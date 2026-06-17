@@ -24,8 +24,14 @@ export async function GET() {
   if (resumesRes.error) return NextResponse.json({ error: resumesRes.error.message }, { status: 500 });
 
   const jobs = jobsRes.data ?? [];
-  const applications = applicationsRes.data ?? [];
+  const allTickets = applicationsRes.data ?? [];
   const resumes = resumesRes.data ?? [];
+
+  // Pipeline tickets are work assigned to an application engineer that hasn't been
+  // submitted yet — they aren't real applications and must not skew conversion rates.
+  const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
+  const applications = allTickets.filter((a) => !PIPELINE_STATUSES.has(a.status));
+  const pipelineCount = allTickets.length - applications.length;
 
   const totalApplications = applications.length;
   const respondedCount = applications.filter((a) => a.status !== "applied").length;
@@ -33,7 +39,7 @@ export async function GET() {
   const offerCount = applications.filter((a) => a.status === "offer").length;
 
   const statusBreakdown: Record<string, number> = {};
-  for (const a of applications) {
+  for (const a of allTickets) {
     statusBreakdown[a.status] = (statusBreakdown[a.status] ?? 0) + 1;
   }
 
@@ -70,6 +76,7 @@ export async function GET() {
       candidates: candidatesRes.count ?? 0,
       jobs: jobs.length,
       applications: totalApplications,
+      pipelineTickets: pipelineCount,
     },
     statusBreakdown,
     rates: {

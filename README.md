@@ -75,11 +75,11 @@ tier badge — anything else just won't show a badge, it won't break.
   `boards.greenhouse.io/asana` → token `asana`). Fetches live postings from that company's
   public job-board API. `src/lib/atsFetchers.ts` has the per-provider fetch + normalize logic.
 
-## Planned: Universal Job Import Normalizer
+## Universal Job Import Normalizer
 
-**Status: spec only, not yet implemented.** This section is the build spec for the next
-import-pipeline phase — written for whoever implements it (currently slated for Codex), so
-read it as instructions, not a description of existing code.
+**Status: implemented for CSV/TSV/JSON.** The `/jobs` page now includes "Import file":
+analyze the file, review or adjust detected column mappings, optionally reuse/save an
+import profile, then commit cleaned and deduped jobs.
 
 ### Problem
 

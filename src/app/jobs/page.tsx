@@ -24,9 +24,77 @@ interface Job {
   employment_type: string | null;
   seniority_level: string | null;
   posted_at: string | null;
+  job_category: string | null;
+  category_tags: string[] | null;
+  category_relevance_score: number | null;
   applicant_count: number;
   applicants: Applicant[];
 }
+
+type SchemaField =
+  | "title" | "company" | "location" | "source_url" | "posted_at" | "salary_range" | "role_tier" | "notes"
+  | "external_job_id" | "tracking_id" | "ref_id" | "apply_url" | "description_html" | "description_text"
+  | "benefits" | "seniority_level" | "employment_type" | "applicants_count" | "job_function" | "industries"
+  | "input_url" | "company_linkedin_url" | "company_logo_url" | "company_employees_count" | "company_website"
+  | "company_address" | "company_slogan" | "company_description" | "job_poster_name" | "job_poster_title"
+  | "job_poster_profile_url" | "job_poster_photo_url" | "job_category" | "category_tags" | "category_relevance_score";
+type FieldMapping = Partial<Record<SchemaField, string>>;
+
+interface MatchingProfile {
+  id: string;
+  label: string;
+  column_map: FieldMapping;
+  score: number;
+}
+
+interface AnalyzeResult {
+  headersDetected: boolean;
+  mapping: FieldMapping;
+  unmappedHeaders: string[];
+  confident: boolean;
+  rawHeaders: string[];
+  sampleRows: Record<string, string>[];
+  matchingProfiles: MatchingProfile[];
+  rowCount: number;
+}
+
+const schemaFields: { value: SchemaField; label: string; required?: boolean }[] = [
+  { value: "title", label: "Job title", required: true },
+  { value: "company", label: "Company" },
+  { value: "location", label: "Location" },
+  { value: "source_url", label: "Posting URL" },
+  { value: "posted_at", label: "Posted date" },
+  { value: "salary_range", label: "Salary range" },
+  { value: "role_tier", label: "Role tier" },
+  { value: "notes", label: "Notes" },
+  { value: "external_job_id", label: "External job ID" },
+  { value: "tracking_id", label: "Tracking ID" },
+  { value: "ref_id", label: "Ref ID" },
+  { value: "apply_url", label: "Apply URL" },
+  { value: "description_html", label: "Description HTML" },
+  { value: "description_text", label: "Description text" },
+  { value: "benefits", label: "Benefits" },
+  { value: "seniority_level", label: "Seniority level" },
+  { value: "employment_type", label: "Employment type" },
+  { value: "applicants_count", label: "Applicants count" },
+  { value: "job_function", label: "Job function" },
+  { value: "industries", label: "Industries" },
+  { value: "input_url", label: "Input/search URL" },
+  { value: "company_linkedin_url", label: "Company LinkedIn" },
+  { value: "company_logo_url", label: "Company logo" },
+  { value: "company_employees_count", label: "Company employees" },
+  { value: "company_website", label: "Company website" },
+  { value: "company_address", label: "Company address" },
+  { value: "company_slogan", label: "Company slogan" },
+  { value: "company_description", label: "Company description" },
+  { value: "job_poster_name", label: "Poster name" },
+  { value: "job_poster_title", label: "Poster title" },
+  { value: "job_poster_profile_url", label: "Poster profile URL" },
+  { value: "job_poster_photo_url", label: "Poster photo URL" },
+  { value: "job_category", label: "Job category" },
+  { value: "category_tags", label: "Category tags" },
+  { value: "category_relevance_score", label: "Category relevance score" },
+];
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
@@ -45,6 +113,7 @@ export default function JobsPage() {
   const [tierFilter, setTierFilter] = useState("");
   const [activeFilter, setActiveFilter] = useState("");
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
 
   async function load() {
@@ -59,12 +128,14 @@ export default function JobsPage() {
 
   const sources = Array.from(new Set(jobs.map((j) => j.source))).sort();
   const employmentTypes = Array.from(new Set(jobs.map((j) => j.employment_type).filter(Boolean))).sort() as string[];
+  const categories = Array.from(new Set(jobs.flatMap((j) => j.category_tags?.length ? j.category_tags : j.job_category ? [j.job_category] : []).filter(Boolean))).sort() as string[];
 
   const filtered = jobs.filter((j) => {
     if (sourceFilter && j.source !== sourceFilter) return false;
     if (tierFilter && j.role_tier !== tierFilter) return false;
     if (activeFilter && (activeFilter === "active") !== j.is_active) return false;
     if (employmentTypeFilter && j.employment_type !== employmentTypeFilter) return false;
+    if (categoryFilter && !(j.category_tags?.includes(categoryFilter) || j.job_category === categoryFilter)) return false;
     if (search) {
       const haystack = `${j.title} ${j.company ?? ""} ${j.location ?? ""}`.toLowerCase();
       if (!haystack.includes(search.toLowerCase())) return false;
@@ -110,11 +181,11 @@ export default function JobsPage() {
     load();
   }
 
-  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter;
+  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter;
 
   function exportCsv() {
     const csv = toCsv(filtered, [
-      "title", "company", "location", "source", "role_tier", "employment_type",
+      "title", "company", "location", "source", "job_category", "category_relevance_score", "role_tier", "employment_type",
       "seniority_level", "posted_at", "is_active", "applicant_count",
     ]);
     downloadCsv("jobs.csv", csv);
@@ -125,7 +196,7 @@ export default function JobsPage() {
       <div className="page-header">
         <h1>Job masterlist</h1>
         <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={() => setShowImport(true)}>Import CSV</button>
+          <button onClick={() => setShowImport(true)}>Import file</button>
           <button onClick={() => setShowImportAts(true)}>Import from ATS</button>
           <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add job</button>
         </div>
@@ -154,8 +225,14 @@ export default function JobsPage() {
             {employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         )}
+        {categories.length > 0 && (
+          <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+            <option value="">All categories</option>
+            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setSourceFilter(""); setTierFilter(""); setActiveFilter(""); setEmploymentTypeFilter(""); }}>
+          <button onClick={() => { setSearch(""); setSourceFilter(""); setTierFilter(""); setActiveFilter(""); setEmploymentTypeFilter(""); setCategoryFilter(""); }}>
             Clear filters
           </button>
         )}
@@ -185,6 +262,7 @@ export default function JobsPage() {
               </th>
               <th>Job</th>
               <th>Company</th>
+              <th>Category</th>
               <th>Tier</th>
               <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
                 Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
@@ -202,11 +280,21 @@ export default function JobsPage() {
                   <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
                 </td>
                 <td className="muted">{job.company || "—"}</td>
+                <td>
+                  {job.job_category ? (
+                    <>
+                      <span className="badge">{job.job_category}</span>
+                      {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{job.category_relevance_score}% relevant</div>
+                      )}
+                    </>
+                  ) : <span className="muted">—</span>}
+                </td>
                 <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
                 <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
                 <td>
                   <div style={{ marginBottom: 4 }}>
-                    <strong>{job.applicant_count}</strong> <span className="muted">applied</span>
+                    <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
                   </div>
                   {job.applicants.length > 0 && (
                     <div>
@@ -236,7 +324,7 @@ export default function JobsPage() {
         <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(); }} />
       )}
       {showImport && (
-        <ImportCsvModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(); }} />
+        <ImportFileModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(); }} />
       )}
       {showImportAts && (
         <ImportAtsModal onClose={() => setShowImportAts(false)} onImported={() => { setShowImportAts(false); load(); }} />
@@ -258,6 +346,8 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [location, setLocation] = useState("");
   const [roleTier, setRoleTier] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [postedAt, setPostedAt] = useState("");
+  const [applicantsCount, setApplicantsCount] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -268,7 +358,15 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
     const res = await fetch("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, company, location, role_tier: roleTier || null, source_url: sourceUrl }),
+      body: JSON.stringify({
+        title,
+        company,
+        location,
+        role_tier: roleTier || null,
+        source_url: sourceUrl,
+        posted_at: postedAt || null,
+        applicants_count: applicantsCount || null,
+      }),
     });
     setSaving(false);
     if (!res.ok) {
@@ -308,6 +406,14 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
           <label>Job posting URL</label>
           <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} placeholder="(optional)" />
         </div>
+        <div className="field-group">
+          <label>Posted date</label>
+          <input type="date" value={postedAt} onChange={(e) => setPostedAt(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Applicants at source</label>
+          <input value={applicantsCount} onChange={(e) => setApplicantsCount(e.target.value)} placeholder="e.g. 25" />
+        </div>
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
 
@@ -316,6 +422,204 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
           <button className="btn-primary" onClick={submit} disabled={saving}>
             {saving ? "Saving…" : "Add job"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportFileModal({ onClose, onImported }: { onClose: () => void; onImported: () => void }) {
+  const [fileName, setFileName] = useState("");
+  const [content, setContent] = useState("");
+  const [analysis, setAnalysis] = useState<AnalyzeResult | null>(null);
+  const [mapping, setMapping] = useState<FieldMapping>({});
+  const [sourceLabel, setSourceLabel] = useState("normalized_import");
+  const [saveProfile, setSaveProfile] = useState(false);
+  const [profileLabel, setProfileLabel] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
+
+  async function analyze(filename: string, text: string) {
+    setWorking(true);
+    setError("");
+    setAnalysis(null);
+    setResult(null);
+    const res = await fetch("/api/import/normalize/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, content: text }),
+    });
+    setWorking(false);
+    const data = await res.json();
+    if (!res.ok) { setError(data.error || "Could not analyze file."); return; }
+    setAnalysis(data);
+    setMapping(data.mapping ?? {});
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    setFileName(file.name);
+    setContent(text);
+    analyze(file.name, text);
+  }
+
+  function fieldForHeader(header: string): SchemaField | "" {
+    return (Object.entries(mapping).find(([, mappedHeader]) => mappedHeader === header)?.[0] as SchemaField | undefined) ?? "";
+  }
+
+  function setHeaderField(header: string, field: SchemaField | "") {
+    setMapping((prev) => {
+      const next: FieldMapping = {};
+      for (const [existingField, existingHeader] of Object.entries(prev) as [SchemaField, string][]) {
+        if (existingHeader !== header && existingField !== field) next[existingField] = existingHeader;
+      }
+      if (field) next[field] = header;
+      return next;
+    });
+  }
+
+  function applyProfile(profile: MatchingProfile) {
+    setMapping(profile.column_map ?? {});
+    setProfileLabel(profile.label);
+    setSaveProfile(false);
+  }
+
+  async function submit() {
+    if (!analysis || !content) { setError("Choose a file first."); return; }
+    if (!mapping.title) { setError("Map one column to Job title before importing."); return; }
+    if (saveProfile && !profileLabel.trim()) { setError("Name the import profile before saving it."); return; }
+
+    setWorking(true);
+    setError("");
+    const res = await fetch("/api/import/normalize/commit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: fileName,
+        content,
+        mapping,
+        sourceLabel,
+        profileLabel: saveProfile ? profileLabel : undefined,
+      }),
+    });
+    setWorking(false);
+    const data = await res.json();
+    if (!res.ok) { setError(data.error || "Import failed."); return; }
+    setResult(data);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ width: 760, maxHeight: "86vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <h2>Import jobs from file</h2>
+        <p className="muted" style={{ fontSize: 12 }}>
+          Upload CSV, TSV, or JSON. Review the detected column mapping before anything is inserted.
+        </p>
+
+        <div className="field-group">
+          <input type="file" accept=".csv,.tsv,.json,text/csv,application/json" onChange={handleFile} />
+        </div>
+
+        {working && <p className="muted">Working...</p>}
+
+        {analysis && !result && (
+          <>
+            <p className="muted">
+              Found <strong>{analysis.rowCount}</strong> rows in {fileName}
+              {!analysis.headersDetected ? " with no confident header row." : "."}
+            </p>
+
+            {analysis.matchingProfiles.length > 0 && (
+              <div className="field-group">
+                <label>Saved profile match</label>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {analysis.matchingProfiles.slice(0, 3).map((profile) => (
+                    <button key={profile.id} onClick={() => applyProfile(profile)}>
+                      Use {profile.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="field-group">
+              <label>Source label</label>
+              <input value={sourceLabel} onChange={(e) => setSourceLabel(e.target.value)} placeholder="normalized_import" />
+            </div>
+
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Column</th>
+                  <th>Import as</th>
+                  <th>Sample values</th>
+                </tr>
+              </thead>
+              <tbody>
+                {analysis.rawHeaders.map((header) => (
+                  <tr key={header}>
+                    <td><strong>{header}</strong></td>
+                    <td>
+                      <select value={fieldForHeader(header)} onChange={(e) => setHeaderField(header, e.target.value as SchemaField | "")}>
+                        <option value="">Ignore</option>
+                        {schemaFields.map((field) => (
+                          <option key={field.value} value={field.value}>
+                            {field.label}{field.required ? " (required)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="muted" style={{ fontSize: 12 }}>
+                      {analysis.sampleRows.map((row) => row[header]).filter(Boolean).slice(0, 3).join(" | ") || "-"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div className="field-group" style={{ marginTop: 14 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={saveProfile}
+                  onChange={(e) => setSaveProfile(e.target.checked)}
+                />
+                Save this mapping as a reusable import profile
+              </label>
+              {saveProfile && (
+                <input
+                  value={profileLabel}
+                  onChange={(e) => setProfileLabel(e.target.value)}
+                  placeholder="e.g. Acme weekly export"
+                  style={{ marginTop: 8 }}
+                />
+              )}
+            </div>
+          </>
+        )}
+
+        {result && (
+          <p style={{ color: "var(--accent)" }}>
+            Imported {result.imported} jobs{result.skipped > 0 ? `, skipped ${result.skipped} duplicate or unmappable row(s)` : ""}.
+          </p>
+        )}
+
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+        <div className="modal-actions">
+          <button onClick={onClose}>{result ? "Close" : "Cancel"}</button>
+          {!result && (
+            <button className="btn-primary" onClick={submit} disabled={working || !analysis}>
+              {working ? "Importing..." : `Import ${analysis?.rowCount || ""} rows`}
+            </button>
+          )}
+          {result && (
+            <button className="btn-primary" onClick={onImported}>Done</button>
+          )}
         </div>
       </div>
     </div>
@@ -470,63 +774,93 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
 
 function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: () => void; onLogged: () => void }) {
   const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
-  const [candidateId, setCandidateId] = useState("");
-  const [status, setStatus] = useState("applied");
+  const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
+  const [status, setStatus] = useState("assigned");
   const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
   const [resumeId, setResumeId] = useState("");
+  const [assignedBy, setAssignedBy] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [assignmentDueAt, setAssignmentDueAt] = useState("");
+  const [assignmentNote, setAssignmentNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     fetch("/api/candidates").then((r) => r.json()).then(setCandidates);
+    setAssignedBy(localStorage.getItem("skarion_manager_name") ?? "");
+    setAssignedTo(localStorage.getItem("skarion_application_owner") ?? "");
   }, []);
 
   useEffect(() => {
     setResumeId("");
-    if (!candidateId) { setResumeVariants([]); return; }
+    if (candidateIds.size !== 1) { setResumeVariants([]); return; }
+    const [candidateId] = Array.from(candidateIds);
     fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
-  }, [candidateId]);
+  }, [candidateIds]);
+
+  function toggleCandidate(id: string) {
+    setCandidateIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   async function submit() {
-    if (!candidateId) { setError("Select a candidate."); return; }
+    if (candidateIds.size === 0) { setError("Select at least one candidate."); return; }
     setSaving(true);
     setError("");
-    const candidate = candidates.find((c) => c.id === candidateId);
+    const selectedIds = Array.from(candidateIds);
+    const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
     const variant = resumeVariants.find((r) => r.id === resumeId);
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        candidate_id: candidateId,
+        candidate_ids: selectedIds,
         job_id: job.id,
         status,
         resume_id: variant?.id ?? null,
         resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
         resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        assigned_by: assignedBy || null,
+        assigned_to: assignedTo || null,
+        assignment_due_at: assignmentDueAt || null,
+        assignment_note: assignmentNote || null,
+        next_action: status === "assigned" || status === "stacked" ? "Apply to this job" : null,
       }),
     });
     setSaving(false);
     const data = await res.json();
     if (!res.ok) { setError(data.error || "Something went wrong."); return; }
+    if (assignedBy) localStorage.setItem("skarion_manager_name", assignedBy);
+    if (assignedTo) localStorage.setItem("skarion_application_owner", assignedTo);
     onLogged();
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Log application — {job.title}</h2>
+        <h2>Assign application - {job.title}</h2>
 
         <div className="field-group">
-          <label>Candidate</label>
-          <select value={candidateId} onChange={(e) => setCandidateId(e.target.value)}>
-            <option value="">— Select —</option>
+          <label>Candidates</label>
+          <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 8 }}>
             {candidates.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}{c.resume_filename ? "" : " (no resume uploaded)"}</option>
+              <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, color: "var(--ink)", fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto" }}
+                  checked={candidateIds.has(c.id)}
+                  onChange={() => toggleCandidate(c.id)}
+                />
+                {c.name}{c.resume_filename ? "" : " (no resume uploaded)"}
+              </label>
             ))}
-          </select>
+          </div>
         </div>
 
-        {candidateId && resumeVariants.length > 0 && (
+        {candidateIds.size === 1 && resumeVariants.length > 0 && (
           <div className="field-group">
             <label>Resume version</label>
             <select value={resumeId} onChange={(e) => setResumeId(e.target.value)}>
@@ -541,6 +875,9 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         <div className="field-group">
           <label>Status</label>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="assigned">Assigned to apply</option>
+            <option value="stacked">Stacked / queued</option>
+            <option value="in_progress">In progress</option>
             <option value="applied">Applied</option>
             <option value="replied">Replied</option>
             <option value="interview">Interview</option>
@@ -548,13 +885,29 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
             <option value="offer">Offer</option>
           </select>
         </div>
+        <div className="field-group">
+          <label>Assigned by</label>
+          <input value={assignedBy} onChange={(e) => setAssignedBy(e.target.value)} placeholder="Manager/admin name" />
+        </div>
+        <div className="field-group">
+          <label>Application owner</label>
+          <input value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} placeholder="Application engineer name" />
+        </div>
+        <div className="field-group">
+          <label>Due date</label>
+          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Assignment note</label>
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." />
+        </div>
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
 
         <div className="modal-actions">
           <button onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : "Log application"}
+            {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
           </button>
         </div>
       </div>

@@ -28,13 +28,44 @@ interface JobDetail {
   company_employees_count: number | null;
   company_website: string | null;
   posted_at: string | null;
+  external_job_id: string | null;
+  tracking_id: string | null;
+  ref_id: string | null;
+  apply_url: string | null;
+  description_html: string | null;
+  description_text: string | null;
+  benefits: unknown;
+  job_function: string | null;
+  industries: string | null;
+  input_url: string | null;
+  company_linkedin_url: string | null;
+  company_logo_url: string | null;
+  company_address: unknown;
+  company_slogan: string | null;
+  company_description: string | null;
+  job_poster_name: string | null;
+  job_poster_title: string | null;
+  job_poster_profile_url: string | null;
+  job_poster_photo_url: string | null;
+  job_category: string | null;
+  category_tags: string[] | null;
+  category_relevance_score: number | null;
   last_seen_at: string | null;
   applicants: Applicant[];
+}
+
+interface JobComment {
+  id: string;
+  job_id: string;
+  commenter_name: string;
+  body: string;
+  created_at: string;
 }
 
 export default function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [job, setJob] = useState<JobDetail | null>(null);
+  const [comments, setComments] = useState<JobComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
 
@@ -45,7 +76,15 @@ export default function JobDetailPage() {
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, [id]);
+  async function loadComments() {
+    const res = await fetch(`/api/jobs/${id}/comments`);
+    if (res.ok) setComments(await res.json());
+  }
+
+  useEffect(() => {
+    load();
+    loadComments();
+  }, [id]);
 
   if (loading) return <p className="muted">Loading…</p>;
   if (!job) return <p className="muted">Job not found.</p>;
@@ -62,18 +101,63 @@ export default function JobDetailPage() {
           <Field label="Company" value={job.company} />
           <Field label="Location" value={job.location} />
           <Field label="Source" value={<span className="badge">{job.source}</span>} />
+          <Field label="Category" value={job.job_category ? <span className="badge">{job.job_category}</span> : null} />
+          <Field label="Category score" value={job.category_relevance_score !== null && job.category_relevance_score !== undefined ? `${job.category_relevance_score}% relevant` : null} />
+          <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
           <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
           <Field label="Salary range" value={job.salary_range} />
           <Field label="Seniority level" value={job.seniority_level} />
           <Field label="Employment type" value={job.employment_type} />
+          <Field label="Job function" value={job.job_function} />
+          <Field label="Industries" value={job.industries} />
           <Field label="Applicants (per source)" value={job.applicants_count?.toString() ?? null} />
           <Field label="Company size" value={job.company_employees_count ? `${job.company_employees_count} employees` : null} />
           <Field label="Company website" value={job.company_website ? <a href={job.company_website} target="_blank" rel="noreferrer">{job.company_website}</a> : null} />
+          <Field label="Company LinkedIn" value={job.company_linkedin_url ? <a href={job.company_linkedin_url} target="_blank" rel="noreferrer">View company</a> : null} />
           <Field label="Posted" value={job.posted_at ? new Date(job.posted_at).toLocaleDateString() : null} />
           <Field label="Last synced" value={job.last_seen_at ? new Date(job.last_seen_at).toLocaleString() : null} />
           <Field label="Status" value={job.is_active ? "Active" : "Inactive"} />
           <Field label="Posting URL" value={job.source_url ? <a href={job.source_url} target="_blank" rel="noreferrer">View original</a> : null} />
+          <Field label="Apply URL" value={job.apply_url ? <a href={job.apply_url} target="_blank" rel="noreferrer">Apply</a> : null} />
+          <Field label="External job ID" value={job.external_job_id} />
+          <Field label="Tracking/ref" value={[job.tracking_id, job.ref_id].filter(Boolean).join(" / ") || null} />
         </div>
+
+        {Boolean(job.company_logo_url || job.company_slogan || job.company_description || job.company_address) && (
+          <div style={{ marginTop: 20 }}>
+            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Company details</h2>
+            {job.company_logo_url && (
+              <img src={job.company_logo_url} alt={`${job.company ?? "Company"} logo`} style={{ width: 56, height: 56, objectFit: "contain", marginBottom: 12 }} />
+            )}
+            {job.company_slogan && <p><strong>{job.company_slogan}</strong></p>}
+            {job.company_description && <LongText value={job.company_description} />}
+            {job.company_address ? <Field label="Company address" value={<JsonValue value={job.company_address} />} /> : null}
+          </div>
+        )}
+
+        {(job.job_poster_name || job.job_poster_title || job.job_poster_profile_url) && (
+          <div style={{ marginTop: 20 }}>
+            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Job poster</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <Field label="Name" value={job.job_poster_profile_url ? <a href={job.job_poster_profile_url} target="_blank" rel="noreferrer">{job.job_poster_name ?? "View profile"}</a> : job.job_poster_name} />
+              <Field label="Title" value={job.job_poster_title} />
+            </div>
+          </div>
+        )}
+
+        {job.description_text && (
+          <div style={{ marginTop: 20 }}>
+            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Job description and qualifications</h2>
+            <LongText value={job.description_text} />
+          </div>
+        )}
+
+        {Boolean(job.benefits) ? (
+          <div style={{ marginTop: 20 }}>
+            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Benefits</h2>
+            <JsonValue value={job.benefits} />
+          </div>
+        ) : null}
 
         {job.notes && (
           <div style={{ marginTop: 16 }}>
@@ -82,6 +166,8 @@ export default function JobDetailPage() {
           </div>
         )}
       </div>
+
+      <JobComments comments={comments} jobId={job.id} onCommented={loadComments} />
 
       <h2 style={{ fontSize: 16, marginBottom: 12 }}>Applicants ({job.applicants.length})</h2>
 
@@ -113,6 +199,85 @@ export default function JobDetailPage() {
   );
 }
 
+function JobComments({ comments, jobId, onCommented }: { comments: JobComment[]; jobId: string; onCommented: () => void }) {
+  const [commenterName, setCommenterName] = useState("");
+  const [body, setBody] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setCommenterName(localStorage.getItem("skarion_commenter_name") ?? "");
+  }, []);
+
+  async function submit() {
+    if (!commenterName.trim()) { setError("Add your name."); return; }
+    if (!body.trim()) { setError("Write a comment first."); return; }
+
+    setSaving(true);
+    setError("");
+    const res = await fetch(`/api/jobs/${jobId}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commenter_name: commenterName, body }),
+    });
+    setSaving(false);
+
+    if (!res.ok) {
+      const data = await res.json();
+      setError(data.error || "Could not save comment.");
+      return;
+    }
+
+    localStorage.setItem("skarion_commenter_name", commenterName.trim());
+    setBody("");
+    onCommented();
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <h2 style={{ fontSize: 16, marginTop: 0, marginBottom: 12 }}>Internal comments</h2>
+
+      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10, alignItems: "start", marginBottom: 12 }}>
+        <input
+          value={commenterName}
+          onChange={(e) => setCommenterName(e.target.value)}
+          placeholder="Your name"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={3}
+          placeholder="Add an internal comment..."
+        />
+      </div>
+
+      {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: comments.length ? 16 : 0 }}>
+        <button className="btn-primary" onClick={submit} disabled={saving}>
+          {saving ? "Posting..." : "Post comment"}
+        </button>
+      </div>
+
+      {comments.length === 0 ? (
+        <p className="muted" style={{ marginBottom: 0 }}>No internal comments yet.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {comments.map((comment) => (
+            <div key={comment.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+                <strong>{comment.commenter_name}</strong>
+                <span className="muted" style={{ fontSize: 12 }}>{new Date(comment.created_at).toLocaleString()}</span>
+              </div>
+              <p style={{ whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.5 }}>{comment.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div>
@@ -120,6 +285,16 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <p>{value ?? "—"}</p>
     </div>
   );
+}
+
+function LongText({ value }: { value: string }) {
+  return <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{value}</p>;
+}
+
+function JsonValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span className="muted">-</span>;
+  if (typeof value === "string") return <span>{value}</span>;
+  return <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, lineHeight: 1.5, margin: 0 }}>{JSON.stringify(value, null, 2)}</pre>;
 }
 
 function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () => void; onSaved: () => void }) {
@@ -134,6 +309,17 @@ function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () =
     seniority_level: job.seniority_level ?? "",
     employment_type: job.employment_type ?? "",
     company_website: job.company_website ?? "",
+    apply_url: job.apply_url ?? "",
+    description_text: job.description_text ?? "",
+    job_function: job.job_function ?? "",
+    industries: job.industries ?? "",
+    company_linkedin_url: job.company_linkedin_url ?? "",
+    company_logo_url: job.company_logo_url ?? "",
+    company_slogan: job.company_slogan ?? "",
+    company_description: job.company_description ?? "",
+    job_category: job.job_category ?? "",
+    category_tags: job.category_tags?.join(", ") ?? "",
+    category_relevance_score: job.category_relevance_score?.toString() ?? "",
     is_active: job.is_active,
   });
   const [saving, setSaving] = useState(false);
@@ -161,6 +347,17 @@ function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () =
         seniority_level: form.seniority_level || null,
         employment_type: form.employment_type || null,
         company_website: form.company_website || null,
+        apply_url: form.apply_url || null,
+        description_text: form.description_text || null,
+        job_function: form.job_function || null,
+        industries: form.industries || null,
+        company_linkedin_url: form.company_linkedin_url || null,
+        company_logo_url: form.company_logo_url || null,
+        company_slogan: form.company_slogan || null,
+        company_description: form.company_description || null,
+        job_category: form.job_category || null,
+        category_tags: form.category_tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        category_relevance_score: form.category_relevance_score ? parseInt(form.category_relevance_score, 10) : null,
         is_active: form.is_active,
       }),
     });
@@ -200,6 +397,18 @@ function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () =
           </select>
         </div>
         <div className="field-group">
+          <label>Category</label>
+          <input value={form.job_category} onChange={(e) => set("job_category", e.target.value)} placeholder="e.g. OSP" />
+        </div>
+        <div className="field-group">
+          <label>Category tags</label>
+          <input value={form.category_tags} onChange={(e) => set("category_tags", e.target.value)} placeholder="OSP, Drafting, GIS" />
+        </div>
+        <div className="field-group">
+          <label>Category relevance score</label>
+          <input value={form.category_relevance_score} onChange={(e) => set("category_relevance_score", e.target.value)} placeholder="0-100" />
+        </div>
+        <div className="field-group">
           <label>Salary range</label>
           <input value={form.salary_range} onChange={(e) => set("salary_range", e.target.value)} />
         </div>
@@ -216,8 +425,40 @@ function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () =
           <input value={form.company_website} onChange={(e) => set("company_website", e.target.value)} />
         </div>
         <div className="field-group">
+          <label>Company LinkedIn</label>
+          <input value={form.company_linkedin_url} onChange={(e) => set("company_linkedin_url", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Company logo URL</label>
+          <input value={form.company_logo_url} onChange={(e) => set("company_logo_url", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Job function</label>
+          <input value={form.job_function} onChange={(e) => set("job_function", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Industries</label>
+          <input value={form.industries} onChange={(e) => set("industries", e.target.value)} />
+        </div>
+        <div className="field-group">
           <label>Posting URL</label>
           <input value={form.source_url} onChange={(e) => set("source_url", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Apply URL</label>
+          <input value={form.apply_url} onChange={(e) => set("apply_url", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Company slogan</label>
+          <input value={form.company_slogan} onChange={(e) => set("company_slogan", e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Company description</label>
+          <textarea value={form.company_description} onChange={(e) => set("company_description", e.target.value)} rows={4} />
+        </div>
+        <div className="field-group">
+          <label>Job description and qualifications</label>
+          <textarea value={form.description_text} onChange={(e) => set("description_text", e.target.value)} rows={8} />
         </div>
         <div className="field-group">
           <label>Notes</label>

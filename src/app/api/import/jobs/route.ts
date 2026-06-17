@@ -15,6 +15,14 @@ interface CsvRow {
   salary_range?: string;
   source_url?: string;
   notes?: string;
+  posted_at?: string;
+  applicants_count?: string | number;
+}
+
+function toInt(value: string | number | undefined): number | null {
+  if (value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : parseInt(value.replace(/[^\d]/g, ""), 10);
+  return Number.isFinite(n) ? n : null;
 }
 
 export async function POST(req: NextRequest) {
@@ -37,6 +45,8 @@ export async function POST(req: NextRequest) {
       salary_range: r.salary_range?.trim() || null,
       source_url: r.source_url?.trim() || null,
       notes: r.notes?.trim() || null,
+      posted_at: r.posted_at?.trim() || null,
+      applicants_count: toInt(r.applicants_count),
     }));
 
   if (cleanRows.length === 0) {

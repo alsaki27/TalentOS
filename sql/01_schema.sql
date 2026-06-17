@@ -42,6 +42,29 @@ create table if not exists jobs (
   company_employees_count  integer,                     -- LinkedIn: companyEmployeesCount
   company_website          text,                        -- LinkedIn: companyWebsite
   posted_at                date,                        -- LinkedIn: postedAt
+  external_job_id          text,                        -- LinkedIn: id
+  tracking_id              text,                        -- LinkedIn: trackingId
+  ref_id                   text,                        -- LinkedIn: refId
+  apply_url                text,                        -- LinkedIn: applyUrl
+  description_html         text,                        -- LinkedIn: descriptionHtml
+  description_text         text,                        -- LinkedIn: descriptionText
+  benefits                 jsonb,                       -- LinkedIn: benefits
+  job_function             text,                        -- LinkedIn: jobFunction
+  industries               text,                        -- LinkedIn: industries
+  input_url                text,                        -- LinkedIn: inputUrl
+  company_linkedin_url     text,                        -- LinkedIn: companyLinkedinUrl
+  company_logo_url         text,                        -- LinkedIn: companyLogo
+  company_address          jsonb,                       -- LinkedIn: companyAddress
+  company_slogan           text,                        -- LinkedIn: companySlogan
+  company_description      text,                        -- LinkedIn: companyDescription
+  job_poster_name          text,                        -- LinkedIn: jobPosterName
+  job_poster_title         text,                        -- LinkedIn: jobPosterTitle
+  job_poster_profile_url   text,                        -- LinkedIn: jobPosterProfileUrl
+  job_poster_photo_url     text,                        -- LinkedIn: jobPosterPhoto
+  raw_source_payload       jsonb,                       -- Original scraper row
+  job_category             text,                        -- Primary heuristic category (OSP, Drafting, GIS, Civil, etc.)
+  category_tags            text[] default '{}',         -- All matched heuristic categories
+  category_relevance_score integer,                     -- 0-100 heuristic score, can be rescored later
   last_seen_at             timestamptz default now(),   -- bumped each time re-import sees this job again
   created_at               timestamptz default now()
 );
@@ -49,6 +72,19 @@ create table if not exists jobs (
 create index if not exists jobs_company_idx on jobs (company);
 create index if not exists jobs_tier_idx on jobs (role_tier);
 create index if not exists jobs_active_idx on jobs (is_active);
+create index if not exists jobs_external_job_id_idx on jobs (external_job_id);
+create index if not exists jobs_job_category_idx on jobs (job_category);
+create index if not exists jobs_category_tags_idx on jobs using gin (category_tags);
+
+-- ----- JOB_COMMENTS (internal comments on each job, newest first in UI) -----
+create table if not exists job_comments (
+  id              uuid primary key default gen_random_uuid(),
+  job_id          uuid not null references jobs(id) on delete cascade,
+  commenter_name  text not null,
+  body            text not null,
+  created_at      timestamptz default now()
+);
+create index if not exists job_comments_job_created_idx on job_comments (job_id, created_at desc);
 
 -- ----- RESUMES (variants: multiple resumes/cover letters per candidate) -----
 create table if not exists resumes (
@@ -62,6 +98,14 @@ create table if not exists resumes (
 );
 create index if not exists resumes_candidate_idx on resumes (candidate_id);
 
+-- ----- IMPORT_PROFILES (remembered column mappings for the universal import normalizer) -----
+create table if not exists import_profiles (
+  id          uuid primary key default gen_random_uuid(),
+  label       text not null,
+  column_map  jsonb not null,
+  created_at  timestamptz default now()
+);
+
 -- ----- APPLICATIONS (links candidate <-> job) -----
 create table if not exists applications (
   id            uuid primary key default gen_random_uuid(),
@@ -73,6 +117,11 @@ create table if not exists applications (
   resume_id     uuid references resumes(id) on delete set null,
   follow_up_at  date,
   next_action   text,
+  assigned_by   text,
+  assigned_to   text,
+  assignment_note text,
+  assignment_due_at date,
+  completed_at  timestamptz,
   applied_at    timestamptz default now(),
   notes         text,
   unique (candidate_id, job_id)                -- prevent duplicate application rows for same pair
@@ -82,6 +131,8 @@ create index if not exists applications_candidate_idx on applications (candidate
 create index if not exists applications_job_idx on applications (job_id);
 create index if not exists applications_status_idx on applications (status);
 create index if not exists applications_follow_up_idx on applications (follow_up_at);
+create index if not exists applications_assigned_to_idx on applications (assigned_to);
+create index if not exists applications_assignment_due_idx on applications (assignment_due_at);
 
 -- ----- APPLICATION_EVENTS (status-change timeline) -----
 create table if not exists application_events (

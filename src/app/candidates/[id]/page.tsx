@@ -11,6 +11,10 @@ interface Application {
   resume_filename: string | null;
   follow_up_at: string | null;
   next_action: string | null;
+  assigned_by: string | null;
+  assigned_to: string | null;
+  assignment_note: string | null;
+  assignment_due_at: string | null;
   jobs: { id: string; title: string; company: string; location: string; role_tier: string | null };
 }
 
@@ -252,6 +256,9 @@ export default function CandidateProfilePage() {
         <div className="filter-bar">
           <select value={appStatusFilter} onChange={(e) => setAppStatusFilter(e.target.value)}>
             <option value="">All statuses</option>
+            <option value="assigned">Assigned</option>
+            <option value="stacked">Stacked</option>
+            <option value="in_progress">In progress</option>
             <option value="applied">Applied</option>
             <option value="replied">Replied</option>
             <option value="interview">Interview</option>

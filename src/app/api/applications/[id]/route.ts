@@ -10,7 +10,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const allowedFields = [
     "status", "notes", "resume_url", "resume_filename", "resume_id",
-    "follow_up_at", "next_action",
+    "follow_up_at", "next_action", "assigned_by", "assigned_to",
+    "assignment_note", "assignment_due_at", "completed_at",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

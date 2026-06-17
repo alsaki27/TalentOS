@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { mapLinkedInJob, LinkedInScrapedJob, JobRow } from "@/lib/linkedinMapper";
-import { filterNewJobs } from "@/lib/jobDedup";
+import { enrichExistingJobsBySourceUrl, filterNewJobs } from "@/lib/jobDedup";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "no valid rows (missing title)" }, { status: 400 });
   }
 
+  await enrichExistingJobsBySourceUrl(cleanRows);
   const { newRows, duplicates } = await filterNewJobs(cleanRows);
 
   if (newRows.length === 0) {

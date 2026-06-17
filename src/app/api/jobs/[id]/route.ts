@@ -4,6 +4,7 @@
 // DELETE -> remove a job (cascades to its applications)
 
 import { NextRequest, NextResponse } from "next/server";
+import { categorizeJob } from "@/lib/jobCategorizer";
 import { supabase } from "@/lib/supabase";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -14,9 +15,18 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  const categoryFallback = job.job_category ? {} : categorizeJob([
+    job.title,
+    job.description_text,
+    job.notes,
+    job.job_function,
+    job.industries,
+    job.company_description,
+  ]);
 
   return NextResponse.json({
     ...job,
+    ...categoryFallback,
     applicants: (job.applications ?? []).map((a: any) => ({
       application_id: a.id,
       candidate_id: a.candidates?.id,
@@ -33,6 +43,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "title", "company", "location", "role_tier", "salary_range", "source_url", "notes",
     "is_active", "seniority_level", "employment_type", "applicants_count",
     "company_employees_count", "company_website", "posted_at",
+    "external_job_id", "tracking_id", "ref_id", "apply_url", "description_html",
+    "description_text", "benefits", "job_function", "industries", "input_url",
+    "company_linkedin_url", "company_logo_url", "company_address", "company_slogan",
+    "company_description", "job_poster_name", "job_poster_title",
+    "job_poster_profile_url", "job_poster_photo_url", "raw_source_payload",
+    "job_category", "category_tags", "category_relevance_score",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 
 interface Analytics {
-  totals: { candidates: number; jobs: number; applications: number };
+  totals: { candidates: number; jobs: number; applications: number; pipelineTickets: number };
   statusBreakdown: Record<string, number>;
   rates: { responseRate: number; interviewRate: number; offerRate: number };
   bySource: { source: string; jobs: number; applications: number; interviewRate: number; offerRate: number; lastSeenAt: string | null }[];
@@ -32,6 +32,7 @@ export default function AnalyticsPage() {
         <SummaryCard label="Candidates" value={data.totals.candidates} />
         <SummaryCard label="Jobs tracked" value={data.totals.jobs} />
         <SummaryCard label="Applications" value={data.totals.applications} />
+        <SummaryCard label="In pipeline" value={data.totals.pipelineTickets} />
         <SummaryCard label="Response rate" value={`${data.rates.responseRate}%`} />
         <SummaryCard label="Interview rate" value={`${data.rates.interviewRate}%`} />
         <SummaryCard label="Offer rate" value={`${data.rates.offerRate}%`} />

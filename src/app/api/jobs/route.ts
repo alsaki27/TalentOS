@@ -3,6 +3,8 @@
 // POST -> manually add one job
 
 import { NextRequest, NextResponse } from "next/server";
+import { categorizeJob } from "@/lib/jobCategorizer";
+import { filterNewJobs } from "@/lib/jobDedup";
 import { supabase } from "@/lib/supabase";
 
 export async function GET() {
@@ -18,6 +20,14 @@ export async function GET() {
   // Shape it so the dashboard gets a clean "applicant_count" + "applicants" list per job.
   const shaped = (jobs ?? []).map((job: any) => ({
     ...job,
+    ...(job.job_category ? {} : categorizeJob([
+      job.title,
+      job.description_text,
+      job.notes,
+      job.job_function,
+      job.industries,
+      job.company_description,
+    ])),
     applicant_count: job.applications?.length ?? 0,
     applicants: (job.applications ?? []).map((a: any) => ({
       candidate_id: a.candidates?.id,
@@ -37,18 +47,34 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "title is required" }, { status: 400 });
   }
 
+  const applicantsCount = body.applicants_count !== undefined && body.applicants_count !== null && body.applicants_count !== ""
+    ? parseInt(String(body.applicants_count).replace(/[^\d]/g, ""), 10)
+    : null;
+  const row = {
+    title: body.title,
+    company: body.company ?? null,
+    location: body.location ?? null,
+    source: "manual",
+    role_tier: body.role_tier ?? null,
+    salary_range: body.salary_range ?? null,
+    source_url: body.source_url ?? null,
+    notes: body.notes ?? null,
+    posted_at: body.posted_at || null,
+    applicants_count: Number.isFinite(applicantsCount) ? applicantsCount : null,
+    ...categorizeJob([body.title, body.notes]),
+  };
+
+  const { newRows } = await filterNewJobs([row]);
+  if (newRows.length === 0) {
+    return NextResponse.json(
+      { error: "Duplicate job: same posting URL or same title, company, posted date, and applicant count." },
+      { status: 409 }
+    );
+  }
+
   const { data, error } = await supabase
     .from("jobs")
-    .insert({
-      title: body.title,
-      company: body.company ?? null,
-      location: body.location ?? null,
-      source: "manual",
-      role_tier: body.role_tier ?? null,
-      salary_range: body.salary_range ?? null,
-      source_url: body.source_url ?? null,
-      notes: body.notes ?? null,
-    })
+    .insert(row)
     .select()
     .single();
 
