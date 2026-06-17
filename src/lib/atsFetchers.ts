@@ -73,10 +73,52 @@ export async function fetchAshbyJobs(boardName: string): Promise<JobRow[]> {
     }));
 }
 
-export async function fetchAtsJobs(provider: "greenhouse" | "lever" | "ashby", token: string): Promise<JobRow[]> {
+// USAJobs is a keyword search across the US federal job board, not a per-company board —
+// "token" here is the search keyword (e.g. "civil engineer"), not a company slug. Requires
+// a free API key from https://developer.usajobs.gov: set USAJOBS_API_KEY (the issued key)
+// and USAJOBS_USER_AGENT (the email address used to register) as env vars.
+export async function fetchUsaJobs(keyword: string): Promise<JobRow[]> {
+  const apiKey = process.env.USAJOBS_API_KEY;
+  const userAgent = process.env.USAJOBS_USER_AGENT;
+  if (!apiKey || !userAgent) {
+    throw new Error("USAJobs import requires USAJOBS_API_KEY and USAJOBS_USER_AGENT env vars (free signup at https://developer.usajobs.gov).");
+  }
+
+  const params = new URLSearchParams({ Keyword: keyword, ResultsPerPage: "250" });
+  const res = await fetch(`https://data.usajobs.gov/api/search?${params}`, {
+    headers: {
+      Host: "data.usajobs.gov",
+      "User-Agent": userAgent,
+      "Authorization-Key": apiKey,
+    },
+  });
+  if (!res.ok) throw new Error(`USAJobs search failed (${res.status})`);
+  const data = await res.json();
+  const items = Array.isArray(data?.SearchResult?.SearchResultItems) ? data.SearchResult.SearchResultItems : [];
+
+  return items
+    .map((item: any) => item.MatchedObjectDescriptor ?? {})
+    .filter((d: any) => d.PositionTitle)
+    .map((d: any) => ({
+      title: d.PositionTitle,
+      company: d.OrganizationName ?? d.DepartmentName ?? null,
+      location: d.PositionLocationDisplay ?? null,
+      source: "usajobs",
+      source_url: d.PositionURI ?? null,
+      seniority_level: d.JobGrade?.[0]?.Code ?? null,
+      employment_type: d.PositionSchedule?.[0]?.Name ?? null,
+      applicants_count: null,
+      company_employees_count: null,
+      company_website: null,
+      posted_at: d.PublicationStartDate ? d.PublicationStartDate.slice(0, 10) : null,
+    }));
+}
+
+export async function fetchAtsJobs(provider: "greenhouse" | "lever" | "ashby" | "usajobs", token: string): Promise<JobRow[]> {
   switch (provider) {
     case "greenhouse": return fetchGreenhouseJobs(token);
     case "lever": return fetchLeverJobs(token);
     case "ashby": return fetchAshbyJobs(token);
+    case "usajobs": return fetchUsaJobs(token);
   }
 }

@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { deleteStorageFile } from "@/lib/storage";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const formData = await req.formData();
@@ -12,6 +13,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!file) {
     return NextResponse.json({ error: "no file provided" }, { status: 400 });
   }
+
+  const { data: existing } = await supabase
+    .from("candidates")
+    .select("avatar_url")
+    .eq("id", params.id)
+    .single();
 
   const ext = file.name.split(".").pop();
   const path = `avatars/${params.id}/${Date.now()}.${ext}`;
@@ -35,5 +42,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await deleteStorageFile(existing?.avatar_url);
+
   return NextResponse.json(data);
 }

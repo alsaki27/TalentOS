@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { deleteStorageFile } from "@/lib/storage";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { data: candidate, error: candErr } = await supabase
@@ -60,8 +61,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const [{ data: candidate }, { data: resumes }] = await Promise.all([
+    supabase.from("candidates").select("resume_url, avatar_url").eq("id", params.id).single(),
+    supabase.from("resumes").select("file_url").eq("candidate_id", params.id),
+  ]);
+
   const { error } = await supabase.from("candidates").delete().eq("id", params.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await Promise.all([
+    deleteStorageFile(candidate?.resume_url),
+    deleteStorageFile(candidate?.avatar_url),
+    ...(resumes ?? []).map((r) => deleteStorageFile(r.file_url)),
+  ]);
+
   return NextResponse.json({ ok: true });
 }

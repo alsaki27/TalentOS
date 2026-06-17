@@ -21,6 +21,7 @@ export default function ApplicationQueuePage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState<QueueItem | null>(null);
 
   async function load() {
     setLoading(true);
@@ -54,6 +55,12 @@ export default function ApplicationQueuePage() {
         event_note: status === "applied" ? "Application submitted from queue." : null,
       }),
     });
+    load();
+  }
+
+  async function removeTicket(item: QueueItem) {
+    if (!confirm(`Remove this assignment${item.candidates ? ` for ${item.candidates.name}` : ""}?`)) return;
+    await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
     load();
   }
 
@@ -126,19 +133,94 @@ export default function ApplicationQueuePage() {
                   <div>{item.assigned_to || "Unassigned"}</div>
                   {item.assigned_by && <div className="muted" style={{ fontSize: 12 }}>from {item.assigned_by}</div>}
                 </td>
-                <td className={item.assignment_due_at && item.assignment_due_at <= today ? "muted" : "muted"}>
+                <td className={item.assignment_due_at && item.assignment_due_at <= today ? "overdue" : "muted"}>
                   {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString() : "—"}
                 </td>
                 <td className="muted">{item.assignment_note || item.next_action || "—"}</td>
-                <td style={{ display: "flex", gap: 6 }}>
+                <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button onClick={() => setStatus(item.id, "in_progress")}>Start</button>
                   <button className="btn-primary" onClick={() => setStatus(item.id, "applied")}>Mark applied</button>
+                  <button onClick={() => setEditing(item)}>Edit</button>
+                  <button className="btn-danger" onClick={() => removeTicket(item)}>Remove</button>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
+
+      {editing && (
+        <EditTicketModal
+          item={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load(); }}
+        />
+      )}
     </>
+  );
+}
+
+function EditTicketModal({ item, onClose, onSaved }: { item: QueueItem; onClose: () => void; onSaved: () => void }) {
+  const [assignedBy, setAssignedBy] = useState(item.assigned_by ?? "");
+  const [assignedTo, setAssignedTo] = useState(item.assigned_to ?? "");
+  const [assignmentDueAt, setAssignmentDueAt] = useState(item.assignment_due_at ?? "");
+  const [assignmentNote, setAssignmentNote] = useState(item.assignment_note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit() {
+    setSaving(true);
+    setError("");
+    const res = await fetch(`/api/applications/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        assigned_by: assignedBy || null,
+        assigned_to: assignedTo || null,
+        assignment_due_at: assignmentDueAt || null,
+        assignment_note: assignmentNote || null,
+      }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      const data = await res.json();
+      setError(data.error || "Something went wrong.");
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Edit assignment{item.candidates ? ` — ${item.candidates.name}` : ""}</h2>
+
+        <div className="field-group">
+          <label>Assigned by</label>
+          <input value={assignedBy} onChange={(e) => setAssignedBy(e.target.value)} placeholder="Manager/admin name" />
+        </div>
+        <div className="field-group">
+          <label>Application owner</label>
+          <input value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} placeholder="Application engineer name" />
+        </div>
+        <div className="field-group">
+          <label>Due date</label>
+          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Assignment note</label>
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} />
+        </div>
+
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

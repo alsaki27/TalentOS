@@ -7,6 +7,7 @@ import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
 
 interface Applicant {
+  application_id: string;
   candidate_id: string;
   name: string;
   avatar_url: string | null;
@@ -100,14 +101,19 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+const PAGE_SIZE = 50;
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showImportAts, setShowImportAts] = useState(false);
   const [showApplyFor, setShowApplyFor] = useState<Job | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
@@ -115,41 +121,53 @@ export default function JobsPage() {
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
+  const [facets, setFacets] = useState<{ sources: string[]; employmentTypes: string[]; categories: string[] }>({ sources: [], employmentTypes: [], categories: [] });
 
-  async function load() {
+  // Debounce the free-text search box so it doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    fetch("/api/jobs/facets").then((r) => r.json()).then(setFacets);
+  }, []);
+
+  function buildParams(pageNum: number, pageSize: number) {
+    const params = new URLSearchParams();
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(pageSize));
+    if (search) params.set("search", search);
+    if (sourceFilter) params.set("source", sourceFilter);
+    if (tierFilter) params.set("roleTier", tierFilter);
+    if (activeFilter) params.set("active", activeFilter);
+    if (employmentTypeFilter) params.set("employmentType", employmentTypeFilter);
+    if (categoryFilter) params.set("category", categoryFilter);
+    if (postedSort) params.set("sort", postedSort === "asc" ? "posted_asc" : "posted_desc");
+    return params;
+  }
+
+  async function load(pageNum: number) {
     setLoading(true);
-    const res = await fetch("/api/jobs");
-    setJobs(await res.json());
+    const res = await fetch(`/api/jobs?${buildParams(pageNum, PAGE_SIZE)}`);
+    const data = await res.json();
+    const newTotal = data.total ?? 0;
+    const totalPages = Math.max(1, Math.ceil(newTotal / PAGE_SIZE));
+    if (pageNum > totalPages && pageNum > 1) {
+      setLoading(false);
+      return load(totalPages);
+    }
+    setJobs(data.jobs ?? []);
+    setTotal(newTotal);
+    setPage(pageNum);
     setSelected(new Set());
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  // Any filter/search/sort change re-queries the server from page 1.
+  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, postedSort]);
 
-  const sources = Array.from(new Set(jobs.map((j) => j.source))).sort();
-  const employmentTypes = Array.from(new Set(jobs.map((j) => j.employment_type).filter(Boolean))).sort() as string[];
-  const categories = Array.from(new Set(jobs.flatMap((j) => j.category_tags?.length ? j.category_tags : j.job_category ? [j.job_category] : []).filter(Boolean))).sort() as string[];
-
-  const filtered = jobs.filter((j) => {
-    if (sourceFilter && j.source !== sourceFilter) return false;
-    if (tierFilter && j.role_tier !== tierFilter) return false;
-    if (activeFilter && (activeFilter === "active") !== j.is_active) return false;
-    if (employmentTypeFilter && j.employment_type !== employmentTypeFilter) return false;
-    if (categoryFilter && !(j.category_tags?.includes(categoryFilter) || j.job_category === categoryFilter)) return false;
-    if (search) {
-      const haystack = `${j.title} ${j.company ?? ""} ${j.location ?? ""}`.toLowerCase();
-      if (!haystack.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
-
-  if (postedSort) {
-    filtered.sort((a, b) => {
-      const av = a.posted_at ?? "";
-      const bv = b.posted_at ?? "";
-      return postedSort === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-    });
-  }
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   function togglePostedSort() {
     setPostedSort((prev) => (prev === "desc" ? "asc" : prev === "asc" ? "" : "desc"));
@@ -165,26 +183,34 @@ export default function JobsPage() {
 
   function toggleAll() {
     setSelected((prev) =>
-      prev.size === filtered.length ? new Set() : new Set(filtered.map((j) => j.id))
+      prev.size === jobs.length ? new Set() : new Set(jobs.map((j) => j.id))
     );
   }
 
   async function deleteOne(id: string) {
     if (!confirm("Delete this job? This also removes any applications logged against it.")) return;
     await fetch(`/api/jobs/${id}`, { method: "DELETE" });
-    load();
+    load(page);
   }
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected job(s)? This also removes any applications logged against them.`)) return;
     await Promise.all(Array.from(selected).map((id) => fetch(`/api/jobs/${id}`, { method: "DELETE" })));
-    load();
+    load(page);
+  }
+
+  async function removeAssignment(applicant: Applicant) {
+    if (!confirm(`Remove ${applicant.name}'s assignment for this job?`)) return;
+    await fetch(`/api/applications/${applicant.application_id}`, { method: "DELETE" });
+    load(page);
   }
 
   const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter;
 
-  function exportCsv() {
-    const csv = toCsv(filtered, [
+  async function exportCsv() {
+    const res = await fetch(`/api/jobs?${buildParams(1, 5000)}`);
+    const data = await res.json();
+    const csv = toCsv(data.jobs ?? [], [
       "title", "company", "location", "source", "job_category", "category_relevance_score", "role_tier", "employment_type",
       "seniority_level", "posted_at", "is_active", "applicant_count",
     ]);
@@ -203,10 +229,10 @@ export default function JobsPage() {
       </div>
 
       <div className="filter-bar">
-        <input placeholder="Search title, company, location…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <input placeholder="Search title, company, location…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
         <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
           <option value="">All sources</option>
-          {sources.map((s) => <option key={s} value={s}>{s}</option>)}
+          {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
           <option value="">All tiers</option>
@@ -219,25 +245,25 @@ export default function JobsPage() {
           <option value="active">Active only</option>
           <option value="inactive">Inactive only</option>
         </select>
-        {employmentTypes.length > 0 && (
+        {facets.employmentTypes.length > 0 && (
           <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
             <option value="">All employment types</option>
-            {employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         )}
-        {categories.length > 0 && (
+        {facets.categories.length > 0 && (
           <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
             <option value="">All categories</option>
-            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+            {facets.categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setSourceFilter(""); setTierFilter(""); setActiveFilter(""); setEmploymentTypeFilter(""); setCategoryFilter(""); }}>
+          <button onClick={() => { setSearchInput(""); setSearch(""); setSourceFilter(""); setTierFilter(""); setActiveFilter(""); setEmploymentTypeFilter(""); setCategoryFilter(""); }}>
             Clear filters
           </button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
-        <span className="muted" style={{ fontSize: 12 }}>{filtered.length} of {jobs.length}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{jobs.length} of {total}</span>
       </div>
 
       {selected.size > 0 && (
@@ -249,16 +275,14 @@ export default function JobsPage() {
 
       {loading ? (
         <p className="muted">Loading…</p>
-      ) : jobs.length === 0 ? (
-        <div className="empty">No jobs yet. Add one manually or import a CSV.</div>
-      ) : filtered.length === 0 ? (
-        <div className="empty">No jobs match these filters.</div>
+      ) : total === 0 ? (
+        <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
         <table className="table">
           <thead>
             <tr>
               <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === filtered.length} onChange={toggleAll} />
+                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
               </th>
               <th>Job</th>
               <th>Company</th>
@@ -272,7 +296,7 @@ export default function JobsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((job) => (
+            {jobs.map((job) => (
               <tr key={job.id}>
                 <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
                 <td>
@@ -299,13 +323,18 @@ export default function JobsPage() {
                   {job.applicants.length > 0 && (
                     <div>
                       {job.applicants.map((a) => (
-                        <span key={a.candidate_id} title={`${a.name} — ${a.status}`}>
+                        <button
+                          key={a.application_id}
+                          className="avatar-button"
+                          title={`${a.name} — ${a.status} (click to remove)`}
+                          onClick={() => removeAssignment(a)}
+                        >
                           {a.avatar_url ? (
                             <img className="avatar-circle" src={a.avatar_url} alt={a.name} />
                           ) : (
                             <span className="avatar-circle">{initials(a.name)}</span>
                           )}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -320,20 +349,28 @@ export default function JobsPage() {
         </table>
       )}
 
+      {total > 0 && (
+        <div className="filter-bar" style={{ justifyContent: "flex-end" }}>
+          <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
+          <span className="muted" style={{ fontSize: 12 }}>Page {page} of {totalPages}</span>
+          <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+        </div>
+      )}
+
       {showAdd && (
-        <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(); }} />
+        <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(1); }} />
       )}
       {showImport && (
-        <ImportFileModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(); }} />
+        <ImportFileModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(1); }} />
       )}
       {showImportAts && (
-        <ImportAtsModal onClose={() => setShowImportAts(false)} onImported={() => { setShowImportAts(false); load(); }} />
+        <ImportAtsModal onClose={() => setShowImportAts(false)} onImported={() => { setShowImportAts(false); load(1); }} />
       )}
       {showApplyFor && (
         <LogApplicationModal
           job={showApplyFor}
           onClose={() => setShowApplyFor(null)}
-          onLogged={() => { setShowApplyFor(null); load(); }}
+          onLogged={() => { setShowApplyFor(null); load(page); }}
         />
       )}
     </>
@@ -709,7 +746,7 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
   const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
 
   async function submit() {
-    if (!token.trim()) { setError("Enter the company's board token/slug."); return; }
+    if (!token.trim()) { setError(provider === "usajobs" ? "Enter a search keyword." : "Enter the company's board token/slug."); return; }
     setImporting(true);
     setError("");
     const res = await fetch("/api/import/ats", {
@@ -728,7 +765,9 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>Import from ATS</h2>
         <p className="muted" style={{ fontSize: 12 }}>
-          Pulls live postings from a company's public job board (no scraping, no auth).
+          Pulls live postings from a company's public job board, or a USAJobs keyword search
+          (no scraping). USAJobs requires a free API key — set <code>USAJOBS_API_KEY</code> and{" "}
+          <code>USAJOBS_USER_AGENT</code> env vars first (see developer.usajobs.gov).
         </p>
 
         <div className="field-group">
@@ -737,14 +776,20 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
             <option value="greenhouse">Greenhouse</option>
             <option value="lever">Lever</option>
             <option value="ashby">Ashby</option>
+            <option value="usajobs">USAJobs (keyword search)</option>
           </select>
         </div>
         <div className="field-group">
-          <label>Company board token / slug</label>
+          <label>{provider === "usajobs" ? "Search keyword" : "Company board token / slug"}</label>
           <input
             value={token}
             onChange={(e) => setToken(e.target.value)}
-            placeholder={provider === "greenhouse" ? "e.g. airbnb" : provider === "lever" ? "e.g. netflix" : "e.g. ramp"}
+            placeholder={
+              provider === "greenhouse" ? "e.g. airbnb"
+              : provider === "lever" ? "e.g. netflix"
+              : provider === "usajobs" ? "e.g. civil engineer"
+              : "e.g. ramp"
+            }
           />
         </div>
 

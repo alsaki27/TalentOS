@@ -146,6 +146,7 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
 .badge-offer { background: #e7f2ec; color: var(--accent); font-weight: 700; }
 
 .muted { color: var(--ink-soft); }
+.overdue { color: var(--danger); font-weight: 600; }
 .empty {
   text-align: center;
   padding: 48px 20px;
@@ -227,4 +228,13 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   margin: 2px;
   object-fit: cover;
   vertical-align: middle;
+}
+
+.avatar-button {
+  display: inline-block;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
 }

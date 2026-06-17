@@ -40,21 +40,28 @@ No AI integrations yet (see [ROADMAP.md](./ROADMAP.md) for why and what's planne
   resume upload, multiple **resume/cover-letter variants** (tailored per job), and every
   application they've made — each with a follow-up date and an expandable status-change
   history.
-- **`/jobs`** — the job masterlist. Search + filter by source/tier/active-status/employment
-  type, sort by posted date, multi-select bulk delete, CSV export. Add jobs manually, import
-  a CSV, import a raw LinkedIn scraper JSON dump, or pull live postings straight from a
-  company's public **Greenhouse/Lever/Ashby** job board (no scraping, no auth). Re-importing
-  any source skips jobs already in the masterlist (matched by posting URL) instead of
-  duplicating them. Click a job to see/edit every field, including the LinkedIn/ATS-sourced
-  ones (seniority level, employment type, applicant count, company size/website, posted
-  date). Applicants for a job show as avatar circles so you can tell at a glance who's
-  already applied. "Log application" lets you pick which resume variant was used.
+- **`/jobs`** — the job masterlist, server-side paginated (50/page) and filtered by
+  source/tier/active-status/employment type/category, sortable by posted date, multi-select
+  bulk delete, CSV export (exports all matching rows, not just the current page). Add jobs
+  manually, import a CSV, import a raw LinkedIn scraper JSON dump, or pull live postings
+  straight from a company's public **Greenhouse/Lever/Ashby** job board (no scraping, no
+  auth). Re-importing any source skips jobs already in the masterlist (matched by posting
+  URL) instead of duplicating them. Click a job to see/edit every field, including the
+  LinkedIn/ATS-sourced ones (seniority level, employment type, applicant count, company
+  size/website, posted date). Applicants for a job show as avatar circles — click one to
+  undo a wrong assignment. "Assign application" lets a manager pick one or more candidates
+  at once, which resume variant to use, and who on the team owns applying.
+- **`/application-queue`** — the application engineer's dashboard: every assigned/stacked/
+  in-progress ticket, filterable by status/owner/search, overdue due-dates highlighted.
+  Start a ticket, mark it applied, edit its owner/due-date/note, or remove a wrong
+  assignment.
 - **`/follow-ups`** — every application with a follow-up date set, across all candidates.
   Filter by status/search/overdue-vs-upcoming, mark done (clears the date) or delete the
   application outright, single or in bulk.
 - **`/analytics`** — non-AI conversion metrics: response/interview/offer rates, performance
   broken down by job source (which channels actually convert) and by resume variant (which
-  tailored resume gets more interviews).
+  tailored resume gets more interviews). Pre-submission pipeline tickets (assigned/stacked/
+  in-progress) are tracked separately and excluded from conversion-rate math.
 
 ## CSV import format
 
@@ -74,6 +81,10 @@ tier badge — anything else just won't show a badge, it won't break.
   enter the company's board token/slug (e.g. a Greenhouse board at
   `boards.greenhouse.io/asana` → token `asana`). Fetches live postings from that company's
   public job-board API. `src/lib/atsFetchers.ts` has the per-provider fetch + normalize logic.
+- **USAJobs**: same "Import from ATS" modal, provider "USAJobs" — unlike the others this is
+  a keyword search (e.g. "civil engineer"), not a company token. Requires a free API key:
+  sign up at developer.usajobs.gov, then set `USAJOBS_API_KEY` and `USAJOBS_USER_AGENT`
+  (the email you registered with) in `.env.local`.
 
 ## Universal Job Import Normalizer
 
@@ -224,10 +235,10 @@ owns workflow" principle (see `ROADMAP.md`) without actually adding an AI depend
 - **No authentication at all.** Every API route uses the Supabase service role key directly.
   Anyone with the app URL has full read/write access to every candidate, resume, and
   application. Do not deploy this publicly without adding auth first (tracked in ROADMAP.md).
-- No pagination — list pages fetch and render every row client-side. Fine at hundreds of
-  rows, will need addressing before thousands.
-- Storage cleanup on delete is incomplete: deleting a candidate/resume-variant/job removes
-  the database row but not the underlying file in Supabase Storage.
+- No pagination on candidates/application-queue/follow-ups — those list pages fetch and
+  render every row client-side. Fine at hundreds of rows, will need addressing before
+  thousands (jobs already hit this at 1,000 rows and now paginates server-side; see
+  ROADMAP.md).
 
 ## Deploy
 
