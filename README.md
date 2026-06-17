@@ -75,6 +75,131 @@ tier badge — anything else just won't show a badge, it won't break.
   `boards.greenhouse.io/asana` → token `asana`). Fetches live postings from that company's
   public job-board API. `src/lib/atsFetchers.ts` has the per-provider fetch + normalize logic.
 
+## Planned: Universal Job Import Normalizer
+
+**Status: spec only, not yet implemented.** This section is the build spec for the next
+import-pipeline phase — written for whoever implements it (currently slated for Codex), so
+read it as instructions, not a description of existing code.
+
+### Problem
+
+Today there are 3 separate, hand-written import paths — CSV (fixed column names:
+`title,company,location,role_tier,salary_range,source_url,notes`), LinkedIn (fixed
+camelCase scraper keys), ATS (fixed per-provider API response shapes). Adding a new source
+or tolerating a slightly different header name currently means writing new code. None of
+the three tolerate: renamed headers, missing headers, extra/unexpected columns, or
+delimiter variations (TSV, semicolon-separated, etc.).
+
+### Goal
+
+A single, reusable pipeline — **detect → parse → map fields → clean → dedupe → insert** —
+that the existing three importers become thin adapters of, plus a new generic "Import
+anything" entry point on `/jobs` for arbitrary CSV/TSV/JSON files with unknown or missing
+headers.
+
+### Pipeline stages
+
+1. **Format detection** (`src/lib/normalizer/detect.ts`) — sniff file extension + content
+   shape → `csv` | `tsv` | `json`. (Excel `.xlsx` is a later phase, not v1 — don't add a new
+   dependency for it yet.)
+2. **Parsing** (`src/lib/normalizer/parse.ts`) — papaparse (already a dependency) for
+   delimited formats, `JSON.parse` for JSON. Output a uniform shape:
+   ```ts
+   { headers: string[], rows: Record<string, string>[], headersDetected: boolean }
+   ```
+   When a delimited file has no header row (heuristic: first row "looks like" data, not
+   labels — e.g. mostly numeric/URL/date-shaped cells), synthesize positional headers
+   (`col_0`, `col_1`, ...) and set `headersDetected: false` rather than guessing wrong.
+3. **Field mapping** (`src/lib/normalizer/fieldMap.ts`) — **heuristic-first, by design
+   decision** (see "On AI" below):
+   - Normalize each header (lowercase, strip punctuation/whitespace).
+   - Exact-match against a synonym dictionary per schema field, e.g.:
+     ```
+     title:       title, job title, position, role, job_title, posting title
+     company:     company, employer, company name, organization, companyname
+     location:    location, city, job location, joblocation
+     source_url:  url, link, job url, posting url, source_url, apply url
+     posted_at:   posted, date posted, posted_at, publish date, postedat
+     salary_range: salary, salary range, comp, compensation
+     role_tier:   tier, role tier, category
+     notes:       notes, comment, comments, description
+     ```
+   - If no exact match, fuzzy-match (Levenshtein or Jaro-Winkler distance) within a
+     threshold (start at edit-distance ≤ 2 or similarity ≥ 0.8 — tune against real sample
+     files, don't hardcode without testing).
+   - Anything still unmapped is **surfaced, not silently dropped** — feeds into stage 4.
+4. **Manual-mapping fallback UI** — when `headersDetected: false`, or one+ required field
+   (`title`) has no confident mapping: show a one-time screen with a preview of the first
+   ~5 rows per column and a dropdown per column (assign to a schema field, or "ignore").
+   This is the actual answer to "headerless data" and "all schemas" — not inference magic,
+   a real but low-friction human step, same pattern as Mailchimp/Airtable-style CSV
+   importers.
+   - **Remember mappings**: persist confirmed mappings as a named "import profile" so the
+     same vendor's recurring export doesn't need re-mapping every time. New table:
+     ```sql
+     create table if not exists import_profiles (
+       id          uuid primary key default gen_random_uuid(),
+       label       text not null,            -- e.g. "Acme Staffing weekly export"
+       column_map  jsonb not null,            -- { "Job Title": "title", "Comp": "salary_range", ... }
+       created_at  timestamptz default now()
+     );
+     ```
+     On a new import, if the file's header set matches a saved profile closely, offer to
+     reuse it instead of re-mapping.
+5. **Cleaning** (`src/lib/normalizer/clean.ts`):
+   - Trim whitespace on every string field.
+   - Parse dates in multiple common formats (`MM/DD/YYYY`, `YYYY-MM-DD`, `Month D, YYYY`,
+     relative strings like "3 days ago") into ISO `date` for `posted_at`.
+   - Normalize `role_tier` to one of `osp` / `adjacent_1` / `adjacent_2` only when
+     confidently recognizable (exact or near-exact match); otherwise `null` — never guess a
+     wrong tier.
+   - Drop fully-empty rows (no `title` and nothing else useful).
+6. **Dedup** — extend the existing `filterNewJobs` (`src/lib/jobDedup.ts`, matches on
+   `source_url`) with a fallback for rows with no URL: fuzzy-match on normalized
+   `title + company + location` against existing jobs, same confidence-threshold approach
+   as field mapping. Don't dedupe on title alone — too many false positives across
+   different companies/locations.
+7. **Insert** — same `jobs` table. `source` becomes either the existing labels
+   (`csv_import` / `linkedin` / `greenhouse` / `lever` / `ashby`) when called from an
+   existing adapter, or `"normalized_import"` (or the import profile's label) for the new
+   generic entry point.
+
+### Migrating the existing importers
+
+Once the pipeline exists, `import/jobs`, `import/linkedin`, and `import/ats` routes should
+become thin callers of the same `parse → map → clean → dedupe → insert` pipeline instead of
+each having their own bespoke mapping/insert logic — reduces duplicated dedup/insert code
+across 4 routes to 1. This is a refactor of working code, so do it as its own pass with
+tests/manual verification before and after, not bundled into the new-feature work.
+
+### On AI — explicit decision, don't relitigate
+
+This pipeline is **heuristic-only for v1**: synonym dictionary + fuzzy string matching +
+the manual-mapping UI as the fallback for anything heuristics can't confidently resolve.
+That's a deliberate choice to keep this app's standing no-AI-integrations stance intact.
+
+Leave one clean extension point for later, but do not wire it up by default:
+```ts
+// src/lib/normalizer/fieldMap.ts
+export interface FieldMapper {
+  mapFields(headers: string[], sampleRows: Record<string, string>[]): FieldMapping;
+}
+// Default export: heuristicFieldMapper (synonym dict + fuzzy match, described above).
+// A future llmFieldMapper implementing the same interface could replace only the
+// "still unmapped after heuristics" columns — gated behind an explicit opt-in (e.g. an
+// env var or a per-import checkbox), never the default path.
+```
+This mirrors the original project vision's "provider abstraction, AI owns reasoning / app
+owns workflow" principle (see `ROADMAP.md`) without actually adding an AI dependency now.
+
+### Out of scope for this phase
+
+- Excel/`.xlsx` parsing (would add a new dependency — `xlsx`/`exceljs` — defer until a real
+  need shows up).
+- Free-text or PDF job-description parsing.
+- Auto-applying a saved import profile without user confirmation on first use with a new
+  file (always show what it's about to do before inserting).
+
 ## Architecture notes
 
 - Next.js 14 App Router, plain CSS (no component library) — see `src/app/globals.css` for
