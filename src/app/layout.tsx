@@ -2,6 +2,7 @@
 import "./globals.css";
 import NavBar from "./NavBar";
 import ChatWidget from "./ChatWidget";
+import ThemeProvider from "./ThemeProvider";
 
 export const metadata = {
   title: "Skarion Tracker",
@@ -10,11 +11,13 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <NavBar />
-        <main className="page">{children}</main>
-        <ChatWidget />
+        <ThemeProvider>
+          <NavBar />
+          <main className="page">{children}</main>
+          <ChatWidget />
+        </ThemeProvider>
       </body>
     </html>
   );

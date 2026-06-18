@@ -1,7 +1,8 @@
-import { Column, Entity, Index, OneToMany } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne, OneToMany } from "typeorm";
 import { BaseEntity } from "./base.entity";
 import { ApplicationEntity } from "./application.entity";
 import { AuditLogEntity } from "./audit-log.entity";
+import { OrganizationEntity } from "./organization.entity";
 import { SavedJobSearchEntity } from "./saved-job-search.entity";
 
 export type UserRole = "admin" | "manager" | "application_engineer" | "recruiter";
@@ -25,6 +26,13 @@ export class ProfileEntity extends BaseEntity {
 
   @Column({ name: "is_active", type: "boolean", default: true })
   isActive!: boolean;
+
+  @Column({ name: "organization_id", type: "uuid", nullable: true })
+  organizationId!: string | null;
+
+  @ManyToOne(() => OrganizationEntity, (org) => org.members)
+  @JoinColumn({ name: "organization_id" })
+  organization?: OrganizationEntity | null;
 
   @OneToMany(() => ApplicationEntity, (application) => application.assignedToUser)
   assignedApplications!: ApplicationEntity[];

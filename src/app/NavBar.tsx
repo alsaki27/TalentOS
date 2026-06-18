@@ -6,6 +6,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import ThemeToggle from "../components/ThemeToggle";
 
 interface MeResponse {
   profile: {
@@ -70,25 +71,25 @@ export default function NavBar() {
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href));
 
   return (
-    <nav className="topnav">
-      <span className="brand">Skarion Tracker</span>
-      <div className="navlinks">
-        <Link href="/candidates">Candidates</Link>
-        <Link href="/jobs">Jobs</Link>
-        <Link href="/companies">Companies</Link>
-        <Link href="/application-queue">
+    <nav className="topnav flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
+      <span className="brand font-semibold text-[15px] text-ink tracking-tight">Skarion Tracker</span>
+      <div className="navlinks flex items-center gap-5">
+        <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
+        <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>
+        <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>
+        <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
           Application Queue
           {notifications && (notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent) > 0 && (
             <span className="nav-badge">{notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent}</span>
           )}
         </Link>
-        <Link href="/follow-ups">
+        <Link href="/follow-ups" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
           Follow-ups
           {notifications && notifications.followUps.due > 0 && <span className="nav-badge">{notifications.followUps.due}</span>}
         </Link>
-        <div className="nav-more" ref={moreRef}>
+        <div className="nav-more relative" ref={moreRef}>
           <button
-            className="nav-more-trigger"
+            className="nav-more-trigger text-sm font-medium text-ink-soft hover:text-ink transition-colors"
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
             style={{ color: moreActive ? "var(--ink)" : undefined }}
@@ -96,25 +97,26 @@ export default function NavBar() {
             More ▾
           </button>
           {moreOpen && (
-            <div className="nav-more-menu">
+            <div className="nav-more-menu absolute top-7 left-0 min-w-[160px] bg-surface border border-border rounded-lg shadow-lg p-1.5 flex flex-col z-50">
               {moreLinks.map((link) => (
-                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)}>
+                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)} className="px-2.5 py-2 rounded-md text-sm font-medium text-ink hover:bg-bg transition-colors">
                   {link.label}
                 </Link>
               ))}
             </div>
           )}
         </div>
-        <Link href="/account">Account</Link>
+        <Link href="/account" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Account</Link>
       </div>
-      <div className="nav-user">
+      <div className="nav-user flex items-center gap-3 text-xs text-ink-soft">
+        <ThemeToggle />
         {me?.profile && (
-          <span>
+          <span className="hidden md:inline">
             {me.profile.display_name || me.profile.email || "User"}
             <span className="role-pill">{me.profile.role.replaceAll("_", " ")}</span>
           </span>
         )}
-        <button onClick={logout}>Sign out</button>
+        <button onClick={logout} className="text-xs">Sign out</button>
       </div>
     </nav>
   );

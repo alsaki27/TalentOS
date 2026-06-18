@@ -1,3 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* existing CSS below — DO NOT REMOVE */
+
 /* src/app/globals.css */
 /* Internal ops tool — optimized for scanability, not marketing polish. */
 
@@ -600,4 +606,16 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
     gap: 10px;
     flex-direction: column;
   }
+}
+
+.dark {
+  --ink: #e8e9ec;
+  --ink-soft: #9a9fa8;
+  --bg: #0f1115;
+  --surface: #1a1d23;
+  --border: #2a2d35;
+  --accent: #3d8f6a;
+  --accent-soft: #1a2e25;
+  --warn: #d4723a;
+  --danger: #d44a3a;
 }
