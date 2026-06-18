@@ -3,6 +3,7 @@
 // Matches first on source_url, then on title + company + posted_at + applicants_count.
 
 import { supabase } from "@/lib/supabase";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 
 type DedupeCandidate = {
   source_url?: string | null;
@@ -79,11 +80,13 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
   const urls = rowsWithUrl.map((r) => r.source_url).filter((u): u is string => !!u);
   const { data: existing } = await supabase
     .from("jobs")
-    .select("source_url")
+    .select("id, source_url")
     .in("source_url", urls);
 
-  const existingUrls = new Set((existing ?? []).map((j) => j.source_url as string));
+  const existingByUrl = new Map((existing ?? []).map((j) => [j.source_url as string, j.id as string]));
+  const existingUrls = new Set(existingByUrl.keys());
   let updated = 0;
+  const syncedRows: Array<T & { id: string }> = [];
 
   for (const row of rowsWithUrl) {
     if (!row.source_url || !existingUrls.has(row.source_url)) continue;
@@ -98,9 +101,14 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
       .from("jobs")
       .update(updates)
       .eq("source_url", row.source_url);
-    if (!error) updated++;
+    if (!error) {
+      updated++;
+      const id = existingByUrl.get(row.source_url);
+      if (id) syncedRows.push({ ...row, id });
+    }
   }
 
+  if (syncedRows.length > 0) await syncCompanyDirectoryFromJobs(syncedRows);
   return updated;
 }
 

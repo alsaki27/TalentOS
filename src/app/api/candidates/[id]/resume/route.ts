@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { deleteStorageFile } from "@/lib/storage";
+import { uploadResumeFile } from "@/lib/resumeStorage";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const formData = await req.formData();
@@ -24,19 +25,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const path = `candidates/${params.id}/${Date.now()}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  const { error: uploadErr } = await supabase.storage
-    .from("resumes")
-    .upload(path, buffer, { contentType: file.type, upsert: true });
-
-  if (uploadErr) {
-    return NextResponse.json({ error: uploadErr.message }, { status: 500 });
+  let uploaded: { url: string };
+  try {
+    uploaded = await uploadResumeFile(path, buffer, file.type);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
   }
-
-  const { data: urlData } = supabase.storage.from("resumes").getPublicUrl(path);
 
   const { data, error } = await supabase
     .from("candidates")
-    .update({ resume_url: urlData.publicUrl, resume_filename: file.name })
+    .update({ resume_url: uploaded.url, resume_filename: file.name })
     .eq("id", params.id)
     .select()
     .single();

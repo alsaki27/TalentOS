@@ -3,13 +3,18 @@
 // USAJobs keyword search (no scraping) and bulk insert new ones into the jobs table.
 
 import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { fetchAtsJobs } from "@/lib/atsFetchers";
 import { filterNewJobs } from "@/lib/jobDedup";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 
 const PROVIDERS = ["greenhouse", "lever", "ashby", "usajobs"] as const;
 
 export async function POST(req: NextRequest) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
   const provider = body.provider;
   const token = body.token?.trim();
@@ -38,9 +43,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ imported: 0, skipped: duplicates });
   }
 
-  const { data, error } = await supabase.from("jobs").insert(newRows).select("id");
+  const { data, error } = await supabase.from("jobs").insert(newRows).select("*");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await syncCompanyDirectoryFromJobs(data ?? []);
 
   return NextResponse.json({
     imported: data.length,

@@ -3,8 +3,10 @@
 // POST -> manually add one job
 
 import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { categorizeJob } from "@/lib/jobCategorizer";
 import { filterNewJobs } from "@/lib/jobDedup";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +15,11 @@ export const dynamic = "force-dynamic";
 // HTML/JSON blobs only needed on the job detail page, not the list view. At 1,000+
 // rows including them ballooned the list payload to 24MB on every page load.
 const LIST_COLUMNS = `
-  id, title, company, location, source, role_tier, salary_range, source_url, notes,
+  id, company_id, title, company, location, source, role_tier, salary_range, source_url, notes,
   is_active, seniority_level, employment_type, applicants_count, company_employees_count,
   company_website, posted_at, external_job_id, tracking_id, ref_id, apply_url,
-  description_text, job_function, industries, input_url, company_linkedin_url,
-  company_logo_url, company_slogan, company_description, job_poster_name, job_poster_title,
+  job_function, industries, input_url, company_linkedin_url,
+  company_logo_url, company_slogan, job_poster_name, job_poster_title,
   job_poster_profile_url, job_poster_photo_url, job_category, category_tags,
   category_relevance_score, last_seen_at, created_at,
   applications(id, status, candidates(id, name, avatar_url))
@@ -26,7 +28,7 @@ const LIST_COLUMNS = `
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
-  const pageSize = Math.min(5000, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
+  const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
   const source = url.searchParams.get("source") || "";
   const roleTier = url.searchParams.get("roleTier") || "";
@@ -35,7 +37,7 @@ export async function GET(req: NextRequest) {
   const category = url.searchParams.get("category") || "";
   const sort = url.searchParams.get("sort") || "";
 
-  let query = supabase.from("jobs").select(LIST_COLUMNS, { count: "exact" });
+  let query = supabase.from("jobs").select(LIST_COLUMNS, { count: "planned" });
 
   if (search) query = query.or(`title.ilike.%${search}%,company.ilike.%${search}%,location.ilike.%${search}%`);
   if (source) query = query.eq("source", source);
@@ -59,11 +61,9 @@ export async function GET(req: NextRequest) {
     ...job,
     ...(job.job_category ? {} : categorizeJob([
       job.title,
-      job.description_text,
       job.notes,
       job.job_function,
       job.industries,
-      job.company_description,
     ])),
     applicant_count: job.applications?.length ?? 0,
     applicants: (job.applications ?? []).map((a: any) => ({
@@ -79,6 +79,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
 
   if (!body.title) {
@@ -117,5 +120,6 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await syncCompanyDirectoryFromJobs([data]);
   return NextResponse.json(data, { status: 201 });
 }

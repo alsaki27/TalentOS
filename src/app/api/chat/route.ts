@@ -1,0 +1,191 @@
+// src/app/api/chat/route.ts
+// POST -> send a message to the AI assistant. Creates a conversation if none given,
+// loads prior text turns for context, runs the tool-calling loop (read-only tools
+// in src/lib/ai/tools.ts) until the model gives a final answer or a step cap is hit,
+// and persists everything to chat_conversations/chat_messages.
+
+import { NextRequest, NextResponse } from "next/server";
+import { requireCurrentUser } from "@/lib/auth";
+import { supabase } from "@/lib/supabase";
+import { getActiveProvider } from "@/lib/ai";
+import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
+import { executeTool, TOOLS } from "@/lib/ai/tools";
+
+const MAX_TOOL_ITERATIONS = 6;
+const MAX_HISTORY_TURNS = 40;
+const MAX_USER_MESSAGES_PER_DAY = 200;
+
+export async function POST(req: NextRequest) {
+  const { context, response } = await requireCurrentUser();
+  if (response) return response;
+
+  const active = getActiveProvider();
+  if (!active) {
+    return NextResponse.json(
+      { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY (see README)." },
+      { status: 503 },
+    );
+  }
+  const { provider } = active;
+
+  const body = await req.json();
+  const userMessage = String(body.message ?? "").trim();
+  const attachment = body.attachment as
+    | { url: string; name: string; type: string; textContent?: string | null }
+    | undefined;
+
+  if (!userMessage && !attachment) {
+    return NextResponse.json({ error: "message or attachment is required" }, { status: 400 });
+  }
+
+  // Cost guardrail: this calls a paid, unsupervised external API. A per-user daily cap
+  // bounds worst-case spend from a runaway client/script far more cheaply than discovering
+  // the bill later.
+  const { data: userConversations } = await supabase
+    .from("chat_conversations")
+    .select("id")
+    .eq("user_id", context!.profile.user_id);
+  const conversationIds = (userConversations ?? []).map((c) => c.id);
+
+  if (conversationIds.length > 0) {
+    const sinceMidnight = new Date();
+    sinceMidnight.setHours(0, 0, 0, 0);
+    const { count: messagesToday } = await supabase
+      .from("chat_messages")
+      .select("id", { count: "exact", head: true })
+      .eq("role", "user")
+      .gte("created_at", sinceMidnight.toISOString())
+      .in("conversation_id", conversationIds);
+
+    if ((messagesToday ?? 0) >= MAX_USER_MESSAGES_PER_DAY) {
+      return NextResponse.json(
+        { error: `Daily assistant message limit (${MAX_USER_MESSAGES_PER_DAY}) reached. Try again tomorrow.` },
+        { status: 429 },
+      );
+    }
+  }
+
+  let conversationId = body.conversation_id as string | undefined;
+  const title = userMessage.slice(0, 60) || attachment?.name || "New conversation";
+
+  if (!conversationId) {
+    const { data: created, error } = await supabase
+      .from("chat_conversations")
+      .insert({ user_id: context!.profile.user_id, title })
+      .select("id")
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    conversationId = created.id;
+  }
+
+  const { data: priorMessages } = await supabase
+    .from("chat_messages")
+    .select("role, content, attachment_name, attachment_type, attachment_text")
+    .eq("conversation_id", conversationId)
+    .in("role", ["user", "assistant"])
+    .order("created_at", { ascending: true })
+    .limit(MAX_HISTORY_TURNS);
+
+  const history: AiMessage[] = (priorMessages ?? []).map((m) => {
+    let text = m.content;
+    if (m.attachment_name) {
+      text += `\n\n[Attached file: ${m.attachment_name} (${m.attachment_type})]`;
+      if (m.attachment_text) text += `\n--- file content ---\n${m.attachment_text}\n--- end file content ---`;
+    }
+    return { role: m.role as "user" | "assistant", content: [{ type: "text", text }] };
+  });
+
+  // The model only ever sees attachments as text: the filename/type always, plus the
+  // extracted content for text-based files (set at upload time in /api/chat/attachments).
+  // Images/PDFs/docs are stored and shown to the user but not analyzed in this v1.
+  let modelText = userMessage;
+  if (attachment) {
+    modelText += `\n\n[Attached file: ${attachment.name} (${attachment.type})]`;
+    if (attachment.textContent) {
+      modelText += `\n--- file content ---\n${attachment.textContent}\n--- end file content ---`;
+    } else {
+      modelText += " (binary file — content not extracted, filename/type only)";
+    }
+  }
+
+  const messages: AiMessage[] = [...history, { role: "user", content: [{ type: "text", text: modelText }] }];
+
+  await supabase.from("chat_messages").insert({
+    conversation_id: conversationId,
+    role: "user",
+    content: userMessage || `Attached: ${attachment?.name}`,
+    attachment_url: attachment?.url ?? null,
+    attachment_name: attachment?.name ?? null,
+    attachment_type: attachment?.type ?? null,
+    attachment_text: attachment?.textContent ?? null,
+  });
+
+  const systemPrompt = [
+    "You are the internal data assistant for TalentOS, a candidate placement tracker.",
+    "Use the available tools to look up real data before answering questions about candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log — never guess or fabricate numbers.",
+    "Tool results are live, authoritative data pulled directly from this app's own database moments ago — not examples, hypotheticals, or data you lack access to. Trust and report them directly; do not hedge by claiming you can't access real-time data after a tool has just given you exactly that.",
+    "Be concise. Use plain language, not raw JSON, in your final answer.",
+    `The person you're talking to has the role: ${context!.profile.role}.`,
+  ].join(" ");
+
+  // On failure, persist a visible error turn instead of leaving the transcript looking
+  // like it silently dropped the user's message (which was already saved above).
+  async function failWithVisibleError(message: string, status: number) {
+    await supabase.from("chat_messages").insert({
+      conversation_id: conversationId,
+      role: "assistant",
+      content: `(error) ${message}`,
+    });
+    return NextResponse.json({ conversation_id: conversationId, error: message }, { status });
+  }
+
+  const toolsUsed: string[] = [];
+  let lastToolCalls: { name: string; result: string }[] = [];
+  let iterations = 0;
+
+  while (iterations < MAX_TOOL_ITERATIONS) {
+    iterations += 1;
+    let aiResponse;
+    try {
+      aiResponse = await provider.send({ system: systemPrompt, messages, tools: TOOLS });
+    } catch (err: any) {
+      return failWithVisibleError(err.message ?? "AI request failed", 502);
+    }
+
+    if (aiResponse.stopReason !== "tool_use") {
+      let finalText = textOf(aiResponse.content) || "(no response)";
+      // Confirmed live with the NVIDIA/Kimi provider: it can degenerate into repeated
+      // tokens right after consuming a tool result. Fall back to the raw data rather than
+      // show the user garbage — only relevant once at least one tool has actually run.
+      if (looksDegenerate(finalText) && lastToolCalls.length > 0) {
+        finalText = [
+          "I looked up the data but couldn't phrase a clean answer this time. Here's exactly what I found:",
+          ...lastToolCalls.map((t) => `\n${t.name}:\n${t.result}`),
+        ].join("\n");
+      }
+      await supabase.from("chat_messages").insert({ conversation_id: conversationId, role: "assistant", content: finalText });
+      await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
+      return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: active.name });
+    }
+
+    messages.push({ role: "assistant", content: aiResponse.content });
+
+    const toolResults: AiContentBlock[] = [];
+    lastToolCalls = [];
+    for (const toolUse of toolUsesOf(aiResponse.content)) {
+      toolsUsed.push(toolUse.name);
+      const result = await executeTool(toolUse.name, toolUse.input, { role: context!.profile.role });
+      lastToolCalls.push({ name: toolUse.name, result });
+      await supabase.from("chat_messages").insert({
+        conversation_id: conversationId,
+        role: "tool",
+        tool_name: toolUse.name,
+        content: JSON.stringify({ input: toolUse.input, result }),
+      });
+      toolResults.push({ type: "tool_result", toolUseId: toolUse.id, content: result });
+    }
+    messages.push({ role: "user", content: toolResults });
+  }
+
+  return failWithVisibleError("Assistant took too many steps without a final answer.", 500);
+}

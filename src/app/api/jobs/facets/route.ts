@@ -29,5 +29,7 @@ export async function GET() {
     sources: Array.from(sources).sort(),
     employmentTypes: Array.from(employmentTypes).sort(),
     categories: Array.from(categories).sort(),
+  }, {
+    headers: { "Cache-Control": "private, max-age=300" },
   });
 }

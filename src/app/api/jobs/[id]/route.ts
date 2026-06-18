@@ -4,7 +4,9 @@
 // DELETE -> remove a job (cascades to its applications)
 
 import { NextRequest, NextResponse } from "next/server";
+import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { categorizeJob } from "@/lib/jobCategorizer";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { supabase } from "@/lib/supabase";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -37,6 +39,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
 
   const allowedFields = [
@@ -63,10 +68,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await syncCompanyDirectoryFromJobs([data]);
   return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  if (response) return response;
+
   const { error } = await supabase.from("jobs").delete().eq("id", params.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

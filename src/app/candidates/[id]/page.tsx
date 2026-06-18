@@ -42,8 +42,17 @@ interface CandidateDetail {
   preferred_locations: string | null;
   salary_expectation: string | null;
   work_authorization: string | null;
+  portal_token: string;
   applications: Application[];
   resumes: Resume[];
+}
+
+interface ApplicationComment {
+  id: string;
+  commenter_name: string;
+  body: string;
+  visible_to_candidate: boolean;
+  created_at: string;
 }
 
 function initials(name: string): string {
@@ -58,7 +67,8 @@ interface ApplicationEvent {
 }
 
 export default function CandidateProfilePage() {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -67,10 +77,13 @@ export default function CandidateProfilePage() {
   const [showAddVariant, setShowAddVariant] = useState(false);
   const [expandedAppId, setExpandedAppId] = useState<string | null>(null);
   const [events, setEvents] = useState<ApplicationEvent[]>([]);
+  const [comments, setComments] = useState<ApplicationComment[]>([]);
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
   const [appStatusFilter, setAppStatusFilter] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
 
   async function load() {
+    if (!id) return;
     setLoading(true);
     const res = await fetch(`/api/candidates/${id}`);
     setCandidate(await res.json());
@@ -121,8 +134,24 @@ export default function CandidateProfilePage() {
       return;
     }
     setExpandedAppId(applicationId);
-    const res = await fetch(`/api/applications/${applicationId}/events`);
-    setEvents(await res.json());
+    const [eventsRes, commentsRes] = await Promise.all([
+      fetch(`/api/applications/${applicationId}/events`),
+      fetch(`/api/applications/${applicationId}/comments`),
+    ]);
+    setEvents(await eventsRes.json());
+    setComments(commentsRes.ok ? await commentsRes.json() : []);
+  }
+
+  async function loadComments(applicationId: string) {
+    const res = await fetch(`/api/applications/${applicationId}/comments`);
+    if (res.ok) setComments(await res.json());
+  }
+
+  function copyPortalLink() {
+    const url = `${window.location.origin}/portal/${candidate?.portal_token}`;
+    navigator.clipboard.writeText(url);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
   }
 
   function toggleAppSelected(id: string) {
@@ -153,7 +182,10 @@ export default function CandidateProfilePage() {
     <>
       <div className="page-header">
         <h1>{candidate.name}</h1>
-        <button onClick={() => setShowEdit(true)}>Edit profile</button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy candidate portal link"}</button>
+          <button onClick={() => setShowEdit(true)}>Edit profile</button>
+        </div>
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
@@ -331,10 +363,11 @@ export default function CandidateProfilePage() {
                 {expandedAppId === a.id && (
                   <tr>
                     <td colSpan={8} style={{ background: "var(--bg)" }}>
+                      <label style={{ display: "block", marginBottom: 6 }}>Status history</label>
                       {events.length === 0 ? (
                         <span className="muted">No status changes recorded yet.</span>
                       ) : (
-                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                        <ul style={{ margin: "0 0 16px", paddingLeft: 18 }}>
                           {events.map((ev) => (
                             <li key={ev.id} className="muted" style={{ fontSize: 12 }}>
                               {new Date(ev.created_at).toLocaleString()} — {ev.from_status ?? "(created)"} → <strong>{ev.to_status}</strong>
@@ -342,6 +375,11 @@ export default function CandidateProfilePage() {
                           ))}
                         </ul>
                       )}
+                      <ApplicationComments
+                        applicationId={a.id}
+                        comments={comments}
+                        onCommented={() => loadComments(a.id)}
+                      />
                     </td>
                   </tr>
                 )}
@@ -372,6 +410,94 @@ export default function CandidateProfilePage() {
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
+}
+
+function ApplicationComments({ applicationId, comments, onCommented }: { applicationId: string; comments: ApplicationComment[]; onCommented: () => void }) {
+  const [commenterName, setCommenterName] = useState("");
+  const [body, setBody] = useState("");
+  const [visibleToCandidate, setVisibleToCandidate] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setCommenterName(localStorage.getItem("skarion_commenter_name") ?? "");
+  }, []);
+
+  async function submit() {
+    if (!commenterName.trim()) { setError("Add your name."); return; }
+    if (!body.trim()) { setError("Write a log entry first."); return; }
+
+    setSaving(true);
+    setError("");
+    const res = await fetch(`/api/applications/${applicationId}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commenter_name: commenterName, body, visible_to_candidate: visibleToCandidate }),
+    });
+    setSaving(false);
+
+    if (!res.ok) {
+      const data = await res.json();
+      setError(data.error || "Could not save log entry.");
+      return;
+    }
+
+    localStorage.setItem("skarion_commenter_name", commenterName.trim());
+    setBody("");
+    setVisibleToCandidate(false);
+    onCommented();
+  }
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+      <label style={{ display: "block", marginBottom: 6 }}>Activity log</label>
+
+      <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 10, alignItems: "start", marginBottom: 8 }}>
+        <input
+          value={commenterName}
+          onChange={(e) => setCommenterName(e.target.value)}
+          placeholder="Your name"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={2}
+          placeholder="e.g. Recruiter called, interview scheduled for Tuesday..."
+        />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: comments.length ? 16 : 0 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
+          <input type="checkbox" style={{ width: "auto" }} checked={visibleToCandidate} onChange={(e) => setVisibleToCandidate(e.target.checked)} />
+          Share with candidate
+        </label>
+        <button className="btn-primary" onClick={submit} disabled={saving}>
+          {saving ? "Posting..." : "Add log entry"}
+        </button>
+      </div>
+
+      {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+      {comments.length === 0 ? (
+        <p className="muted" style={{ marginBottom: 0 }}>No log entries yet.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {comments.map((comment) => (
+            <div key={comment.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 4 }}>
+                <strong>{comment.commenter_name}</strong>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  {new Date(comment.created_at).toLocaleString()}
+                  {comment.visible_to_candidate && <span className="badge" style={{ marginLeft: 8 }}>visible to candidate</span>}
+                </span>
+              </div>
+              <p style={{ whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.5 }}>{comment.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function EditProfileModal({ candidate, onClose, onSaved }: { candidate: CandidateDetail; onClose: () => void; onSaved: () => void }) {

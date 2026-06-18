@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 
 interface Applicant {
   application_id: string;
@@ -13,6 +14,7 @@ interface Applicant {
 
 interface JobDetail {
   id: string;
+  company_id: string | null;
   title: string;
   company: string | null;
   location: string | null;
@@ -62,14 +64,31 @@ interface JobComment {
   created_at: string;
 }
 
+interface ShortlistCandidate {
+  id: string;
+  name: string;
+  email: string | null;
+  status: string | null;
+  target_tier: string | null;
+  resume_url: string | null;
+  resume_filename: string | null;
+  already_on_job: boolean;
+  match_score: number;
+  match_reasons: string[];
+}
+
 export default function JobDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
   const [job, setJob] = useState<JobDetail | null>(null);
   const [comments, setComments] = useState<JobComment[]>([]);
+  const [shortlist, setShortlist] = useState<ShortlistCandidate[]>([]);
+  const [shortlistLoading, setShortlistLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
 
   async function load() {
+    if (!id) return;
     setLoading(true);
     const res = await fetch(`/api/jobs/${id}`);
     setJob(await res.json());
@@ -77,8 +96,17 @@ export default function JobDetailPage() {
   }
 
   async function loadComments() {
+    if (!id) return;
     const res = await fetch(`/api/jobs/${id}/comments`);
     if (res.ok) setComments(await res.json());
+  }
+
+  async function loadShortlist() {
+    if (!id) return;
+    setShortlistLoading(true);
+    const res = await fetch(`/api/jobs/${id}/shortlist`);
+    if (res.ok) setShortlist(await res.json());
+    setShortlistLoading(false);
   }
 
   useEffect(() => {
@@ -98,7 +126,7 @@ export default function JobDetailPage() {
 
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <Field label="Company" value={job.company} />
+          <Field label="Company" value={job.company_id && job.company ? <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link> : job.company} />
           <Field label="Location" value={job.location} />
           <Field label="Source" value={<span className="badge">{job.source}</span>} />
           <Field label="Category" value={job.job_category ? <span className="badge">{job.job_category}</span> : null} />
@@ -168,6 +196,47 @@ export default function JobDetailPage() {
       </div>
 
       <JobComments comments={comments} jobId={job.id} onCommented={loadComments} />
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div className="page-header" style={{ marginBottom: 12 }}>
+          <h2 style={{ fontSize: 16, margin: 0 }}>Candidate shortlist</h2>
+          <button onClick={loadShortlist} disabled={shortlistLoading}>
+            {shortlistLoading ? "Scoring..." : "Score candidates"}
+          </button>
+        </div>
+        {shortlist.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>Score candidates to see who best fits this job.</p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Candidate</th>
+                <th>Score</th>
+                <th>Why</th>
+                <th>Resume</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shortlist.map((candidate) => (
+                <tr key={candidate.id}>
+                  <td>
+                    <a className="row-link" href={`/candidates/${candidate.id}`}>{candidate.name}</a>
+                    <div className="muted" style={{ fontSize: 12 }}>{candidate.email || candidate.status || "-"}</div>
+                    {candidate.already_on_job && <span className="badge badge-review-changes_requested">already on job</span>}
+                  </td>
+                  <td><strong>{candidate.match_score}%</strong></td>
+                  <td className="muted">{candidate.match_reasons.join(", ") || "-"}</td>
+                  <td>
+                    {candidate.resume_url ? (
+                      <a href={candidate.resume_url} target="_blank" rel="noreferrer">{candidate.resume_filename || "Resume"}</a>
+                    ) : <span className="muted">Missing</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       <h2 style={{ fontSize: 16, marginBottom: 12 }}>Applicants ({job.applicants.length})</h2>
 

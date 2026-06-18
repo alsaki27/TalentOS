@@ -95,5 +95,7 @@ export async function GET() {
       ...stats,
       interviewRate: rate(stats.interviews, stats.used),
     })),
+  }, {
+    headers: { "Cache-Control": "private, max-age=60" },
   });
 }

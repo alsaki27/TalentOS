@@ -4,13 +4,18 @@
 // and insert into jobs. Optionally saves/updates a named import profile.
 
 import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { detectFormat } from "@/lib/normalizer/detect";
 import { parseTable } from "@/lib/normalizer/parse";
 import { applyMapping, FieldMapping } from "@/lib/normalizer";
 import { enrichExistingJobsBySourceUrl, filterNewJobsWithFuzzyFallback } from "@/lib/jobDedup";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 
 export async function POST(req: NextRequest) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
   const filename = body.filename as string | undefined;
   const content = body.content as string | undefined;
@@ -47,8 +52,9 @@ export async function POST(req: NextRequest) {
 
   let imported = 0;
   if (newRows.length > 0) {
-    const { data, error } = await supabase.from("jobs").insert(newRows).select("id");
+    const { data, error } = await supabase.from("jobs").insert(newRows).select("*");
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await syncCompanyDirectoryFromJobs(data ?? []);
     imported = data.length;
   }
 

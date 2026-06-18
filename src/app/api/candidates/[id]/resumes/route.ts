@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { uploadResumeFile } from "@/lib/resumeStorage";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { data, error } = await supabase
@@ -29,13 +30,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const path = `candidates/${params.id}/variants/${Date.now()}.${ext}`;
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  const { error: uploadErr } = await supabase.storage
-    .from("resumes")
-    .upload(path, buffer, { contentType: file.type, upsert: true });
-
-  if (uploadErr) return NextResponse.json({ error: uploadErr.message }, { status: 500 });
-
-  const { data: urlData } = supabase.storage.from("resumes").getPublicUrl(path);
+  let uploaded: { url: string };
+  try {
+    uploaded = await uploadResumeFile(path, buffer, file.type);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
+  }
 
   const { data, error } = await supabase
     .from("resumes")
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       candidate_id: params.id,
       label,
       kind,
-      file_url: urlData.publicUrl,
+      file_url: uploaded.url,
       filename: file.name,
     })
     .select()

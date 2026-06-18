@@ -4,6 +4,7 @@
 // DELETE -> remove a candidate (cascades to their applications + resume variants)
 
 import { NextRequest, NextResponse } from "next/server";
+import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { deleteStorageFile } from "@/lib/storage";
 
@@ -37,6 +38,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
 
   const allowedFields = [
@@ -61,6 +65,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  if (response) return response;
+
   const [{ data: candidate }, { data: resumes }] = await Promise.all([
     supabase.from("candidates").select("resume_url, avatar_url").eq("id", params.id).single(),
     supabase.from("resumes").select("file_url").eq("candidate_id", params.id),

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
+import { TableSkeleton } from "../Skeleton";
 
 interface Applicant {
   application_id: string;
@@ -16,6 +17,7 @@ interface Applicant {
 
 interface Job {
   id: string;
+  company_id: string | null;
   title: string;
   company: string | null;
   location: string | null;
@@ -30,6 +32,32 @@ interface Job {
   category_relevance_score: number | null;
   applicant_count: number;
   applicants: Applicant[];
+}
+
+interface TeamUser {
+  user_id: string;
+  email: string | null;
+  display_name: string;
+  role: string;
+}
+
+interface MeResponse {
+  profile: TeamUser;
+}
+
+interface SavedJobSearch {
+  id: string;
+  label: string;
+  filters: {
+    search?: string;
+    source?: string;
+    roleTier?: string;
+    active?: string;
+    employmentType?: string;
+    category?: string;
+    sort?: string;
+  };
+  is_shared: boolean;
 }
 
 type SchemaField =
@@ -122,6 +150,10 @@ export default function JobsPage() {
   const [categoryFilter, setCategoryFilter] = useState("");
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
   const [facets, setFacets] = useState<{ sources: string[]; employmentTypes: string[]; categories: string[] }>({ sources: [], employmentTypes: [], categories: [] });
+  const [savedSearches, setSavedSearches] = useState<SavedJobSearch[]>([]);
+  const [savedSearchId, setSavedSearchId] = useState("");
+  const [saveSearchLabel, setSaveSearchLabel] = useState("");
+  const [savedSearchError, setSavedSearchError] = useState("");
 
   // Debounce the free-text search box so it doesn't fire a request per keystroke.
   useEffect(() => {
@@ -131,6 +163,7 @@ export default function JobsPage() {
 
   useEffect(() => {
     fetch("/api/jobs/facets").then((r) => r.json()).then(setFacets);
+    loadSavedSearches();
   }, []);
 
   function buildParams(pageNum: number, pageSize: number) {
@@ -205,10 +238,83 @@ export default function JobsPage() {
     load(page);
   }
 
-  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter;
+  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || postedSort;
+
+  function currentSavedFilters() {
+    const filters: SavedJobSearch["filters"] = {};
+    if (search) filters.search = search;
+    if (sourceFilter) filters.source = sourceFilter;
+    if (tierFilter) filters.roleTier = tierFilter;
+    if (activeFilter) filters.active = activeFilter;
+    if (employmentTypeFilter) filters.employmentType = employmentTypeFilter;
+    if (categoryFilter) filters.category = categoryFilter;
+    if (postedSort) filters.sort = postedSort === "asc" ? "posted_asc" : "posted_desc";
+    return filters;
+  }
+
+  function clearFilters() {
+    setSearchInput("");
+    setSearch("");
+    setSourceFilter("");
+    setTierFilter("");
+    setActiveFilter("");
+    setEmploymentTypeFilter("");
+    setCategoryFilter("");
+    setPostedSort("");
+    setSavedSearchId("");
+  }
+
+  async function loadSavedSearches() {
+    const res = await fetch("/api/saved-job-searches");
+    if (!res.ok) return;
+    setSavedSearches(await res.json());
+  }
+
+  function applySavedSearch(searchPreset: SavedJobSearch) {
+    const filters = searchPreset.filters ?? {};
+    setSearchInput(filters.search ?? "");
+    setSearch(filters.search ?? "");
+    setSourceFilter(filters.source ?? "");
+    setTierFilter(filters.roleTier ?? "");
+    setActiveFilter(filters.active ?? "");
+    setEmploymentTypeFilter(filters.employmentType ?? "");
+    setCategoryFilter(filters.category ?? "");
+    setPostedSort(filters.sort === "posted_asc" ? "asc" : filters.sort === "posted_desc" ? "desc" : "");
+    setSavedSearchId(searchPreset.id);
+  }
+
+  async function saveCurrentSearch() {
+    setSavedSearchError("");
+    if (!saveSearchLabel.trim()) {
+      setSavedSearchError("Name this saved search first.");
+      return;
+    }
+    const res = await fetch("/api/saved-job-searches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: saveSearchLabel, filters: currentSavedFilters(), is_shared: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSavedSearchError(data.error || "Could not save search.");
+      return;
+    }
+    setSaveSearchLabel("");
+    setSavedSearches((current) => [data, ...current]);
+    setSavedSearchId(data.id);
+  }
+
+  async function deleteSavedSearch() {
+    if (!savedSearchId) return;
+    const preset = savedSearches.find((item) => item.id === savedSearchId);
+    if (!preset || !confirm(`Delete saved search "${preset.label}"?`)) return;
+    await fetch(`/api/saved-job-searches/${savedSearchId}`, { method: "DELETE" });
+    setSavedSearches((current) => current.filter((item) => item.id !== savedSearchId));
+    setSavedSearchId("");
+  }
 
   async function exportCsv() {
-    const res = await fetch(`/api/jobs?${buildParams(1, 5000)}`);
+    const res = await fetch(`/api/jobs?${buildParams(1, 100)}`);
     const data = await res.json();
     const csv = toCsv(data.jobs ?? [], [
       "title", "company", "location", "source", "job_category", "category_relevance_score", "role_tier", "employment_type",
@@ -229,6 +335,18 @@ export default function JobsPage() {
       </div>
 
       <div className="filter-bar">
+        {savedSearches.length > 0 && (
+          <select
+            value={savedSearchId}
+            onChange={(e) => {
+              const preset = savedSearches.find((item) => item.id === e.target.value);
+              if (preset) applySavedSearch(preset); else setSavedSearchId("");
+            }}
+          >
+            <option value="">Saved searches</option>
+            {savedSearches.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+          </select>
+        )}
         <input placeholder="Search title, company, location…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
         <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
           <option value="">All sources</option>
@@ -258,12 +376,23 @@ export default function JobsPage() {
           </select>
         )}
         {filtersActive && (
-          <button onClick={() => { setSearchInput(""); setSearch(""); setSourceFilter(""); setTierFilter(""); setActiveFilter(""); setEmploymentTypeFilter(""); setCategoryFilter(""); }}>
+          <button onClick={clearFilters}>
             Clear filters
           </button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
         <span className="muted" style={{ fontSize: 12 }}>{jobs.length} of {total}</span>
+      </div>
+
+      <div className="filter-bar">
+        <input
+          placeholder="Name current filters..."
+          value={saveSearchLabel}
+          onChange={(e) => setSaveSearchLabel(e.target.value)}
+        />
+        <button onClick={saveCurrentSearch} disabled={!filtersActive}>Save search</button>
+        {savedSearchId && <button className="btn-danger" onClick={deleteSavedSearch}>Delete saved</button>}
+        {savedSearchError && <span className="form-error">{savedSearchError}</span>}
       </div>
 
       {selected.size > 0 && (
@@ -274,7 +403,7 @@ export default function JobsPage() {
       )}
 
       {loading ? (
-        <p className="muted">Loading…</p>
+        <TableSkeleton cols={8} />
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
@@ -303,7 +432,11 @@ export default function JobsPage() {
                   <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
                   <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
                 </td>
-                <td className="muted">{job.company || "—"}</td>
+                <td className="muted">
+                  {job.company_id && job.company ? (
+                    <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
+                  ) : job.company || "—"}
+                </td>
                 <td>
                   {job.job_category ? (
                     <>
@@ -746,13 +879,23 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
   const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
 
   async function submit() {
-    if (!token.trim()) { setError(provider === "usajobs" ? "Enter a search keyword." : "Enter the company's board token/slug."); return; }
+    if (!token.trim()) {
+      setError(
+        provider === "usajobs" ? "Enter a search keyword."
+        : provider === "career-page" ? "Enter a career page URL."
+        : "Enter the company's board token/slug."
+      );
+      return;
+    }
     setImporting(true);
     setError("");
-    const res = await fetch("/api/import/ats", {
+    const res = await fetch(provider === "career-page" ? "/api/import/career-page" : "/api/import/ats", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, token: token.trim() }),
+      body: JSON.stringify(provider === "career-page"
+        ? { url: token.trim() }
+        : { provider, token: token.trim() }
+      ),
     });
     setImporting(false);
     const data = await res.json();
@@ -777,10 +920,15 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
             <option value="lever">Lever</option>
             <option value="ashby">Ashby</option>
             <option value="usajobs">USAJobs (keyword search)</option>
+            <option value="career-page">Career page (JobPosting schema)</option>
           </select>
         </div>
         <div className="field-group">
-          <label>{provider === "usajobs" ? "Search keyword" : "Company board token / slug"}</label>
+          <label>
+            {provider === "usajobs" ? "Search keyword"
+              : provider === "career-page" ? "Career page URL"
+              : "Company board token / slug"}
+          </label>
           <input
             value={token}
             onChange={(e) => setToken(e.target.value)}
@@ -788,6 +936,7 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
               provider === "greenhouse" ? "e.g. airbnb"
               : provider === "lever" ? "e.g. netflix"
               : provider === "usajobs" ? "e.g. civil engineer"
+              : provider === "career-page" ? "https://company.com/careers"
               : "e.g. ramp"
             }
           />
@@ -819,21 +968,30 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
 
 function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: () => void; onLogged: () => void }) {
   const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
+  const [users, setUsers] = useState<TeamUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("assigned");
   const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
   const [resumeId, setResumeId] = useState("");
-  const [assignedBy, setAssignedBy] = useState("");
-  const [assignedTo, setAssignedTo] = useState("");
+  const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const assignmentOwners = [...users].sort((a, b) => {
+    const aRank = a.role === "application_engineer" ? 0 : 1;
+    const bRank = b.role === "application_engineer" ? 0 : 1;
+    if (aRank !== bRank) return aRank - bRank;
+    return (a.display_name || a.email || "").localeCompare(b.display_name || b.email || "");
+  });
 
   useEffect(() => {
-    fetch("/api/candidates").then((r) => r.json()).then(setCandidates);
-    setAssignedBy(localStorage.getItem("skarion_manager_name") ?? "");
-    setAssignedTo(localStorage.getItem("skarion_application_owner") ?? "");
+    fetch("/api/candidates?compact=1&pageSize=200").then((r) => r.json()).then(setCandidates);
+    fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
+    fetch("/api/auth/me")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);
 
   useEffect(() => {
@@ -858,6 +1016,13 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     const selectedIds = Array.from(candidateIds);
     const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
     const variant = resumeVariants.find((r) => r.id === resumeId);
+    const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
+    const assignmentStatus = status === "assigned" || status === "stacked";
+    if (assignmentStatus && !assignedToUserId) {
+      setSaving(false);
+      setError("Choose an application owner for assigned or stacked tickets.");
+      return;
+    }
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -868,8 +1033,10 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         resume_id: variant?.id ?? null,
         resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
         resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
-        assigned_by: assignedBy || null,
-        assigned_to: assignedTo || null,
+        assigned_by: currentUser?.display_name || currentUser?.email || null,
+        assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
+        assigned_by_user_id: currentUser?.user_id ?? null,
+        assigned_to_user_id: assignedToUserId || null,
         assignment_due_at: assignmentDueAt || null,
         assignment_note: assignmentNote || null,
         next_action: status === "assigned" || status === "stacked" ? "Apply to this job" : null,
@@ -878,8 +1045,6 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     setSaving(false);
     const data = await res.json();
     if (!res.ok) { setError(data.error || "Something went wrong."); return; }
-    if (assignedBy) localStorage.setItem("skarion_manager_name", assignedBy);
-    if (assignedTo) localStorage.setItem("skarion_application_owner", assignedTo);
     onLogged();
   }
 
@@ -932,11 +1097,18 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         </div>
         <div className="field-group">
           <label>Assigned by</label>
-          <input value={assignedBy} onChange={(e) => setAssignedBy(e.target.value)} placeholder="Manager/admin name" />
+          <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" />
         </div>
         <div className="field-group">
           <label>Application owner</label>
-          <input value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} placeholder="Application engineer name" />
+          <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
+            <option value="">-- Select owner --</option>
+            {assignmentOwners.map((user) => (
+              <option key={user.user_id} value={user.user_id}>
+                {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
+              </option>
+            ))}
+          </select>
         </div>
         <div className="field-group">
           <label>Due date</label>

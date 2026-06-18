@@ -21,8 +21,10 @@ create table if not exists candidates (
   salary_expectation    text,
   work_authorization    text,
   avatar_url            text,
+  portal_token          uuid not null default gen_random_uuid(), -- magic-link token for the read-only candidate portal
   created_at            timestamptz default now()
 );
+create unique index if not exists candidates_portal_token_idx on candidates (portal_token);
 
 -- ----- JOBS (masterlist) -----
 create table if not exists jobs (
@@ -76,15 +78,31 @@ create index if not exists jobs_external_job_id_idx on jobs (external_job_id);
 create index if not exists jobs_job_category_idx on jobs (job_category);
 create index if not exists jobs_category_tags_idx on jobs using gin (category_tags);
 
+-- ----- PROFILES (internal authenticated users) -----
+create table if not exists profiles (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  email         text,
+  display_name  text not null default '',
+  role          text not null default 'recruiter'
+    check (role in ('admin', 'manager', 'application_engineer', 'recruiter')),
+  is_active     boolean not null default true,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index if not exists profiles_role_idx on profiles (role);
+create index if not exists profiles_active_idx on profiles (is_active);
+
 -- ----- JOB_COMMENTS (internal comments on each job, newest first in UI) -----
 create table if not exists job_comments (
   id              uuid primary key default gen_random_uuid(),
   job_id          uuid not null references jobs(id) on delete cascade,
   commenter_name  text not null,
+  commenter_user_id uuid references profiles(user_id) on delete set null,
   body            text not null,
   created_at      timestamptz default now()
 );
 create index if not exists job_comments_job_created_idx on job_comments (job_id, created_at desc);
+create index if not exists job_comments_commenter_user_idx on job_comments (commenter_user_id);
 
 -- ----- RESUMES (variants: multiple resumes/cover letters per candidate) -----
 create table if not exists resumes (
@@ -119,6 +137,8 @@ create table if not exists applications (
   next_action   text,
   assigned_by   text,
   assigned_to   text,
+  assigned_by_user_id uuid references profiles(user_id) on delete set null,
+  assigned_to_user_id uuid references profiles(user_id) on delete set null,
   assignment_note text,
   assignment_due_at date,
   completed_at  timestamptz,
@@ -132,6 +152,8 @@ create index if not exists applications_job_idx on applications (job_id);
 create index if not exists applications_status_idx on applications (status);
 create index if not exists applications_follow_up_idx on applications (follow_up_at);
 create index if not exists applications_assigned_to_idx on applications (assigned_to);
+create index if not exists applications_assigned_by_user_idx on applications (assigned_by_user_id);
+create index if not exists applications_assigned_to_user_idx on applications (assigned_to_user_id);
 create index if not exists applications_assignment_due_idx on applications (assignment_due_at);
 
 -- ----- APPLICATION_EVENTS (status-change timeline) -----
@@ -144,6 +166,90 @@ create table if not exists application_events (
   created_at      timestamptz default now()
 );
 create index if not exists application_events_application_idx on application_events (application_id);
+
+-- ----- APPLICATION_COMMENTS (free-form activity log, "the log is a comment" v1 design) -----
+create table if not exists application_comments (
+  id                    uuid primary key default gen_random_uuid(),
+  application_id        uuid not null references applications(id) on delete cascade,
+  commenter_name        text not null,
+  commenter_user_id     uuid references profiles(user_id) on delete set null,
+  body                  text not null,
+  visible_to_candidate  boolean not null default false,  -- only flagged comments show on the candidate portal
+  created_at            timestamptz default now()
+);
+create index if not exists application_comments_application_created_idx on application_comments (application_id, created_at desc);
+create index if not exists application_comments_commenter_user_idx on application_comments (commenter_user_id);
+
+-- ----- AUDIT_LOGS (internal audit trail) -----
+create table if not exists audit_logs (
+  id             uuid primary key default gen_random_uuid(),
+  actor_user_id  uuid references profiles(user_id) on delete set null,
+  actor_email    text,
+  action         text not null,
+  entity_type    text not null,
+  entity_id      uuid,
+  metadata       jsonb not null default '{}'::jsonb,
+  created_at     timestamptz not null default now()
+);
+create index if not exists audit_logs_actor_idx on audit_logs (actor_user_id, created_at desc);
+create index if not exists audit_logs_entity_idx on audit_logs (entity_type, entity_id, created_at desc);
+
+-- ----- IMPORT_SOURCES (saved, schedulable ATS/career-page board sources) -----
+create table if not exists import_sources (
+  id            uuid primary key default gen_random_uuid(),
+  label         text not null,
+  provider      text not null check (provider in ('greenhouse', 'lever', 'ashby', 'usajobs', 'career_page')),
+  token_or_url  text not null,
+  is_active     boolean not null default true,
+  last_run_at   timestamptz,
+  last_result   jsonb,
+  created_at    timestamptz not null default now()
+);
+create index if not exists import_sources_active_idx on import_sources (is_active);
+
+-- ----- IMPORT_RUNS (history of every scheduled/manual import attempt) -----
+create table if not exists import_runs (
+  id                uuid primary key default gen_random_uuid(),
+  import_source_id  uuid not null references import_sources(id) on delete cascade,
+  imported          integer,
+  skipped           integer,
+  error             text,
+  ran_at            timestamptz not null default now()
+);
+create index if not exists import_runs_source_idx on import_runs (import_source_id, ran_at desc);
+
+-- ----- CHAT_CONVERSATIONS / CHAT_MESSAGES (AI assistant, read-only tool access) -----
+create table if not exists chat_conversations (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid references profiles(user_id) on delete set null,
+  title       text not null default 'New conversation',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists chat_conversations_user_idx on chat_conversations (user_id, updated_at desc);
+
+create table if not exists chat_messages (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references chat_conversations(id) on delete cascade,
+  role            text not null check (role in ('user', 'assistant', 'tool')),
+  content         text not null,
+  tool_name       text,
+  attachment_url   text,
+  attachment_name  text,
+  attachment_type  text,
+  attachment_text  text,  -- extracted content for text-based files only (.txt/.md/.csv/.json/.log)
+  created_at      timestamptz not null default now()
+);
+create index if not exists chat_messages_conversation_idx on chat_messages (conversation_id, created_at);
+
+-- ----- AI_DIGESTS (single-shot daily summary, no tool-calling) -----
+create table if not exists ai_digests (
+  id            uuid primary key default gen_random_uuid(),
+  content       text not null,
+  provider      text not null,
+  generated_at  timestamptz not null default now()
+);
+create index if not exists ai_digests_generated_idx on ai_digests (generated_at desc);
 
 -- ----- Storage bucket for resumes -----
 -- Run this separately if it errors (bucket may need creating via Supabase dashboard UI instead):

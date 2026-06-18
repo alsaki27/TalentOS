@@ -3,10 +3,16 @@
 // PATCH is handled in [id]/route.ts for status updates
 
 import { NextRequest, NextResponse } from "next/server";
+import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
+import { applicationAutomation } from "@/lib/applicationAutomation";
 import { supabase } from "@/lib/supabase";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
   const candidateIds: string[] = Array.isArray(body.candidate_ids)
     ? body.candidate_ids.filter(Boolean)
     : body.candidate_id
@@ -18,6 +24,23 @@ export async function POST(req: NextRequest) {
   }
 
   const status = body.status ?? "applied";
+  const automated = applicationAutomation({
+    status,
+    explicitFollowUp: "follow_up_at" in body,
+    explicitNextAction: "next_action" in body,
+    explicitAssignmentDue: "assignment_due_at" in body,
+  });
+  const followUpAt = "follow_up_at" in body ? body.follow_up_at : automated.follow_up_at ?? null;
+  const nextAction = "next_action" in body ? body.next_action : automated.next_action ?? null;
+  const assignmentDueAt = "assignment_due_at" in body ? body.assignment_due_at : automated.assignment_due_at ?? null;
+  const followUpSource = "follow_up_at" in body
+    ? (body.follow_up_at ? "manual" : null)
+    : automated.follow_up_source ?? null;
+  const isAssignmentTicket = ["assigned", "stacked"].includes(status) || Boolean(body.assigned_to_user_id);
+  if (isAssignmentTicket && !hasRole(currentUser.profile, ASSIGNMENT_MANAGER_ROLES)) {
+    return NextResponse.json({ error: "Only admins, managers, and recruiters can assign application tickets." }, { status: 403 });
+  }
+
   const { data: existing } = await supabase
     .from("applications")
     .select("candidate_id")
@@ -40,13 +63,20 @@ export async function POST(req: NextRequest) {
       resume_url: body.resume_url ?? null,
       resume_filename: body.resume_filename ?? null,
       resume_id: body.resume_id ?? null,
-      follow_up_at: body.follow_up_at ?? null,
-      next_action: body.next_action ?? null,
+      follow_up_at: followUpAt,
+      next_action: nextAction,
+      follow_up_source: followUpSource,
+      follow_up_created_at: followUpAt ? (automated.follow_up_created_at ?? new Date().toISOString()) : null,
+      follow_up_completed_at: null,
       notes: body.notes ?? null,
       assigned_by: body.assigned_by ?? null,
       assigned_to: body.assigned_to ?? null,
+      assigned_by_user_id: body.assigned_by_user_id ?? currentUser?.profile.user_id ?? null,
+      assigned_to_user_id: body.assigned_to_user_id ?? null,
       assignment_note: body.assignment_note ?? null,
-      assignment_due_at: body.assignment_due_at ?? null,
+      assignment_due_at: assignmentDueAt,
+      priority: body.priority ?? "normal",
+      review_status: body.review_status ?? "not_required",
     })))
     .select();
 
@@ -64,6 +94,21 @@ export async function POST(req: NextRequest) {
     to_status: status,
     note: body.event_note ?? body.assignment_note ?? null,
   })));
+
+  if (currentUser && data?.length) {
+    await supabase.from("audit_logs").insert(data.map((application) => ({
+      actor_user_id: currentUser.profile.user_id,
+      actor_email: currentUser.profile.email,
+      action: "application.created",
+      entity_type: "application",
+      entity_id: application.id,
+      metadata: {
+        job_id: body.job_id,
+        candidate_id: application.candidate_id,
+        status,
+      },
+    })));
+  }
 
   return NextResponse.json({
     created: data ?? [],

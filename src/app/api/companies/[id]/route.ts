@@ -1,0 +1,129 @@
+import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { normalizeCompanyName } from "@/lib/companyDirectory";
+import { supabase } from "@/lib/supabase";
+
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser();
+  if (response) return response;
+
+  const [{ data: company, error }, { data: jobs }, { data: people }, { data: applications, error: applicationsError }] = await Promise.all([
+    supabase.from("companies").select("*").eq("id", params.id).single(),
+    supabase
+      .from("jobs")
+      .select("id, title, location, source, posted_at, is_active, applicants_count, job_category, category_relevance_score")
+      .eq("company_id", params.id)
+      .order("posted_at", { ascending: false, nullsFirst: false })
+      .limit(100),
+    supabase
+      .from("company_people")
+      .select("*")
+      .eq("company_id", params.id)
+      .order("last_seen_at", { ascending: false }),
+    supabase
+      .from("applications")
+      .select("id, status, applied_at, follow_up_at, next_action, assigned_to, assignment_due_at, candidates(id, name), jobs!inner(id, title, company_id)")
+      .eq("jobs.company_id", params.id)
+      .order("applied_at", { ascending: false, nullsFirst: false })
+      .limit(100),
+  ]);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  if (applicationsError) return NextResponse.json({ error: applicationsError.message }, { status: 500 });
+
+  const applicationIds = (applications ?? []).map((application) => application.id);
+  const [{ data: events, error: eventsError }, { data: comments, error: commentsError }] = applicationIds.length > 0
+    ? await Promise.all([
+      supabase
+        .from("application_events")
+        .select("id, application_id, from_status, to_status, note, created_at")
+        .in("application_id", applicationIds)
+        .order("created_at", { ascending: false })
+        .limit(200),
+      supabase
+        .from("application_comments")
+        .select("id, application_id, commenter_name, body, visible_to_candidate, created_at")
+        .in("application_id", applicationIds)
+        .order("created_at", { ascending: false })
+        .limit(200),
+    ])
+    : [{ data: [], error: null }, { data: [], error: null }];
+
+  if (eventsError) return NextResponse.json({ error: eventsError.message }, { status: 500 });
+  if (commentsError) return NextResponse.json({ error: commentsError.message }, { status: 500 });
+
+  const appById = new Map((applications ?? []).map((application: any) => [application.id, application]));
+  const applicationLogs = [
+    ...(events ?? []).map((event: any) => {
+      const application = appById.get(event.application_id) as any;
+      return {
+        id: `event:${event.id}`,
+        kind: "status_event",
+        application_id: event.application_id,
+        created_at: event.created_at,
+        candidate: application?.candidates ?? null,
+        job: application?.jobs ?? null,
+        from_status: event.from_status,
+        to_status: event.to_status,
+        body: event.note,
+        actor: null,
+        visible_to_candidate: false,
+      };
+    }),
+    ...(comments ?? []).map((comment: any) => {
+      const application = appById.get(comment.application_id) as any;
+      return {
+        id: `comment:${comment.id}`,
+        kind: "comment",
+        application_id: comment.application_id,
+        created_at: comment.created_at,
+        candidate: application?.candidates ?? null,
+        job: application?.jobs ?? null,
+        from_status: null,
+        to_status: null,
+        body: comment.body,
+        actor: comment.commenter_name,
+        visible_to_candidate: comment.visible_to_candidate,
+      };
+    }),
+  ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+  return NextResponse.json({
+    ...company,
+    jobs: jobs ?? [],
+    people: people ?? [],
+    applications: applications ?? [],
+    application_logs: applicationLogs,
+  });
+}
+
+export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
+  const body = await req.json();
+  const allowed = [
+    "name", "website", "linkedin_url", "logo_url", "employees_count", "address",
+    "slogan", "description", "notes", "source",
+  ];
+  const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const field of allowed) {
+    if (field in body) updates[field] = body[field] || null;
+  }
+  if (typeof updates.name === "string" && updates.name.trim()) {
+    const name = updates.name.trim();
+    updates.name = name;
+    updates.normalized_name = normalizeCompanyName(name);
+    updates.slug = String(updates.normalized_name).replace(/\s+/g, "-");
+  }
+
+  const { data, error } = await supabase
+    .from("companies")
+    .update(updates)
+    .eq("id", params.id)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json(data);
+}

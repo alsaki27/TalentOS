@@ -9,7 +9,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .from("application_events")
     .select("*")
     .eq("application_id", params.id)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: true })
+    .limit(100);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);

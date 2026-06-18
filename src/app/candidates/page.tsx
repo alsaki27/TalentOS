@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
+import { TableSkeleton } from "../Skeleton";
 
 interface Candidate {
   id: string;
@@ -20,24 +21,28 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+const PAGE_SIZE = 100;
+
 export default function CandidatesPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
   const [showAdd, setShowAdd] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
 
-  async function load() {
+  async function load(pageNum = page) {
     setLoading(true);
-    const res = await fetch("/api/candidates");
+    const res = await fetch(`/api/candidates?page=${pageNum}&pageSize=${PAGE_SIZE}`);
     setCandidates(await res.json());
     setSelected(new Set());
+    setPage(pageNum);
     setLoading(false);
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(1); }, []);
 
   const filtered = candidates.filter((c) => {
     if (statusFilter && c.status !== statusFilter) return false;
@@ -117,7 +122,7 @@ export default function CandidatesPage() {
       )}
 
       {loading ? (
-        <p className="muted">Loading…</p>
+        <TableSkeleton cols={7} />
       ) : candidates.length === 0 ? (
         <div className="empty">No candidates yet. Add the first one to get started.</div>
       ) : filtered.length === 0 ? (
@@ -163,9 +168,14 @@ export default function CandidatesPage() {
       {showAdd && (
         <AddCandidateModal
           onClose={() => setShowAdd(false)}
-          onCreated={() => { setShowAdd(false); load(); }}
+          onCreated={() => { setShowAdd(false); load(1); }}
         />
       )}
+      <div className="pagination-bar">
+        <button onClick={() => load(Math.max(1, page - 1))} disabled={loading || page === 1}>Previous</button>
+        <span className="muted">Page {page}</span>
+        <button onClick={() => load(page + 1)} disabled={loading || candidates.length < PAGE_SIZE}>Next</button>
+      </div>
     </>
   );
 }

@@ -4,6 +4,7 @@
 // before calling /commit. Does not touch the database.
 
 import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { analyzeFile } from "@/lib/normalizer";
 import { supabase } from "@/lib/supabase";
 
@@ -21,6 +22,9 @@ function headerOverlapScore(a: string[], b: string[]): number {
 }
 
 export async function POST(req: NextRequest) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
   const filename = body.filename as string | undefined;
   const content = body.content as string | undefined;

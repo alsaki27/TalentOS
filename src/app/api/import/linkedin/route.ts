@@ -3,11 +3,16 @@
 // camelCase fields straight from the scraper output, sent here as { rows: [...] }).
 
 import { NextRequest, NextResponse } from "next/server";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { mapLinkedInJob, LinkedInScrapedJob, JobRow } from "@/lib/linkedinMapper";
 import { enrichExistingJobsBySourceUrl, filterNewJobs } from "@/lib/jobDedup";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 
 export async function POST(req: NextRequest) {
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  if (response) return response;
+
   const body = await req.json();
   const rows: LinkedInScrapedJob[] = body.rows ?? [];
 
@@ -30,9 +35,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ imported: 0, skipped: rows.length - cleanRows.length + duplicates });
   }
 
-  const { data, error } = await supabase.from("jobs").insert(newRows).select("id");
+  const { data, error } = await supabase.from("jobs").insert(newRows).select("*");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await syncCompanyDirectoryFromJobs(data ?? []);
 
   return NextResponse.json({
     imported: data.length,
