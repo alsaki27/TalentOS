@@ -41,6 +41,7 @@ interface ApplicationResumeVersion {
   content: ResumeDocument;
   fit_score?: number | null;
   recommendation?: string | null;
+  source_type?: string | null;
   updated_at: string;
   created_at: string;
 }

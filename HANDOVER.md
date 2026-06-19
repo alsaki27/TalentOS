@@ -5,8 +5,7 @@ Single entry point for whoever is taking this project over. Read this first, the
 left, prioritized next steps — written for the team picking this up to deploy), then
 [README.md](./README.md) (feature-by-feature reference) and [ROADMAP.md](./ROADMAP.md)
 (historical decisions and the *why* behind them). This file was last refreshed
-2026-06-18 — build, types, migrations, env vars, and auth were re-checked against the
-live state of the repo and the live Supabase project, not assumed from memory.
+2026-06-19 — includes the Chunk 1 application workflow redesign schema changes.
 
 ## There are two backends in this repo — read this before touching anything
 
@@ -42,6 +41,26 @@ the exact module list still missing).
   `/import-sources` early on, a `sql/01_schema.sql` snapshot that lags the real migrations,
   inconsistent comment style. No ongoing reason to preserve that split — treat the whole
   tree as one codebase going forward.
+
+## Schema change note (Chunk 1, 2026-06-19)
+
+The application workflow redesign foundation migration is applied:
+`supabase/migrations/20260619020000_chunk1_application_workflow_foundation.sql`
+
+Key changes:
+- `applications.job_id` is now **nullable** (was `NOT NULL` with a unique constraint on
+  `(candidate_id, job_id)`). A partial unique index preserves the no-duplicate rule for
+  masterlist-linked apps while allowing unlimited ad-hoc applications per candidate.
+- `applications` new columns: `adhoc_job_data` (JSONB), `adhoc_job_raw_text` (text),
+  `source_type` (`base_resume` | `original_resume` | `blank` | `manual`).
+- `jobs` new columns: `raw_description`, `parsed_description`, `ai_extracted_at`,
+  `ai_confidence_score` — for auto-creating jobs from pasted JDs in future chunks.
+- `application_resume_versions` new column: `source_type`.
+- New table: `job_duplicates` (for future deduplication engine).
+
+Backward compatibility: all existing workflows (application creation with job_id, resume
+studio, jobs list, candidates list) continue working without changes. UI only adds
+defensive null handling for nullable `jobs` relations.
 
 ## Environment variables — full reference (frontend, `/`)
 

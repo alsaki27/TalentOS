@@ -22,6 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "assigned_by_user_id", "assigned_to_user_id",
     "assignment_note", "assignment_due_at", "completed_at",
     "priority", "review_status", "review_note", "reviewed_by_user_id", "reviewed_at",
+    "adhoc_job_data", "adhoc_job_raw_text", "source_type",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

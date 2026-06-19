@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from("application_resume_versions")
-    .select("id, candidate_id, base_resume_id, target_job_id, status, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at")
+    .select("id, candidate_id, base_resume_id, target_job_id, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at")
     .eq("candidate_id", candidateId)
     .order("created_at", { ascending: false });
 
@@ -31,31 +31,66 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const baseResumeId = body.baseResumeId as string | undefined;
   const targetJobId = body.targetJobId as string | undefined;
+  const candidateId = body.candidateId as string | undefined;
+  const sourceType = (body.sourceType as string | undefined) ?? "base_resume";
 
-  if (!baseResumeId || !targetJobId) {
-    return NextResponse.json({ error: "baseResumeId and targetJobId are required" }, { status: 400 });
+  if (!targetJobId) {
+    return NextResponse.json({ error: "targetJobId is required" }, { status: 400 });
   }
 
-  const { data: baseResume, error: baseError } = await supabase
-    .from("base_resumes")
-    .select("content, candidate_id")
-    .eq("id", baseResumeId)
-    .single();
+  let insertData: Record<string, unknown> = {
+    target_job_id: targetJobId,
+    status: "draft",
+    source_type: sourceType,
+    created_by: context!.profile.user_id,
+  };
 
-  if (baseError || !baseResume) {
-    return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
+  if (baseResumeId) {
+    // Base resume path: copy content from base_resume
+    const { data: baseResume, error: baseError } = await supabase
+      .from("base_resumes")
+      .select("content, candidate_id")
+      .eq("id", baseResumeId)
+      .single();
+
+    if (baseError || !baseResume) {
+      return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
+    }
+
+    insertData.candidate_id = baseResume.candidate_id;
+    insertData.base_resume_id = baseResumeId;
+    insertData.content = baseResume.content;
+  } else {
+    // Blank or original resume path: require candidateId and optionally content
+    if (!candidateId) {
+      return NextResponse.json({ error: "candidateId is required when baseResumeId is not provided" }, { status: 400 });
+    }
+    insertData.candidate_id = candidateId;
+    insertData.base_resume_id = null;
+    insertData.content = body.content ?? {
+      header: { fullName: "" },
+      skills: [],
+      experience: [],
+      education: [],
+      formatting: {
+        styleId: "skarion_compact_professional",
+        pageFormat: "letter",
+        fontFamily: "Calibri",
+        fontSize: 10.5,
+        marginTop: 0.5,
+        marginRight: 0.5,
+        marginBottom: 0.5,
+        marginLeft: 0.5,
+        sectionSpacing: 8,
+        bulletSpacing: 2,
+        lineHeight: 1.15,
+      },
+    };
   }
 
   const { data, error } = await supabase
     .from("application_resume_versions")
-    .insert({
-      candidate_id: baseResume.candidate_id,
-      base_resume_id: baseResumeId,
-      target_job_id: targetJobId,
-      content: baseResume.content,
-      status: "draft",
-      created_by: context!.profile.user_id,
-    })
+    .insert(insertData)
     .select()
     .single();
 
@@ -65,10 +100,10 @@ export async function POST(req: NextRequest) {
     userId: context!.profile.user_id,
     actorName: context!.profile.display_name || context!.profile.email || undefined,
     type: "create",
-    description: `Created application resume version from base resume ${baseResumeId}`,
+    description: `Created application resume version (source: ${sourceType})`,
     entityType: "application_resume_version",
     entityId: data.id,
-    metadata: { base_resume_id: baseResumeId, target_job_id: targetJobId, candidate_id: baseResume.candidate_id },
+    metadata: { base_resume_id: baseResumeId ?? null, target_job_id: targetJobId, candidate_id: insertData.candidate_id, source_type: sourceType },
   });
 
   return NextResponse.json(data, { status: 201 });

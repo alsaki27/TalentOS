@@ -39,6 +39,10 @@ interface Job {
   work_authorization: string | null;
   applicant_count: number;
   applicants: Applicant[];
+  raw_description?: string | null;
+  parsed_description?: unknown | null;
+  ai_extracted_at?: string | null;
+  ai_confidence_score?: number | null;
 }
 
 const WORK_AUTH_LABELS: Record<string, string> = {

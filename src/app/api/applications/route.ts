@@ -48,8 +48,11 @@ export async function POST(req: NextRequest) {
       ? [body.candidate_id]
       : [];
 
-  if (candidateIds.length === 0 || !body.job_id) {
-    return NextResponse.json({ error: "candidate_id/candidate_ids and job_id are required" }, { status: 400 });
+  const hasJobId = !!body.job_id;
+  const hasAdhocJobData = !!body.adhoc_job_data || !!body.adhoc_job_raw_text;
+
+  if (candidateIds.length === 0 || (!hasJobId && !hasAdhocJobData)) {
+    return NextResponse.json({ error: "candidate_id/candidate_ids and either job_id or adhoc_job_data/adhoc_job_raw_text are required" }, { status: 400 });
   }
 
   const status = body.status ?? "applied";
@@ -70,24 +73,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Only admins, managers, and recruiters can assign application tickets." }, { status: 403 });
   }
 
-  const { data: existing } = await supabase
-    .from("applications")
-    .select("candidate_id")
-    .eq("job_id", body.job_id)
-    .in("candidate_id", candidateIds);
+  let newCandidateIds = candidateIds;
+  if (hasJobId) {
+    const { data: existing } = await supabase
+      .from("applications")
+      .select("candidate_id")
+      .eq("job_id", body.job_id)
+      .in("candidate_id", candidateIds);
 
-  const existingCandidateIds = new Set((existing ?? []).map((row) => row.candidate_id as string));
-  const newCandidateIds = candidateIds.filter((id) => !existingCandidateIds.has(id));
+    const existingCandidateIds = new Set((existing ?? []).map((row) => row.candidate_id as string));
+    newCandidateIds = candidateIds.filter((id) => !existingCandidateIds.has(id));
 
-  if (newCandidateIds.length === 0) {
-    return NextResponse.json({ error: "All selected candidates already have applications for this job." }, { status: 409 });
+    if (newCandidateIds.length === 0) {
+      return NextResponse.json({ error: "All selected candidates already have applications for this job." }, { status: 409 });
+    }
   }
 
   const { data, error } = await supabase
     .from("applications")
     .insert(newCandidateIds.map((candidateId) => ({
       candidate_id: candidateId,
-      job_id: body.job_id,
+      job_id: body.job_id ?? null,
       status,
       resume_url: body.resume_url ?? null,
       resume_filename: body.resume_filename ?? null,
@@ -106,6 +112,9 @@ export async function POST(req: NextRequest) {
       assignment_due_at: assignmentDueAt,
       priority: body.priority ?? "normal",
       review_status: body.review_status ?? "not_required",
+      adhoc_job_data: body.adhoc_job_data ?? null,
+      adhoc_job_raw_text: body.adhoc_job_raw_text ?? null,
+      source_type: body.source_type ?? "base_resume",
     })))
     .select();
 

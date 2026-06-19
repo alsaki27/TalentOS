@@ -4,6 +4,34 @@ Written for the team picking this up to deploy. Read [HANDOVER.md](./HANDOVER.md
 for the technical reference (env vars, security audit, architecture); this file is the
 point-in-time summary of where things stand and what to do next, in priority order.
 
+## Recent update (2026-06-19)
+
+**Chunk 1: Application workflow redesign — database foundation**
+
+Schema changes landed (migration `20260619020000_chunk1_application_workflow_foundation.sql`):
+- `applications.job_id` is now **nullable**, enabling ad-hoc applications without a masterlist job.
+- `applications` gains `adhoc_job_data` (JSONB), `adhoc_job_raw_text` (text), and `source_type`
+  (`base_resume` | `original_resume` | `blank` | `manual`) — supports the future quick-application
+  workflow where AE pastes a JD directly without pre-creating a job.
+- `jobs` gains `raw_description`, `parsed_description` (AI-extracted), `ai_extracted_at`,
+  `ai_confidence_score` — foundation for auto-creating jobs from pasted JDs.
+- `application_resume_versions` gains `source_type` — tracks whether a tailored resume was built
+  from a base resume, the candidate's original upload, a blank template, or manual entry.
+- New `job_duplicates` table for future deduplication engine.
+
+API backward compatibility preserved: existing application creation (with `job_id`), existing
+resume tailoring, existing jobs list — all continue working exactly as before. No UI redesign
+in this pass; only defensive null handling for nullable `jobs` relations.
+
+**Not yet implemented:**
+- JD analyzer / auto-extract from pasted text (Phase 2 of redesign).
+- Quick-application modal with "Paste JD" as primary option.
+- Resume source selector (Base Resume / Original Resume / Blank) in the studio.
+- AI suggestion generation for application resume tailoring.
+- Real PDF export.
+
+See `plan-application-workflow-redesign.md` for the full phased plan.
+
 ## Executive summary
 
 The frontend (Next.js + Supabase) is a working, feature-complete internal recruiting tool

@@ -63,6 +63,10 @@ interface JobDetail {
   work_authorization_evidence: string | null;
   last_seen_at: string | null;
   applicants: Applicant[];
+  raw_description?: string | null;
+  parsed_description?: unknown | null;
+  ai_extracted_at?: string | null;
+  ai_confidence_score?: number | null;
 }
 
 const WORK_AUTH_LABELS: Record<string, string> = {

@@ -376,7 +376,12 @@ export default function ApplicationQueuePage() {
                       {item.jobs.job_category && <span className="badge">{item.jobs.job_category}</span>}
                       {item.jobs.source_url && <div><a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Posting</a></div>}
                     </>
-                  ) : "—"}
+                  ) : (
+                    <>
+                      <span className="muted">Ad-hoc job</span>
+                      <div className="muted" style={{ fontSize: 12 }}>No linked job</div>
+                    </>
+                  )}
                 </td>
                 <td><span className={`badge badge-${item.status}`}>{item.status}</span></td>
                 <td><span className={`badge badge-priority-${item.priority}`}>{item.priority}</span></td>

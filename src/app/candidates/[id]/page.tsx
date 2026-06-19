@@ -26,7 +26,10 @@ interface Application {
   assigned_to: string | null;
   assignment_note: string | null;
   assignment_due_at: string | null;
-  jobs: { id: string; title: string; company: string; location: string; role_tier: string | null };
+  source_type: string | null;
+  adhoc_job_data: unknown | null;
+  adhoc_job_raw_text: string | null;
+  jobs: { id: string; title: string; company: string; location: string; role_tier: string | null } | null;
 }
 
 interface Resume {
@@ -608,8 +611,8 @@ export default function CandidateProfilePage() {
                   <Fragment key={a.id}>
                     <tr>
                       <td><input type="checkbox" style={{ width: "auto" }} checked={selectedApps.has(a.id)} onChange={() => toggleAppSelected(a.id)} /></td>
-                      <td>{a.jobs?.title}</td>
-                      <td className="muted">{a.jobs?.company}</td>
+                      <td>{a.jobs?.title || <span className="muted">Ad-hoc job</span>}</td>
+                      <td className="muted">{a.jobs?.company || <span className="muted">—</span>}</td>
                       <td><StatusBadge status={a.status} /></td>
                       <td className="muted">{new Date(a.applied_at).toLocaleDateString()}</td>
                       <td className="muted">{a.resume_filename || "—"}</td>

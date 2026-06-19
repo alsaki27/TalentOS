@@ -228,6 +228,12 @@ oversight — the reasoning is included so future work doesn't undo it by accide
    Backend done (see "Done" above) and now also runnable on a schedule via
    `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
    one-off manual option — that file is mid-flight with the auth work.
+5. **Application workflow redesign (in progress — Chunk 1 done).** Schema foundation
+   for ad-hoc applications (nullable `job_id`, pasted JD storage, AI-extracted job
+   metadata, resume source tracking) is landed. Next chunks: JD analyzer, quick-
+   application modal, resume source selector (Base / Original / Blank), AI suggestion
+   generation, PDF export, application packet + cover letter. See
+   `plan-application-workflow-redesign.md` for the full phased plan.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 
