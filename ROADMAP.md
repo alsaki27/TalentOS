@@ -246,16 +246,22 @@ oversight — the reasoning is included so future work doesn't undo it by accide
    Backend done (see "Done" above) and now also runnable on a schedule via
    `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
    one-off manual option — that file is mid-flight with the auth work.
-5. **Application workflow redesign (in progress — Chunk 1 done, Chunk 2 done).**
+5. **Application workflow redesign (in progress — Chunk 1 done, Chunk 2 done, Chunk 3 done).**
    - Chunk 1 (schema foundation): nullable `job_id`, pasted JD storage, AI-extracted job
      metadata, resume source tracking — landed.
    - Chunk 2 (JD Analyzer API, parse-only): `POST /api/jobs/analyze` extracts structured
      data from raw JD text via AI. Returns title, company, skills, salary, red flags, etc.
      Does NOT create jobs yet — pure analysis endpoint. Role-gated (admin/manager/recruiter/
      application_engineer only; reviewer excluded).
-   - Next chunks: auto-create job from parsed JD (Chunk 3), quick-application modal with
-     "Paste JD" option (Chunk 3), resume source selector (Chunk 4), AI suggestion generation
-     (Chunk 5), PDF export (Chunk 6). See `plan-application-workflow-redesign.md`.
+   - Chunk 3 (Auto-create job from parsed JD): `POST /api/jobs/from-jd` runs the full
+     parse → dedup → create workflow. Three-pass duplicate detection (exact URL, exact
+     normalized title+company+location, fuzzy Levenshtein). Returns 409 if duplicates found
+     unless `forceCreate: true`. On success, inserts a `pasted_jd` source job with all
+     AI-extracted fields mapped, triggers webhooks, and logs activity. Gated to
+     `MASTER_DATA_MANAGER_ROLES`.
+   - Next chunks: quick-application modal with "Paste JD" option (Chunk 4), resume source
+     selector (Chunk 5), AI suggestion generation (Chunk 6), PDF export (Chunk 7). See
+     `plan-application-workflow-redesign.md`.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

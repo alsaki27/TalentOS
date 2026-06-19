@@ -26,6 +26,7 @@ the exact module list still missing).
 ## Status snapshot (this refresh)
 
 - **Frontend** (`/`): package scripts now cover `typecheck`, `lint`, `test`, `build`, and `start`. GitHub Actions CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, lint, and build on push/PR. The latest local verification target is `npm run typecheck`, `npm run lint`, and `npm run build`.
+- **Chunk 3 (2026-06-19)**: `POST /api/jobs/from-jd` is live. Parses a pasted JD via AI, runs a three-pass duplicate check (exact URL, exact normalized title+company+location, fuzzy Levenshtein), and creates a `pasted_jd` source job if clean. Maps salary, employment type, seniority, and all AI-extracted fields into the `jobs` table. Webhook + activity logging wired. Gated to `MASTER_DATA_MANAGER_ROLES` (admin/manager/recruiter).
 - **Backend** (`/backend`): `npm run typecheck` and `npm run build` both clean. Found and
   fixed a real bug while verifying this: the root `tsconfig.json` had no exclusion for
   `backend/`, so any `tsc --noEmit` run from the repo root was picking up NestJS decorator

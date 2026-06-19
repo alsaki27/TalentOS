@@ -40,11 +40,26 @@ Files added:
 - `src/lib/ai/falood/jdAnalyzer.ts` — AI service with full validation/sanitization of JSON output.
 - `src/app/api/jobs/analyze/route.ts` — API route with role checks, input validation, clean error handling.
 
+**Chunk 3: Auto-create Job from Pasted JD + duplicate detection**
+
+New endpoint: `POST /api/jobs/from-jd`
+- Accepts raw JD text (100–30,000 chars) and optional `sourceUrl`, `forceCreate`, `useExistingJobId`.
+- Calls the AI analyzer (`analyzeJD`) to extract structured data.
+- Performs **duplicate detection** in three passes: exact `source_url` match, exact normalized title+company+location match, and fuzzy Levenshtein match (title ≥ 0.90, company ≥ 0.86, location ≥ 0.86).
+- Returns **409** if potential duplicates are found, unless `forceCreate: true`.
+- Returns **422** if the AI cannot extract a job title.
+- Returns **503** if no AI provider is configured.
+- On success, inserts a new `jobs` row with `source = 'pasted_jd'`, `raw_description`, `parsed_description`, `ai_extracted_at`, `ai_confidence_score`, and all mapped fields (salary, employment type, seniority level, etc.).
+- Calls `syncCompanyDirectoryFromJobs`, `logActivity`, and `triggerWebhooks("job.created", ...)` on success.
+- Authorization: `MASTER_DATA_MANAGER_ROLES` (admin/manager/recruiter) — reviewers and application engineers cannot create masterlist jobs via this endpoint.
+
+Files added/modified:
+- `src/app/api/jobs/from-jd/route.ts` — full workflow endpoint with mapping, dedup, and webhook triggers.
+- `src/lib/jobDedup.ts` — extended with `findPotentialDuplicateJobs()` for the new duplicate detection flow.
+
 Typecheck: clean (`npx tsc --noEmit`). Build: fails on pre-existing missing Supabase env vars only.
 
-**Not yet implemented (Chunk 3+):**
-- Auto-creating jobs from parsed JD output.
-- Deduplication check against existing jobs.
+**Not yet implemented (Chunk 4+):**
 - Quick-application modal with "Paste JD" as primary option.
 - Resume source selector (Base / Original / Blank) in the studio.
 - AI suggestion generation for application resume tailoring.

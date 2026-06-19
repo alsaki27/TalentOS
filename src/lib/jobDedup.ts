@@ -174,6 +174,119 @@ function fuzzyJobMatch(
   );
 }
 
+interface DuplicateCheckInput {
+  title?: string | null;
+  company?: string | null;
+  location?: string | null;
+  sourceUrl?: string | null;
+}
+
+interface DuplicateCheckResult {
+  id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  source_url: string | null;
+  matchType: "exact_url" | "exact_match" | "fuzzy";
+  matchScore: number;
+}
+
+export async function findPotentialDuplicateJobs(
+  input: DuplicateCheckInput
+): Promise<DuplicateCheckResult[]> {
+  const results: DuplicateCheckResult[] = [];
+
+  // 1. Exact URL match
+  if (input.sourceUrl) {
+    const { data: urlMatches } = await supabase
+      .from("jobs")
+      .select("id, title, company, location, source_url")
+      .eq("source_url", input.sourceUrl);
+    if (urlMatches) {
+      for (const job of urlMatches) {
+        results.push({
+          id: job.id as string,
+          title: job.title as string,
+          company: job.company ?? null,
+          location: job.location ?? null,
+          source_url: job.source_url ?? null,
+          matchType: "exact_url",
+          matchScore: 1.0,
+        });
+      }
+    }
+  }
+
+  // 2. Exact normalized title+company+location match
+  const nTitle = normalizeForMatch(input.title);
+  const nCompany = normalizeForMatch(input.company);
+  const nLocation = normalizeForMatch(input.location);
+
+  if (nTitle && nCompany) {
+    const { data: exactMatches } = await supabase
+      .from("jobs")
+      .select("id, title, company, location, source_url")
+      .not("title", "is", null);
+
+    if (exactMatches) {
+      for (const job of exactMatches) {
+        if (results.some((r) => r.id === job.id)) continue;
+        const jobKey = matchKey(job.title ?? "", job.company, job.location);
+        const inputKey = matchKey(input.title ?? "", input.company, input.location);
+        if (jobKey === inputKey) {
+          results.push({
+            id: job.id as string,
+            title: job.title as string,
+            company: job.company ?? null,
+            location: job.location ?? null,
+            source_url: job.source_url ?? null,
+            matchType: "exact_match",
+            matchScore: 1.0,
+          });
+        }
+      }
+    }
+  }
+
+  // 3. Fuzzy match against all existing jobs
+  if (nTitle && nCompany) {
+    const { data: allJobs } = await supabase
+      .from("jobs")
+      .select("id, title, company, location, source_url")
+      .not("title", "is", null);
+
+    if (allJobs) {
+      for (const job of allJobs) {
+        if (results.some((r) => r.id === job.id)) continue;
+        const existingTitle = normalizeForMatch(job.title);
+        const existingCompany = normalizeForMatch(job.company);
+        const existingLocation = normalizeForMatch(job.location);
+
+        const titleSim = existingTitle ? similarity(nTitle, existingTitle) : 0;
+        const companySim = nCompany && existingCompany ? similarity(nCompany, existingCompany) : 1;
+        const locationSim = nLocation && existingLocation ? similarity(nLocation, existingLocation) : 1;
+
+        const score = (titleSim + companySim + locationSim) / 3;
+
+        if (titleSim >= 0.9 && companySim >= 0.86 && locationSim >= 0.86) {
+          results.push({
+            id: job.id as string,
+            title: job.title as string,
+            company: job.company ?? null,
+            location: job.location ?? null,
+            source_url: job.source_url ?? null,
+            matchType: "fuzzy",
+            matchScore: Math.round(score * 1000) / 1000,
+          });
+        }
+      }
+    }
+  }
+
+  // Sort by score descending
+  return results.sort((a, b) => b.matchScore - a.matchScore);
+}
+
 // Used only by the normalizer pipeline (src/lib/normalizer), where rows commonly have no
 // source_url to dedupe on. Falls back to a normalized title+company+location match for
 // those rows. This is normalized-exact rather than true edit-distance fuzzy matching —

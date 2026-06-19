@@ -126,8 +126,17 @@ complete env var reference table and a list of what's configured vs. what isn't.
   skills, ATS keywords, visa signals, red flags with severity, fit summary, and confidence
   score. Role-gated to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application
   engineer). Returns **503** if no AI provider is configured. Does **not** create or update
-  any database rows — pure analysis endpoint. Foundation for future auto-create job from
-  pasted JD (Chunk 3).
+  any database rows — pure analysis endpoint.
+- **Auto-create Job from Pasted JD (Chunk 3)** — `POST /api/jobs/from-jd` runs the full
+  parse → dedup → create workflow. It calls the AI analyzer, then performs three-pass
+  duplicate detection (exact `source_url` match, exact normalized title+company+location,
+  and fuzzy Levenshtein matching with thresholds: title ≥ 0.90, company ≥ 0.86, location ≥ 0.86).
+  Returns **409** if potential duplicates are found unless `forceCreate: true`. Returns **422**
+  if the AI cannot extract a job title. On success, inserts a new `jobs` row with
+  `source = 'pasted_jd'`, stores the raw text in `raw_description`, the parsed JSON in
+  `parsed_description`, and maps all AI-extracted fields (salary, employment type, seniority,
+  etc.) into their respective columns. Triggers `job.created` webhooks and logs activity.
+  Gated to `MASTER_DATA_MANAGER_ROLES` (admin, manager, recruiter).
 - **Resume tailoring workflow** - admins/managers/recruiters can open "Tailor resume for
   job" from a candidate or job page, choose a base resume and target job, generate a
   markdown draft through the configured AI provider, edit it, save it as an

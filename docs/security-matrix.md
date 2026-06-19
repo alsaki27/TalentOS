@@ -29,6 +29,7 @@ policies; browser code does not query Supabase directly.
 | `/api/jobs` | `GET` | authenticated staff via middleware | Paginated/filterable list. |
 | `/api/jobs` | `POST` | `MASTER_DATA_MANAGER_ROLES` | Job create is gated. |
 | `/api/jobs/analyze` | `POST` | `APPLICATION_WORKER_ROLES` | JD analyzer (parse-only). Returns structured analysis from raw JD text. Does not create jobs. Excludes `reviewer` role. |
+| `/api/jobs/from-jd` | `POST` | `MASTER_DATA_MANAGER_ROLES` | Full JD workflow: parse → dedup → create job. Three-pass duplicate detection (exact URL, exact normalized match, fuzzy Levenshtein). Returns 409 if duplicates found unless `forceCreate: true`. Creates a `pasted_jd` source job on success. |
 | `/api/jobs/[id]` | `GET` | authenticated staff via middleware | Job detail is staff-only. |
 | `/api/jobs/[id]` | `PATCH` | `MASTER_DATA_MANAGER_ROLES` | Job edit is gated. |
 | `/api/jobs/[id]` | `DELETE` | `DESTRUCTIVE_MANAGER_ROLES` | Job delete is gated. |
