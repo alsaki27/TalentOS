@@ -129,13 +129,13 @@ export async function triggerWebhooks(
   }
 
   const matching = endpoints.filter(
-    (ep) => ep.events.length === 0 || ep.events.includes(event) || ep.events.includes("*")
+    (ep: any) => ep.events.length === 0 || ep.events.includes(event) || ep.events.includes("*")
   );
 
   if (matching.length === 0) return [];
 
   const results = await Promise.all(
-    matching.map((ep) => deliverWebhook(ep as WebhookEndpoint, event, payload))
+    matching.map((ep: any) => deliverWebhook(ep as WebhookEndpoint, event, payload))
   );
   return results;
 }

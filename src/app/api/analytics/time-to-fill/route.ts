@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: jobsError.message }, { status: 500 });
   }
 
-  const jobIds = (jobs ?? []).map((j) => j.id);
+  const jobIds = (jobs ?? []).map((j: any) => j.id as string);
   if (jobIds.length === 0) {
     return NextResponse.json({ data: [] });
   }
@@ -46,24 +46,29 @@ export async function GET(req: NextRequest) {
   // First placed date per job
   const jobFirstPlaced: Record<string, { date: string; recruiters: string[] }> = {};
   for (const app of placedApps ?? []) {
-    if (!app.job_id) continue;
-    if (!jobFirstPlaced[app.job_id] || app.created_at < jobFirstPlaced[app.job_id].date) {
-      jobFirstPlaced[app.job_id] = { date: app.created_at, recruiters: [app.created_by] };
-    } else if (app.created_at === jobFirstPlaced[app.job_id].date) {
-      jobFirstPlaced[app.job_id].recruiters.push(app.created_by);
+    const appJobId = (app as any).job_id as string | undefined;
+    const appCreatedAt = (app as any).created_at as string;
+    const appCreatedBy = (app as any).created_by as string;
+    if (!appJobId) continue;
+    if (!jobFirstPlaced[appJobId] || appCreatedAt < jobFirstPlaced[appJobId].date) {
+      jobFirstPlaced[appJobId] = { date: appCreatedAt, recruiters: [appCreatedBy] };
+    } else if (appCreatedAt === jobFirstPlaced[appJobId].date) {
+      jobFirstPlaced[appJobId].recruiters.push(appCreatedBy);
     }
   }
 
   const jobDays: Array<{ job: any; days: number; recruiters: string[] }> = [];
   for (const job of jobs ?? []) {
-    const fp = jobFirstPlaced[job.id];
+    const jobId = (job as any).id as string;
+    const jobCreatedAt = (job as any).created_at as string;
+    const fp = jobFirstPlaced[jobId];
     if (!fp) continue;
     const days = Math.round(
-      (new Date(fp.date).getTime() - new Date(job.created_at).getTime()) /
+      (new Date(fp.date).getTime() - new Date(jobCreatedAt).getTime()) /
         (1000 * 60 * 60 * 24)
     );
     if (days >= 0) {
-      jobDays.push({ job, days, recruiters: fp.recruiters });
+      jobDays.push({ job: (job as any), days, recruiters: fp.recruiters });
     }
   }
 
@@ -81,7 +86,7 @@ export async function GET(req: NextRequest) {
         .from("profiles")
         .select("user_id, display_name")
         .in("user_id", [...allRecruiterIds]);
-      profileMap = new Map(profiles?.map((p) => [p.user_id, p.display_name]) ?? []);
+      profileMap = new Map(profiles?.map((p: { user_id: string; display_name: string | null }) => [p.user_id, p.display_name]) ?? []);
     }
   }
 

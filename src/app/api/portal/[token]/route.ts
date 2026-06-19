@@ -50,8 +50,8 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
 
   if (appErr) return NextResponse.json({ error: appErr.message }, { status: 500 });
 
-  const submitted = (applications ?? []).filter((a) => !PIPELINE_STATUSES.has(a.status));
-  const appIds = submitted.map((a) => a.id);
+  const submitted = (applications ?? []).filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
+  const appIds = submitted.map((a: any) => a.id as string);
 
   const { data: comments, error: commentsErr } = appIds.length
     ? await supabase
@@ -71,9 +71,9 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
     commentsByApp.set(c.application_id, list);
   }
 
-  const respondedCount = submitted.filter((a) => a.status !== "applied").length;
-  const interviewCount = submitted.filter((a) => a.status === "interview" || a.status === "offer").length;
-  const offerCount = submitted.filter((a) => a.status === "offer").length;
+  const respondedCount = submitted.filter((a: any) => a.status !== "applied").length;
+  const interviewCount = submitted.filter((a: any) => a.status === "interview" || a.status === "offer").length;
+  const offerCount = submitted.filter((a: any) => a.status === "offer").length;
 
   return NextResponse.json({
     name: candidate.name,
@@ -83,7 +83,7 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
       offers: offerCount,
       responseRate: rate(respondedCount, submitted.length),
     },
-    applications: submitted.map((a) => ({
+    applications: submitted.map((a: any) => ({
       id: a.id,
       status: a.status,
       public_status: publicStatus(a.status),

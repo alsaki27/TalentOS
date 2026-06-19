@@ -31,7 +31,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
   if (applicationsError) return NextResponse.json({ error: applicationsError.message }, { status: 500 });
 
-  const applicationIds = (applications ?? []).map((application) => application.id);
+  const applicationIds = (applications ?? []).map((application: any) => application.id as string);
   const [{ data: events, error: eventsError }, { data: comments, error: commentsError }] = applicationIds.length > 0
     ? await Promise.all([
       supabase

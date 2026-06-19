@@ -36,7 +36,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   if (candidateError) return NextResponse.json({ error: candidateError.message }, { status: 500 });
 
-  const alreadyApplied = new Set((existingApplications ?? []).map((application) => application.candidate_id));
+  const alreadyApplied = new Set((existingApplications ?? []).map((application: any) => application.candidate_id as string));
   const jobTokenSet = tokens([
     job.title,
     job.location,
@@ -49,7 +49,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   ].filter(Boolean).join(" "));
   const jobLocationTokens = tokens(job.location);
 
-  const scored = (candidates ?? []).map((candidate) => {
+  const scored = (candidates ?? []).map((candidate: any) => {
     const reasons: string[] = [];
     let score = 0;
     if (candidate.status === "active") { score += 15; reasons.push("active candidate"); }
@@ -79,7 +79,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       match_score: Math.max(0, Math.min(100, score)),
       match_reasons: reasons,
     };
-  }).sort((a, b) => b.match_score - a.match_score || a.name.localeCompare(b.name));
+  }).sort((a: any, b: any) => b.match_score - a.match_score || a.name.localeCompare(b.name));
 
   return NextResponse.json({ data: scored.slice(0, limit) });
 }

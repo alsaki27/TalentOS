@@ -21,6 +21,7 @@ interface QueueItem {
   proof_url: string | null;
   proof_filename: string | null;
   proof_uploaded_at: string | null;
+  source_type: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null } | null;
 }
@@ -365,6 +366,7 @@ export default function ApplicationQueuePage() {
               <th>Candidate</th>
               <th>Job</th>
               <th>Status</th>
+              <th>Source</th>
               <th>Priority</th>
               <th>Review</th>
               <th>Owner</th>
@@ -404,6 +406,7 @@ export default function ApplicationQueuePage() {
                   )}
                 </td>
                 <td><span className={`badge badge-${item.status}`}>{item.status}</span></td>
+                <td><SourceTypeBadge sourceType={item.source_type} /></td>
                 <td><span className={`badge badge-priority-${item.priority}`}>{item.priority}</span></td>
                 <td><span className={`badge badge-review-${item.review_status}`}>{item.review_status.replaceAll("_", " ")}</span></td>
                 <td>
@@ -606,4 +609,16 @@ function EditTicketModal({ item, users, onClose, onSaved }: { item: QueueItem; u
       </div>
     </div>
   );
+}
+
+function SourceTypeBadge({ sourceType }: { sourceType: string | null }) {
+  const label = sourceType || "Legacy";
+  const colorMap: Record<string, string> = {
+    base_resume: "badge-info",
+    original_resume: "badge-success",
+    blank: "badge-warning",
+    manual: "badge-secondary",
+    Legacy: "badge-muted",
+  };
+  return <span className={`badge ${colorMap[label] || "badge-muted"}`}>{label.replaceAll("_", " ")}</span>;
 }

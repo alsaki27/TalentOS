@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     if (queueError) return NextResponse.json({ error: queueError.message }, { status: 500 });
 
     const visibleQueue = context.profile.role === "application_engineer"
-      ? (queueItems ?? []).filter((item) => (
+      ? (queueItems ?? []).filter((item: any) => (
         item.assigned_to_user_id === context.profile.user_id
         || item.assigned_to === context.profile.display_name
         || item.assigned_to === context.profile.email
@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
     if (followUpError) return NextResponse.json({ error: followUpError.message }, { status: 500 });
 
     const visibleFollowUps = context.profile.role === "application_engineer"
-      ? (dueFollowUps ?? []).filter((item) => (
+      ? (dueFollowUps ?? []).filter((item: any) => (
         item.assigned_to_user_id === context.profile.user_id
         || item.assigned_to === context.profile.display_name
         || item.assigned_to === context.profile.email
@@ -54,9 +54,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       queue: {
         total: visibleQueue.length,
-        overdue: visibleQueue.filter((item) => item.assignment_due_at && item.assignment_due_at <= today).length,
-        urgent: visibleQueue.filter((item) => item.priority === "urgent").length,
-        pendingReview: visibleQueue.filter((item) => item.review_status === "pending").length,
+        overdue: visibleQueue.filter((item: any) => item.assignment_due_at && item.assignment_due_at <= today).length,
+        urgent: visibleQueue.filter((item: any) => item.priority === "urgent").length,
+        pendingReview: visibleQueue.filter((item: any) => item.review_status === "pending").length,
       },
       followUps: {
         due: visibleFollowUps.length,

@@ -46,14 +46,14 @@ export async function POST(req: NextRequest) {
     .order("created_at", { ascending: false });
 
   const matchingProfiles = (profiles ?? [])
-    .map((profile) => ({
+    .map((profile: any) => ({
       id: profile.id,
       label: profile.label,
       column_map: profile.column_map,
       score: headerOverlapScore(result.rawHeaders, Object.values(profile.column_map ?? {}) as string[]),
     }))
-    .filter((profile) => profile.score >= 0.7)
-    .sort((a, b) => b.score - a.score);
+    .filter((profile: any) => profile.score >= 0.7)
+    .sort((a: any, b: any) => b.score - a.score);
 
   return NextResponse.json({
     headersDetected: result.headersDetected,

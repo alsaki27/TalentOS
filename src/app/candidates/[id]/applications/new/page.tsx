@@ -106,6 +106,7 @@ export default function NewApplicationPage() {
   const [baseResumes, setBaseResumes] = useState<BaseResume[]>([]);
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [selectedBaseResumeId, setSelectedBaseResumeId] = useState<string | null>(null);
+  const [sourceType, setSourceType] = useState<string>("base_resume");
 
   /* Step 2 */
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -270,6 +271,7 @@ export default function NewApplicationPage() {
           candidateId,
           baseResumeId: selectedBaseResumeId,
           targetJobId: job.id,
+          sourceType,
         }),
       });
 
@@ -450,6 +452,19 @@ export default function NewApplicationPage() {
               ))}
             </div>
           )}
+
+          <div className="field-group" style={{ marginTop: 16 }}>
+            <label>Resume source for this application</label>
+            <select value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
+              <option value="base_resume">Base Resume (default)</option>
+              <option value="original_resume">Original Resume</option>
+              <option value="blank">Blank / Custom</option>
+              <option value="manual">Manual upload</option>
+            </select>
+            <p className="muted text-xs" style={{ marginTop: 4 }}>
+              This tells the system which source resume to use when tailoring.
+            </p>
+          </div>
 
           <div className="flex items-center justify-between">
             <Link className="btn inline-block" href={`/candidates/${candidateId}`}>

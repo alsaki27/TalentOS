@@ -45,7 +45,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .order("submitted_at", { ascending: true });
 
   // Fetch profiles for panel members
-  const interviewerIds = (panel ?? []).map((p) => p.interviewer_id).filter(Boolean);
+  const interviewerIds = (panel ?? []).map((p: any) => p.interviewer_id).filter(Boolean);
   let profiles: any[] = [];
   if (interviewerIds.length > 0) {
     const { data: profs } = await supabase
@@ -55,10 +55,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     profiles = profs ?? [];
   }
 
-  const profileById = new Map(profiles.map((p) => [p.user_id, p]));
-  const panelWithProfiles = (panel ?? []).map((p) => ({
+  const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
+  const panelWithProfiles = (panel ?? []).map((p: any) => ({
     ...p,
-    profile: profileById.get(p.interviewer_id) ?? null,
+    profile: profileById.get(p.interviewer_id as string) ?? null,
   }));
 
   return NextResponse.json({

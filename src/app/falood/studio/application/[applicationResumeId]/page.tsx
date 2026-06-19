@@ -591,6 +591,9 @@ export default function ApplicationResumeStudioPage() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span className={`badge ${statusBadgeClass}`}>{appResume.status}</span>
+          <span className="badge" style={{ background: "var(--surface)", color: "var(--ink-soft)" }}>
+            Source: {(appResume.source_type ?? "Legacy").replaceAll("_", " ")}
+          </span>
           <span
             className="badge"
             style={{

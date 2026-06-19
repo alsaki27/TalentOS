@@ -23,9 +23,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (commentsError) return NextResponse.json({ error: commentsError.message }, { status: 500 });
 
   const timeline = [
-    ...(events ?? []).map((event) => ({ kind: "status_event", ...event })),
-    ...(comments ?? []).map((comment) => ({ kind: "comment", ...comment })),
-  ].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    ...(events ?? []).map((event: any) => ({ kind: "status_event", ...event })),
+    ...(comments ?? []).map((comment: any) => ({ kind: "comment", ...comment })),
+  ].sort((a: any, b: any) => new Date(b.created_at as string).getTime() - new Date(a.created_at as string).getTime());
 
   return NextResponse.json({ data: timeline });
 }

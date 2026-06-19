@@ -41,8 +41,8 @@ export async function GET(req: NextRequest) {
   const placedJobIds = [
     ...new Set(
       (apps ?? [])
-        .filter((a) => a.status === "placed" && a.job_id)
-        .map((a) => a.job_id)
+        .filter((a: any) => a.status === "placed" && a.job_id)
+        .map((a: any) => a.job_id as string)
     ),
   ];
   const jobCreatedMap = new Map<string, string>();
@@ -52,7 +52,8 @@ export async function GET(req: NextRequest) {
       .select("id, created_at")
       .in("id", placedJobIds);
     for (const j of jobs ?? []) {
-      jobCreatedMap.set(j.id, j.created_at);
+      const job = j as any;
+      jobCreatedMap.set(job.id as string, job.created_at as string);
     }
   }
 
@@ -65,17 +66,18 @@ export async function GET(req: NextRequest) {
   }
 
   for (const app of apps ?? []) {
-    const source = app.source || "manual";
+    const a = app as any;
+    const source = (a.source as string | undefined) || "manual";
     if (!stats[source]) {
       stats[source] = { count: 0, placed: 0, daysToHire: [] };
     }
     stats[source].count++;
-    if (app.status === "placed") {
+    if (a.status === "placed") {
       stats[source].placed++;
-      const jobCreated = jobCreatedMap.get(app.job_id);
+      const jobCreated = jobCreatedMap.get(a.job_id as string);
       if (jobCreated) {
         const days = Math.round(
-          (new Date(app.created_at).getTime() - new Date(jobCreated).getTime()) /
+          (new Date(a.created_at as string).getTime() - new Date(jobCreated).getTime()) /
             (1000 * 60 * 60 * 24)
         );
         if (days >= 0) stats[source].daysToHire.push(days);
@@ -93,7 +95,7 @@ export async function GET(req: NextRequest) {
     avgTimeToHire:
       stats[source].daysToHire.length > 0
         ? Math.round(
-            stats[source].daysToHire.reduce((a, b) => a + b, 0) /
+            stats[source].daysToHire.reduce((sum: number, d: number) => sum + d, 0) /
               stats[source].daysToHire.length
           )
         : 0,

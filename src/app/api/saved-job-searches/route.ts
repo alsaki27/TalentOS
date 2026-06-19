@@ -33,7 +33,7 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const visible = (data ?? []).filter((search) =>
+  const visible = (data ?? []).filter((search: any) =>
     search.is_shared || search.owner_user_id === context.profile.user_id
   );
   return NextResponse.json(visible);

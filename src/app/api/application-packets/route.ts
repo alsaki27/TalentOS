@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     .select("id")
     .eq("candidate_id", candidateId);
 
-  const applicationIds = (applications ?? []).map((a) => a.id);
+  const applicationIds = (applications ?? []).map((a: any) => a.id as string);
   if (applicationIds.length === 0) return NextResponse.json([]);
 
   const { data, error } = await supabase

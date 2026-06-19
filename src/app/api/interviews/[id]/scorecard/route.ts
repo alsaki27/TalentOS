@@ -71,10 +71,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
   // Aggregate overall rating
   const overallRatings = items
-    .map((s) => s.overall_rating)
-    .filter((r): r is number => r !== null && r !== undefined);
+    .map((s: any) => s.overall_rating as number | null)
+    .filter((r: any): r is number => r !== null && r !== undefined);
   const avgOverall = overallRatings.length > 0
-    ? overallRatings.reduce((a, b) => a + b, 0) / overallRatings.length
+    ? overallRatings.reduce((a: number, b: number) => a + b, 0) / overallRatings.length
     : 0;
 
   // Aggregate competencies

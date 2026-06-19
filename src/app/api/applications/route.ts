@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
       .eq("job_id", body.job_id)
       .in("candidate_id", candidateIds);
 
-    const existingCandidateIds = new Set((existing ?? []).map((row) => row.candidate_id as string));
+    const existingCandidateIds = new Set((existing ?? []).map((row: any) => row.candidate_id as string));
     newCandidateIds = candidateIds.filter((id) => !existingCandidateIds.has(id));
 
     if (newCandidateIds.length === 0) {
@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  await supabase.from("application_events").insert((data ?? []).map((application) => ({
+  await supabase.from("application_events").insert((data ?? []).map((application: any) => ({
     application_id: application.id,
     from_status: null,
     to_status: status,
@@ -134,7 +134,7 @@ export async function POST(req: NextRequest) {
   })));
 
   if (currentUser && data?.length) {
-    await supabase.from("audit_logs").insert(data.map((application) => ({
+    await supabase.from("audit_logs").insert(data.map((application: any) => ({
       actor_user_id: currentUser.profile.user_id,
       actor_email: currentUser.profile.email,
       action: "application.created",

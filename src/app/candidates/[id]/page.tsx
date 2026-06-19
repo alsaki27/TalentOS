@@ -605,6 +605,7 @@ export default function CandidateProfilePage() {
                   <th>Job</th>
                   <th>Company</th>
                   <th>Status</th>
+                  <th>Source</th>
                   <th>Applied</th>
                   <th>Resume used</th>
                   <th>Tailored variant</th>
@@ -620,6 +621,7 @@ export default function CandidateProfilePage() {
                       <td>{a.jobs?.title || <span className="muted">Ad-hoc job</span>}</td>
                       <td className="muted">{a.jobs?.company || <span className="muted">—</span>}</td>
                       <td><StatusBadge status={a.status} /></td>
+                      <td><SourceTypeBadge sourceType={a.source_type} /></td>
                       <td className="muted">{new Date(a.applied_at).toLocaleDateString()}</td>
                       <td className="muted">{a.resume_filename || "—"}</td>
                       <td>
@@ -644,7 +646,7 @@ export default function CandidateProfilePage() {
                     </tr>
                     {expandedAppId === a.id && (
                       <tr>
-                        <td colSpan={9} style={{ background: "var(--bg)" }}>
+                        <td colSpan={10} style={{ background: "var(--bg)" }}>
                           <label style={{ display: "block", marginBottom: 6 }}>Status history</label>
                           {events.length === 0 ? (
                             <span className="muted">No status changes recorded yet.</span>
@@ -778,6 +780,18 @@ function ParsedResults({ parsed }: { parsed: any }) {
 
 function StatusBadge({ status }: { status: string }) {
   return <span className={`badge badge-${status}`}>{status}</span>;
+}
+
+function SourceTypeBadge({ sourceType }: { sourceType: string | null }) {
+  const label = sourceType || "Legacy";
+  const colorMap: Record<string, string> = {
+    base_resume: "badge-info",
+    original_resume: "badge-success",
+    blank: "badge-warning",
+    manual: "badge-secondary",
+    Legacy: "badge-muted",
+  };
+  return <span className={`badge ${colorMap[label] || "badge-muted"}`}>{label.replaceAll("_", " ")}</span>;
 }
 
 function ApplicationComments({ applicationId, comments, onCommented }: { applicationId: string; comments: ApplicationComment[]; onCommented: () => void }) {

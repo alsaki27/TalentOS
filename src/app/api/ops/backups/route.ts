@@ -17,7 +17,7 @@ export async function GET() {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json((data ?? []).map((f) => ({ name: f.name, createdAt: f.created_at, sizeBytes: f.metadata?.size ?? null })));
+  return NextResponse.json((data ?? []).map((f: any) => ({ name: f.name as string, createdAt: f.created_at as string, sizeBytes: f.metadata?.size ?? null })));
 }
 
 export async function POST() {

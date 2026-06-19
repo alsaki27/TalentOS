@@ -22,10 +22,10 @@ export async function GET(req: NextRequest) {
   const jobs = jobsRes.data ?? [];
   const allApplications = applicationsRes.data ?? [];
   const pipelineStatuses = new Set(["assigned", "stacked", "in_progress"]);
-  const submitted = allApplications.filter((app) => !pipelineStatuses.has(app.status));
-  const respondedCount = submitted.filter((app) => app.status !== "applied").length;
-  const interviewCount = submitted.filter((app) => app.status === "interview" || app.status === "offer").length;
-  const offerCount = submitted.filter((app) => app.status === "offer").length;
+  const submitted = allApplications.filter((app: any) => !pipelineStatuses.has(app.status as string));
+  const respondedCount = submitted.filter((app: any) => app.status !== "applied").length;
+  const interviewCount = submitted.filter((app: any) => app.status === "interview" || app.status === "offer").length;
+  const offerCount = submitted.filter((app: any) => app.status === "offer").length;
 
   return NextResponse.json({
     totals: {
@@ -33,21 +33,27 @@ export async function GET(req: NextRequest) {
       jobs: jobs.length,
       applications: submitted.length,
       pipelineTickets: allApplications.length - submitted.length,
-      companies: new Set(jobs.map((job) => job.company_id).filter(Boolean)).size,
+      companies: new Set(jobs.map((job: any) => job.company_id as string).filter(Boolean)).size,
     },
     rates: {
       responseRate: rate(respondedCount, submitted.length),
       interviewRate: rate(interviewCount, submitted.length),
       offerRate: rate(offerCount, submitted.length),
     },
-    statusBreakdown: allApplications.reduce<Record<string, number>>((acc, app) => {
-      acc[app.status] = (acc[app.status] ?? 0) + 1;
+    statusBreakdown: (() => {
+      const acc: Record<string, number> = {};
+      for (const app of allApplications) {
+        acc[(app as any).status as string] = (acc[(app as any).status as string] ?? 0) + 1;
+      }
       return acc;
-    }, {}),
-    priorityBreakdown: allApplications.reduce<Record<string, number>>((acc, app) => {
-      const key = app.priority || "normal";
-      acc[key] = (acc[key] ?? 0) + 1;
+    })(),
+    priorityBreakdown: (() => {
+      const acc: Record<string, number> = {};
+      for (const app of allApplications) {
+        const key = (app as any).priority as string || "normal";
+        acc[key] = (acc[key] ?? 0) + 1;
+      }
       return acc;
-    }, {}),
+    })(),
   });
 }

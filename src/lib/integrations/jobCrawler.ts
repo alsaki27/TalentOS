@@ -89,7 +89,7 @@ export function computeIsOnline(lastHeartbeatAt: string | null, offlineThreshold
 export async function getCrawlerStatuses() {
   const { data, error } = await supabase.from("job_crawler_status").select("*").order("crawler_name", { ascending: true });
   if (error) throw error;
-  return (data ?? []).map((row) => ({
+  return (data ?? []).map((row: any) => ({
     ...row,
     isOnline: row.is_active && computeIsOnline(row.last_heartbeat_at, row.offline_threshold_minutes),
   }));

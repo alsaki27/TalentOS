@@ -35,7 +35,7 @@ export async function filterNewJobs<T extends DedupeCandidate>(
     .select("source_url")
     .in("source_url", urls) : { data: [] };
 
-  const existingUrls = new Set((existingByUrl ?? []).map((j) => j.source_url as string));
+  const existingUrls = new Set((existingByUrl ?? []).map((j: any) => j.source_url as string));
 
   if (existingUrls.size > 0) {
     await supabase
@@ -53,8 +53,8 @@ export async function filterNewJobs<T extends DedupeCandidate>(
 
   const existingSignatures = new Set(
     (existingJobs ?? [])
-      .map((job) => jobDuplicateSignature(job))
-      .filter((key): key is string => !!key)
+      .map((job: any) => jobDuplicateSignature(job))
+      .filter((key: any): key is string => !!key)
   );
   const acceptedSignatures = new Set<string>();
 
@@ -83,7 +83,7 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
     .select("id, source_url")
     .in("source_url", urls);
 
-  const existingByUrl = new Map((existing ?? []).map((j) => [j.source_url as string, j.id as string]));
+  const existingByUrl = new Map((existing ?? []).map((j: any) => [j.source_url as string, j.id as string]));
   const existingUrls = new Set(existingByUrl.keys());
   let updated = 0;
   const syncedRows: Array<T & { id: string }> = [];
@@ -103,7 +103,7 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
       .eq("source_url", row.source_url);
     if (!error) {
       updated++;
-      const id = existingByUrl.get(row.source_url);
+      const id = existingByUrl.get(row.source_url) as string | undefined;
       if (id) syncedRows.push({ ...row, id });
     }
   }
@@ -306,13 +306,13 @@ export async function filterNewJobsWithFuzzyFallback<
 
   const { data: existingJobs } = await supabase.from("jobs").select("title, company, location");
   const existing = existingJobs ?? [];
-  const existingKeys = new Set(existing.map((j) => matchKey(j.title, j.company, j.location)));
+  const existingKeys = new Set(existing.map((j: any) => matchKey(j.title as string, j.company as string, j.location as string)));
   const acceptedKeys = new Set<string>();
 
-  const newWithoutUrl = withoutUrl.filter((r) => {
+  const newWithoutUrl = withoutUrl.filter((r: any) => {
     const key = matchKey(r.title, r.company, r.location);
     if (existingKeys.has(key) || acceptedKeys.has(key)) return false;
-    if (existing.some((j) => fuzzyJobMatch(r, j))) return false;
+    if (existing.some((j: any) => fuzzyJobMatch(r, j))) return false;
     acceptedKeys.add(key);
     return true;
   });

@@ -272,8 +272,14 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      `/api/applications` with resume source, status, notes, optional assignment. Ad-hoc
      path available (skip masterlist job). Does not yet implement full resume source studio
      integration, keyword approval, or ATS suggestions.
-   - Next chunks: resume source selector in studio (Chunk 5), AI suggestion generation (Chunk 6),
-     PDF export (Chunk 7). See `plan-application-workflow-redesign.md`.
+   - Chunk 5 (Application service abstraction + Resume Source Studio integration):
+     `src/server/repositories/applicationsRepository.ts` provides full data-access abstraction
+     for applications (CRUD, dedup, queue listing, events). `source_type` badge added to
+     `/application-queue` and candidate detail applications table. Resume source selector
+     added to Step 1 of `/candidates/[id]/applications/new` (base_resume / original_resume /
+     blank / manual). `source_type` displayed in Application Resume Studio top bar.
+     Legacy null values fall back to "Legacy" label.
+   - Next chunks: AI suggestion generation (Chunk 6), PDF export (Chunk 7). See `plan-application-workflow-redesign.md`.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

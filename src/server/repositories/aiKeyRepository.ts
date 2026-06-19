@@ -102,7 +102,7 @@ export async function listAiKeys(): Promise<AiApiKeyMetadata[]> {
     .order("priority", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) throw new Error(error.message);
-  return (data ?? []).map((r) => toMetadata(r as AiApiKeyRow));
+  return (data ?? []).map((r: any) => toMetadata(r as AiApiKeyRow));
 }
 
 /**
@@ -117,7 +117,7 @@ export async function listEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
     .order("priority", { ascending: true })
     .order("created_at", { ascending: true });
   if (error) throw new Error(error.message);
-  return (data ?? []).map((r) => toMetadata(r as AiApiKeyRow));
+  return (data ?? []).map((r: any) => toMetadata(r as AiApiKeyRow));
 }
 
 /**

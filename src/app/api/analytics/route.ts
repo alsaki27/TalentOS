@@ -30,45 +30,48 @@ export async function GET() {
   // Pipeline tickets are work assigned to an application engineer that hasn't been
   // submitted yet — they aren't real applications and must not skew conversion rates.
   const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
-  const applications = allTickets.filter((a) => !PIPELINE_STATUSES.has(a.status));
+  const applications = allTickets.filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
   const pipelineCount = allTickets.length - applications.length;
 
   const totalApplications = applications.length;
-  const respondedCount = applications.filter((a) => a.status !== "applied").length;
-  const interviewCount = applications.filter((a) => a.status === "interview" || a.status === "offer").length;
-  const offerCount = applications.filter((a) => a.status === "offer").length;
+  const respondedCount = applications.filter((a: any) => a.status !== "applied").length;
+  const interviewCount = applications.filter((a: any) => a.status === "interview" || a.status === "offer").length;
+  const offerCount = applications.filter((a: any) => a.status === "offer").length;
 
   const statusBreakdown: Record<string, number> = {};
   for (const a of allTickets) {
-    statusBreakdown[a.status] = (statusBreakdown[a.status] ?? 0) + 1;
+    statusBreakdown[(a as any).status as string] = (statusBreakdown[(a as any).status as string] ?? 0) + 1;
   }
 
-  const jobById = new Map(jobs.map((j) => [j.id, j]));
+  const jobById = new Map(jobs.map((j: any) => [j.id as string, j]));
   const bySource: Record<string, { jobs: number; applications: number; interviews: number; offers: number; lastSeenAt: string | null }> = {};
   for (const j of jobs) {
-    const key = j.source ?? "unknown";
+    const job = j as any;
+    const key = job.source ?? "unknown";
     bySource[key] ??= { jobs: 0, applications: 0, interviews: 0, offers: 0, lastSeenAt: null };
     bySource[key].jobs += 1;
-    if (!bySource[key].lastSeenAt || (j.last_seen_at && j.last_seen_at > bySource[key].lastSeenAt!)) {
-      bySource[key].lastSeenAt = j.last_seen_at;
+    if (!bySource[key].lastSeenAt || (job.last_seen_at && job.last_seen_at > bySource[key].lastSeenAt!)) {
+      bySource[key].lastSeenAt = job.last_seen_at;
     }
   }
   for (const a of applications) {
-    const job = jobById.get(a.job_id);
+    const app = a as any;
+    const job = jobById.get(app.job_id as string) as any;
     const key = job?.source ?? "unknown";
     bySource[key] ??= { jobs: 0, applications: 0, interviews: 0, offers: 0, lastSeenAt: null };
     bySource[key].applications += 1;
-    if (a.status === "interview" || a.status === "offer") bySource[key].interviews += 1;
-    if (a.status === "offer") bySource[key].offers += 1;
+    if (app.status === "interview" || app.status === "offer") bySource[key].interviews += 1;
+    if (app.status === "offer") bySource[key].offers += 1;
   }
 
-  const resumeLabelById = new Map(resumes.map((r) => [r.id, r.label]));
+  const resumeLabelById = new Map(resumes.map((r: any) => [r.id as string, r.label as string]));
   const byResume: Record<string, { label: string; used: number; interviews: number }> = {};
   for (const a of applications) {
-    if (!a.resume_id) continue;
-    byResume[a.resume_id] ??= { label: resumeLabelById.get(a.resume_id) ?? "(deleted variant)", used: 0, interviews: 0 };
-    byResume[a.resume_id].used += 1;
-    if (a.status === "interview" || a.status === "offer") byResume[a.resume_id].interviews += 1;
+    const app = a as any;
+    if (!app.resume_id) continue;
+    byResume[app.resume_id as string] ??= { label: (resumeLabelById.get(app.resume_id as string) as string | undefined) ?? "(deleted variant)", used: 0, interviews: 0 };
+    byResume[app.resume_id as string].used += 1;
+    if (app.status === "interview" || app.status === "offer") byResume[app.resume_id as string].interviews += 1;
   }
 
   return NextResponse.json({

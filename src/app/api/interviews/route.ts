@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
       .from("interview_panel_members")
       .select("*")
       .in("schedule_id", scheduleIds);
-    const interviewerIds = (panels ?? []).map((p) => p.interviewer_id).filter(Boolean);
+    const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id).filter(Boolean);
     let profiles: any[] = [];
     if (interviewerIds.length > 0) {
       const { data: profs } = await supabase
@@ -66,21 +66,21 @@ export async function GET(req: NextRequest) {
         .in("user_id", interviewerIds);
       profiles = profs ?? [];
     }
-    const profileById = new Map(profiles.map((p) => [p.user_id, p]));
-    panelWithProfiles = (panels ?? []).map((pm) => ({
+    const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
+    panelWithProfiles = (panels ?? []).map((pm: any) => ({
       ...pm,
-      profile: profileById.get(pm.interviewer_id) ?? null,
+      profile: profileById.get(pm.interviewer_id as string) ?? null,
     }));
   }
 
   const panelBySchedule = new Map<string, any[]>();
   for (const pm of panelWithProfiles) {
-    const list = panelBySchedule.get(pm.schedule_id) ?? [];
+    const list = panelBySchedule.get(pm.schedule_id as string) ?? [];
     list.push(pm);
-    panelBySchedule.set(pm.schedule_id, list);
+    panelBySchedule.set(pm.schedule_id as string, list);
   }
 
-  const items = (schedules ?? []).map((schedule) => ({
+  const items = (schedules ?? []).map((schedule: any) => ({
     ...schedule,
     panel: panelBySchedule.get(schedule.id) ?? [],
   }));

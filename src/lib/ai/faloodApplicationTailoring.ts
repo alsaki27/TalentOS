@@ -40,18 +40,18 @@ async function gatherContext(applicationResumeId: string): Promise<TailoringCont
     supabase.from("candidate_evidence").select("title, description, related_skills").eq("candidate_id", appResume.candidate_id),
   ]);
 
-  const keywordIds = (keywords ?? []).map((k) => k.id);
+  const keywordIds = (keywords ?? []).map((k: any) => k.id as string);
   const { data: approvals } = keywordIds.length
     ? await supabase.from("keyword_approvals").select("keyword_id, decision").in("keyword_id", keywordIds)
     : { data: [] as { keyword_id: string; decision: string }[] };
 
-  const approvedIds = new Set((approvals ?? []).filter((a) => a.decision === "approved" || a.decision === "already_present").map((a) => a.keyword_id));
-  const rejectedIds = new Set((approvals ?? []).filter((a) => a.decision === "rejected").map((a) => a.keyword_id));
+  const approvedIds = new Set((approvals ?? []).filter((a: any) => a.decision === "approved" || a.decision === "already_present").map((a: any) => a.keyword_id as string));
+  const rejectedIds = new Set((approvals ?? []).filter((a: any) => a.decision === "rejected").map((a: any) => a.keyword_id as string));
 
   return {
     applicationResume: appResume,
-    approvedKeywords: (keywords ?? []).filter((k) => approvedIds.has(k.id)),
-    rejectedKeywords: (keywords ?? []).filter((k) => rejectedIds.has(k.id)).map((k) => k.keyword),
+    approvedKeywords: (keywords ?? []).filter((k: any) => approvedIds.has(k.id as string)),
+    rejectedKeywords: (keywords ?? []).filter((k: any) => rejectedIds.has(k.id as string)).map((k: any) => k.keyword as string),
     evidence: evidence ?? [],
     jdAnalysis: targetJob?.parsed_description ?? null,
   };

@@ -178,10 +178,10 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
           supabase.from("applications").select("id, status"),
         ]);
         const allTickets = applicationsRes.data ?? [];
-        const submitted = allTickets.filter((a) => !PIPELINE_STATUSES.has(a.status));
-        const responded = submitted.filter((a) => a.status !== "applied").length;
-        const interviews = submitted.filter((a) => a.status === "interview" || a.status === "offer").length;
-        const offers = submitted.filter((a) => a.status === "offer").length;
+        const submitted = allTickets.filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
+        const responded = submitted.filter((a: any) => a.status !== "applied").length;
+        const interviews = submitted.filter((a: any) => a.status === "interview" || a.status === "offer").length;
+        const offers = submitted.filter((a: any) => a.status === "offer").length;
         const rate = (count: number, total: number) => (total === 0 ? 0 : Math.round((count / total) * 1000) / 10);
         const { count: jobsCount } = await supabase.from("jobs").select("id", { count: "exact", head: true });
 

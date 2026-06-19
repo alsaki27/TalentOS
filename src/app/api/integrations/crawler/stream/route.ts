@@ -31,12 +31,12 @@ export async function GET(req: NextRequest) {
         .on(
           "postgres_changes",
           { event: "*", schema: "public", table: "job_crawler_status" },
-          (payload) => send("crawler_status", payload.new ?? payload.old),
+          (payload: any) => send("crawler_status", payload.new ?? payload.old),
         )
         .on(
           "postgres_changes",
           { event: "INSERT", schema: "public", table: "jobs", filter: "source=eq.crawler" },
-          (payload) => send("job_inserted", payload.new),
+          (payload: any) => send("job_inserted", payload.new),
         )
         .subscribe();
 

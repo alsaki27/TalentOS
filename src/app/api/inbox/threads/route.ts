@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   const { data: candidates, error: candErr } = await query;
   if (candErr) return NextResponse.json({ error: candErr.message }, { status: 500 });
 
-  const candidateIds = (candidates ?? []).map((c) => c.id);
+  const candidateIds = (candidates ?? []).map((c: any) => c.id as string);
   if (candidateIds.length === 0) return NextResponse.json({ threads: [] });
 
   // Fetch latest message per candidate
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
     unreadMap[row.candidate_id] = (unreadMap[row.candidate_id] || 0) + 1;
   }
 
-  const threads = (candidates ?? []).map((c) => ({
+  const threads = (candidates ?? []).map((c: any) => ({
     id: c.id,
     name: c.name,
     email: c.email ?? null,

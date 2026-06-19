@@ -104,7 +104,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   await Promise.all([
     deleteStorageFile(candidate?.resume_url),
     deleteStorageFile(candidate?.avatar_url),
-    ...(resumes ?? []).map((r) => deleteStorageFile(r.file_url)),
+    ...(resumes ?? []).map((r: any) => deleteStorageFile(r.file_url)),
   ]);
 
   if (context) {

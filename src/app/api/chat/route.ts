@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
     .from("chat_conversations")
     .select("id")
     .eq("user_id", context!.profile.user_id);
-  const conversationIds = (userConversations ?? []).map((c) => c.id);
+  const conversationIds = (userConversations ?? []).map((c: any) => c.id as string);
 
   if (conversationIds.length > 0) {
     const sinceMidnight = new Date();
@@ -86,8 +86,8 @@ export async function POST(req: NextRequest) {
     .order("created_at", { ascending: true })
     .limit(MAX_HISTORY_TURNS);
 
-  const history: AiMessage[] = (priorMessages ?? []).map((m) => {
-    let text = m.content;
+  const history: AiMessage[] = (priorMessages ?? []).map((m: any) => {
+    let text = m.content as string;
     if (m.attachment_name) {
       text += `\n\n[Attached file: ${m.attachment_name} (${m.attachment_type})]`;
       if (m.attachment_text) text += `\n--- file content ---\n${m.attachment_text}\n--- end file content ---`;
