@@ -626,7 +626,7 @@ export default function CandidateProfilePage() {
                         <ApplicationResumeAttach
                           candidateId={candidate.id}
                           applicationId={a.id}
-                          jobId={a.jobs.id}
+                          jobId={a.jobs?.id ?? ""}
                         />
                       </td>
                       <td>
@@ -637,7 +637,7 @@ export default function CandidateProfilePage() {
                         />
                       </td>
                       <td style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => setTailorContext({ jobId: a.jobs.id, applicationId: a.id })}>Tailor</button>
+                        <button onClick={() => setTailorContext({ jobId: a.jobs?.id ?? "", applicationId: a.id })}>Tailor</button>
                         <button onClick={() => toggleHistory(a.id)}>History</button>
                         <button onClick={() => deleteApplication(a.id)}>Delete</button>
                       </td>
