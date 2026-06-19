@@ -102,5 +102,9 @@ Keys are SHA-256 hashed at rest and support expiry/revocation.
   especially for worker-facing resume/Falood routes and application close actions.
 - Supabase RLS policies are still not implemented. That is acceptable only while all data
   access remains server-side through the service-role client.
+- **Quick Application modal (Chunk 4)**: The "+ New Application" nav button is client-side
+  gated to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application_engineer).
+  Reviewers cannot see or use it. The modal itself calls existing API routes; all actual
+  authorization is enforced by those route handlers. The modal uses no direct Supabase calls.
 - Candidate self-login, Gmail intelligence/classification, resume tailoring AI, NestJS
   migration, and Cloudflare/D1/R2 migration are not part of this pass.

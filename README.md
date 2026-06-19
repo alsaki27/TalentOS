@@ -149,6 +149,25 @@ complete env var reference table and a list of what's configured vs. what isn't.
     DB-managed keys by priority. Tracks usage_count and failure_count per key.
   - Migration readiness: `docs/migration-neon-cloudflare.md` documents the path from
     Vercel+Supabase to Neon+Cloudflare Workers.
+- **Quick Application Modal (Chunk 4)** — Global "+ New Application" button in the nav bar,
+  visible to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application_engineer).
+  Reviewers are excluded. Opens a 4-step modal:
+  1. **Candidate**: searchable list from `/api/candidates?compact=1`.
+  2. **Paste JD**: textarea + optional source URL. "Auto-Analyze" calls `/api/jobs/analyze`.
+     Shows preview card with title, company, location, workplace type, employment type,
+     seniority, salary, confidence score, required/preferred skills, and red flags.
+  3. **Review Job**: "Create Job" calls `/api/jobs/from-jd`. On 409 duplicate, shows
+     duplicate jobs with options to "Use existing" or "Force create new".
+     On 422, shows clean message to paste a clearer JD.
+  4. **Create Application**: resume source selector (Base/Original/Blank/Manual), status
+     selector (default Stacked), notes, optional assignment. Calls `/api/applications`.
+     On 409 duplicate, shows "already has an application" with link to candidate.
+     Success shows links to candidate, job, and application queue.
+  - Ad-hoc path: user can skip creating a masterlist job and create an ad-hoc application
+    with `adhoc_job_data` + `adhoc_job_raw_text` instead of `job_id`.
+  - Uses API routes only. No direct Supabase calls in client code.
+  - Does not yet implement full resume source switching in studio, keyword approval,
+    ATS suggestions, or cover letter generation.
 - **Resume tailoring workflow** - admins/managers/recruiters can open "Tailor resume for
   job" from a candidate or job page, choose a base resume and target job, generate a
   markdown draft through the configured AI provider, edit it, save it as an

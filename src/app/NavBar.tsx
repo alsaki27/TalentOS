@@ -8,6 +8,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ThemeToggle from "../components/ThemeToggle";
 import NotificationBell from "../components/NotificationBell";
+import QuickApplicationModal from "../components/QuickApplicationModal";
 
 interface MeResponse {
   profile: {
@@ -27,9 +28,11 @@ export default function NavBar() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [notifications, setNotifications] = useState<Notifications | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const canManageSources = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
   const isAdmin = me?.profile.role === "admin";
+  const canQuickApply = ["admin", "manager", "recruiter", "application_engineer"].includes(me?.profile.role ?? "");
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") return;
@@ -74,7 +77,7 @@ export default function NavBar() {
   ].filter((link) => link.show);
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
-  return (
+  return (<>
     <nav className="topnav flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
       <span className="brand font-semibold text-[15px] text-ink tracking-tight">Skarion Tracker</span>
       <div className="navlinks flex items-center gap-5">
@@ -115,6 +118,15 @@ export default function NavBar() {
         <Link href="/account" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Account</Link>
       </div>
       <div className="nav-user flex items-center gap-3 text-xs text-ink-soft">
+        {canQuickApply && (
+          <button
+            className="text-sm font-medium text-ink hover:text-accent transition-colors"
+            onClick={() => setShowModal(true)}
+            style={{ color: "var(--accent)" }}
+          >
+            + New Application
+          </button>
+        )}
         <NotificationBell />
         <ThemeToggle />
         {me?.profile && (
@@ -126,5 +138,6 @@ export default function NavBar() {
         <button onClick={logout} className="text-xs">Sign out</button>
       </div>
     </nav>
-  );
+    {showModal && <QuickApplicationModal onClose={() => setShowModal(false)} />}
+  </>);
 }

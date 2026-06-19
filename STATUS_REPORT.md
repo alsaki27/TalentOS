@@ -85,9 +85,35 @@ Migration readiness:
 
 Typecheck: clean. Build: fails on pre-existing missing Supabase env vars only.
 
-**Not yet implemented (Chunk 4+):**
-- Quick-application modal with "Paste JD" as primary option.
-- Resume source selector (Base / Original / Blank) in the studio.
+**Chunk 4: Quick Application Modal**
+
+New global "+ New Application" button in the nav bar, visible to `APPLICATION_WORKER_ROLES`
+(admin, manager, recruiter, application_engineer). Reviewers are excluded. Opens a 4-step modal
+that uses existing API routes only (no direct Supabase calls in client code):
+
+1. **Candidate selection**: Searchable list from `GET /api/candidates?compact=1`. Click to select.
+2. **Paste JD**: Textarea + optional source URL. "Auto-Analyze" calls `POST /api/jobs/analyze`.
+   Preview card shows title, company, location, workplace type, employment type, seniority,
+   salary, confidence score, required/preferred skills, and red flags. Clean error messages for
+   400 (short JD), 401 (unauthenticated), 403 (not allowed), 503 (no AI provider), 502 (AI failed).
+3. **Review Job**: "Create Job" calls `POST /api/jobs/from-jd`. On 409 duplicate, shows duplicate
+   jobs with "Use existing" or "Force create new" options. On 422, asks for a clearer JD.
+4. **Create Application**: Resume source selector (Base/Original/Blank/Manual), status selector
+   (default: Stacked), notes, optional assignment. Calls `POST /api/applications`. On 409 duplicate
+   application, shows link to candidate. Success shows links to candidate, job, and queue.
+
+Ad-hoc path: user can skip creating a masterlist job and create an ad-hoc application with
+`adhoc_job_data` + `adhoc_job_raw_text` instead of `job_id`.
+
+Files added:
+- `src/components/QuickApplicationModal.tsx` — full 4-step modal component.
+- Modified `src/app/NavBar.tsx` — added "+ New Application" button with role gating.
+
+Does not yet implement: full resume source switching in studio, keyword approval,
+ATS suggestions, or cover letter generation.
+
+**Not yet implemented (Chunk 5+):**
+- Full resume source selector with studio integration (Base/Original/Blank/Manual is available in Quick Application modal only).
 - AI suggestion generation for application resume tailoring.
 - Real PDF export.
 - Full DB-backed AI provider fallback in chat/digest routes (infrastructure ready, integration pending).

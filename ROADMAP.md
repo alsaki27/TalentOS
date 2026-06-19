@@ -264,9 +264,16 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      lock-in. Admin-only `/api/admin/ai-keys` CRUD + test routes. Keys encrypted with
      AES-256-GCM, fingerprinted, never returned to browser. `getActiveProviderAsync()` supports
      DB-managed keys as fallback. Migration readiness doc: `docs/migration-neon-cloudflare.md`.
-   - Next chunks: quick-application modal with "Paste JD" option (Chunk 4), resume source
-     selector (Chunk 5), AI suggestion generation (Chunk 6), PDF export (Chunk 7). See
-     `plan-application-workflow-redesign.md`.
+   - Chunk 4 (Quick Application modal): Global "+ New Application" button in nav bar,
+     visible to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application_engineer).
+     Reviewers excluded. 4-step modal using existing API routes only: (1) candidate search
+     from `/api/candidates`, (2) paste JD + auto-analyze via `/api/jobs/analyze`, (3) review
+     job + handle duplicates via `/api/jobs/from-jd`, (4) create application via
+     `/api/applications` with resume source, status, notes, optional assignment. Ad-hoc
+     path available (skip masterlist job). Does not yet implement full resume source studio
+     integration, keyword approval, or ATS suggestions.
+   - Next chunks: resume source selector in studio (Chunk 5), AI suggestion generation (Chunk 6),
+     PDF export (Chunk 7). See `plan-application-workflow-redesign.md`.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 
