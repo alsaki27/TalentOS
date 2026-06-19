@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Pagination from "@/components/Pagination";
 
 interface QueueItem {
   id: string;
@@ -35,7 +36,12 @@ interface MeResponse {
   };
 }
 
-const PAGE_SIZE = 50;
+interface QueueStats {
+  all: number;
+  mine: number;
+  overdue: number;
+  pendingReview: number;
+}
 
 export default function ApplicationQueuePage() {
   const [items, setItems] = useState<QueueItem[]>([]);
@@ -43,6 +49,9 @@ export default function ApplicationQueuePage() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, overdue: 0, pendingReview: 0 });
   const [statusFilter, setStatusFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
@@ -55,17 +64,40 @@ export default function ApplicationQueuePage() {
   const [actionId, setActionId] = useState("");
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
-  async function load(pageNum = page) {
+  function buildParams(pageNum: number, size: number) {
+    const params = new URLSearchParams();
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(size));
+    if (search) params.set("search", search);
+    if (statusFilter) params.set("status", statusFilter);
+    if (ownerFilter) params.set("owner", ownerFilter);
+    if (priorityFilter) params.set("priority", priorityFilter);
+    if (reviewFilter) params.set("review", reviewFilter);
+    if (viewFilter !== "all") params.set("view", viewFilter);
+    return params;
+  }
+
+  async function load(pageNum: number, size: number = pageSize) {
     setLoading(true);
+    setFeedback(null);
     try {
       const [queueRes, usersRes] = await Promise.all([
-        fetch(`/api/application-queue?page=${pageNum}&pageSize=${PAGE_SIZE}`),
-        fetch("/api/users"),
+        fetch(`/api/application-queue?${buildParams(pageNum, size)}`, { cache: "no-store" }),
+        fetch("/api/users", { cache: "no-store" }),
       ]);
       if (!queueRes.ok) throw new Error("Could not load application queue.");
-      setItems(await queueRes.json());
+      const data = await queueRes.json();
+      const newTotal = data.total ?? 0;
+      const totalPages = Math.max(1, Math.ceil(newTotal / size));
+      if (pageNum > totalPages && pageNum > 1) {
+        setLoading(false);
+        return load(totalPages, size);
+      }
+      setItems(data.items ?? []);
+      setTotal(newTotal);
+      setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
-      const meRes = await fetch("/api/auth/me");
+      const meRes = await fetch("/api/auth/me", { cache: "no-store" });
       if (meRes.ok) setMe(await meRes.json());
       setSelected(new Set());
       setPage(pageNum);
@@ -76,7 +108,8 @@ export default function ApplicationQueuePage() {
     }
   }
 
-  useEffect(() => { load(1); }, []);
+  // Any filter/search/view change re-queries from page 1.
+  useEffect(() => { load(1, pageSize); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
   const userById = new Map(users.map((user) => [user.user_id, user]));
   const ownerName = (item: QueueItem) => {
@@ -101,27 +134,7 @@ export default function ApplicationQueuePage() {
     return (a.display_name || a.email || "").localeCompare(b.display_name || b.email || "");
   });
 
-  const filtered = items.filter((item) => {
-    if (statusFilter && item.status !== statusFilter) return false;
-    if (ownerFilter && (item.assigned_to_user_id ?? item.assigned_to ?? "") !== ownerFilter) return false;
-    if (priorityFilter && item.priority !== priorityFilter) return false;
-    if (reviewFilter && item.review_status !== reviewFilter) return false;
-    if (viewFilter === "mine" && item.assigned_to_user_id !== me?.profile.user_id) return false;
-    if (viewFilter === "overdue" && (!item.assignment_due_at || item.assignment_due_at > today)) return false;
-    if (viewFilter === "review" && item.review_status !== "pending") return false;
-    if (search) {
-      const haystack = `${item.candidates?.name ?? ""} ${item.jobs?.title ?? ""} ${item.jobs?.company ?? ""}`.toLowerCase();
-      if (!haystack.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
-  const selectedItems = filtered.filter((item) => selected.has(item.id));
-  const counts = {
-    overdue: items.filter((item) => item.assignment_due_at && item.assignment_due_at <= today).length,
-    pendingReview: items.filter((item) => item.review_status === "pending").length,
-    urgent: items.filter((item) => item.priority === "urgent").length,
-    mine: items.filter((item) => item.assigned_to_user_id === me?.profile.user_id).length,
-  };
+  const selectedItems = items.filter((item) => selected.has(item.id));
 
   function dueClass(date: string | null) {
     if (!date) return "";
@@ -139,7 +152,7 @@ export default function ApplicationQueuePage() {
   }
 
   function toggleAll() {
-    setSelected((prev) => prev.size === filtered.length ? new Set() : new Set(filtered.map((item) => item.id)));
+    setSelected((prev) => prev.size === items.length ? new Set() : new Set(items.map((item) => item.id)));
   }
 
   async function setStatus(id: string, status: string) {
@@ -147,6 +160,7 @@ export default function ApplicationQueuePage() {
     setFeedback(null);
     const res = await fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status,
@@ -161,7 +175,7 @@ export default function ApplicationQueuePage() {
       return;
     }
     setFeedback({ kind: "success", text: status === "applied" ? "Application marked applied." : "Ticket updated." });
-    load();
+    load(page, pageSize);
   }
 
   async function requestReview(item: QueueItem) {
@@ -169,6 +183,7 @@ export default function ApplicationQueuePage() {
     setFeedback(null);
     const res = await fetch(`/api/applications/${item.id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         review_status: "pending",
@@ -183,12 +198,13 @@ export default function ApplicationQueuePage() {
       return;
     }
     setFeedback({ kind: "success", text: "Sent for manager review." });
-    load();
+    load(page, pageSize);
   }
 
   async function bulkStatus(status: string) {
     await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         status,
@@ -196,7 +212,7 @@ export default function ApplicationQueuePage() {
         event_note: status === "applied" ? "Bulk marked applied from queue." : "Bulk status update from queue.",
       }),
     })));
-    load();
+    load(page, pageSize);
   }
 
   async function bulkReassign() {
@@ -204,6 +220,7 @@ export default function ApplicationQueuePage() {
     const owner = users.find((user) => user.user_id === bulkOwnerId);
     await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         assigned_to_user_id: bulkOwnerId,
@@ -212,13 +229,13 @@ export default function ApplicationQueuePage() {
       }),
     })));
     setBulkOwnerId("");
-    load();
+    load(page, pageSize);
   }
 
   async function removeTicket(item: QueueItem) {
     if (!confirm(`Remove this assignment${item.candidates ? ` for ${item.candidates.name}` : ""}?`)) return;
-    await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
-    load();
+    await fetch(`/api/applications/${item.id}`, { method: "DELETE", cache: "no-store" });
+    load(page, pageSize);
   }
 
   return (
@@ -228,7 +245,7 @@ export default function ApplicationQueuePage() {
           <h1>Application Queue</h1>
           <div className="page-kicker">Assigned application work, review gates, and due tickets.</div>
         </div>
-        <button onClick={() => load(page)} disabled={loading}>Refresh</button>
+        <button onClick={() => load(page, pageSize)} disabled={loading}>Refresh</button>
       </div>
 
       {feedback && <div className={`toast ${feedback.kind === "error" ? "toast-error" : ""}`}>{feedback.text}</div>}
@@ -236,19 +253,19 @@ export default function ApplicationQueuePage() {
       <div className="stats-strip">
         <button className={`stat-button ${viewFilter === "all" ? "active" : ""}`} onClick={() => setViewFilter("all")}>
           <span className="stat-label">All tickets</span>
-          <span className="stat-value">{items.length}</span>
+          <span className="stat-value">{stats.all}</span>
         </button>
         <button className={`stat-button ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>
           <span className="stat-label">Mine</span>
-          <span className="stat-value">{counts.mine}</span>
+          <span className="stat-value">{stats.mine}</span>
         </button>
         <button className={`stat-button ${viewFilter === "overdue" ? "active" : ""}`} onClick={() => setViewFilter("overdue")}>
           <span className="stat-label">Overdue / today</span>
-          <span className="stat-value">{counts.overdue}</span>
+          <span className="stat-value">{stats.overdue}</span>
         </button>
         <button className={`stat-button ${viewFilter === "review" ? "active" : ""}`} onClick={() => setViewFilter("review")}>
           <span className="stat-label">Review</span>
-          <span className="stat-value">{counts.pendingReview}</span>
+          <span className="stat-value">{stats.pendingReview}</span>
         </button>
       </div>
 
@@ -281,7 +298,7 @@ export default function ApplicationQueuePage() {
           <option value="approved">Approved</option>
           <option value="changes_requested">Changes requested</option>
         </select>
-        <span className="muted" style={{ fontSize: 12 }}>{filtered.length} of {items.length}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
       </div>
       </div>
 
@@ -315,7 +332,7 @@ export default function ApplicationQueuePage() {
 
       {loading ? (
         <div className="loading-panel">Loading application queue...</div>
-      ) : filtered.length === 0 ? (
+      ) : total === 0 ? (
         <div className="empty">No assigned application tickets.</div>
       ) : (
         <div className="table-shell">
@@ -323,7 +340,7 @@ export default function ApplicationQueuePage() {
           <thead>
             <tr>
               <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={filtered.length > 0 && selected.size === filtered.length} onChange={toggleAll} />
+                <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
               </th>
               <th>Candidate</th>
               <th>Job</th>
@@ -337,7 +354,7 @@ export default function ApplicationQueuePage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((item) => (
+            {items.map((item) => (
               <tr key={item.id}>
                 <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
                 <td className="cell-main">
@@ -404,14 +421,19 @@ export default function ApplicationQueuePage() {
           item={editing}
           users={users}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={() => { setEditing(null); load(page, pageSize); }}
         />
       )}
-      <div className="pagination-bar">
-        <button onClick={() => load(Math.max(1, page - 1))} disabled={loading || page === 1}>Previous</button>
-        <span className="muted">Page {page}</span>
-        <button onClick={() => load(page + 1)} disabled={loading || items.length < PAGE_SIZE}>Next</button>
-      </div>
+
+      {total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={(newPage) => load(newPage, pageSize)}
+          onPageSizeChange={(newSize) => setPageSize(newSize)}
+        />
+      )}
     </>
   );
 }
@@ -442,6 +464,7 @@ function EditTicketModal({ item, users, onClose, onSaved }: { item: QueueItem; u
     const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
     const res = await fetch(`/api/applications/${item.id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         assigned_by: assignedByUser?.display_name || assignedByUser?.email || assignedBy || null,

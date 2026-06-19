@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { logActivity } from "@/lib/activity";
+import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 import { deleteStorageFile } from "@/lib/storage";
 
@@ -38,7 +40,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
   const body = await req.json();
@@ -61,15 +63,34 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (context && data) {
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email,
+      type: "update",
+      description: `Updated candidate ${data.name}`,
+      entityType: "candidate",
+      entityId: params.id,
+      entityName: data.name,
+      metadata: { fields: Object.keys(updates) },
+    });
+    void triggerWebhooks("candidate.updated", {
+      candidate_id: params.id,
+      updates: Object.keys(updates),
+      updated_by: context.profile.user_id,
+    });
+  }
+
   return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
   if (response) return response;
 
   const [{ data: candidate }, { data: resumes }] = await Promise.all([
-    supabase.from("candidates").select("resume_url, avatar_url").eq("id", params.id).single(),
+    supabase.from("candidates").select("resume_url, avatar_url, name").eq("id", params.id).single(),
     supabase.from("resumes").select("file_url").eq("candidate_id", params.id),
   ]);
 
@@ -82,6 +103,23 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     deleteStorageFile(candidate?.avatar_url),
     ...(resumes ?? []).map((r) => deleteStorageFile(r.file_url)),
   ]);
+
+  if (context) {
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email,
+      type: "delete",
+      description: `Deleted candidate ${candidate?.name || params.id}`,
+      entityType: "candidate",
+      entityId: params.id,
+      entityName: candidate?.name || undefined,
+    });
+    void triggerWebhooks("candidate.deleted", {
+      candidate_id: params.id,
+      name: candidate?.name || null,
+      deleted_by: context.profile.user_id,
+    });
+  }
 
   return NextResponse.json({ ok: true });
 }

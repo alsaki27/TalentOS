@@ -7,6 +7,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ThemeToggle from "../components/ThemeToggle";
+import NotificationBell from "../components/NotificationBell";
 
 interface MeResponse {
   profile: {
@@ -67,6 +68,8 @@ export default function NavBar() {
     { href: "/audit", label: "Audit Log", show: isAdmin },
     { href: "/ops", label: "System Health", show: isAdmin },
     { href: "/team", label: "Team", show: isAdmin },
+    { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
+    { href: "/settings/billing", label: "Billing", show: isAdmin || me?.profile.role === "manager" },
   ].filter((link) => link.show);
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href));
 
@@ -109,6 +112,7 @@ export default function NavBar() {
         <Link href="/account" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Account</Link>
       </div>
       <div className="nav-user flex items-center gap-3 text-xs text-ink-soft">
+        <NotificationBell />
         <ThemeToggle />
         {me?.profile && (
           <span className="hidden md:inline">

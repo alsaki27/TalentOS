@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Pagination from "@/components/Pagination";
 
 interface FollowUp {
   id: string;
@@ -17,12 +18,21 @@ interface FollowUp {
   jobs: { id: string; title: string; company: string | null } | null;
 }
 
-const PAGE_SIZE = 50;
+interface FollowUpStats {
+  all: number;
+  due: number;
+  upcoming: number;
+  auto: number;
+  manual: number;
+}
 
 export default function FollowUpsPage() {
   const [items, setItems] = useState<FollowUp[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [total, setTotal] = useState(0);
+  const [stats, setStats] = useState<FollowUpStats>({ all: 0, due: 0, upcoming: 0, auto: 0, manual: 0 });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -30,12 +40,32 @@ export default function FollowUpsPage() {
   const [actionId, setActionId] = useState("");
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
-  async function load(pageNum = page) {
+  function buildParams(pageNum: number, size: number) {
+    const params = new URLSearchParams();
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(size));
+    if (search) params.set("search", search);
+    if (statusFilter) params.set("status", statusFilter);
+    if (dueFilter) params.set("dueFilter", dueFilter);
+    return params;
+  }
+
+  async function load(pageNum: number, size: number = pageSize) {
     setLoading(true);
+    setFeedback(null);
     try {
-      const res = await fetch(`/api/follow-ups?page=${pageNum}&pageSize=${PAGE_SIZE}`);
+      const res = await fetch(`/api/follow-ups?${buildParams(pageNum, size)}`, { cache: "no-store" });
       if (!res.ok) throw new Error("Could not load follow-ups.");
-      setItems(await res.json());
+      const data = await res.json();
+      const newTotal = data.total ?? 0;
+      const totalPages = Math.max(1, Math.ceil(newTotal / size));
+      if (pageNum > totalPages && pageNum > 1) {
+        setLoading(false);
+        return load(totalPages, size);
+      }
+      setItems(data.items ?? []);
+      setTotal(newTotal);
+      setStats(data.stats ?? { all: 0, due: 0, upcoming: 0, auto: 0, manual: 0 });
       setSelected(new Set());
       setPage(pageNum);
     } catch (err: any) {
@@ -45,13 +75,15 @@ export default function FollowUpsPage() {
     }
   }
 
-  useEffect(() => { load(1); }, []);
+  // Any filter/search change re-queries from page 1.
+  useEffect(() => { load(1, pageSize); }, [search, statusFilter, dueFilter, pageSize]);
 
   async function markDone(id: string) {
     setActionId(`${id}:done`);
     setFeedback(null);
     const res = await fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ follow_up_at: null, event_note: "Follow-up reminder completed." }),
     });
@@ -62,7 +94,7 @@ export default function FollowUpsPage() {
       return;
     }
     setFeedback({ kind: "success", text: "Reminder completed." });
-    load();
+    load(page, pageSize);
   }
 
   async function snooze(id: string, days: number) {
@@ -72,6 +104,7 @@ export default function FollowUpsPage() {
     due.setDate(due.getDate() + days);
     const res = await fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         follow_up_at: due.toISOString().slice(0, 10),
@@ -86,7 +119,7 @@ export default function FollowUpsPage() {
       return;
     }
     setFeedback({ kind: "success", text: `Snoozed ${days} day(s).` });
-    load();
+    load(page, pageSize);
   }
 
   async function setStatus(id: string, status: string) {
@@ -94,6 +127,7 @@ export default function FollowUpsPage() {
     setFeedback(null);
     const res = await fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, event_note: `Status updated from follow-up queue to ${status}.` }),
     });
@@ -104,28 +138,29 @@ export default function FollowUpsPage() {
       return;
     }
     setFeedback({ kind: "success", text: "Status updated." });
-    load();
+    load(page, pageSize);
   }
 
   async function deleteOne(id: string) {
     if (!confirm("Delete this application entirely (not just the follow-up)?")) return;
-    await fetch(`/api/applications/${id}`, { method: "DELETE" });
-    load();
+    await fetch(`/api/applications/${id}`, { method: "DELETE", cache: "no-store" });
+    load(page, pageSize);
   }
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected application(s) entirely?`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, { method: "DELETE" })));
-    load();
+    await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, { method: "DELETE", cache: "no-store" })));
+    load(page, pageSize);
   }
 
   async function markSelectedDone() {
     await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ follow_up_at: null, event_note: "Bulk follow-up reminders completed." }),
     })));
-    load();
+    load(page, pageSize);
   }
 
   async function snoozeSelected(days: number) {
@@ -133,6 +168,7 @@ export default function FollowUpsPage() {
     due.setDate(due.getDate() + days);
     await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, {
       method: "PATCH",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         follow_up_at: due.toISOString().slice(0, 10),
@@ -140,7 +176,7 @@ export default function FollowUpsPage() {
         event_note: `Bulk follow-up reminders snoozed ${days} day(s).`,
       }),
     })));
-    load();
+    load(page, pageSize);
   }
 
   function toggleOne(id: string) {
@@ -152,12 +188,6 @@ export default function FollowUpsPage() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const counts = {
-    due: items.filter((item) => item.follow_up_at <= today).length,
-    upcoming: items.filter((item) => item.follow_up_at > today).length,
-    auto: items.filter((item) => item.follow_up_source === "auto_status_rule").length,
-    manual: items.filter((item) => item.follow_up_source !== "auto_status_rule").length,
-  };
 
   function dueClass(date: string) {
     if (date < today) return "overdue";
@@ -165,19 +195,8 @@ export default function FollowUpsPage() {
     return "";
   }
 
-  const filtered = items.filter((item) => {
-    if (statusFilter && item.status !== statusFilter) return false;
-    if (dueFilter === "overdue" && item.follow_up_at > today) return false;
-    if (dueFilter === "upcoming" && item.follow_up_at <= today) return false;
-    if (search) {
-      const haystack = `${item.candidates?.name ?? ""} ${item.jobs?.title ?? ""} ${item.jobs?.company ?? ""}`.toLowerCase();
-      if (!haystack.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
-
   function toggleAll() {
-    setSelected((prev) => (prev.size === filtered.length ? new Set() : new Set(filtered.map((i) => i.id))));
+    setSelected((prev) => (prev.size === items.length ? new Set() : new Set(items.map((i) => i.id))));
   }
 
   const filtersActive = search || statusFilter || dueFilter;
@@ -189,7 +208,7 @@ export default function FollowUpsPage() {
           <h1>Follow-ups</h1>
           <div className="page-kicker">Auto reminders, manual snoozes, and next actions from application activity.</div>
         </div>
-        <button onClick={() => load(page)} disabled={loading}>Refresh</button>
+        <button onClick={() => load(page, pageSize)} disabled={loading}>Refresh</button>
       </div>
 
       {feedback && <div className={`toast ${feedback.kind === "error" ? "toast-error" : ""}`}>{feedback.text}</div>}
@@ -197,19 +216,19 @@ export default function FollowUpsPage() {
       <div className="stats-strip">
         <button className={`stat-button ${dueFilter === "" ? "active" : ""}`} onClick={() => setDueFilter("")}>
           <span className="stat-label">All reminders</span>
-          <span className="stat-value">{items.length}</span>
+          <span className="stat-value">{stats.all}</span>
         </button>
         <button className={`stat-button ${dueFilter === "overdue" ? "active" : ""}`} onClick={() => setDueFilter("overdue")}>
           <span className="stat-label">Due now</span>
-          <span className="stat-value">{counts.due}</span>
+          <span className="stat-value">{stats.due}</span>
         </button>
         <button className={`stat-button ${dueFilter === "upcoming" ? "active" : ""}`} onClick={() => setDueFilter("upcoming")}>
           <span className="stat-label">Upcoming</span>
-          <span className="stat-value">{counts.upcoming}</span>
+          <span className="stat-value">{stats.upcoming}</span>
         </button>
         <div className="stat-card">
           <span className="stat-label">Auto / manual</span>
-          <span className="stat-value">{counts.auto} / {counts.manual}</span>
+          <span className="stat-value">{stats.auto} / {stats.manual}</span>
         </div>
       </div>
 
@@ -232,7 +251,7 @@ export default function FollowUpsPage() {
         {filtersActive && (
           <button onClick={() => { setSearch(""); setStatusFilter(""); setDueFilter(""); }}>Clear filters</button>
         )}
-        <span className="muted" style={{ fontSize: 12 }}>{filtered.length} of {items.length}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
       </div>
       </div>
 
@@ -250,17 +269,15 @@ export default function FollowUpsPage() {
 
       {loading ? (
         <div className="loading-panel">Loading follow-ups...</div>
-      ) : items.length === 0 ? (
-        <div className="empty">No follow-ups scheduled. Set a follow-up date from a candidate's profile.</div>
-      ) : filtered.length === 0 ? (
-        <div className="empty">No follow-ups match these filters.</div>
+      ) : total === 0 ? (
+        <div className="empty">{filtersActive ? "No follow-ups match these filters." : "No follow-ups scheduled. Set a follow-up date from a candidate's profile."}</div>
       ) : (
         <div className="table-shell">
         <table className="table table-compact">
           <thead>
             <tr>
               <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === filtered.length} onChange={toggleAll} />
+                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === items.length} onChange={toggleAll} />
               </th>
               <th>Due</th>
               <th>Candidate</th>
@@ -272,7 +289,7 @@ export default function FollowUpsPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((item) => (
+            {items.map((item) => (
               <tr key={item.id}>
                 <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
                 <td>
@@ -321,11 +338,16 @@ export default function FollowUpsPage() {
         </table>
         </div>
       )}
-      <div className="pagination-bar">
-        <button onClick={() => load(Math.max(1, page - 1))} disabled={loading || page === 1}>Previous</button>
-        <span className="muted">Page {page}</span>
-        <button onClick={() => load(page + 1)} disabled={loading || items.length < PAGE_SIZE}>Next</button>
-      </div>
+
+      {total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={(newPage) => load(newPage, pageSize)}
+          onPageSizeChange={(newSize) => setPageSize(newSize)}
+        />
+      )}
     </>
   );
 }

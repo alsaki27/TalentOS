@@ -3,6 +3,8 @@
 // POST -> upload a new variant (multipart: file, label, kind)
 
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUserContext } from "@/lib/auth";
+import { logActivity } from "@/lib/activity";
 import { supabase } from "@/lib/supabase";
 import { uploadResumeFile } from "@/lib/resumeStorage";
 
@@ -18,6 +20,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const currentUser = await getCurrentUserContext();
+
   const formData = await req.formData();
   const file = formData.get("file") as File | null;
   const label = (formData.get("label") as string | null)?.trim();
@@ -50,5 +54,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (currentUser && data) {
+    await logActivity({
+      userId: currentUser.profile.user_id,
+      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      type: "create",
+      description: `Uploaded ${kind} "${label}" for candidate ${params.id}`,
+      entityType: "resume",
+      entityId: data.id,
+      entityName: label,
+      metadata: { candidate_id: params.id, filename: file.name },
+    });
+  }
+
   return NextResponse.json(data, { status: 201 });
 }

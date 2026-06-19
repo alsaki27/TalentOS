@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
+import Pagination from "@/components/Pagination";
 
 interface Candidate {
   id: string;
@@ -21,38 +22,47 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
-const PAGE_SIZE = 100;
-
 export default function CandidatesPage() {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [items, setItems] = useState<Candidate[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [showAdd, setShowAdd] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
 
-  async function load(pageNum = page) {
+  function buildParams(pageNum: number, size: number) {
+    const params = new URLSearchParams();
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(size));
+    if (search) params.set("search", search);
+    if (statusFilter) params.set("status", statusFilter);
+    if (tierFilter) params.set("tier", tierFilter);
+    return params;
+  }
+
+  async function load(pageNum: number, size: number = pageSize) {
     setLoading(true);
-    const res = await fetch(`/api/candidates?page=${pageNum}&pageSize=${PAGE_SIZE}`);
-    setCandidates(await res.json());
+    const res = await fetch(`/api/candidates?${buildParams(pageNum, size)}`, { cache: "no-store" });
+    const data = await res.json();
+    const newTotal = data.total ?? 0;
+    const totalPages = Math.max(1, Math.ceil(newTotal / size));
+    if (pageNum > totalPages && pageNum > 1) {
+      setLoading(false);
+      return load(totalPages, size);
+    }
+    setItems(data.items ?? []);
+    setTotal(newTotal);
     setSelected(new Set());
     setPage(pageNum);
     setLoading(false);
   }
 
-  useEffect(() => { load(1); }, []);
-
-  const filtered = candidates.filter((c) => {
-    if (statusFilter && c.status !== statusFilter) return false;
-    if (tierFilter && c.target_tier !== tierFilter) return false;
-    if (search) {
-      const haystack = `${c.name} ${c.email ?? ""}`.toLowerCase();
-      if (!haystack.includes(search.toLowerCase())) return false;
-    }
-    return true;
-  });
+  // Any filter/search change re-queries from page 1.
+  useEffect(() => { load(1, pageSize); }, [search, statusFilter, tierFilter, pageSize]);
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -64,26 +74,31 @@ export default function CandidatesPage() {
 
   function toggleAll() {
     setSelected((prev) =>
-      prev.size === filtered.length ? new Set() : new Set(filtered.map((c) => c.id))
+      prev.size === items.length ? new Set() : new Set(items.map((c) => c.id))
     );
   }
 
   async function deleteOne(id: string) {
     if (!confirm("Delete this candidate? This also removes their applications and resume variants.")) return;
-    await fetch(`/api/candidates/${id}`, { method: "DELETE" });
-    load();
+    await fetch(`/api/candidates/${id}`, { method: "DELETE", cache: "no-store" });
+    load(page, pageSize);
   }
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected candidate(s)? This also removes their applications and resume variants.`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/candidates/${id}`, { method: "DELETE" })));
-    load();
+    await Promise.all(Array.from(selected).map((id) => fetch(`/api/candidates/${id}`, { method: "DELETE", cache: "no-store" })));
+    load(page, pageSize);
   }
 
-  function exportCsv() {
-    const csv = toCsv(filtered, ["name", "email", "phone", "status", "target_tier", "resume_filename"]);
+  async function exportCsv() {
+    const res = await fetch(`/api/candidates?${buildParams(1, 1000)}`, { cache: "no-store" });
+    const data = await res.json();
+    const rows = data.items ?? [];
+    const csv = toCsv(rows, ["name", "email", "phone", "status", "target_tier", "resume_filename"]);
     downloadCsv("candidates.csv", csv);
   }
+
+  const filtersActive = search || statusFilter || tierFilter;
 
   return (
     <>
@@ -107,11 +122,11 @@ export default function CandidatesPage() {
           <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
-        {(search || statusFilter || tierFilter) && (
+        {filtersActive && (
           <button onClick={() => { setSearch(""); setStatusFilter(""); setTierFilter(""); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
-        <span className="muted" style={{ fontSize: 12 }}>{filtered.length} of {candidates.length}</span>
+        <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
       </div>
 
       {selected.size > 0 && (
@@ -123,16 +138,14 @@ export default function CandidatesPage() {
 
       {loading ? (
         <TableSkeleton cols={7} />
-      ) : candidates.length === 0 ? (
-        <div className="empty">No candidates yet. Add the first one to get started.</div>
-      ) : filtered.length === 0 ? (
-        <div className="empty">No candidates match these filters.</div>
+      ) : total === 0 ? (
+        <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
         <table className="table">
           <thead>
             <tr>
               <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === filtered.length} onChange={toggleAll} />
+                <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
               </th>
               <th>Name</th>
               <th>Email</th>
@@ -143,7 +156,7 @@ export default function CandidatesPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((c) => (
+            {items.map((c) => (
               <tr key={c.id}>
                 <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
                 <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -165,17 +178,22 @@ export default function CandidatesPage() {
         </table>
       )}
 
+      {total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={(newPage) => load(newPage, pageSize)}
+          onPageSizeChange={(newSize) => setPageSize(newSize)}
+        />
+      )}
+
       {showAdd && (
         <AddCandidateModal
           onClose={() => setShowAdd(false)}
-          onCreated={() => { setShowAdd(false); load(1); }}
+          onCreated={() => { setShowAdd(false); load(1, pageSize); }}
         />
       )}
-      <div className="pagination-bar">
-        <button onClick={() => load(Math.max(1, page - 1))} disabled={loading || page === 1}>Previous</button>
-        <span className="muted">Page {page}</span>
-        <button onClick={() => load(page + 1)} disabled={loading || candidates.length < PAGE_SIZE}>Next</button>
-      </div>
     </>
   );
 }
@@ -194,6 +212,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     setError("");
     const res = await fetch("/api/candidates", {
       method: "POST",
+      cache: "no-store",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, phone, target_tier: targetTier || null }),
     });

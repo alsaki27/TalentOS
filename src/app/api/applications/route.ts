@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { applicationAutomation } from "@/lib/applicationAutomation";
+import { logActivity } from "@/lib/activity";
+import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 
 export async function POST(req: NextRequest) {
@@ -108,6 +110,29 @@ export async function POST(req: NextRequest) {
         status,
       },
     })));
+
+    for (const application of data) {
+      await logActivity({
+        userId: currentUser.profile.user_id,
+        actorName: currentUser.profile.display_name || currentUser.profile.email,
+        type: "create",
+        description: `Created application for candidate ${application.candidate_id}`,
+        entityType: "application",
+        entityId: application.id,
+        entityName: `Job ${body.job_id}`,
+        metadata: { job_id: body.job_id, candidate_id: application.candidate_id, status },
+      });
+    }
+
+    for (const application of data) {
+      void triggerWebhooks("application.created", {
+        application_id: application.id,
+        job_id: body.job_id,
+        candidate_id: application.candidate_id,
+        status,
+        created_by: currentUser.profile.user_id,
+      });
+    }
   }
 
   return NextResponse.json({

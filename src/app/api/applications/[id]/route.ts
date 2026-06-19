@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { applicationAutomation } from "@/lib/applicationAutomation";
+import { logActivity } from "@/lib/activity";
+import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -120,6 +122,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       entity_id: params.id,
       metadata: { fields: Object.keys(updates) },
     });
+
+    await logActivity({
+      userId: currentUser.profile.user_id,
+      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      type: "update",
+      description: `Updated application ${params.id}`,
+      entityType: "application",
+      entityId: params.id,
+      metadata: { fields: Object.keys(updates) },
+    });
+    void triggerWebhooks("application.updated", {
+      application_id: params.id,
+      updates: Object.keys(updates),
+      updated_by: currentUser.profile.user_id,
+    });
   }
 
   return NextResponse.json(data);
@@ -143,6 +160,19 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       action: "application.deleted",
       entity_type: "application",
       entity_id: params.id,
+    });
+
+    await logActivity({
+      userId: currentUser.profile.user_id,
+      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      type: "delete",
+      description: `Deleted application ${params.id}`,
+      entityType: "application",
+      entityId: params.id,
+    });
+    void triggerWebhooks("application.deleted", {
+      application_id: params.id,
+      deleted_by: currentUser.profile.user_id,
     });
   }
   return NextResponse.json({ ok: true });

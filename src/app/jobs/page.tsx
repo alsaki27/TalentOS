@@ -330,6 +330,7 @@ export default function JobsPage() {
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={() => setShowImport(true)}>Import file</button>
           <button onClick={() => setShowImportAts(true)}>Import from ATS</button>
+          <Link href="/import" className="btn">Universal Import</Link>
           <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add job</button>
         </div>
       </div>
@@ -987,7 +988,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   });
 
   useEffect(() => {
-    fetch("/api/candidates?compact=1&pageSize=200").then((r) => r.json()).then(setCandidates);
+    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" }).then((r) => r.json()).then((data) => setCandidates(data.items ?? data));
     fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
     fetch("/api/auth/me")
       .then((r) => r.ok ? r.json() : null)

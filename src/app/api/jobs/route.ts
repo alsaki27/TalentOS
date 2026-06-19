@@ -7,6 +7,8 @@ import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { categorizeJob } from "@/lib/jobCategorizer";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
+import { logActivity } from "@/lib/activity";
+import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
@@ -79,7 +81,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
   const body = await req.json();
@@ -121,5 +123,25 @@ export async function POST(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   await syncCompanyDirectoryFromJobs([data]);
+
+  if (context && data) {
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email,
+      type: "create",
+      description: `Created job ${data.title}`,
+      entityType: "job",
+      entityId: data.id,
+      entityName: data.title,
+      metadata: { company: data.company },
+    });
+    void triggerWebhooks("job.created", {
+      job_id: data.id,
+      title: data.title,
+      company: data.company,
+      created_by: context.profile.user_id,
+    });
+  }
+
   return NextResponse.json(data, { status: 201 });
 }

@@ -7,6 +7,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { categorizeJob } from "@/lib/jobCategorizer";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
+import { logActivity } from "@/lib/activity";
+import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -39,7 +41,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
   const body = await req.json();
@@ -69,15 +71,54 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   await syncCompanyDirectoryFromJobs([data]);
+
+  if (context && data) {
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email,
+      type: "update",
+      description: `Updated job ${data.title}`,
+      entityType: "job",
+      entityId: params.id,
+      entityName: data.title,
+      metadata: { fields: Object.keys(updates) },
+    });
+    void triggerWebhooks("job.updated", {
+      job_id: params.id,
+      updates: Object.keys(updates),
+      updated_by: context.profile.user_id,
+    });
+  }
+
   return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  const { context, response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
   if (response) return response;
+
+  const { data: job } = await supabase.from("jobs").select("title").eq("id", params.id).single();
 
   const { error } = await supabase.from("jobs").delete().eq("id", params.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (context) {
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email,
+      type: "delete",
+      description: `Deleted job ${job?.title || params.id}`,
+      entityType: "job",
+      entityId: params.id,
+      entityName: job?.title || undefined,
+    });
+    void triggerWebhooks("job.deleted", {
+      job_id: params.id,
+      title: job?.title || null,
+      deleted_by: context.profile.user_id,
+    });
+  }
+
   return NextResponse.json({ ok: true });
 }

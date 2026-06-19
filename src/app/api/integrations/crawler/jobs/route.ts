@@ -1,14 +1,17 @@
 // src/app/api/integrations/crawler/jobs/route.ts
-// POST -> a crawler bot pushes one job posting in. Gated by CRAWLER_API_KEY (bearer),
-// same pattern as CRON_SECRET — checked here and in src/middleware.ts's bypass for this
-// path, since an external bot has no session cookie to present.
+// POST -> a crawler bot pushes one job posting in. Gated by API key validation
+// (validateApiKey checks public_api_keys table with jobs:import scope,
+// then falls back to CRAWLER_API_KEY env var). This is the same pattern as
+// the legacy CRON_SECRET check, but with support for multiple integration keys.
 
 import { NextRequest, NextResponse } from "next/server";
-import { isCrawlerAuthorized, upsertCrawlerJob } from "@/lib/integrations/jobCrawler";
+import { validateApiKey } from "@/lib/apiKeyAuth";
+import { upsertCrawlerJob } from "@/lib/integrations/jobCrawler";
 
 export async function POST(req: NextRequest) {
-  if (!isCrawlerAuthorized(req.headers.get("authorization"))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const result = await validateApiKey(req);
+  if (!result.valid) {
+    return result.error ?? NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const body = await req.json().catch(() => null);

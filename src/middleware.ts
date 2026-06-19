@@ -70,11 +70,16 @@ function isCronAuthorized(req: NextRequest, pathname: string) {
 // An external job-crawler bot has no session cookie either — same bearer-secret
 // pattern as cron, scoped to only the two endpoints it actually calls (not /status or
 // /stream, which stay behind normal staff auth). Route itself re-checks the key too.
+// Also accepts CRON_SECRET so cron jobs can trigger crawler ingestion if desired.
 function isCrawlerAuthorized(req: NextRequest, pathname: string) {
   if (pathname !== "/api/integrations/crawler/jobs" && pathname !== "/api/integrations/crawler/heartbeat") return false;
-  const key = process.env.CRAWLER_API_KEY;
-  if (!key) return false;
-  return req.headers.get("authorization") === `Bearer ${key}`;
+  const authHeader = req.headers.get("authorization");
+  const crawlerKey = process.env.CRAWLER_API_KEY;
+  if (crawlerKey && authHeader === `Bearer ${crawlerKey}`) return true;
+  // Fallback: allow cron secret to invoke crawler endpoints for scheduled crawls
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true;
+  return false;
 }
 
 export async function middleware(req: NextRequest) {
