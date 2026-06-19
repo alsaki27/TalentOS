@@ -1,4 +1,4 @@
-# Status Report — 2026-06-18
+# Status Report — 2026-06-19
 
 Written for the team picking this up to deploy. Read [HANDOVER.md](./HANDOVER.md) first
 for the technical reference (env vars, security audit, architecture); this file is the
@@ -6,20 +6,42 @@ point-in-time summary of where things stand and what to do next, in priority ord
 
 ## Executive summary
 
-The frontend (Next.js + Supabase) is a working, feature-complete internal recruiting tool
-— candidates, jobs, applications, AI assistant, analytics, integrations, all live-tested
-and building cleanly. A separate NestJS backend was started in parallel to eventually move
+The frontend (Next.js + Supabase) is a working internal recruiting/placement tool —
+candidates, jobs, applications, AI assistant, analytics, integrations, application proof
+upload, paginated operational queues, and CI-backed build checks. The docs were refreshed
+after the latest hardening pass so they match the code rather than the older audit notes.
+A separate NestJS backend was started in parallel to eventually move
 off Supabase (to Clerk auth + a portable Postgres + SharePoint storage), and is currently a
 **first slice, not a replacement** — about 6 of ~20 modules are ported, and there's no path
 yet to point it at real production data without a few real risks (detailed below). Both are
-being kept; nothing is being torn down. The most urgent thing before any deploy is **setting
-`CRON_SECRET`** — without it, three daily scheduled jobs (import, backup, AI digest) will
+being kept; nothing is being torn down. Do not start or extend the NestJS migration unless
+that is explicitly requested. The most urgent thing before any deploy is **setting
+`CRON_SECRET`** — without it, scheduled jobs (import, backup, digest, categorization/email
+queue depending on deployed config) will
 silently never run.
 
 ## What's live and working today (frontend, `/`)
 
 - Full candidate/job/application tracker with resume variants, follow-up automation, status
   timeline, priority/review workflow, audit log.
+- Root package scripts now include `typecheck`, `lint`, `test`, `build`, and `start`, and
+  GitHub Actions CI runs `npm ci`, typecheck, lint, and build on push/PR.
+- `.env.example` now exists for the frontend and covers Supabase, cron, crawler, AI,
+  Gmail, Teams, SharePoint, USAJobs, and storage-provider variables.
+- Candidates, application queue, and follow-ups now use paginated/filterable API responses
+  instead of relying on the old unbounded list pattern.
+- Role-based action gating is now mostly implemented for day-to-day risk areas:
+  master-data writes, assignment edits, destructive deletes, public API key management,
+  admin/team/audit/ops routes, and application-engineer scoping. It is still app-layer
+  gating via middleware/auth helpers, not complete Supabase RLS policy coverage.
+- Application proof upload exists at `POST /api/applications/[id]/proof`; it stores a proof
+  artifact, records `application_proofs`, updates the application's latest proof metadata,
+  and logs activity.
+- AI job categorization exists (`src/lib/ai/jobCategorization.ts`) with processing routes
+  and cron support. This is separate from `/chat` and the daily digest.
+- Resume tailoring workflow now exists: admins/managers/recruiters can generate an
+  editable markdown draft from a candidate base resume and target job, save it as an
+  `application_resume_versions` variant, and attach it to an application packet.
 - Companies directory, saved job searches, per-user notifications feed.
 - AI data assistant (`/chat`) and a daily AI digest — both live-tested against the real
   NVIDIA-hosted model, with a documented, mitigated reliability issue (see HANDOVER.md).
@@ -39,8 +61,7 @@ silently never run.
   the one piece that needs a human with Microsoft 365 access to validate** — see
   HANDOVER.md's "Switching resume storage to SharePoint" section for the exact setup steps.
 
-All of the above: `npx tsc --noEmit` clean, `npm run build` clean, all migrations applied
-and in sync with the live database.
+Latest local validation target: `npm run typecheck`, `npm run lint`, and `npm run build`.
 
 ## What's in progress (backend, `/backend`)
 
@@ -61,7 +82,7 @@ analytics, follow-ups/reminders, candidate portal, file storage adapter.
 In priority order — these aren't equally urgent, ordered by impact if skipped:
 
 1. **Set `CRON_SECRET`** (frontend, both locally and in Vercel). Without it, scheduled
-   import/backup/digest jobs 401 silently forever. Free to set — any random string.
+   cron jobs 401 silently forever. Free to set — any random string.
 2. **Bootstrap the first admin account** if this is a fresh deploy — no self-serve signup
    exists. See HANDOVER.md's operational runbook.
 3. **Decide the SharePoint cutover timing.** The code is ready; a real human with Microsoft
@@ -81,23 +102,25 @@ In priority order — these aren't equally urgent, ordered by impact if skipped:
 
 ## Prioritized next steps (not blocking deploy, but next in line)
 
-1. **Role-based action gating** — most mutations (assigning tickets, deleting jobs/
-   candidates) aren't restricted by role yet. This needs a product decision on policy
-   before implementation, not just engineering time — see ROADMAP.md's "Next up" list.
-2. **UI wiring for threaded comment replies** — the data model and API support replies
+1. **Candidate self-login dashboard** — scoped in [docs/candidate-self-login.md](./docs/candidate-self-login.md)
+   but not built. The current portal is still magic-link based, not account/session based.
+2. **Gmail intelligence/email classification** — Gmail OAuth/linking exists, but rejection
+   detection, reply classification, interview invite detection, follow-up task creation,
+   and automatic application status updates from email are still not implemented.
+3. **Cover-letter generation / deeper tailoring QA** — resume tailoring now covers
+   editable markdown resume drafts and application-packet attachment. Cover letters,
+   automated truth scoring, and richer approval workflows are still future work.
+4. **UI wiring for threaded comment replies** — the data model and API support replies
    (`parent_comment_id`) since this session, but `candidates/[id]` and `jobs/[id]` don't
    render the thread structure yet. Deferred because both pages had large uncommitted
    diffs from concurrent work at the time; safe to pick up once that settles.
-3. **Candidate self-login dashboard** — scoped in [docs/candidate-self-login.md](./docs/candidate-self-login.md)
-   but not built. Real auth/role-model decision needed first (see that doc for the exact
-   tradeoffs) — not a quick add.
-4. **Backend migration continuation** — the team's own next-module list in
+5. **Backend migration continuation** — the team's own next-module list in
    `backend/MIGRATION.md` is accurate and already prioritized; no need to re-derive it here.
-5. **SharePoint delete cleanup** — `deleteStorageFile()` only knows how to clean up
+6. **SharePoint delete cleanup** — `deleteStorageFile()` only knows how to clean up
    Supabase Storage URLs today; switching to SharePoint means replaced/deleted resumes will
    leak as orphaned files until someone adds a SharePoint-aware delete path. Low urgency
    (storage-quota drip, not a security or correctness issue), but worth a ticket.
-6. **USAJobs import** — wired but never live-tested end-to-end (no API key was ever
+7. **USAJobs import** — wired but never live-tested end-to-end (no API key was ever
    available in any environment this was built in). Low priority unless USAJobs is an
    active sourcing channel.
 
@@ -105,12 +128,19 @@ In priority order — these aren't equally urgent, ordered by impact if skipped:
 
 - RLS is enabled with zero policies on every Supabase table — fine today since nothing
   queries with the anon key, but don't mistake it for active protection if that changes.
-- No pagination on candidates/application-queue/follow-ups lists — fine at current scale
-  (hundreds of rows), will need the same server-side-pagination treatment `/jobs` already
-  got once any of them approaches ~1,000 rows.
+- Candidate self-login is still not built; `/portal/<token>` remains the candidate-facing
+  path.
+- Gmail intelligence/email classification is still not built; OAuth is only the connection
+  layer.
+- Resume tailoring exists for editable markdown resume drafts, but cover-letter generation
+  and deeper automated truth/fit scoring are still not built.
+- Backup restore now has an admin API/UI workflow, but it is an upsert restore, not a full
+  point-in-time database rollback.
 - Two AI providers exist; only NVIDIA has ever been live-tested, and it has a known,
   mitigated-but-not-eliminated reliability issue on multi-turn tool calls. Prefer Anthropic
   once a key exists.
+- Current deployment is Vercel + Supabase. Cloudflare full-stack hosting is not configured;
+  D1/R2 migration is not part of the current architecture.
 
 ## Deployment readiness checklist
 

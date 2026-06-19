@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { TailorResumeModal } from "@/components/TailorResumeModal";
 
 interface Applicant {
   application_id: string;
@@ -102,6 +103,7 @@ export default function JobDetailPage() {
   const [shortlistLoading, setShortlistLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
+  const [tailorContext, setTailorContext] = useState<{ candidateId: string; applicationId?: string } | null>(null);
 
   async function load() {
     if (!id) return;
@@ -244,6 +246,7 @@ export default function JobDetailPage() {
                 <th>Score</th>
                 <th>Why</th>
                 <th>Resume</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -260,6 +263,9 @@ export default function JobDetailPage() {
                     {candidate.resume_url ? (
                       <a href={candidate.resume_url} target="_blank" rel="noreferrer">{candidate.resume_filename || "Resume"}</a>
                     ) : <span className="muted">Missing</span>}
+                  </td>
+                  <td>
+                    <button onClick={() => setTailorContext({ candidateId: candidate.id })}>Tailor resume</button>
                   </td>
                 </tr>
               ))}
@@ -278,6 +284,7 @@ export default function JobDetailPage() {
             <tr>
               <th>Candidate</th>
               <th>Status</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -285,6 +292,11 @@ export default function JobDetailPage() {
               <tr key={a.application_id}>
                 <td>{a.name}</td>
                 <td><span className={`badge badge-${a.status}`}>{a.status}</span></td>
+                <td>
+                  <button onClick={() => setTailorContext({ candidateId: a.candidate_id, applicationId: a.application_id })}>
+                    Tailor resume
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -293,6 +305,15 @@ export default function JobDetailPage() {
 
       {showEdit && (
         <EditJobModal job={job} onClose={() => setShowEdit(false)} onSaved={() => { setShowEdit(false); load(); }} />
+      )}
+      {tailorContext && (
+        <TailorResumeModal
+          candidateId={tailorContext.candidateId}
+          initialJobId={job.id}
+          initialApplicationId={tailorContext.applicationId}
+          onClose={() => setTailorContext(null)}
+          onSaved={() => load()}
+        />
       )}
     </>
   );

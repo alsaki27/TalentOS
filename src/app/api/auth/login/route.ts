@@ -7,8 +7,7 @@ import { supabase } from "@/lib/supabase";
 function authClient() {
   const url = process.env.SUPABASE_URL;
   const authKey = process.env.SUPABASE_ANON_KEY
-    ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
+    ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
   if (!url || !authKey) return null;
 
@@ -39,48 +38,24 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await client.auth.signInWithPassword({ email, password });
   if (error || !data.session || !data.user) {
-    return NextResponse.json({ error: error?.message ?? "Invalid login." }, { status: 401 });
+    return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
   }
 
-  const { data: existingProfile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("user_id, email, display_name, role, is_active")
     .eq("user_id", data.user.id)
     .maybeSingle();
 
-  let profile = existingProfile;
-  if (!profile) {
-    const { data: insertedProfile, error: insertError } = await supabase
-      .from("profiles")
-      .insert({
-        user_id: data.user.id,
-        email: data.user.email,
-        display_name: data.user.user_metadata?.display_name ?? data.user.email?.split("@")[0] ?? "User",
-        role: data.user.user_metadata?.role ?? "recruiter",
-      })
-      .select("user_id, email, display_name, role, is_active")
-      .single();
-
-    if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
-    profile = insertedProfile;
+  if (profileError) {
+    return NextResponse.json({ error: "Could not complete login." }, { status: 500 });
   }
 
-  const { count: adminCount } = await supabase
-    .from("profiles")
-    .select("user_id", { count: "exact", head: true })
-    .eq("role", "admin")
-    .eq("is_active", true);
-
-  if ((adminCount ?? 0) === 0 && profile) {
-    const { data: adminProfile, error: adminError } = await supabase
-      .from("profiles")
-      .update({ role: "admin", updated_at: new Date().toISOString() })
-      .eq("user_id", profile.user_id)
-      .select("user_id, email, display_name, role, is_active")
-      .single();
-
-    if (adminError) return NextResponse.json({ error: adminError.message }, { status: 500 });
-    profile = adminProfile;
+  if (!profile) {
+    return NextResponse.json(
+      { error: "Login succeeded, but no TalentOS profile exists. Run npm run seed:admin or contact admin." },
+      { status: 403 },
+    );
   }
 
   if (!profile?.is_active) {

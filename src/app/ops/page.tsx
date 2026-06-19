@@ -84,6 +84,10 @@ export default function OpsPage() {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [restorePath, setRestorePath] = useState("");
+  const [restoreConfirm, setRestoreConfirm] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [generatingDigest, setGeneratingDigest] = useState(false);
   const [digestError, setDigestError] = useState("");
   const [categorization, setCategorization] = useState<CategorizationStatus | null>(null);
@@ -188,6 +192,33 @@ export default function OpsPage() {
       URL.revokeObjectURL(url);
     }
     setExporting(false);
+  }
+
+  async function restoreBackup() {
+    if (!restorePath || restoreConfirm !== "RESTORE TALENTOS BACKUP") return;
+    if (!confirm("Restore this backup by upserting candidates, jobs, resumes, and applications? This is not a full point-in-time rollback.")) return;
+
+    setRestoring(true);
+    setRestoreMessage(null);
+    const res = await fetch("/api/ops/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: restorePath, confirm: restoreConfirm }),
+    });
+    setRestoring(false);
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setRestoreMessage({ kind: "error", text: data.error || "Restore failed." });
+      return;
+    }
+
+    const counts = Object.entries(data.restored ?? {})
+      .map(([table, count]) => `${table}: ${count}`)
+      .join(", ");
+    setRestoreMessage({ kind: "success", text: `Restored ${counts || "0 rows"}.` });
+    setRestoreConfirm("");
+    await load();
   }
 
   useEffect(() => { load(); }, []);
@@ -302,6 +333,46 @@ export default function OpsPage() {
           </tbody>
         </table>
       )}
+
+      <div className="card" style={{ marginTop: 12 }}>
+        <label>Restore from stored backup</label>
+        <p className="muted" style={{ fontSize: 12, margin: "6px 0 12px" }}>
+          Restore upserts records from a JSON snapshot into candidates, jobs, resumes, and
+          applications. It is not a full point-in-time database rollback and does not delete
+          records that are absent from the backup.
+        </p>
+        <div className="filter-bar" style={{ alignItems: "flex-end" }}>
+          <div className="field-group" style={{ marginBottom: 0, minWidth: 260 }}>
+            <label>Backup file</label>
+            <select value={restorePath} onChange={(e) => setRestorePath(e.target.value)}>
+              <option value="">Select a backup...</option>
+              {backups.map((backup) => (
+                <option key={backup.name} value={backup.name}>{backup.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group" style={{ marginBottom: 0, minWidth: 260 }}>
+            <label>Confirmation phrase</label>
+            <input
+              value={restoreConfirm}
+              onChange={(e) => setRestoreConfirm(e.target.value)}
+              placeholder="RESTORE TALENTOS BACKUP"
+            />
+          </div>
+          <button
+            className="btn-danger"
+            onClick={restoreBackup}
+            disabled={!restorePath || restoreConfirm !== "RESTORE TALENTOS BACKUP" || restoring}
+          >
+            {restoring ? "Restoring..." : "Restore backup"}
+          </button>
+        </div>
+        {restoreMessage && (
+          <p style={{ color: restoreMessage.kind === "error" ? "var(--danger)" : "var(--accent)", fontSize: 13 }}>
+            {restoreMessage.text}
+          </p>
+        )}
+      </div>
 
       <div className="page-header" style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>AI daily digest</h2>

@@ -12,45 +12,66 @@ reversed by request; see ROADMAP.md for the prior reasoning and what changed).
 (build/types/migrations/env vars/auth) done as of the last working session, with a
 complete env var reference table and a list of what's configured vs. what isn't.
 
-## Setup (10–15 min)
+## Setup (10-15 min)
 
-1. **Create a Supabase project** (free tier) at supabase.com.
-2. **Run the schema:** open the SQL editor in your Supabase project, paste in `sql/01_schema.sql`,
-   run it. This creates `candidates`, `jobs`, `applications`, `resumes`, and `application_events`
-   tables plus a `resumes` storage bucket (also used for candidate profile photos, under an
-   `avatars/` prefix).
-   - If the storage bucket insert at the bottom errors, create a bucket named `resumes`
-     (public) manually via Storage in the Supabase dashboard instead.
-   - Alternatively, if you have the Supabase CLI linked to your project, the same schema
-     lives as incremental migrations in `supabase/migrations/` — `supabase db push` applies
-     them in order.
-3. **Env vars:** create `.env.local` in the project root with at least:
+1. **Create or open a cloud Supabase project** at supabase.com.
+2. **Copy env vars:** create `.env.local` in the project root from `.env.example`:
    ```
    SUPABASE_URL=https://your-project.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
    SUPABASE_ANON_KEY=your-anon-key
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
    ```
-   These three are in your Supabase project settings → API. **Never commit this file** —
-   the service role key bypasses all database access control. `SUPABASE_ANON_KEY` is used
-   only for the login password check (`auth.signInWithPassword`); it falls back to the
-   service role key if omitted, but set it for real use.
+   In the Supabase dashboard, find these under **Project Settings > API**:
+   - **Project URL** -> `SUPABASE_URL`
+   - **anon / publishable key** -> `SUPABASE_ANON_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - **service_role / secret key** -> `SUPABASE_SERVICE_ROLE_KEY`
+
+   **Never commit `.env.local`.** The service-role key bypasses database access control.
+3. **Apply migrations:** link the Supabase CLI to the project if needed, then run:
+   ```bash
+   npx supabase db push
+   ```
+   `supabase/migrations/` is the source of truth. `sql/01_schema.sql` is only a convenience
+   snapshot and can lag newer migrations.
+4. **Check setup:**
+   ```bash
+   npm run setup:check
+   ```
+   This validates `.env.local`, rejects placeholder Supabase values, checks connectivity,
+   and verifies the required core tables exist.
+5. **Create the first admin:** first create an Auth user and password in Supabase
+   **Authentication > Users**. Then run:
+   ```bash
+   npm run seed:admin
+   ```
+   The script defaults to `ADMIN_EMAIL=admin@skarion.local`. Override it by setting
+   `ADMIN_EMAIL=you@example.com` in `.env.local` before running the command.
+   It creates or updates the TalentOS `profiles` row for that existing Auth user. It does
+   not set or print passwords.
 
    Everything else (AI assistant keys, `CRON_SECRET` for scheduled jobs, USAJobs import
-   credentials, Gmail/Teams/TalentOS integration secrets — see
+   credentials, Gmail/Teams/TalentOS integration secrets - see
    [docs/integrations.md](./docs/integrations.md) for those) is optional and degrades to a
    clear error or a no-op, not a crash, when missing. **[HANDOVER.md](./HANDOVER.md)** has
-   the full env var reference table — every variable the app reads, what it gates, and
-   what's actually configured today.
-4. **Install + run:**
+   the full env var reference table - every variable the app reads, what it gates, and
+   what is actually configured today.
+6. **Install + run:**
    ```bash
    npm install
    npm run dev
    ```
-5. Open `http://localhost:3000` — it redirects to `/candidates`.
-
+   Other project scripts now exist too: `npm run setup:check`, `npm run seed:admin`,
+   `npm run typecheck`, `npm run lint`, `npm run test` (currently an alias for typecheck),
+   `npm run build`, and `npm run start`.
+   GitHub Actions CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, lint, and build
+   on pushes to `main` and on pull requests.
+7. **Verify:** open `http://localhost:3000/api/health`, then log in at
+   `http://localhost:3000/login`. After login, `/jobs` and `/candidates` should load.
 ## What's here
 
-- **`/candidates`** — masterlist with search + status/tier filters, multi-select bulk delete,
+- **`/candidates`** — server-side paginated masterlist with search + status/tier filters,
+  multi-select bulk delete,
   CSV export. Click a name for their profile: contact info, target roles/locations/salary/work
   authorization, a profile photo (shown as a circle avatar throughout the app), a primary
   resume upload, multiple **resume/cover-letter variants** (tailored per job), and every
@@ -68,12 +89,17 @@ complete env var reference table and a list of what's configured vs. what isn't.
   undo a wrong assignment. "Assign application" lets a manager pick one or more candidates
   at once, which resume variant to use, and who on the team owns applying.
 - **`/application-queue`** — the application engineer's dashboard: every assigned/stacked/
-  in-progress ticket, filterable by status/owner/search, overdue due-dates highlighted.
+  in-progress ticket, server-side paginated and filterable by status/owner/search/priority/
+  review state, overdue due-dates highlighted.
   Start a ticket, mark it applied, edit its owner/due-date/note, or remove a wrong
-  assignment.
+  assignment. Application proof upload exists here: AEs/managers can attach a screenshot or
+  PDF through `POST /api/applications/[id]/proof`; the app stores the artifact, writes an
+  `application_proofs` row, updates the application's latest proof URL/filename, and logs
+  the activity.
 - **`/follow-ups`** — every application with a follow-up date set, across all candidates.
-  Filter by status/search/overdue-vs-upcoming, mark done (clears the date) or delete the
-  application outright, single or in bulk.
+  Server-side paginated and filterable by status/search/overdue-vs-upcoming; application
+  engineers are scoped to their own assigned work. Mark done (clears the date) or delete
+  the application outright, single or in bulk.
 - **`/analytics`** — non-AI conversion metrics: response/interview/offer rates, performance
   broken down by job source (which channels actually convert) and by resume variant (which
   tailored resume gets more interviews). Pre-submission pipeline tickets (assigned/stacked/
@@ -88,7 +114,17 @@ complete env var reference table and a list of what's configured vs. what isn't.
   backup panel. Built after an hour-long Supabase outage and a wiped `jobs` table went
   unnoticed mid-session until someone happened to check manually — give that an obvious
   place to surface next time.
-- **`/companies`** — directory of every employer seen across imported job postings,
+- **AI job categorization** — imported jobs can be categorized by the AI layer
+  (`src/lib/ai/jobCategorization.ts`) through the manual processing route and the
+  `categorize-jobs` cron route. It classifies active categories and extracts useful signals
+  such as salary/work-authorization hints. This is separate from the read-only chat
+  assistant and daily digest.
+- **Resume tailoring workflow** - admins/managers/recruiters can open "Tailor resume for
+  job" from a candidate or job page, choose a base resume and target job, generate a
+  markdown draft through the configured AI provider, edit it, save it as an
+  `application_resume_versions` variant, and attach it to an application packet. The prompt
+  explicitly forbids inventing experience and the UI warns to review before sending.
+- **/companies** — directory of every employer seen across imported job postings,
   normalized by name (`src/lib/companyDirectory.ts`). Each company page (`/companies/[id]`)
   aggregates every job posting and every scraped contact person (`company_people` — name,
   title, LinkedIn profile, inferred influence level like "hiring manager" vs "recruiter")
@@ -134,11 +170,11 @@ A daily Vercel Cron (`/api/cron/backup`, see `vercel.json`) snapshots `candidate
 `applications`/`resumes` to JSON and stores it in the `resumes` Storage bucket under
 `backups/<timestamp>.json`. `/ops` lists recent backups and has a "Download backup now"
 button for an on-demand copy (`/api/ops/export`, streamed straight to the browser, not
-stored). This exists because the team's actual jobs data got wiped mid-development by an
-external Supabase incident, and recovery only worked because a source import file happened
-to still be sitting on disk — next time shouldn't depend on luck. It's a JSON dump, not a
-restore tool: restoring from one today means writing a one-off script against
-`src/lib/backup.ts`'s `BackupSnapshot` shape, not a button.
+stored). `src/lib/backup.ts` includes restore helpers (`parseBackupSnapshot`,
+`loadStoredBackupSnapshot`, `restoreBackupSnapshot`), and `/api/ops/restore` plus the
+Stored backups panel on `/ops` provide an admin-only restore workflow. Restore requires the
+exact phrase `RESTORE TALENTOS BACKUP` and upserts records; it is not a full point-in-time
+database rollback and does not delete rows absent from the snapshot.
 - **`/portal/<token>`** — public, no-login, read-only candidate-facing page. Each candidate
   gets a unique magic-link token (`candidates.portal_token`) — copy it from their profile.
   Shows their submitted applications, statuses, a per-candidate stats summary (applications/
@@ -404,8 +440,12 @@ owns workflow" principle (see `ROADMAP.md`) without actually adding an AI depend
   `src/lib/supabase.ts`, using the **service role key** (full access, bypasses Row Level
   Security). Authorization is enforced in the app layer instead: `src/middleware.ts` requires
   a valid session cookie on every route except `/login`, `/portal/*`, `/api/portal/*`, and
-  `/api/auth/*`; `src/lib/auth.ts`'s `requireCurrentUser(roles?)` additionally checks role for
-  admin-only routes (`/team`, `/audit`, `POST /api/users`). RLS is enabled on every table
+  `/api/auth/*`; `src/lib/auth.ts`'s `requireCurrentUser(roles?)` additionally checks roles
+  across most write paths. Role-based action gating is now mostly implemented for the
+  important mutations: master-data creation/editing, destructive candidate/job/application
+  actions, assignment changes, public API key management, audit/team/admin ops, and
+  application-engineer queue visibility. It is still app-layer authorization, not Supabase
+  RLS policy enforcement. RLS is enabled on every table
   (`20260618102000_enable_rls.sql`) with no policies, since nothing queries Supabase directly
   from the browser with the anon key — if that ever changes, policies need writing then.
 - That shared client explicitly disables Next.js's fetch caching (`cache: "no-store"`).
@@ -426,24 +466,27 @@ owns workflow" principle (see `ROADMAP.md`) without actually adding an AI depend
 
 ## Known gaps (read before relying on this for anything sensitive)
 
-- **No bootstrap account.** There is no self-serve signup, and `POST /api/users` (the "create
-  a teammate" endpoint behind `/team`) requires an existing admin session — chicken-and-egg
-  on a brand new project. Create the very first account directly via Supabase's Admin API
-  (`POST {SUPABASE_URL}/auth/v1/admin/users` with the service role key) or the Supabase
-  dashboard's Authentication → Users panel, then log in at `/login`.
-- No pagination on candidates/application-queue/follow-ups — those list pages fetch and
-  render every row client-side. Fine at hundreds of rows, will need addressing before
-  thousands (jobs already hit this at 1,000 rows and now paginates server-side; see
-  ROADMAP.md).
-- **`CRON_SECRET` must be set in production** or all three scheduled jobs in `vercel.json`
-  (import-sources, backup, AI digest) 401 silently every day, forever — see
+- **First admin bootstrap is explicit.** There is no self-serve signup. Create the first Auth user/password in Supabase Authentication, then run `npm run seed:admin` to create or update the TalentOS admin profile before logging in.
+- Candidate self-login is still not implemented. The public candidate portal remains a
+  magic-link flow at `/portal/<token>` with expiry/revocation fields available, not a
+  candidate account/session dashboard.
+- Gmail intelligence/email classification is still not implemented. Gmail OAuth/linking
+  exists, but the app does not yet classify rejections, recruiter replies, interview
+  invites, or auto-update application state from email.
+- Resume tailoring now generates editable markdown drafts and saves/attaches variants. Cover-letter generation and deeper truth-scoring/approval automation are still future work.
+- **`CRON_SECRET` must be set in production** or every `/api/cron/*` route, including the
+  Vercel cron jobs in `vercel.json`, 401s silently every day, forever — see
   [HANDOVER.md](./HANDOVER.md) for the full operational checklist before deploying.
 
 ## Deploy
 
-Push to GitHub, import into Vercel, add the same two env vars there. Don't forget the
-bootstrap-account step above — without it, every route redirects to a `/login` no one can
-use yet.
+The current deployment path is **Vercel + Supabase**: push to GitHub, import into Vercel,
+and add the required Supabase and cron env vars there. Supabase remains the database,
+auth, and default storage backend. Cloudflare full-stack hosting is not configured, and a
+Cloudflare D1/R2 migration is not part of the current architecture.
+
+Don't forget the bootstrap-account step above — without it, every route redirects to a
+`/login` no one can use yet.
 
 ## Integration Docs
 
@@ -458,6 +501,7 @@ Public REST API scopes, endpoints, and examples are documented in
 This started from a much larger vision document (`Project Goals.docx`, distilled from
 `Deep Research Blueprint for a Candidate Placement Operating System.docx`) describing a full
 "Candidate Placement Operating System" — job aggregation, resume tailoring AI, email/calendar
-sync, interview prep, the works. What's built so far is deliberately the **non-AI v1 slice**
-of that vision. See [ROADMAP.md](./ROADMAP.md) for what's next and why each piece was
-sequenced where it was.
+sync, interview prep, the works. What's built so far is the internal operating-tracker
+slice of that vision, with a few AI features now added deliberately (chat, digest, job
+categorization) and larger AI workflows still deferred. See [ROADMAP.md](./ROADMAP.md) for
+what's next and why each piece was sequenced where it was.

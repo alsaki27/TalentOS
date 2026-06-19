@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "setup:check": "node scripts/setup-check.mjs",
+    "seed:admin": "node scripts/seed-admin.mjs",
     "typecheck": "tsc --noEmit --incremental false",
     "lint": "next lint",
     "test": "npm run typecheck",
