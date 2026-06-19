@@ -26,9 +26,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const file = formData.get("file") as File | null;
   const label = (formData.get("label") as string | null)?.trim();
   const kind = (formData.get("kind") as string | null) || "resume";
+  const isOriginalUpload = (formData.get("is_original_upload") as string | null) === "true";
 
   if (!file) return NextResponse.json({ error: "no file provided" }, { status: 400 });
-  if (!label) return NextResponse.json({ error: "label is required" }, { status: 400 });
+  if (!label && !isOriginalUpload) return NextResponse.json({ error: "label is required" }, { status: 400 });
 
   const ext = file.name.split(".").pop();
   const path = `candidates/${params.id}/variants/${Date.now()}.${ext}`;
@@ -41,14 +42,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
   }
 
+  let parsedJson: Record<string, unknown> | null = null;
+  if (isOriginalUpload) {
+    try {
+      const { extractText, parseResumeFields } = await import("@/lib/resumeParsing");
+      const rawText = await extractText(buffer, file.type);
+      const parsed = await parseResumeFields(rawText);
+      parsedJson = parsed as unknown as Record<string, unknown>;
+    } catch {
+      // Parsing failure is non-blocking — the file still uploads
+      parsedJson = null;
+    }
+  }
+
   const { data, error } = await supabase
     .from("resumes")
     .insert({
       candidate_id: params.id,
-      label,
+      label: label || (isOriginalUpload ? "Original Upload" : "Untitled"),
       kind,
       file_url: uploaded.url,
       filename: file.name,
+      is_original_upload: isOriginalUpload,
+      parsed_json: parsedJson,
     })
     .select()
     .single();
@@ -64,7 +80,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       entityType: "resume",
       entityId: data.id,
       entityName: label,
-      metadata: { candidate_id: params.id, filename: file.name },
+      metadata: { candidate_id: params.id, filename: file.name, is_original_upload: isOriginalUpload },
     });
   }
 

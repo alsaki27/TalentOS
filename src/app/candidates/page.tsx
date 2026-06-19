@@ -199,66 +199,213 @@ export default function CandidatesPage() {
 }
 
 function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [step, setStep] = useState(1);
+
+  // Step 1 fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [targetTier, setTargetTier] = useState("");
+  const [linkedinUrl, setLinkedinUrl] = useState("");
+  const [githubUrl, setGithubUrl] = useState("");
+  const [portfolioUrl, setPortfolioUrl] = useState("");
+  const [visaStatus, setVisaStatus] = useState("");
+  const [locationPreference, setLocationPreference] = useState("");
+  const [workModePreference, setWorkModePreference] = useState("");
+  const [availableStartDate, setAvailableStartDate] = useState("");
+  const [targetIndustries, setTargetIndustries] = useState("");
+  const [targetRoles, setTargetRoles] = useState("");
+
+  // Step 2 fields
+  const [file, setFile] = useState<File | null>(null);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  function reset() {
+    setStep(1);
+    setName("");
+    setEmail("");
+    setPhone("");
+    setTargetTier("");
+    setLinkedinUrl("");
+    setGithubUrl("");
+    setPortfolioUrl("");
+    setVisaStatus("");
+    setLocationPreference("");
+    setWorkModePreference("");
+    setAvailableStartDate("");
+    setTargetIndustries("");
+    setTargetRoles("");
+    setFile(null);
+    setError("");
+  }
+
+  useEffect(() => {
+    reset();
+  }, []);
 
   async function submit() {
     if (!name.trim()) { setError("Name is required."); return; }
     setSaving(true);
     setError("");
+
+    const payload = {
+      name,
+      email: email || null,
+      phone: phone || null,
+      target_tier: targetTier || null,
+      linkedin_url: linkedinUrl || null,
+      github_url: githubUrl || null,
+      portfolio_url: portfolioUrl || null,
+      visa_status: visaStatus || null,
+      target_industries: targetIndustries.split(",").map((s) => s.trim()).filter(Boolean),
+      location_preference: locationPreference || null,
+      work_mode_preference: workModePreference || null,
+      available_start_date: availableStartDate || null,
+      target_roles: targetRoles.split(",").map((s) => s.trim()).filter(Boolean),
+    };
+
     const res = await fetch("/api/candidates", {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, phone, target_tier: targetTier || null }),
+      body: JSON.stringify(payload),
     });
-    setSaving(false);
+
     if (!res.ok) {
+      setSaving(false);
       const data = await res.json();
       setError(data.error || "Something went wrong.");
       return;
     }
+
+    const candidate = await res.json();
+    const candidateId = candidate.id;
+
+    if (file && candidateId) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("label", "Original Upload");
+      formData.append("kind", "resume");
+      formData.append("is_original_upload", "true");
+      try {
+        await fetch(`/api/candidates/${candidateId}/resumes`, {
+          method: "POST",
+          cache: "no-store",
+          body: formData,
+        });
+      } catch {
+        // Upload failure is non-blocking; candidate already created.
+      }
+    }
+
+    setSaving(false);
     onCreated();
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Add candidate</h2>
+        <h2>Add candidate — Step {step} of 2</h2>
 
-        <div className="field-group">
-          <label>Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
-        </div>
-        <div className="field-group">
-          <label>Email</label>
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" />
-        </div>
-        <div className="field-group">
-          <label>Phone</label>
-          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(optional)" />
-        </div>
-        <div className="field-group">
-          <label>Target tier</label>
-          <select value={targetTier} onChange={(e) => setTargetTier(e.target.value)}>
-            <option value="">— None —</option>
-            <option value="osp">OSP</option>
-            <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
-            <option value="adjacent_2">Adjacent 2 (Telecom)</option>
-          </select>
-        </div>
+        {step === 1 && (
+          <>
+            <div className="field-group">
+              <label>Name <span style={{ color: "var(--danger)" }}>*</span></label>
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
+            </div>
+            <div className="field-group">
+              <label>Email</label>
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" />
+            </div>
+            <div className="field-group">
+              <label>Phone</label>
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(optional)" />
+            </div>
+            <div className="field-group">
+              <label>Target tier</label>
+              <select value={targetTier} onChange={(e) => setTargetTier(e.target.value)}>
+                <option value="">— None —</option>
+                <option value="osp">OSP</option>
+                <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
+                <option value="adjacent_2">Adjacent 2 (Telecom)</option>
+              </select>
+            </div>
+            <div className="field-group">
+              <label>LinkedIn URL</label>
+              <input value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/..." />
+            </div>
+            <div className="field-group">
+              <label>GitHub URL</label>
+              <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder="https://github.com/..." />
+            </div>
+            <div className="field-group">
+              <label>Portfolio URL</label>
+              <input value={portfolioUrl} onChange={(e) => setPortfolioUrl(e.target.value)} placeholder="https://..." />
+            </div>
+            <div className="field-group">
+              <label>Visa Status</label>
+              <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H-1B, OPT, Citizen..." />
+            </div>
+            <div className="field-group">
+              <label>Location Preference</label>
+              <input value={locationPreference} onChange={(e) => setLocationPreference(e.target.value)} placeholder="City, State, or Remote..." />
+            </div>
+            <div className="field-group">
+              <label>Work Mode Preference</label>
+              <select value={workModePreference} onChange={(e) => setWorkModePreference(e.target.value)}>
+                <option value="">— Select —</option>
+                <option value="remote">Remote</option>
+                <option value="hybrid">Hybrid</option>
+                <option value="onsite">On-site</option>
+              </select>
+            </div>
+            <div className="field-group">
+              <label>Available Start Date</label>
+              <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
+            </div>
+            <div className="field-group">
+              <label>Target Industries</label>
+              <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. SaaS, Fintech, Healthcare (comma-separated)" />
+            </div>
+            <div className="field-group">
+              <label>Target Roles</label>
+              <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. Backend Engineer, DevOps (comma-separated)" />
+            </div>
+          </>
+        )}
+
+        {step === 2 && (
+          <div className="field-group">
+            <label>Upload original resume (optional — AI will auto-parse)</label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            {file && <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>{file.name}</p>}
+          </div>
+        )}
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
 
         <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : "Add candidate"}
-          </button>
+          {step === 1 ? (
+            <>
+              <button onClick={onClose}>Cancel</button>
+              <button className="btn-primary" onClick={() => setStep(2)} disabled={!name.trim()}>
+                Next
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setStep(1)}>Back</button>
+              <button className="btn-primary" onClick={submit} disabled={saving}>
+                {saving ? "Saving…" : "Create candidate"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
   const active = url.searchParams.get("active") || "";
   const employmentType = url.searchParams.get("employmentType") || "";
   const category = url.searchParams.get("category") || "";
+  const workAuthorization = url.searchParams.get("workAuthorization") || "";
   const sort = url.searchParams.get("sort") || "";
 
   let query = supabase.from("jobs").select(LIST_COLUMNS, { count: "planned" });
@@ -49,6 +50,7 @@ export async function GET(req: NextRequest) {
   if (active === "inactive") query = query.eq("is_active", false);
   if (employmentType) query = query.eq("employment_type", employmentType);
   if (category) query = query.or(`job_category.eq.${category},category_tags.cs.{"${category}"}`);
+  if (workAuthorization) query = query.eq("work_authorization", workAuthorization);
 
   if (sort === "posted_asc") query = query.order("posted_at", { ascending: true, nullsFirst: false });
   else if (sort === "posted_desc") query = query.order("posted_at", { ascending: false, nullsFirst: false });

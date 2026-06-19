@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabase";
 export const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 export const REFRESH_TOKEN_COOKIE = "skarion_refresh_token";
 
-export type UserRole = "admin" | "manager" | "application_engineer" | "recruiter";
+export type UserRole = "admin" | "manager" | "application_engineer" | "recruiter" | "reviewer";
 
 export interface UserProfile {
   user_id: string;
@@ -25,6 +25,7 @@ export const ASSIGNMENT_MANAGER_ROLES: UserRole[] = ["admin", "manager", "recrui
 export const APPLICATION_WORKER_ROLES: UserRole[] = ["admin", "manager", "application_engineer", "recruiter"];
 export const MASTER_DATA_MANAGER_ROLES: UserRole[] = ["admin", "manager", "recruiter"];
 export const DESTRUCTIVE_MANAGER_ROLES: UserRole[] = ["admin", "manager"];
+export const FALOOD_REVIEWER_ROLES: UserRole[] = ["admin", "manager", "reviewer"];
 
 export function hasRole(profile: UserProfile, roles: UserRole[]) {
   return roles.includes(profile.role);

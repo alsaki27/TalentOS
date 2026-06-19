@@ -49,6 +49,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "name", "email", "phone", "status", "target_tier",
     "notes", "resume_url", "resume_filename",
     "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
+    "linkedin_url", "github_url", "portfolio_url", "visa_status",
+    "target_industries", "location_preference", "work_mode_preference", "available_start_date",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

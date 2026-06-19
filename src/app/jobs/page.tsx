@@ -1,7 +1,7 @@
 // src/app/jobs/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
@@ -30,9 +30,22 @@ interface Job {
   job_category: string | null;
   category_tags: string[] | null;
   category_relevance_score: number | null;
+  category_status: "pending" | "done" | "needs_review" | "failed" | null;
+  ai_suggested_category: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  salary_period: string | null;
+  work_authorization: string | null;
   applicant_count: number;
   applicants: Applicant[];
 }
+
+const WORK_AUTH_LABELS: Record<string, string> = {
+  us_citizen_required: "US citizen required",
+  no_sponsorship: "No sponsorship",
+  sponsorship_available: "Sponsorship available",
+};
 
 interface TeamUser {
   user_id: string;
@@ -55,6 +68,7 @@ interface SavedJobSearch {
     active?: string;
     employmentType?: string;
     category?: string;
+    workAuthorization?: string;
     sort?: string;
   };
   is_shared: boolean;
@@ -148,12 +162,15 @@ export default function JobsPage() {
   const [activeFilter, setActiveFilter] = useState("");
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [workAuthFilter, setWorkAuthFilter] = useState("");
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
   const [facets, setFacets] = useState<{ sources: string[]; employmentTypes: string[]; categories: string[] }>({ sources: [], employmentTypes: [], categories: [] });
   const [savedSearches, setSavedSearches] = useState<SavedJobSearch[]>([]);
   const [savedSearchId, setSavedSearchId] = useState("");
   const [saveSearchLabel, setSaveSearchLabel] = useState("");
   const [savedSearchError, setSavedSearchError] = useState("");
+  const [pendingCategorization, setPendingCategorization] = useState(0);
+  const categorizingRef = useRef(false);
 
   // Debounce the free-text search box so it doesn't fire a request per keystroke.
   useEffect(() => {
@@ -176,6 +193,7 @@ export default function JobsPage() {
     if (activeFilter) params.set("active", activeFilter);
     if (employmentTypeFilter) params.set("employmentType", employmentTypeFilter);
     if (categoryFilter) params.set("category", categoryFilter);
+    if (workAuthFilter) params.set("workAuthorization", workAuthFilter);
     if (postedSort) params.set("sort", postedSort === "asc" ? "posted_asc" : "posted_desc");
     return params;
   }
@@ -198,7 +216,33 @@ export default function JobsPage() {
   }
 
   // Any filter/search/sort change re-queries the server from page 1.
-  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, postedSort]);
+  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, postedSort]);
+
+  // Drains the pending-categorization queue in small sequential batches, called right
+  // after any import/create action and once on page load (in case a backlog already
+  // exists — e.g. right after this feature's migration ran). Import itself never waits
+  // on this — it's always a separate call made after the import's own response lands.
+  // Guarded against overlapping loops (e.g. two imports in quick succession).
+  async function kickCategorization() {
+    if (categorizingRef.current) return;
+    categorizingRef.current = true;
+    try {
+      let remaining = 1;
+      while (remaining > 0) {
+        const res = await fetch("/api/jobs/categorize/process", { method: "POST" });
+        if (!res.ok) break;
+        const data = await res.json();
+        remaining = data.remainingPending ?? 0;
+        setPendingCategorization(remaining);
+        if (remaining > 0) await new Promise((r) => setTimeout(r, 400));
+      }
+    } finally {
+      categorizingRef.current = false;
+      load(page);
+    }
+  }
+
+  useEffect(() => { kickCategorization(); }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -238,7 +282,7 @@ export default function JobsPage() {
     load(page);
   }
 
-  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || postedSort;
+  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || workAuthFilter || postedSort;
 
   function currentSavedFilters() {
     const filters: SavedJobSearch["filters"] = {};
@@ -248,6 +292,7 @@ export default function JobsPage() {
     if (activeFilter) filters.active = activeFilter;
     if (employmentTypeFilter) filters.employmentType = employmentTypeFilter;
     if (categoryFilter) filters.category = categoryFilter;
+    if (workAuthFilter) filters.workAuthorization = workAuthFilter;
     if (postedSort) filters.sort = postedSort === "asc" ? "posted_asc" : "posted_desc";
     return filters;
   }
@@ -260,6 +305,7 @@ export default function JobsPage() {
     setActiveFilter("");
     setEmploymentTypeFilter("");
     setCategoryFilter("");
+    setWorkAuthFilter("");
     setPostedSort("");
     setSavedSearchId("");
   }
@@ -279,6 +325,7 @@ export default function JobsPage() {
     setActiveFilter(filters.active ?? "");
     setEmploymentTypeFilter(filters.employmentType ?? "");
     setCategoryFilter(filters.category ?? "");
+    setWorkAuthFilter(filters.workAuthorization ?? "");
     setPostedSort(filters.sort === "posted_asc" ? "asc" : filters.sort === "posted_desc" ? "desc" : "");
     setSavedSearchId(searchPreset.id);
   }
@@ -327,7 +374,12 @@ export default function JobsPage() {
     <>
       <div className="page-header">
         <h1>Job masterlist</h1>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          {pendingCategorization > 0 && (
+            <span className="badge" title="AI categorization, salary cleanup, and work-authorization tagging running in the background">
+              Categorizing {pendingCategorization} pending…
+            </span>
+          )}
           <button onClick={() => setShowImport(true)}>Import file</button>
           <button onClick={() => setShowImportAts(true)}>Import from ATS</button>
           <Link href="/import" className="btn">Universal Import</Link>
@@ -376,6 +428,12 @@ export default function JobsPage() {
             {facets.categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         )}
+        <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
+          <option value="">Any work authorization</option>
+          <option value="no_sponsorship">No sponsorship</option>
+          <option value="sponsorship_available">Sponsorship available</option>
+          <option value="us_citizen_required">US citizen required</option>
+        </select>
         {filtersActive && (
           <button onClick={clearFilters}>
             Clear filters
@@ -432,6 +490,14 @@ export default function JobsPage() {
                 <td>
                   <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
                   <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
+                  {(job.salary_min || job.salary_max) ? (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {job.salary_currency ?? ""} {job.salary_min ?? "?"}–{job.salary_max ?? "?"}{job.salary_period ? `/${job.salary_period}` : ""}
+                    </div>
+                  ) : null}
+                  {job.work_authorization && job.work_authorization !== "unspecified" && (
+                    <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
+                  )}
                 </td>
                 <td className="muted">
                   {job.company_id && job.company ? (
@@ -439,7 +505,18 @@ export default function JobsPage() {
                   ) : job.company || "—"}
                 </td>
                 <td>
-                  {job.job_category ? (
+                  {job.category_status === "pending" ? (
+                    <span className="muted">Categorizing…</span>
+                  ) : job.category_status === "needs_review" ? (
+                    <>
+                      <span className="badge">Needs review</span>
+                      {job.ai_suggested_category && (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Suggested: {job.ai_suggested_category}</div>
+                      )}
+                    </>
+                  ) : job.category_status === "failed" ? (
+                    <span className="badge" title="AI categorization failed — check /ops">Failed</span>
+                  ) : job.job_category ? (
                     <>
                       <span className="badge">{job.job_category}</span>
                       {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
@@ -492,13 +569,13 @@ export default function JobsPage() {
       )}
 
       {showAdd && (
-        <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(1); }} />
+        <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(1); kickCategorization(); }} />
       )}
       {showImport && (
-        <ImportFileModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(1); }} />
+        <ImportFileModal onClose={() => setShowImport(false)} onImported={() => { setShowImport(false); load(1); kickCategorization(); }} />
       )}
       {showImportAts && (
-        <ImportAtsModal onClose={() => setShowImportAts(false)} onImported={() => { setShowImportAts(false); load(1); }} />
+        <ImportAtsModal onClose={() => setShowImportAts(false)} onImported={() => { setShowImportAts(false); load(1); kickCategorization(); }} />
       )}
       {showApplyFor && (
         <LogApplicationModal

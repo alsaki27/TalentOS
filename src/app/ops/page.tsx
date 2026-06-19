@@ -45,6 +45,38 @@ interface Digest {
   generated_at: string;
 }
 
+interface CategorizationRun {
+  id: string;
+  started_at: string;
+  finished_at: string | null;
+  jobs_processed: number;
+  jobs_failed: number;
+  triggered_by: string | null;
+  error: string | null;
+}
+
+interface NeedsReviewJob {
+  id: string;
+  title: string;
+  company: string | null;
+  ai_suggested_category: string | null;
+  category_relevance_score: number | null;
+}
+
+interface JobCategory {
+  id: string;
+  label: string;
+  description: string | null;
+  is_active: boolean;
+}
+
+interface CategorizationStatus {
+  pendingCount: number;
+  needsReview: NeedsReviewJob[];
+  recentRuns: CategorizationRun[];
+  categories: JobCategory[];
+}
+
 export default function OpsPage() {
   const [status, setStatus] = useState<OpsStatus | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
@@ -54,19 +86,79 @@ export default function OpsPage() {
   const [exporting, setExporting] = useState(false);
   const [generatingDigest, setGeneratingDigest] = useState(false);
   const [digestError, setDigestError] = useState("");
+  const [categorization, setCategorization] = useState<CategorizationStatus | null>(null);
+  const [processingCategorization, setProcessingCategorization] = useState(false);
+  const [categorizationError, setCategorizationError] = useState("");
+  const [reviewChoice, setReviewChoice] = useState<Record<string, string>>({});
 
   async function load() {
     setLoading(true);
-    const [statusRes, backupsRes, digestsRes] = await Promise.all([
+    const [statusRes, backupsRes, digestsRes, categorizationRes] = await Promise.all([
       fetch("/api/ops/status"),
       fetch("/api/ops/backups"),
       fetch("/api/ops/digests"),
+      fetch("/api/ops/categorize"),
     ]);
     if (statusRes.status === 403) { setForbidden(true); setLoading(false); return; }
     setStatus(await statusRes.json());
     setBackups(backupsRes.ok ? await backupsRes.json() : []);
     setDigests(digestsRes.ok ? await digestsRes.json() : []);
+    setCategorization(categorizationRes.ok ? await categorizationRes.json() : null);
     setLoading(false);
+  }
+
+  async function loadCategorization() {
+    const res = await fetch("/api/ops/categorize");
+    if (res.ok) setCategorization(await res.json());
+  }
+
+  async function processCategorization() {
+    setProcessingCategorization(true);
+    setCategorizationError("");
+    const res = await fetch("/api/ops/categorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "process" }),
+    });
+    setProcessingCategorization(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setCategorizationError(data.error || "Could not process pending jobs.");
+      return;
+    }
+    await loadCategorization();
+  }
+
+  async function requeueAllCategorization() {
+    if (!confirm("Reset every categorized/needs-review job back to pending? Use this after editing the category list, to re-score everything against it.")) return;
+    setCategorizationError("");
+    const res = await fetch("/api/ops/categorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "requeue_all" }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setCategorizationError(data.error || "Could not requeue jobs.");
+      return;
+    }
+    await loadCategorization();
+  }
+
+  async function resolveReview(jobId: string, action: "approve_category" | "assign_category", label: string) {
+    if (!label.trim()) return;
+    setCategorizationError("");
+    const res = await fetch("/api/ops/categorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, jobId, label }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setCategorizationError(data.error || "Could not update category.");
+      return;
+    }
+    await loadCategorization();
   }
 
   async function generateDigest() {
@@ -235,6 +327,96 @@ export default function OpsPage() {
             </div>
           ))}
         </div>
+      )}
+
+      <div className="page-header" style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 16, margin: 0 }}>Job categorization</h2>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={requeueAllCategorization}>Re-run on all categorized jobs</button>
+          <button
+            className="btn-primary"
+            onClick={processCategorization}
+            disabled={processingCategorization || !categorization || categorization.pendingCount === 0}
+          >
+            {processingCategorization ? "Processing..." : `Process pending now (${categorization?.pendingCount ?? 0})`}
+          </button>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
+        AI picks the best-fit category, cleans up salary into a structured range, and tags
+        work authorization for every job — sequentially, after import, never blocking it.
+        Safety net: <code>/api/cron/categorize-jobs</code> drains anything still pending once daily.
+      </p>
+      {categorizationError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{categorizationError}</p>}
+
+      {categorization && categorization.needsReview.length > 0 && (
+        <>
+          <h3 style={{ fontSize: 14, margin: "12px 0 8px" }}>Needs review ({categorization.needsReview.length})</h3>
+          <table className="table" style={{ marginBottom: 16 }}>
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>AI suggested</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {categorization.needsReview.map((job) => (
+                <tr key={job.id}>
+                  <td>{job.title} {job.company ? <span className="muted">— {job.company}</span> : null}</td>
+                  <td className="muted">{job.ai_suggested_category ?? "—"}</td>
+                  <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {job.ai_suggested_category && (
+                      <button onClick={() => resolveReview(job.id, "approve_category", job.ai_suggested_category!)}>
+                        Add "{job.ai_suggested_category}" as new category
+                      </button>
+                    )}
+                    <select
+                      value={reviewChoice[job.id] ?? ""}
+                      onChange={(e) => setReviewChoice((prev) => ({ ...prev, [job.id]: e.target.value }))}
+                    >
+                      <option value="">Assign existing category…</option>
+                      {categorization.categories.filter((c) => c.is_active).map((c) => (
+                        <option key={c.id} value={c.label}>{c.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      disabled={!reviewChoice[job.id]}
+                      onClick={() => resolveReview(job.id, "assign_category", reviewChoice[job.id])}
+                    >
+                      Assign
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {categorization && categorization.recentRuns.length > 0 && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Triggered by</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {categorization.recentRuns.map((run) => (
+              <tr key={run.id}>
+                <td className="muted" style={{ fontSize: 12 }}>{new Date(run.started_at).toLocaleString()}</td>
+                <td className="muted">{run.triggered_by ?? "—"}</td>
+                <td>
+                  {run.error
+                    ? <span style={{ color: "var(--danger)" }}>{run.error}</span>
+                    : <span className="muted">{run.jobs_processed} processed, {run.jobs_failed} failed</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </>
   );

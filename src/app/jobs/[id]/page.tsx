@@ -52,9 +52,25 @@ interface JobDetail {
   job_category: string | null;
   category_tags: string[] | null;
   category_relevance_score: number | null;
+  category_status: "pending" | "done" | "needs_review" | "failed" | null;
+  ai_suggested_category: string | null;
+  category_error: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  salary_period: string | null;
+  work_authorization: string | null;
+  work_authorization_evidence: string | null;
   last_seen_at: string | null;
   applicants: Applicant[];
 }
+
+const WORK_AUTH_LABELS: Record<string, string> = {
+  us_citizen_required: "US citizen required",
+  no_sponsorship: "No sponsorship",
+  sponsorship_available: "Sponsorship available",
+  unspecified: "Unspecified (posting doesn't say)",
+};
 
 interface JobComment {
   id: string;
@@ -129,11 +145,25 @@ export default function JobDetailPage() {
           <Field label="Company" value={job.company_id && job.company ? <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link> : job.company} />
           <Field label="Location" value={job.location} />
           <Field label="Source" value={<span className="badge">{job.source}</span>} />
-          <Field label="Category" value={job.job_category ? <span className="badge">{job.job_category}</span> : null} />
+          <Field label="Category" value={
+            job.category_status === "pending" ? <span className="muted">Categorizing…</span> :
+            job.category_status === "needs_review" ? <span className="badge" title={job.ai_suggested_category ? `AI suggested: ${job.ai_suggested_category}` : undefined}>Needs review{job.ai_suggested_category ? ` — suggested: ${job.ai_suggested_category}` : ""}</span> :
+            job.category_status === "failed" ? <span className="badge" title={job.category_error ?? undefined}>Failed{job.category_error ? ` — ${job.category_error}` : ""}</span> :
+            job.job_category ? <span className="badge">{job.job_category}</span> : null
+          } />
           <Field label="Category score" value={job.category_relevance_score !== null && job.category_relevance_score !== undefined ? `${job.category_relevance_score}% relevant` : null} />
           <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
           <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
-          <Field label="Salary range" value={job.salary_range} />
+          <Field label="Salary range" value={
+            job.salary_min || job.salary_max
+              ? `${job.salary_currency ?? ""} ${job.salary_min ?? "?"}–${job.salary_max ?? "?"}${job.salary_period ? `/${job.salary_period}` : ""}`.trim()
+              : job.salary_range
+          } />
+          <Field label="Work authorization" value={
+            job.work_authorization && job.work_authorization !== "unspecified"
+              ? <span className="badge" title={job.work_authorization_evidence ?? undefined}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
+              : null
+          } />
           <Field label="Seniority level" value={job.seniority_level} />
           <Field label="Employment type" value={job.employment_type} />
           <Field label="Job function" value={job.job_function} />

@@ -52,6 +52,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (f in body) updates[f] = body[f];
   }
 
+  if ("job_category" in body) {
+    updates.category_status = "done";
+  } else if (["title", "description_text", "notes", "job_function", "industries", "company_description"].some((f) => f in body)) {
+    // Core text changed without an explicit category override — the existing category
+    // may no longer be accurate, so re-queue for the AI pass instead of leaving a stale one.
+    updates.category_status = "pending";
+    updates.job_category = null;
+    updates.ai_suggested_category = null;
+  }
+
   const { data, error } = await supabase
     .from("jobs")
     .update(updates)
