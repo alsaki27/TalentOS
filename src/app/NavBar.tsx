@@ -82,6 +82,7 @@ export default function NavBar() {
         <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>
         <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>
         <Link href="/interviews" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Interviews</Link>
+        <Link href="/falood" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Falood AI</Link>
         <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
           Application Queue
           {notifications && (notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent) > 0 && (
