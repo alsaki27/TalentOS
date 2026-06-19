@@ -279,7 +279,28 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      added to Step 1 of `/candidates/[id]/applications/new` (base_resume / original_resume /
      blank / manual). `source_type` displayed in Application Resume Studio top bar.
      Legacy null values fall back to "Legacy" label.
-   - Next chunks: AI suggestion generation (Chunk 6), PDF export (Chunk 7). See `plan-application-workflow-redesign.md`.
+   - Next chunks: ~~AI suggestion generation (Chunk 6)~~ done, ~~PDF export (Chunk 7)~~ done. See `plan-application-workflow-redesign.md`.
+   - Chunk 6 (JD Keyword Approval + Evidence Mapping): `application_job_keywords` table with CHECK
+     constraints, `src/server/repositories/applicationKeywordsRepository.ts` (CRUD + dedup + bulk update),
+     `src/server/services/applicationKeywordService.ts` (generates keywords from parsed JD or AI fallback),
+     `src/server/services/evidenceMappingService.ts` (deterministic evidence mapping: profile → resume →
+     base resume → evidence bank, never invents). API routes: `GET/PATCH
+     /api/applications/[id]/keywords`, `POST /api/applications/[id]/keywords/generate`, and studio
+     convenience routes via `application-resume-versions/[id]/keywords`. Studio UI panel with
+     approve/reject/pending keyword badges and evidence status indicators.
+   - Chunk 7 (AI Resume Suggestions + Truth Check): `application_resume_suggestions` table with CHECK
+     constraints (suggestion_type, target_section, truth_status, status). Truth-check guardrails:
+     rejected keywords are blocked, missing evidence converts keyword_injection to missing_evidence or
+     truth_warning, fabrication_risk flagged with red background. `src/server/services/resumeContextService.ts`
+     gathers all candidate evidence sources. `src/server/services/resumeSuggestionService.ts` builds AI
+     prompt with approved/rejected keywords + evidence, parses structured JSON response, runs deterministic
+     truth-check, persists suggestions. API routes: `GET/POST
+     /api/applications/[id]/resume-suggestions`, `POST /api/applications/[id]/resume-suggestions/generate`,
+     `PATCH /api/applications/[id]/resume-suggestions/[suggestionId]`, `POST
+     /api/applications/[id]/resume-suggestions/[suggestionId]/apply`, and studio convenience routes via
+     `application-resume-versions/[id]/resume-suggestions`. Studio UI: Generate Suggestions button,
+     truth-status badges (✓ Verified / ⚠ Fabrication Risk / ? Unverified), suggestion-type color coding,
+     Accept & Apply / Accept Only / Reject actions. Warnings are display-only (no apply button).
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

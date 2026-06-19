@@ -66,17 +66,22 @@ interface KeywordApproval {
 
 interface ResumeSuggestion {
   id: string;
-  application_resume_version_id: string;
-  section: string;
-  original_text: string;
-  suggested_text: string;
-  reason: string;
-  confidence: number;
-  truth_risk: "low" | "medium" | "high";
-  ats_impact: "positive" | "neutral" | "negative";
-  status: "pending" | "accepted" | "rejected" | "customized";
-  custom_text?: string | null;
+  application_id: string;
+  resume_version_id: string | null;
+  keyword_id: string | null;
+  suggestion_type: "content_change" | "format_improvement" | "truth_warning" | "keyword_injection" | "missing_evidence";
+  target_section: "summary" | "skills" | "experience" | "education" | "certifications" | "projects" | "header";
+  target_subsection_id: string | null;
+  original_text: string | null;
+  proposed_text: string;
+  ai_reasoning: string | null;
+  truth_status: "verified" | "unverified" | "fabrication_risk";
+  truth_check_details: string | null;
+  source_evidence: string | null;
+  status: "pending" | "accepted" | "rejected" | "applied";
+  user_notes: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 interface Candidate {
@@ -143,6 +148,7 @@ export default function ApplicationResumeStudioPage() {
   const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
   const [keywordApprovals, setKeywordApprovals] = useState<KeywordApproval[]>([]);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
+  const [generatingSuggestions, setGeneratingSuggestions] = useState(false);
 
   /* UI state */
   const [loading, setLoading] = useState(true);
@@ -160,8 +166,6 @@ export default function ApplicationResumeStudioPage() {
 
   /* right pane tabs */
   const [rightTab, setRightTab] = useState<"suggestions" | "chat">("suggestions");
-  const [customizingSuggestion, setCustomizingSuggestion] = useState<string | null>(null);
-  const [customText, setCustomText] = useState("");
 
   /* Falood CLI */
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
@@ -189,14 +193,17 @@ export default function ApplicationResumeStudioPage() {
         fetch(`/api/base-resumes/${ar.base_resume_id}`),
         fetch(`/api/candidates/${ar.candidate_id}`),
         fetch(`/api/keyword-approvals?candidateId=${ar.candidate_id}`),
-        fetch(`/api/resume-suggestions?applicationResumeId=${applicationResumeId}`),
+        fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`),
       ]);
 
       if (jobRes.ok) setTargetJob(await jobRes.json());
       if (baseRes.ok) setBaseResume(await baseRes.json());
       if (candRes.ok) setCandidate(await candRes.json());
       if (kaRes.ok) setKeywordApprovals(await kaRes.json());
-      if (sugRes.ok) setSuggestions(await sugRes.json());
+      if (sugRes.ok) {
+        const sugData = await sugRes.json();
+        setSuggestions(sugData.suggestions ?? []);
+      }
     } catch (e: any) {
       setError(e.message || "Load failed");
     } finally {
@@ -208,8 +215,11 @@ export default function ApplicationResumeStudioPage() {
 
   async function refreshSuggestions() {
     if (!applicationResumeId) return;
-    const res = await fetch(`/api/resume-suggestions?applicationResumeId=${applicationResumeId}`);
-    if (res.ok) setSuggestions(await res.json());
+    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`);
+    if (res.ok) {
+      const data = await res.json();
+      setSuggestions(data.suggestions ?? []);
+    }
   }
 
   /* ──────────── derived keyword groups ──────────── */
@@ -436,22 +446,63 @@ export default function ApplicationResumeStudioPage() {
 
   /* ──────────── suggestions ──────────── */
 
-  async function handleSuggestionDecision(suggestionId: string, decision: "accept" | "reject" | "customize") {
-    const body: any = { decision };
-    if (decision === "customize") {
-      body.customText = customText;
-    }
-    const res = await fetch(`/api/resume-suggestions/${suggestionId}/apply`, {
-      method: "POST",
+  async function handleSuggestionDecision(suggestionId: string, decision: "accept" | "reject") {
+    const status = decision === "accept" ? "accepted" : "rejected";
+    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ updates: [{ id: suggestionId, status }] }),
     });
     if (res.ok) {
-      // Refresh suggestions
-      const sugRes = await fetch(`/api/resume-suggestions?applicationResumeId=${applicationResumeId}`);
-      if (sugRes.ok) setSuggestions(await sugRes.json());
-      setCustomizingSuggestion(null);
-      setCustomText("");
+      await refreshSuggestions();
+    }
+  }
+
+  async function generateSuggestions() {
+    if (!applicationResumeId) return;
+    setGeneratingSuggestions(true);
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSuggestions(data.suggestions ?? []);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || "Failed to generate suggestions");
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to generate suggestions");
+    } finally {
+      setGeneratingSuggestions(false);
+    }
+  }
+
+  async function applySuggestionToResume(suggestionId: string) {
+    if (!applicationResumeId) return;
+    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ updates: [{ id: suggestionId, status: "accepted" }] }),
+    });
+    if (!res.ok) return;
+    // Now apply
+    const applyRes = await fetch(`/api/applications/${suggestions.find(s => s.id === suggestionId)?.application_id}/resume-suggestions/${suggestionId}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resume_version_id: applicationResumeId }),
+    });
+    if (applyRes.ok) {
+      await refreshSuggestions();
+      // Also reload the resume content
+      const arRes = await fetch(`/api/application-resume-versions/${applicationResumeId}`);
+      if (arRes.ok) {
+        const ar = await arRes.json();
+        setAppResume(ar);
+        setDraftContent(JSON.parse(JSON.stringify(ar.content)));
+      }
     }
   }
 
@@ -502,7 +553,7 @@ export default function ApplicationResumeStudioPage() {
       setLog((prev) => [...prev, { role: "warning", text: data.action.message }]);
     }
     if (isCommand && (commandOrMessage === "/suggest-edits" || commandOrMessage === "/inject-approved-keywords")) {
-      refreshSuggestions();
+      generateSuggestions();
     }
   }
 
@@ -1101,8 +1152,26 @@ export default function ApplicationResumeStudioPage() {
 
           {rightTab === "suggestions" ? (
             <div style={{ flex: 1, overflowY: "auto" }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                <button
+                  className="btn-primary btn-compact"
+                  onClick={generateSuggestions}
+                  disabled={generatingSuggestions}
+                  style={{ flex: 1, minWidth: 120 }}
+                >
+                  {generatingSuggestions ? "Generating…" : "Generate Suggestions"}
+                </button>
+                <button className="btn btn-compact" onClick={refreshSuggestions} disabled={generatingSuggestions}>
+                  Refresh
+                </button>
+              </div>
+
               {suggestions.length === 0 ? (
-                <p className="muted" style={{ fontSize: 12 }}>No suggestions yet.</p>
+                <p className="muted" style={{ fontSize: 12 }}>
+                  {generatingSuggestions
+                    ? "AI is analyzing approved keywords and generating suggestions…"
+                    : "No suggestions yet. Generate suggestions after approving keywords in the JD Keywords panel."}
+                </p>
               ) : (
                 suggestions.map((s) => (
                   <div
@@ -1113,63 +1182,100 @@ export default function ApplicationResumeStudioPage() {
                       border: "1px solid var(--border)",
                       borderRadius: 6,
                       fontSize: 12,
+                      background: s.truth_status === "fabrication_risk" ? "#fef2f2" : undefined,
                     }}
                   >
-                    <div style={{ marginBottom: 4 }}>
-                      <span className="badge" style={{ fontSize: 10, marginRight: 6 }}>{s.section}</span>
+                    <div style={{ marginBottom: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      <span className="badge" style={{ fontSize: 10, textTransform: "capitalize" }}>
+                        {s.target_section}
+                      </span>
+                      <span
+                        className="badge"
+                        style={{
+                          fontSize: 10,
+                          textTransform: "capitalize",
+                          background:
+                            s.suggestion_type === "keyword_injection"
+                              ? "#e0f2fe"
+                              : s.suggestion_type === "truth_warning"
+                              ? "#fef2f2"
+                              : s.suggestion_type === "missing_evidence"
+                              ? "#fff7ed"
+                              : s.suggestion_type === "format_improvement"
+                              ? "#f0fdf4"
+                              : "#eef1f5",
+                          color:
+                            s.suggestion_type === "keyword_injection"
+                              ? "#0369a1"
+                              : s.suggestion_type === "truth_warning"
+                              ? "var(--danger)"
+                              : s.suggestion_type === "missing_evidence"
+                              ? "#c2410c"
+                              : s.suggestion_type === "format_improvement"
+                              ? "#15803d"
+                              : "#4a5568",
+                        }}
+                      >
+                        {s.suggestion_type.replace("_", " ")}
+                      </span>
                       <span
                         className="badge"
                         style={{
                           fontSize: 10,
                           background:
-                            s.ats_impact === "positive"
-                              ? "var(--accent-soft)"
-                              : s.ats_impact === "negative"
-                              ? "#fbeaea"
-                              : "#eef1f5",
+                            s.truth_status === "verified"
+                              ? "#f0fdf4"
+                              : s.truth_status === "fabrication_risk"
+                              ? "#fef2f2"
+                              : "#fffbeb",
                           color:
-                            s.ats_impact === "positive"
-                              ? "var(--accent)"
-                              : s.ats_impact === "negative"
+                            s.truth_status === "verified"
+                              ? "#15803d"
+                              : s.truth_status === "fabrication_risk"
                               ? "var(--danger)"
-                              : "#4a5568",
+                              : "#a16207",
                         }}
                       >
-                        ATS: {s.ats_impact}
+                        {s.truth_status === "verified" ? "✓ Verified" : s.truth_status === "fabrication_risk" ? "⚠ Fabrication Risk" : "? Unverified"}
                       </span>
+                      {s.status !== "pending" && (
+                        <span className="badge" style={{ fontSize: 10, background: "#e2e8f0", color: "#475569" }}>
+                          {s.status}
+                        </span>
+                      )}
                     </div>
-                    <p style={{ margin: "4px 0", textDecoration: "line-through", color: "var(--ink-soft)" }}>{s.original_text}</p>
-                    <p style={{ margin: "4px 0", fontWeight: 600 }}>{s.suggested_text}</p>
-                    <p className="muted" style={{ margin: "4px 0" }}>{s.reason}</p>
+                    {s.original_text && (
+                      <p style={{ margin: "4px 0", textDecoration: "line-through", color: "var(--ink-soft)" }}>
+                        {s.original_text}
+                      </p>
+                    )}
+                    <p style={{ margin: "4px 0", fontWeight: 600 }}>{s.proposed_text}</p>
+                    {s.ai_reasoning && <p className="muted" style={{ margin: "4px 0" }}>{s.ai_reasoning}</p>}
+                    {s.source_evidence && (
+                      <p style={{ margin: "4px 0", fontSize: 11, color: "#15803d" }}>
+                        <strong>Evidence:</strong> {s.source_evidence}
+                      </p>
+                    )}
+                    {s.truth_check_details && s.truth_status === "fabrication_risk" && (
+                      <p style={{ margin: "4px 0", fontSize: 11, color: "var(--danger)" }}>
+                        <strong>Truth check:</strong> {s.truth_check_details}
+                      </p>
+                    )}
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
-                      <button className="btn-primary btn-compact" onClick={() => handleSuggestionDecision(s.id, "accept")} disabled={s.status !== "pending"}>
-                        Accept
+                      <button
+                        className="btn-primary btn-compact"
+                        onClick={() => applySuggestionToResume(s.id)}
+                        disabled={s.status !== "pending" || s.suggestion_type === "truth_warning" || s.suggestion_type === "missing_evidence"}
+                      >
+                        Accept & Apply
+                      </button>
+                      <button className="btn btn-compact" onClick={() => handleSuggestionDecision(s.id, "accept")} disabled={s.status !== "pending"}>
+                        Accept Only
                       </button>
                       <button className="btn btn-compact" onClick={() => handleSuggestionDecision(s.id, "reject")} disabled={s.status !== "pending"}>
                         Reject
                       </button>
-                      <button className="btn btn-compact" onClick={() => { setCustomizingSuggestion(s.id); setCustomText(s.custom_text ?? ""); }} disabled={s.status !== "pending"}>
-                        Customize
-                      </button>
                     </div>
-                    {customizingSuggestion === s.id && (
-                      <div style={{ marginTop: 8 }}>
-                        <textarea
-                          rows={2}
-                          value={customText}
-                          onChange={(e) => setCustomText(e.target.value)}
-                          placeholder="Custom instruction…"
-                          style={{ fontSize: 12 }}
-                        />
-                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                          <button className="btn-primary btn-compact" onClick={() => handleSuggestionDecision(s.id, "customize")}>Apply custom</button>
-                          <button className="btn btn-compact" onClick={() => { setCustomizingSuggestion(null); setCustomText(""); }}>Cancel</button>
-                        </div>
-                      </div>
-                    )}
-                    {s.status !== "pending" && (
-                      <p className="muted" style={{ marginTop: 6, fontSize: 11 }}>Status: {s.status}</p>
-                    )}
                   </div>
                 ))
               )}
