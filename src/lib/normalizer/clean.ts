@@ -1,8 +1,16 @@
 // src/lib/normalizer/clean.ts
 // Normalizes a raw, field-mapped row into the shape jobs table inserts expect.
 // Never guesses a wrong role_tier or date — null when not confidently recognized.
-
-import { categorizeJob } from "@/lib/jobCategorizer";
+//
+// Categorization is no longer inferred here with keyword heuristics (that approach
+// mis-categorized almost everything that wasn't a clean keyword match — see
+// src/lib/ai/jobCategorization.ts for why and what replaced it). Jobs are inserted
+// with job_category left null and category_status defaulting to 'pending' at the DB
+// level (supabase/migrations/20260618210000_ai_job_enrichment.sql); the AI pass fills
+// job_category/category_tags/category_relevance_score in afterward. The only exception
+// is when the *source data itself* already supplies an explicit category (e.g. a
+// column-mapped import file) — that's trusted as-is and marked 'done' immediately,
+// skipping an unnecessary AI call.
 
 export interface CleanedJobRow {
   title: string;
@@ -40,6 +48,7 @@ export interface CleanedJobRow {
   job_category: string | null;
   category_tags: string[];
   category_relevance_score: number | null;
+  category_status?: string;
   raw_source_payload?: unknown;
 }
 
@@ -118,14 +127,15 @@ export function cleanRow(raw: Record<string, string | undefined>): CleanedJobRow
   const jobFunction = trimOrNull(raw.job_function);
   const industries = trimOrNull(raw.industries);
   const companyDescription = trimOrNull(raw.company_description);
-  const inferredCategory = categorizeJob([title, descriptionText, jobFunction, industries, companyDescription]);
   const explicitTags = parseTags(raw.category_tags);
   const explicitCategory = trimOrNull(raw.job_category);
   const explicitScore = toInt(raw.category_relevance_score);
   const category = {
-    job_category: explicitCategory ?? inferredCategory.job_category,
-    category_tags: explicitTags.length ? explicitTags : inferredCategory.category_tags,
-    category_relevance_score: explicitScore ?? inferredCategory.category_relevance_score,
+    job_category: explicitCategory,
+    category_tags: explicitTags,
+    category_relevance_score: explicitScore,
+    // Omitted (not 'pending') when there's no explicit category, so the DB default applies.
+    ...(explicitCategory ? { category_status: "done" } : {}),
   };
 
   return {

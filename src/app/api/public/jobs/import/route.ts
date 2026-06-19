@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
-import { categorizeJob } from "@/lib/jobCategorizer";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
@@ -52,18 +51,14 @@ export async function POST(req: NextRequest) {
       job_poster_profile_url: row.job_poster_profile_url ?? null,
       job_poster_photo_url: row.job_poster_photo_url ?? null,
       raw_source_payload: row.raw_source_payload ?? row,
+      // job_category left unset when the caller doesn't supply one — category_status
+      // defaults to 'pending' and the AI categorization pass fills it in afterward.
       ...(row.job_category ? {
         job_category: row.job_category,
         category_tags: row.category_tags ?? [],
         category_relevance_score: row.category_relevance_score ?? null,
-      } : categorizeJob([
-        row.title,
-        row.description_text,
-        row.notes,
-        row.job_function,
-        row.industries,
-        row.company_description,
-      ])),
+        category_status: "done",
+      } : {}),
     }));
 
   const { newRows, duplicates } = await filterNewJobs(normalizedRows);

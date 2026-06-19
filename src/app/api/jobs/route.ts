@@ -4,7 +4,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { categorizeJob } from "@/lib/jobCategorizer";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
@@ -23,7 +22,9 @@ const LIST_COLUMNS = `
   job_function, industries, input_url, company_linkedin_url,
   company_logo_url, company_slogan, job_poster_name, job_poster_title,
   job_poster_profile_url, job_poster_photo_url, job_category, category_tags,
-  category_relevance_score, last_seen_at, created_at,
+  category_relevance_score, category_status, ai_suggested_category,
+  salary_min, salary_max, salary_currency, salary_period,
+  work_authorization, work_authorization_evidence, last_seen_at, created_at,
   applications(id, status, candidates(id, name, avatar_url))
 `;
 
@@ -61,12 +62,6 @@ export async function GET(req: NextRequest) {
   // Shape it so the dashboard gets a clean "applicant_count" + "applicants" list per job.
   const shaped = (jobs ?? []).map((job: any) => ({
     ...job,
-    ...(job.job_category ? {} : categorizeJob([
-      job.title,
-      job.notes,
-      job.job_function,
-      job.industries,
-    ])),
     applicant_count: job.applications?.length ?? 0,
     applicants: (job.applications ?? []).map((a: any) => ({
       application_id: a.id,
@@ -104,7 +99,8 @@ export async function POST(req: NextRequest) {
     notes: body.notes ?? null,
     posted_at: body.posted_at || null,
     applicants_count: Number.isFinite(applicantsCount) ? applicantsCount : null,
-    ...categorizeJob([body.title, body.notes]),
+    // job_category intentionally omitted — category_status defaults to 'pending' at
+    // the DB level and the AI categorization pass fills it in afterward.
   };
 
   const { newRows } = await filterNewJobs([row]);

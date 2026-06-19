@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { categorizeJob } from "@/lib/jobCategorizer";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
@@ -28,7 +27,7 @@ export async function GET(req: NextRequest) {
 
   let query = supabase
     .from("jobs")
-    .select("id, company_id, title, company, location, source, role_tier, salary_range, source_url, is_active, employment_type, applicants_count, company_website, posted_at, external_job_id, apply_url, job_category, category_tags, category_relevance_score, last_seen_at, created_at", { count: "planned" })
+    .select("id, company_id, title, company, location, source, role_tier, salary_range, source_url, is_active, employment_type, applicants_count, company_website, posted_at, external_job_id, apply_url, job_category, category_tags, category_relevance_score, category_status, salary_min, salary_max, salary_currency, salary_period, work_authorization, last_seen_at, created_at", { count: "planned" })
     .order("created_at", { ascending: false });
 
   if (search) query = query.or(`title.ilike.%${search}%,company.ilike.%${search}%,location.ilike.%${search}%`);
@@ -53,14 +52,9 @@ export async function POST(req: NextRequest) {
     ...pickFields(body, JOB_FIELDS),
     source: body.source ?? "public_api",
     is_active: body.is_active ?? true,
-    ...("job_category" in body ? {} : categorizeJob([
-      body.title,
-      body.description_text,
-      body.notes,
-      body.job_function,
-      body.industries,
-      body.company_description,
-    ])),
+    // job_category left unset when the caller doesn't supply one — category_status
+    // defaults to 'pending' and the AI categorization pass fills it in afterward.
+    ...("job_category" in body ? { category_status: "done" } : {}),
   };
 
   const { newRows } = await filterNewJobs([row]);

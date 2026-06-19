@@ -5,7 +5,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { categorizeJob } from "@/lib/jobCategorizer";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
@@ -19,18 +18,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
-  const categoryFallback = job.job_category ? {} : categorizeJob([
-    job.title,
-    job.description_text,
-    job.notes,
-    job.job_function,
-    job.industries,
-    job.company_description,
-  ]);
 
   return NextResponse.json({
     ...job,
-    ...categoryFallback,
     applicants: (job.applications ?? []).map((a: any) => ({
       application_id: a.id,
       candidate_id: a.candidates?.id,

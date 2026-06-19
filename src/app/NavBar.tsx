@@ -62,6 +62,7 @@ export default function NavBar() {
   }
 
   const moreLinks = [
+    { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
     { href: "/import-sources", label: "Import Sources", show: canManageSources },
@@ -71,7 +72,7 @@ export default function NavBar() {
     { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
     { href: "/settings/billing", label: "Billing", show: isAdmin || me?.profile.role === "manager" },
   ].filter((link) => link.show);
-  const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href));
+  const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
   return (
     <nav className="topnav flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
@@ -80,6 +81,7 @@ export default function NavBar() {
         <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
         <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>
         <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>
+        <Link href="/interviews" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Interviews</Link>
         <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
           Application Queue
           {notifications && (notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent) > 0 && (

@@ -1,7 +1,7 @@
 // src/lib/linkedinMapper.ts
 // Maps raw LinkedIn jobs-scraper output (camelCase) onto the jobs table row shape (snake_case).
-
-import { categorizeJob } from "@/lib/jobCategorizer";
+// job_category is intentionally left unset here — category_status defaults to 'pending'
+// at the DB level and src/lib/ai/jobCategorization.ts fills it in afterward.
 
 export interface LinkedInScrapedJob {
   id?: string;
@@ -82,13 +82,6 @@ function toInt(value: string | number | undefined): number | null {
 
 export function mapLinkedInJob(raw: LinkedInScrapedJob): JobRow | null {
   if (!raw.title || !raw.title.trim()) return null;
-  const category = categorizeJob([
-    raw.title,
-    raw.descriptionText,
-    raw.jobFunction,
-    raw.industries,
-    raw.companyDescription,
-  ]);
 
   return {
     title: raw.title.trim(),
@@ -122,6 +115,5 @@ export function mapLinkedInJob(raw: LinkedInScrapedJob): JobRow | null {
     job_poster_profile_url: raw.jobPosterProfileUrl?.trim() || null,
     job_poster_photo_url: raw.jobPosterPhoto?.trim() || null,
     raw_source_payload: raw,
-    ...category,
   };
 }

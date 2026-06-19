@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { categorizeJob } from "@/lib/jobCategorizer";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
@@ -34,16 +33,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (response) return response;
 
   const body = await req.json();
-  const updates = pickFields(body, JOB_FIELDS);
-  if (!("job_category" in body) && (body.title || body.description_text || body.notes)) {
-    Object.assign(updates, categorizeJob([
-      String(body.title ?? ""),
-      String(body.description_text ?? ""),
-      String(body.notes ?? ""),
-      String(body.job_function ?? ""),
-      String(body.industries ?? ""),
-      String(body.company_description ?? ""),
-    ]));
+  const updates: Record<string, unknown> = pickFields(body, JOB_FIELDS);
+  if ("job_category" in body) {
+    updates.category_status = "done";
+  } else if (body.title || body.description_text || body.notes || body.job_function || body.industries || body.company_description) {
+    // Core text changed without an explicit category — the existing category may no
+    // longer be accurate, so re-queue for the AI pass instead of guessing inline.
+    updates.category_status = "pending";
+    updates.job_category = null;
+    updates.ai_suggested_category = null;
   }
 
   const { data, error } = await supabase.from("jobs").update(updates).eq("id", params.id).select().single();

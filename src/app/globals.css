@@ -245,6 +245,8 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
 .badge-in_progress { background: #fff3e0; color: var(--warn); }
 .badge-applied { background: #eef1f5; color: #4a5568; }
 .badge-replied { background: #fff3e0; color: var(--warn); }
+.badge-scheduled { background: var(--accent-soft); color: var(--accent); }
+.badge-no_show { background: #fbeaea; color: var(--danger); }
 .badge-interview { background: var(--accent-soft); color: var(--accent); }
 .badge-rejected { background: #fbeaea; color: var(--danger); }
 .badge-offer { background: #e7f2ec; color: var(--accent); font-weight: 700; }

@@ -9,6 +9,33 @@ import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
 
+export async function GET(req: NextRequest) {
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+  const url = new URL(req.url);
+  const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
+  const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
+  const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
+
+  let query = supabase
+    .from("applications")
+    .select("*, candidates(id, name, email), jobs(id, title, company)", { count: "exact" });
+
+  if (search) {
+    query = query.or(`candidates.name.ilike.%${search}%,candidates.email.ilike.%${search}%,jobs.title.ilike.%${search}%`);
+  }
+
+  const from = (page - 1) * pageSize;
+  const { data, error, count } = await query
+    .order("created_at", { ascending: false })
+    .range(from, from + pageSize - 1);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ items: data ?? [], total: count ?? 0, page, pageSize });
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const currentUser = await getCurrentUserContext();
