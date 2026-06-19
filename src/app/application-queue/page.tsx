@@ -18,6 +18,9 @@ interface QueueItem {
   review_note: string | null;
   reviewed_at: string | null;
   next_action: string | null;
+  proof_url: string | null;
+  proof_filename: string | null;
+  proof_uploaded_at: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null } | null;
 }
@@ -175,6 +178,23 @@ export default function ApplicationQueuePage() {
       return;
     }
     setFeedback({ kind: "success", text: status === "applied" ? "Application marked applied." : "Ticket updated." });
+    load(page, pageSize);
+  }
+
+  async function uploadProof(item: QueueItem, file: File | null) {
+    if (!file) return;
+    setActionId(`${item.id}:proof`);
+    setFeedback(null);
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: formData });
+    setActionId("");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setFeedback({ kind: "error", text: data.error || "Could not upload proof." });
+      return;
+    }
+    setFeedback({ kind: "success", text: "Proof uploaded." });
     load(page, pageSize);
   }
 
@@ -393,7 +413,16 @@ export default function ApplicationQueuePage() {
                 <td className={item.assignment_due_at ? dueClass(item.assignment_due_at) : "muted"}>
                   {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString() : "—"}
                 </td>
-                <td className="muted">{item.assignment_note || item.next_action || "—"}</td>
+                <td className="muted">
+                  <div>{item.assignment_note || item.next_action || "No note"}</div>
+                  {item.proof_url ? (
+                    <a href={item.proof_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
+                      Proof: {item.proof_filename || "view"}
+                    </a>
+                  ) : (
+                    <span style={{ fontSize: 12 }}>No proof uploaded</span>
+                  )}
+                </td>
                 <td>
                   <div className="action-group">
                   <button className="btn-compact" onClick={() => setStatus(item.id, "in_progress")} disabled={actionId === `${item.id}:in_progress`}>
@@ -410,6 +439,16 @@ export default function ApplicationQueuePage() {
                   >
                     {actionId === `${item.id}:applied` ? "Saving..." : "Applied"}
                   </button>
+                  <label className="btn-compact" style={{ cursor: "pointer" }}>
+                    {actionId === `${item.id}:proof` ? "Uploading..." : "Proof"}
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={(e) => uploadProof(item, e.target.files?.[0] ?? null)}
+                      disabled={actionId === `${item.id}:proof`}
+                      style={{ display: "none" }}
+                    />
+                  </label>
                   {canManageAssignments && <button className="btn-compact" onClick={() => setEditing(item)}>Edit</button>}
                   {canManageAssignments && <button className="btn-danger btn-compact" onClick={() => removeTicket(item)}>Remove</button>}
                   </div>

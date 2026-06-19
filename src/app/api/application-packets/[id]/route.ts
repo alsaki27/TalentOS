@@ -47,6 +47,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   if (context) {
+    if ("final_resume_version_id" in updates) {
+      await logActivity({
+        userId: context.profile.user_id,
+        actorName: context.profile.display_name || context.profile.email || undefined,
+        type: "update",
+        description: `Attached resume variant to application packet ${params.id}`,
+        entityType: "application_packet",
+        entityId: params.id,
+        metadata: { application_id: params.id, final_resume_version_id: updates.final_resume_version_id },
+      });
+    }
+
     await logActivity({
       userId: context.profile.user_id,
       actorName: context.profile.display_name || context.profile.email || undefined,

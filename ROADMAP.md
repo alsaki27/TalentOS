@@ -35,14 +35,11 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   directly from the job row. Analytics excludes pipeline tickets from conversion-rate math
   (a real application only counts once it's actually `applied`) and surfaces a separate
   "In pipeline" total.
-- **Jobs list pagination + server-side filtering.** `/api/jobs` now paginates (50/page) and
+- **List pagination + server-side filtering.** `/api/jobs` paginates (50/page) and
   filters/sorts server-side instead of shipping every row to the browser — the unpaginated
-  version had grown to a 24MB response at 1,000 rows (full LinkedIn HTML descriptions + raw
-  scraper payloads on every row). The list view also now excludes `description_html` and
-  `raw_source_payload` (detail-page-only fields). A new `/api/jobs/facets` endpoint supplies
-  filter dropdown options (sources/employment types/categories) without needing the full
-  unpaginated dataset. CSV export still exports all matching rows (up to a 5,000-row cap),
-  not just the current page.
+  version had grown to a 24MB response at 1,000 rows. Candidates, application queue, and
+  follow-ups now also return paginated/filterable API responses. CSV export still exports
+  all matching job rows (up to a 5,000-row cap), not just the current page.
 - **Storage cleanup on delete/replace.** `src/lib/storage.ts` adds a best-effort
   `deleteStorageFile()` used by candidate delete (resume + avatar + every resume variant),
   resume-variant delete, and both upload routes (the old file is removed when a resume or
@@ -78,6 +75,11 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   **Known gap:** there's no self-serve bootstrap — `POST /api/users` requires an existing
   admin session, so the very first account must be created directly via Supabase's Admin API
   or dashboard. Until that happens, every route redirects to a `/login` no one can use.
+- **Role-based action gating — mostly implemented.** Admin/team/audit/ops surfaces are
+  gated; master-data creation/editing, destructive candidate/job/application actions,
+  assignment changes, public API key management, and application-engineer queue visibility
+  now enforce roles in the app layer. Remaining work is policy refinement and edge-case
+  review, not the old "roles exist but actions are mostly ungated" state.
 - **Audit log viewer.** `/audit` (admin-only) reads back everything `audit_logs` has been
   collecting — finally a UI for the "we need logs and metrics" half of the auth work.
   Filterable by action/entity type, paginated.
@@ -112,7 +114,13 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   Cron, `vercel.json`) and stores the result in Supabase Storage under `backups/`; `/ops`
   also has a "Download backup now" button for an immediate copy. Direct response to this
   session's actual jobs-table wipe, where recovery only worked because a source file
-  happened to still be on disk — not a restore tool yet, just a JSON dump (see README).
+  happened to still be on disk. Restore library helpers now exist
+  (`parseBackupSnapshot`, `loadStoredBackupSnapshot`, `restoreBackupSnapshot`), with an
+  admin-only `/api/ops/restore` route and `/ops` restore control. Restore is an upsert
+  workflow, not a full point-in-time database rollback.
+- **Application proof upload.** `POST /api/applications/[id]/proof` accepts proof files
+  (10MB cap), stores them, records `application_proofs`, updates the application's latest
+  proof metadata, and logs activity. `/application-queue` surfaces the latest proof link.
 - **AI data assistant (`/chat`) — explicit reversal of the "no AI" stance below.** Read-only
   tool-calling chatbot over candidates/jobs/applications/activity-log/analytics/import-sources
   and (admin-only) the audit log — see `src/lib/ai/tools.ts` for the exact tool list. No
@@ -146,6 +154,15 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   viewable + manually triggerable on `/ops`. Deliberately the simpler generation pattern —
   confirmed live it doesn't hit the degeneration failure mode above, since there's no second
   turn for the model to break on.
+- **AI job categorization.** `src/lib/ai/jobCategorization.ts` categorizes jobs against
+  active categories and extracts useful salary/work-authorization signals. Processing is
+  available through job categorization routes and the `categorize-jobs` cron route. This
+  is separate from resume tailoring.
+- **Resume tailoring workflow.** Admins/managers/recruiters can open "Tailor resume for
+  job" from candidate/job detail surfaces, select a base resume and target job, generate an
+  editable markdown draft through the active AI provider, save it as an
+  `application_resume_versions` variant, and attach it to an application packet. The prompt
+  forbids invented experience and the UI warns to review before sending.
 - **Frontend perceived-performance pass + nav rework.** Bundle sizes were already small
   (audited, not assumed) — real win was skeleton loading states (`src/app/Skeleton.tsx`)
   replacing plain "Loading…" text on `/jobs`/`/candidates`/`/audit`/`/import-sources`/`/ops`,
@@ -216,15 +233,16 @@ oversight — the reasoning is included so future work doesn't undo it by accide
 
 1. ~~Bootstrap the first admin account.~~ **Done** — confirmed live: `admin@skarion.local`
    and `engineer@skarion.local` exist in Supabase Auth now. Login is usable.
-2. **Pagination / server-side filtering for the remaining lists.** Jobs is done (see
-   above). Candidates, the application queue, and follow-ups are still small (single/low
-   double-digit rows today) and filter client-side; revisit each once it approaches ~1,000
-   rows, same threshold and approach as jobs.
-3. **Role-based action gating.** Roles exist and gate a couple of admin-only routes
-   (`/team`, `/audit`, `POST /api/users`), but most actions (assigning tickets, deleting
-   jobs/candidates, etc.) aren't yet restricted by role. Needs a product decision on which
-   actions are limited to which roles before implementing — not just an engineering task.
-4. **Company career pages via Google's `JobPosting` structured data — UI wiring only.**
+2. **Candidate self-login dashboard.** Scoped in
+   [docs/candidate-self-login.md](./docs/candidate-self-login.md), still not built. The
+   current candidate portal is still a magic-link page, not an account/session dashboard.
+3. **Gmail intelligence/email classification.** Gmail OAuth/linking exists, but rejection
+   detection, recruiter-reply detection, interview invite detection, follow-up generation,
+   and application-status updates from email are still not implemented.
+4. **Cover-letter generation and deeper tailoring QA.** Resume tailoring now covers
+   editable markdown resume drafts. Cover letters, automated truth scoring, and richer
+   approval workflows are still not implemented as a production workflow.
+5. **Company career pages via Google's `JobPosting` structured data — UI wiring only.**
    Backend done (see "Done" above) and now also runnable on a schedule via
    `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
    one-off manual option — that file is mid-flight with the auth work.
@@ -238,10 +256,10 @@ oversight — the reasoning is included so future work doesn't undo it by accide
 ## Explicitly deferred (not just "later" — needs a real decision first)
 
 - **Communication Intelligence (Gmail/Outlook sync).** Email/calendar sync, interview
-  detection, rejection detection. This is a large OAuth-app-registration + webhook
+  detection, rejection detection, and email classification. This is a large OAuth-app-registration + webhook
   surface on its own, comparable in size to the auth work above. Don't start this without
   scoping it as its own phase.
-- **The rest of the AI Layer** (resume tailoring, job-match scoring, email classification,
+- **The rest of the AI Layer** (cover letters, job-match scoring,
   interview prep, weekly summaries). The blanket "zero AI integrations" version of this
   decision was reversed by direct request — see "Done" above for the one piece built so far
   (a read-only chat assistant). The other pieces listed here are still deferred: each is its
@@ -254,6 +272,9 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   events). What exists today is the narrow slice that's actually load-bearing —
   `application_events` for the status timeline. Don't build the general version until a
   second real consumer of "events" shows up (e.g. scheduled ingestion, or notifications).
+- **Cloudflare full-stack hosting / D1 / R2 migration.** The current app remains Vercel +
+  Supabase oriented. Cloudflare hosting is not configured, and D1/R2 migration is not part
+  of the current architecture.
 
 ## Source documents
 

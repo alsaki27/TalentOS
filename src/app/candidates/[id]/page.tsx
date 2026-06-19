@@ -4,6 +4,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
 
 interface BaseResumeSummary {
   id: string;
@@ -126,6 +127,7 @@ export default function CandidateProfilePage() {
   const [baseResumes, setBaseResumes] = useState<BaseResumeSummary[]>([]);
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
+  const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
 
   async function load() {
     if (!id) return;
@@ -511,7 +513,10 @@ export default function CandidateProfilePage() {
         <div>
           <div className="page-header">
             <h2 style={{ fontSize: 16, margin: 0 }}>Base resumes ({baseResumes.length})</h2>
-            <button onClick={() => setShowCreateBaseResume(true)}>+ Create base resume</button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setTailorContext({})}>Tailor resume for job</button>
+              <button onClick={() => setShowCreateBaseResume(true)}>+ Create base resume</button>
+            </div>
           </div>
           <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
             Reusable, structured starting points built with the Falood CLI — not job-specific
@@ -602,6 +607,7 @@ export default function CandidateProfilePage() {
                   <th>Status</th>
                   <th>Applied</th>
                   <th>Resume used</th>
+                  <th>Tailored variant</th>
                   <th>Follow-up</th>
                   <th></th>
                 </tr>
@@ -617,6 +623,13 @@ export default function CandidateProfilePage() {
                       <td className="muted">{new Date(a.applied_at).toLocaleDateString()}</td>
                       <td className="muted">{a.resume_filename || "—"}</td>
                       <td>
+                        <ApplicationResumeAttach
+                          candidateId={candidate.id}
+                          applicationId={a.id}
+                          jobId={a.jobs.id}
+                        />
+                      </td>
+                      <td>
                         <input
                           type="date"
                           defaultValue={a.follow_up_at ?? ""}
@@ -624,13 +637,14 @@ export default function CandidateProfilePage() {
                         />
                       </td>
                       <td style={{ display: "flex", gap: 6 }}>
+                        <button onClick={() => setTailorContext({ jobId: a.jobs.id, applicationId: a.id })}>Tailor</button>
                         <button onClick={() => toggleHistory(a.id)}>History</button>
                         <button onClick={() => deleteApplication(a.id)}>Delete</button>
                       </td>
                     </tr>
                     {expandedAppId === a.id && (
                       <tr>
-                        <td colSpan={8} style={{ background: "var(--bg)" }}>
+                        <td colSpan={9} style={{ background: "var(--bg)" }}>
                           <label style={{ display: "block", marginBottom: 6 }}>Status history</label>
                           {events.length === 0 ? (
                             <span className="muted">No status changes recorded yet.</span>
@@ -679,6 +693,15 @@ export default function CandidateProfilePage() {
           candidateId={candidate.id}
           onClose={() => setShowAddEvidence(false)}
           onAdded={() => { setShowAddEvidence(false); loadEvidence(); }}
+        />
+      )}
+      {tailorContext && (
+        <TailorResumeModal
+          candidateId={candidate.id}
+          initialJobId={tailorContext.jobId}
+          initialApplicationId={tailorContext.applicationId}
+          onClose={() => setTailorContext(null)}
+          onSaved={() => load()}
         />
       )}
       {parsedReview && parsedReview.parsed_json && (

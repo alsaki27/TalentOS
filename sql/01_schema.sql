@@ -22,9 +22,12 @@ create table if not exists candidates (
   work_authorization    text,
   avatar_url            text,
   portal_token          uuid not null default gen_random_uuid(), -- magic-link token for the read-only candidate portal
+  portal_token_expires_at timestamptz,
+  portal_token_revoked_at timestamptz,
   created_at            timestamptz default now()
 );
 create unique index if not exists candidates_portal_token_idx on candidates (portal_token);
+create index if not exists candidates_portal_token_expiry_idx on candidates (portal_token_expires_at);
 
 -- ----- JOBS (masterlist) -----
 create table if not exists jobs (
@@ -142,6 +145,10 @@ create table if not exists applications (
   assignment_note text,
   assignment_due_at date,
   completed_at  timestamptz,
+  proof_url     text,
+  proof_filename text,
+  proof_uploaded_at timestamptz,
+  proof_uploaded_by_user_id uuid references profiles(user_id) on delete set null,
   applied_at    timestamptz default now(),
   notes         text,
   unique (candidate_id, job_id)                -- prevent duplicate application rows for same pair
@@ -155,6 +162,7 @@ create index if not exists applications_assigned_to_idx on applications (assigne
 create index if not exists applications_assigned_by_user_idx on applications (assigned_by_user_id);
 create index if not exists applications_assigned_to_user_idx on applications (assigned_to_user_id);
 create index if not exists applications_assignment_due_idx on applications (assignment_due_at);
+create index if not exists applications_proof_uploaded_by_idx on applications (proof_uploaded_by_user_id);
 
 -- ----- APPLICATION_EVENTS (status-change timeline) -----
 create table if not exists application_events (

@@ -97,7 +97,8 @@ function statusBadgeClass(status: string) {
 }
 
 export default function InterviewDetailPage() {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id: string }>();
+  const id = params?.id ?? "";
   const router = useRouter();
   const [interview, setInterview] = useState<InterviewDetail | null>(null);
   const [me, setMe] = useState<MeResponse | null>(null);

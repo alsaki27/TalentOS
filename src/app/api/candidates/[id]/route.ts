@@ -51,6 +51,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
     "linkedin_url", "github_url", "portfolio_url", "visa_status",
     "target_industries", "location_preference", "work_mode_preference", "available_start_date",
+    "portal_token_expires_at", "portal_token_revoked_at",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

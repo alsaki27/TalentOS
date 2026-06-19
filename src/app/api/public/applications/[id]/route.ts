@@ -85,7 +85,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requirePublicApiScope(req, "applications:assign");
+  const { response } = await requirePublicApiScope(req, "applications:delete");
   if (response) return response;
 
   const { error } = await supabase.from("applications").delete().eq("id", params.id);

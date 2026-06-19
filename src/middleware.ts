@@ -10,6 +10,7 @@ function isPublicPath(pathname: string) {
     pathname.startsWith("/portal") ||
     pathname.startsWith("/api/portal") ||
     pathname.startsWith("/api/public") ||
+    pathname === "/api/health" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||
     pathname.startsWith("/api/auth") ||

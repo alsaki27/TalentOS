@@ -1,6 +1,6 @@
 // src/app/api/application-resume-versions/route.ts
 // GET  -> list by candidateId query param
-// POST -> create from baseResumeId + targetJobId. Copy base_resume.content into content, set status='draft', created_by
+// POST -> create from baseResumeId + targetJobId. Copy or save tailored content, set status='draft', created_by
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from("application_resume_versions")
-    .select("id, candidate_id, base_resume_id, target_job_id, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at")
+    .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, target_jobs(job_id, jobs(title, company))")
     .eq("candidate_id", candidateId)
     .order("created_at", { ascending: false });
 
@@ -33,6 +33,10 @@ export async function POST(req: NextRequest) {
   const targetJobId = body.targetJobId as string | undefined;
   const candidateId = body.candidateId as string | undefined;
   const sourceType = (body.sourceType as string | undefined) ?? "base_resume";
+  const title = (body.title as string | undefined)?.trim();
+  const versionLabel = (body.versionLabel as string | undefined)?.trim();
+  const generatedText = (body.generatedText as string | undefined)?.trim();
+  const content = body.content;
 
   if (!targetJobId) {
     return NextResponse.json({ error: "targetJobId is required" }, { status: 400 });
@@ -88,6 +92,30 @@ export async function POST(req: NextRequest) {
     };
   }
 
+  const resolvedContent = generatedText
+    ? {
+        ...(content ?? insertData.content),
+        customSections: [
+          ...((content ?? insertData.content)?.customSections ?? []),
+          {
+            id: `tailored-markdown-${Date.now()}`,
+            title: "Tailored Markdown Draft",
+            bullets: generatedText.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => ({
+              id: `tailored-line-${index}`,
+              text: line,
+              riskLevel: "low",
+            })),
+          },
+        ],
+      }
+    : (content ?? insertData.content);
+
+  insertData.title = title || null;
+  insertData.version_label = versionLabel || null;
+  insertData.generated_text = generatedText || null;
+  insertData.source_resume_id = baseResumeId ?? null;
+  insertData.content = resolvedContent;
+
   const { data, error } = await supabase
     .from("application_resume_versions")
     .insert(insertData)
@@ -100,10 +128,11 @@ export async function POST(req: NextRequest) {
     userId: context!.profile.user_id,
     actorName: context!.profile.display_name || context!.profile.email || undefined,
     type: "create",
-    description: `Created application resume version (source: ${sourceType})`,
+    description: generatedText ? `Created tailored resume variant "${title || versionLabel || data.id}"` : `Created application resume version (source: ${sourceType})`,
     entityType: "application_resume_version",
     entityId: data.id,
-    metadata: { base_resume_id: baseResumeId ?? null, target_job_id: targetJobId, candidate_id: insertData.candidate_id, source_type: sourceType },
+    entityName: title || versionLabel || undefined,
+    metadata: { base_resume_id: baseResumeId ?? null, source_resume_id: baseResumeId ?? null, target_job_id: targetJobId, candidate_id: insertData.candidate_id, source_type: sourceType, generated: Boolean(generatedText) },
   });
 
   return NextResponse.json(data, { status: 201 });
