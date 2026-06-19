@@ -5,7 +5,7 @@ Single entry point for whoever is taking this project over. Read this first, the
 left, prioritized next steps Ã¢â‚¬â€ written for the team picking this up to deploy), then
 [README.md](./README.md) (feature-by-feature reference) and [ROADMAP.md](./ROADMAP.md)
 (historical decisions and the *why* behind them). This file was last refreshed
-2026-06-19 — includes the Chunk 1 application workflow redesign schema changes.
+2026-06-19 — includes the Chunk 1 and Chunk 2 application workflow redesign changes.
 
 ## There are two backends in this repo Ã¢â‚¬â€ read this before touching anything
 

@@ -28,6 +28,7 @@ policies; browser code does not query Supabase directly.
 | `/api/candidates/[id]` | `DELETE` | `DESTRUCTIVE_MANAGER_ROLES` | Candidate delete is gated. |
 | `/api/jobs` | `GET` | authenticated staff via middleware | Paginated/filterable list. |
 | `/api/jobs` | `POST` | `MASTER_DATA_MANAGER_ROLES` | Job create is gated. |
+| `/api/jobs/analyze` | `POST` | `APPLICATION_WORKER_ROLES` | JD analyzer (parse-only). Returns structured analysis from raw JD text. Does not create jobs. Excludes `reviewer` role. |
 | `/api/jobs/[id]` | `GET` | authenticated staff via middleware | Job detail is staff-only. |
 | `/api/jobs/[id]` | `PATCH` | `MASTER_DATA_MANAGER_ROLES` | Job edit is gated. |
 | `/api/jobs/[id]` | `DELETE` | `DESTRUCTIVE_MANAGER_ROLES` | Job delete is gated. |

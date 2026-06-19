@@ -119,6 +119,15 @@ complete env var reference table and a list of what's configured vs. what isn't.
   `categorize-jobs` cron route. It classifies active categories and extracts useful signals
   such as salary/work-authorization hints. This is separate from the read-only chat
   assistant and daily digest.
+- **JD Analyzer (Chunk 2, parse-only)** — `POST /api/jobs/analyze` accepts raw job
+  description text and returns structured JSON analysis via the configured AI provider:
+  title, company, location, workplace type, employment type, required/preferred skills, tools,
+  responsibilities, seniority level, years experience, salary range, domain keywords, soft
+  skills, ATS keywords, visa signals, red flags with severity, fit summary, and confidence
+  score. Role-gated to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application
+  engineer). Returns **503** if no AI provider is configured. Does **not** create or update
+  any database rows — pure analysis endpoint. Foundation for future auto-create job from
+  pasted JD (Chunk 3).
 - **Resume tailoring workflow** - admins/managers/recruiters can open "Tailor resume for
   job" from a candidate or job page, choose a base resume and target job, generate a
   markdown draft through the configured AI provider, edit it, save it as an

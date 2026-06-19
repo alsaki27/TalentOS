@@ -246,12 +246,16 @@ oversight — the reasoning is included so future work doesn't undo it by accide
    Backend done (see "Done" above) and now also runnable on a schedule via
    `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
    one-off manual option — that file is mid-flight with the auth work.
-5. **Application workflow redesign (in progress — Chunk 1 done).** Schema foundation
-   for ad-hoc applications (nullable `job_id`, pasted JD storage, AI-extracted job
-   metadata, resume source tracking) is landed. Next chunks: JD analyzer, quick-
-   application modal, resume source selector (Base / Original / Blank), AI suggestion
-   generation, PDF export, application packet + cover letter. See
-   `plan-application-workflow-redesign.md` for the full phased plan.
+5. **Application workflow redesign (in progress — Chunk 1 done, Chunk 2 done).**
+   - Chunk 1 (schema foundation): nullable `job_id`, pasted JD storage, AI-extracted job
+     metadata, resume source tracking — landed.
+   - Chunk 2 (JD Analyzer API, parse-only): `POST /api/jobs/analyze` extracts structured
+     data from raw JD text via AI. Returns title, company, skills, salary, red flags, etc.
+     Does NOT create jobs yet — pure analysis endpoint. Role-gated (admin/manager/recruiter/
+     application_engineer only; reviewer excluded).
+   - Next chunks: auto-create job from parsed JD (Chunk 3), quick-application modal with
+     "Paste JD" option (Chunk 3), resume source selector (Chunk 4), AI suggestion generation
+     (Chunk 5), PDF export (Chunk 6). See `plan-application-workflow-redesign.md`.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

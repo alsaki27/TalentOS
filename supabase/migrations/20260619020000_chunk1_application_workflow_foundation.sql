@@ -124,15 +124,6 @@ create index if not exists job_duplicates_duplicate_idx on job_duplicates (dupli
 -- Re-add a partial unique constraint: only enforce uniqueness when job_id IS NOT NULL.
 -- This preserves the "no duplicate (candidate, job) pairs" rule for masterlist jobs
 -- while allowing unlimited ad-hoc applications per candidate.
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint
-    where conname = 'applications_candidate_job_unique_when_not_null'
-    and conrelid = 'applications'::regclass
-  ) then
-    create unique index applications_candidate_job_unique_when_not_null
-      on applications (candidate_id, job_id)
-      where job_id is not null;
-  end if;
-end $$;
+create unique index if not exists applications_candidate_job_unique_when_not_null
+  on applications (candidate_id, job_id)
+  where job_id is not null;

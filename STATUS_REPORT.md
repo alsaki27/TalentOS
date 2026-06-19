@@ -23,10 +23,30 @@ API backward compatibility preserved: existing application creation (with `job_i
 resume tailoring, existing jobs list — all continue working exactly as before. No UI redesign
 in this pass; only defensive null handling for nullable `jobs` relations.
 
-**Not yet implemented:**
-- JD analyzer / auto-extract from pasted text (Phase 2 of redesign).
+**Chunk 2: JD Analyzer API (parse-only)**
+
+New endpoint: `POST /api/jobs/analyze`
+- Accepts raw job description text (100–30,000 chars).
+- Returns structured JSON analysis via configured AI provider (Anthropic preferred, NVIDIA fallback).
+- Output: title, company, location, workplace type, employment type, required/preferred skills,
+  tools, responsibilities, seniority level, years experience, salary range, domain keywords,
+  soft skills, ATS keywords, visa signals, red flags (with severity), fit summary, confidence score.
+- Returns **503** if no AI provider is configured. Returns **401** for unauthenticated users.
+- Returns **403** for `reviewer` role (not in `APPLICATION_WORKER_ROLES`).
+- Does **not** create or update any database rows — pure parse-only.
+- Activity is logged to `activity_logs` on successful analysis.
+
+Files added:
+- `src/lib/ai/falood/jdAnalyzer.ts` — AI service with full validation/sanitization of JSON output.
+- `src/app/api/jobs/analyze/route.ts` — API route with role checks, input validation, clean error handling.
+
+Typecheck: clean (`npx tsc --noEmit`). Build: fails on pre-existing missing Supabase env vars only.
+
+**Not yet implemented (Chunk 3+):**
+- Auto-creating jobs from parsed JD output.
+- Deduplication check against existing jobs.
 - Quick-application modal with "Paste JD" as primary option.
-- Resume source selector (Base Resume / Original Resume / Blank) in the studio.
+- Resume source selector (Base / Original / Blank) in the studio.
 - AI suggestion generation for application resume tailoring.
 - Real PDF export.
 
