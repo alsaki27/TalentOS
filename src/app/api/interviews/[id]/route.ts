@@ -99,7 +99,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "update",
     description: `Updated interview ${params.id}`,
     entityType: "interview",
@@ -119,7 +119,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "delete",
     description: `Deleted interview ${params.id}`,
     entityType: "interview",

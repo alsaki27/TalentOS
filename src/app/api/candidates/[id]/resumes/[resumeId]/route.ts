@@ -29,7 +29,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (currentUser) {
     await logActivity({
       userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
       type: "delete",
       description: `Deleted ${resume?.kind || "resume"} "${resume?.label || params.resumeId}"`,
       entityType: "resume",

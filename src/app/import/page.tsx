@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   FileSpreadsheet,
-  Linkedin,
+  Link2,
   Briefcase,
   Globe,
   ArrowLeft,
@@ -84,7 +84,7 @@ const SOURCE_CARDS: {
     id: "linkedin",
     title: "LinkedIn JSON",
     description: "Import a JSON export from LinkedIn job searches.",
-    icon: <Linkedin className="h-6 w-6" />,
+    icon: <Link2 className="h-6 w-6" />,
   },
   {
     id: "ats",

@@ -14,7 +14,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
   const { data, error } = await supabase
     .from("application_packets")
-    .select("*")
+    .select("*, applications(status, review_status, review_note, jobs(title, company))")
     .eq("application_id", params.id)
     .single();
 

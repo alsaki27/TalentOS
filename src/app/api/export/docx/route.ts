@@ -1,12 +1,11 @@
-// src/app/api/export/pdf/route.ts
-// POST -> generate a real PDF from an application resume version (or a base resume)
-// using the Skarion Compact Professional layout (src/lib/falood/skarionPdfDocument.tsx),
-// rendered via @react-pdf/renderer. Returns actual PDF bytes, not JSON.
+// src/app/api/export/docx/route.ts
+// POST -> generate a real DOCX from an application resume version or base resume.
+// Same request contract as /api/export/pdf for consistency.
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
-import { renderResumePdf } from "@/lib/falood/pdfExport";
+import { renderResumeDocx } from "@/lib/falood/docxExport";
 import { ResumeDocument } from "@/lib/falood/types";
 
 export async function POST(req: NextRequest) {
@@ -35,18 +34,18 @@ export async function POST(req: NextRequest) {
     formatting: { ...(data.content as ResumeDocument).formatting, ...(formattingOverride ?? {}) },
   };
 
-  let pdfBuffer: Buffer;
+  let docxBuffer: Buffer;
   try {
-    pdfBuffer = await renderResumePdf(content);
+    docxBuffer = await renderResumeDocx(content);
   } catch (err: any) {
-    return NextResponse.json({ error: `PDF generation failed: ${err.message ?? err}` }, { status: 500 });
+    return NextResponse.json({ error: `DOCX generation failed: ${err.message ?? err}` }, { status: 500 });
   }
 
-  const fileName = `${content.header.fullName.replace(/[^a-z0-9]+/gi, "_")}_resume.pdf`;
-  return new NextResponse(new Blob([new Uint8Array(pdfBuffer)]), {
+  const fileName = `${content.header.fullName.replace(/[^a-z0-9]+/gi, "_")}_resume.docx`;
+  return new NextResponse(new Blob([new Uint8Array(docxBuffer)]), {
     status: 200,
     headers: {
-      "Content-Type": "application/pdf",
+      "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "Content-Disposition": `attachment; filename="${fileName}"`,
     },
   });

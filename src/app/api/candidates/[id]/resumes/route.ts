@@ -74,7 +74,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (currentUser && data) {
     await logActivity({
       userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
       type: "create",
       description: `Uploaded ${kind} "${label}" for candidate ${params.id}`,
       entityType: "resume",

@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from("application_packets")
-    .select("*")
+    .select("*, applications(status, review_status, review_note, jobs(title, company))")
     .in("application_id", applicationIds)
     .order("created_at", { ascending: false });
 

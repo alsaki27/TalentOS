@@ -125,7 +125,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     await logActivity({
       userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
       type: "update",
       description: `Updated application ${params.id}`,
       entityType: "application",
@@ -164,7 +164,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
     await logActivity({
       userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email,
+      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
       type: "delete",
       description: `Deleted application ${params.id}`,
       entityType: "application",

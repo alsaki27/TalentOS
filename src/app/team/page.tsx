@@ -65,7 +65,8 @@ function formatDate(dateStr: string | null) {
   });
 }
 
-function formatRelative(dateStr: string) {
+function formatRelative(dateStr: string | null) {
+  if (!dateStr) return "Never";
   const d = new Date(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - d.getTime();

@@ -31,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "create",
     description: `Added panel member to interview ${params.id}`,
     entityType: "interview_panel",
@@ -62,7 +62,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "delete",
     description: `Removed panel member from interview ${params.id}`,
     entityType: "interview_panel",

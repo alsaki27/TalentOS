@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "create",
     description: `Created scorecard template: ${body.name}`,
     entityType: "scorecard_template",
@@ -85,7 +85,7 @@ export async function PATCH(req: NextRequest) {
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "update",
     description: `Updated scorecard template ${body.id}`,
     entityType: "scorecard_template",
@@ -111,7 +111,7 @@ export async function DELETE(req: NextRequest) {
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "delete",
     description: `Deleted scorecard template ${id}`,
     entityType: "scorecard_template",

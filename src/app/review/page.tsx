@@ -1,6 +1,8 @@
 // src/app/review/page.tsx
-// QC Review Queue for reviewers and managers.
-// MVP: Base resumes only. Application packet review coming soon.
+// QC Review Queue for reviewers and managers — base resumes and application packets.
+// Packets have no status column of their own; review state is the linked
+// applications.review_status (pending/approved/changes_requested/not_required),
+// the same review gate the rest of the app already uses for applications.
 
 "use client";
 
@@ -102,6 +104,34 @@ interface EvidenceRow {
   confidence_score: number | null;
 }
 
+interface ApplicationPacketSummary {
+  application_id: string;
+  final_resume_version_id: string | null;
+  cover_letter: string | null;
+  recruiter_message: string | null;
+  hiring_manager_email: string | null;
+  interview_prep_notes: string | null;
+  approved_keyword_ids: string[] | null;
+  rejected_keyword_ids: string[] | null;
+  created_by?: string | null;
+  created_at: string;
+  applications: {
+    status: string;
+    review_status: string | null;
+    review_note: string | null;
+    jobs: { title: string; company: string | null } | null;
+  } | null;
+}
+
+// applications.review_status -> the generic status vocabulary the rest of this page
+// already uses for base resumes (draft/in_review/approved/archived).
+function packetReviewToGenericStatus(reviewStatus: string | null): string {
+  if (reviewStatus === "approved") return "approved";
+  if (reviewStatus === "changes_requested") return "rejected";
+  if (reviewStatus === "pending") return "in_review";
+  return "draft"; // not_required / null — nothing actionable
+}
+
 function isToday(iso: string) {
   const d = new Date(iso);
   const now = new Date();
@@ -147,28 +177,53 @@ export default function ReviewPage() {
         name: c.name,
       }));
 
-      const results = await Promise.all(
-        candidates.map(async (c) => {
-          try {
-            const res = await fetch(`/api/base-resumes?candidateId=${c.id}`, { cache: "no-store" });
-            const data = res.ok ? await res.json() : [];
-            return (data as BaseResumeSummary[]).map((b) => ({
-              id: b.id,
-              type: "base_resume" as const,
-              candidateId: c.id,
-              candidateName: c.name,
-              name: b.name,
-              status: b.status,
-              createdAt: b.created_at,
-              updatedAt: b.updated_at,
-              createdBy: b.created_by,
-            }));
-          } catch {
-            return [];
-          }
-        })
-      );
-      setItems(results.flat());
+      const [baseResumeResults, packetResults] = await Promise.all([
+        Promise.all(
+          candidates.map(async (c) => {
+            try {
+              const res = await fetch(`/api/base-resumes?candidateId=${c.id}`, { cache: "no-store" });
+              const data = res.ok ? await res.json() : [];
+              return (data as BaseResumeSummary[]).map((b) => ({
+                id: b.id,
+                type: "base_resume" as const,
+                candidateId: c.id,
+                candidateName: c.name,
+                name: b.name,
+                status: b.status,
+                createdAt: b.created_at,
+                updatedAt: b.updated_at,
+                createdBy: b.created_by,
+              }));
+            } catch {
+              return [];
+            }
+          })
+        ),
+        Promise.all(
+          candidates.map(async (c) => {
+            try {
+              const res = await fetch(`/api/application-packets?candidateId=${c.id}`, { cache: "no-store" });
+              const data = res.ok ? await res.json() : [];
+              return (data as ApplicationPacketSummary[])
+                .filter((p) => p.applications && p.applications.review_status && p.applications.review_status !== "not_required")
+                .map((p) => ({
+                  id: p.application_id,
+                  type: "application_packet" as const,
+                  candidateId: c.id,
+                  candidateName: c.name,
+                  name: p.applications?.jobs ? `${p.applications.jobs.title} @ ${p.applications.jobs.company ?? "—"}` : "Application packet",
+                  status: packetReviewToGenericStatus(p.applications?.review_status ?? null),
+                  createdAt: p.created_at,
+                  updatedAt: p.created_at,
+                  createdBy: p.created_by,
+                }));
+            } catch {
+              return [];
+            }
+          })
+        ),
+      ]);
+      setItems([...baseResumeResults.flat(), ...packetResults.flat()]);
     } catch {
       showToast("Failed to load review queue.", "error");
     } finally {
@@ -185,7 +240,8 @@ export default function ReviewPage() {
     description: string,
     entityId: string,
     entityName: string,
-    metadata: Record<string, unknown>
+    metadata: Record<string, unknown>,
+    entityType: ReviewItem["type"] = "base_resume",
   ) {
     await fetch("/api/activity", {
       method: "POST",
@@ -195,7 +251,7 @@ export default function ReviewPage() {
         actor_name: me?.profile.display_name || me?.profile.email,
         type: "update",
         description,
-        entity_type: "base_resume",
+        entity_type: entityType,
         entity_id: entityId,
         entity_name: entityName,
         metadata,
@@ -207,17 +263,24 @@ export default function ReviewPage() {
     if (actionLoading) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/base-resumes/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "approved" }),
-      });
+      const res = item.type === "application_packet"
+        ? await fetch(`/api/applications/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ review_status: "approved" }),
+          })
+        : await fetch(`/api/base-resumes/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "approved" }),
+          });
       if (!res.ok) throw new Error("Approve failed");
       await logActivity(
-        `Approved base resume "${item.name}"`,
+        `Approved ${item.type === "application_packet" ? "application packet" : "base resume"} "${item.name}"`,
         item.id,
         item.name,
-        { candidate_id: item.candidateId, action: "approve" }
+        { candidate_id: item.candidateId, action: "approve" },
+        item.type,
       );
       showToast(`Approved "${item.name}"`);
       setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "approved" } : i)));
@@ -232,20 +295,27 @@ export default function ReviewPage() {
     if (actionLoading) return;
     setActionLoading(true);
     try {
-      const res = await fetch(`/api/base-resumes/${item.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "draft" }),
-      });
+      const res = item.type === "application_packet"
+        ? await fetch(`/api/applications/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ review_status: "changes_requested", review_note: reason }),
+          })
+        : await fetch(`/api/base-resumes/${item.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "draft" }),
+          });
       if (!res.ok) throw new Error("Reject failed");
       await logActivity(
-        `Rejected base resume "${item.name}": ${reason}`,
+        `Rejected ${item.type === "application_packet" ? "application packet" : "base resume"} "${item.name}": ${reason}`,
         item.id,
         item.name,
-        { candidate_id: item.candidateId, action: "reject", reason }
+        { candidate_id: item.candidateId, action: "reject", reason },
+        item.type,
       );
       showToast(`Rejected "${item.name}"`);
-      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "draft" } : i)));
+      setItems((prev) => prev.map((i) => (i.id === item.id ? { ...i, status: "rejected" } : i)));
       setRejectItem(null);
       setRejectReason("");
     } catch {
@@ -260,10 +330,11 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       await logActivity(
-        `Flagged issue on base resume "${item.name}": ${note}`,
+        `Flagged issue on ${item.type === "application_packet" ? "application packet" : "base resume"} "${item.name}": ${note}`,
         item.id,
         item.name,
-        { candidate_id: item.candidateId, action: "flag", note }
+        { candidate_id: item.candidateId, action: "flag", note },
+        item.type,
       );
       showToast("Issue flagged");
     } catch {
@@ -388,10 +459,6 @@ export default function ReviewPage() {
 
       {loading ? (
         <TableSkeleton cols={7} />
-      ) : activeTab === "Application Packets" ? (
-        <div className="empty">
-          Application packet review is coming soon. Use the <strong>Base Resumes</strong> tab for now.
-        </div>
       ) : filtered.length === 0 ? (
         <div className="empty">
           {search ? "No items match your search." : "No items in the review queue."}
@@ -527,6 +594,7 @@ function ReviewModal({
   actionLoading: boolean;
 }) {
   const [detail, setDetail] = useState<BaseResumeDetail | null>(null);
+  const [packet, setPacket] = useState<ApplicationPacketSummary | null>(null);
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
   const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -534,6 +602,7 @@ function ReviewModal({
   const [flagNote, setFlagNote] = useState("");
   const [showReject, setShowReject] = useState(false);
   const [showFlag, setShowFlag] = useState(false);
+  const isPacket = item.type === "application_packet";
 
   useEffect(() => {
     setLoading(true);
@@ -542,18 +611,20 @@ function ReviewModal({
     setShowReject(false);
     setShowFlag(false);
     Promise.all([
-      fetch(`/api/base-resumes/${item.id}`).then((r) => (r.ok ? r.json() : null)),
+      isPacket
+        ? fetch(`/api/application-packets/${item.id}`).then((r) => (r.ok ? r.json() : null))
+        : fetch(`/api/base-resumes/${item.id}`).then((r) => (r.ok ? r.json() : null)),
       fetch(`/api/candidates/${item.candidateId}`).then((r) => (r.ok ? r.json() : null)),
       fetch(`/api/candidates/${item.candidateId}/evidence`).then((r) => (r.ok ? r.json() : [])),
     ])
       .then(([d, c, e]) => {
-        setDetail(d);
+        if (isPacket) setPacket(d); else setDetail(d);
         setCandidate(c);
         setEvidence(e);
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [item]);
+  }, [item, isPacket]);
 
   const content = detail?.content;
 
@@ -576,7 +647,7 @@ function ReviewModal({
           <button onClick={onClose}>Close</button>
         </div>
 
-        {loading || !content ? (
+        {loading || (!isPacket && !content) || (isPacket && !packet) ? (
           <p className="muted">Loading detail…</p>
         ) : (
           <>
@@ -596,12 +667,16 @@ function ReviewModal({
                 <p className="muted" style={{ fontSize: 12 }}>
                   Work auth: {candidate?.work_authorization ?? "—"}
                 </p>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  Target industry: {detail?.target_industry ?? "—"}
-                </p>
-                <p className="muted" style={{ fontSize: 12 }}>
-                  Target roles: {detail?.target_roles?.join(", ") ?? "—"}
-                </p>
+                {!isPacket && (
+                  <>
+                    <p className="muted" style={{ fontSize: 12 }}>
+                      Target industry: {detail?.target_industry ?? "—"}
+                    </p>
+                    <p className="muted" style={{ fontSize: 12 }}>
+                      Target roles: {detail?.target_roles?.join(", ") ?? "—"}
+                    </p>
+                  </>
+                )}
                 <p className="muted" style={{ fontSize: 12 }}>
                   Visa status: {candidate?.visa_status ?? "—"}
                 </p>
@@ -629,79 +704,125 @@ function ReviewModal({
               </div>
             </div>
 
-            <div className="card" style={{ marginBottom: 16 }}>
-              <h3 style={{ fontSize: 14, marginTop: 0 }}>Resume draft</h3>
-              <h2 style={{ margin: "8px 0 0", fontSize: 18 }}>{content.header.fullName}</h2>
-              <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                {[
-                  content.header.location,
-                  content.header.phone,
-                  content.header.email,
-                  content.header.linkedin,
-                  content.header.portfolio,
-                ]
-                  .filter(Boolean)
-                  .join(" | ")}
-              </p>
-              {content.summary?.text && (
-                <p style={{ fontSize: 13, marginTop: 8 }}>{content.summary.text}</p>
-              )}
+            {!isPacket && content && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h3 style={{ fontSize: 14, marginTop: 0 }}>Resume draft</h3>
+                <h2 style={{ margin: "8px 0 0", fontSize: 18 }}>{content.header.fullName}</h2>
+                <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+                  {[
+                    content.header.location,
+                    content.header.phone,
+                    content.header.email,
+                    content.header.linkedin,
+                    content.header.portfolio,
+                  ]
+                    .filter(Boolean)
+                    .join(" | ")}
+                </p>
+                {content.summary?.text && (
+                  <p style={{ fontSize: 13, marginTop: 8 }}>{content.summary.text}</p>
+                )}
 
-              {content.skills.length > 0 && (
-                <>
-                  <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Technical Skills</h4>
-                  {content.skills.map((s) => (
-                    <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      <strong>{s.title}:</strong> {s.skills.join(", ")}
-                    </p>
-                  ))}
-                </>
-              )}
-
-              {content.experience.length > 0 && (
-                <>
-                  <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Professional Experience</h4>
-                  {content.experience.map((exp) => (
-                    <div key={exp.id} style={{ marginBottom: 8 }}>
-                      <p style={{ fontSize: 13, margin: 0 }}>
-                        <strong>{exp.title}</strong> — {exp.company}{" "}
-                        {exp.location ? `(${exp.location})` : ""}
+                {content.skills.length > 0 && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Technical Skills</h4>
+                    {content.skills.map((s) => (
+                      <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}>
+                        <strong>{s.title}:</strong> {s.skills.join(", ")}
                       </p>
-                      <p className="muted" style={{ fontSize: 11, margin: 0 }}>
-                        {exp.startDate} – {exp.endDate ?? "Present"}
-                      </p>
-                      <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
-                        {exp.bullets.map((b) => (
-                          <li key={b.id}>{b.text}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
-                </>
-              )}
+                    ))}
+                  </>
+                )}
 
-              {content.education.length > 0 && (
-                <>
-                  <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Education</h4>
-                  {content.education.map((edu) => (
-                    <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      {edu.degree} — {edu.school}{" "}
-                      {edu.graduationDate ? `(${edu.graduationDate})` : ""}
-                    </p>
-                  ))}
-                </>
-              )}
-            </div>
+                {content.experience.length > 0 && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Professional Experience</h4>
+                    {content.experience.map((exp) => (
+                      <div key={exp.id} style={{ marginBottom: 8 }}>
+                        <p style={{ fontSize: 13, margin: 0 }}>
+                          <strong>{exp.title}</strong> — {exp.company}{" "}
+                          {exp.location ? `(${exp.location})` : ""}
+                        </p>
+                        <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+                          {exp.startDate} – {exp.endDate ?? "Present"}
+                        </p>
+                        <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
+                          {exp.bullets.map((b) => (
+                            <li key={b.id}>{b.text}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </>
+                )}
+
+                {content.education.length > 0 && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Education</h4>
+                    {content.education.map((edu) => (
+                      <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>
+                        {edu.degree} — {edu.school}{" "}
+                        {edu.graduationDate ? `(${edu.graduationDate})` : ""}
+                      </p>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+
+            {isPacket && packet && (
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h3 style={{ fontSize: 14, marginTop: 0 }}>Application packet</h3>
+                <p className="muted" style={{ fontSize: 12 }}>
+                  Target job: {packet.applications?.jobs ? `${packet.applications.jobs.title} @ ${packet.applications.jobs.company ?? "—"}` : "—"}
+                </p>
+                <p className="muted" style={{ fontSize: 12 }}>
+                  Approved keywords: {packet.approved_keyword_ids?.length ?? 0} · Rejected: {packet.rejected_keyword_ids?.length ?? 0}
+                </p>
+                {packet.cover_letter && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Cover letter</h4>
+                    <p style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{packet.cover_letter}</p>
+                  </>
+                )}
+                {packet.recruiter_message && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Recruiter message</h4>
+                    <p style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{packet.recruiter_message}</p>
+                  </>
+                )}
+                {packet.applications?.review_note && (
+                  <>
+                    <h4 style={{ fontSize: 13, margin: "12px 0 4px" }}>Previous review note</h4>
+                    <p className="muted" style={{ fontSize: 12 }}>{packet.applications.review_note}</p>
+                  </>
+                )}
+              </div>
+            )}
 
             <div className="card" style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, marginTop: 0 }}>Falood command log</h3>
-              <p className="muted" style={{ fontSize: 12 }}>
-                Command history is available in the{" "}
-                <Link href={`/falood/studio/base/${item.id}`} onClick={onClose}>
-                  Falood Studio
-                </Link>
-                .
-              </p>
+              {isPacket ? (
+                packet?.final_resume_version_id ? (
+                  <p className="muted" style={{ fontSize: 12 }}>
+                    Command history is available in the{" "}
+                    <Link href={`/falood/studio/application/${packet.final_resume_version_id}`} onClick={onClose}>
+                      Falood Studio
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <p className="muted" style={{ fontSize: 12 }}>No final resume version linked to this packet yet.</p>
+                )
+              ) : (
+                <p className="muted" style={{ fontSize: 12 }}>
+                  Command history is available in the{" "}
+                  <Link href={`/falood/studio/base/${item.id}`} onClick={onClose}>
+                    Falood Studio
+                  </Link>
+                  .
+                </p>
+              )}
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

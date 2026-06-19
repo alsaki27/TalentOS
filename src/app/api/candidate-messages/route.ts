@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "message",
     description: `Sent ${channel} message to candidate ${candidate.name}`,
     entityType: "candidate",

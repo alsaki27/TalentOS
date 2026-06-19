@@ -4,13 +4,15 @@
 // — never mutates resume content directly. Logs every turn to falood_conversations/
 // falood_messages (same shape as chat_conversations/chat_messages).
 //
-// Only mode="base_resume_creation" is implemented (Phase 2). Other modes return 501
-// rather than silently no-oping, matching this app's fail-clearly convention.
+// mode="base_resume_creation" (Phase 2) and mode="application_resume_tailoring"
+// (Phase 4 — /suggest-edits and free-text advice) are implemented. The remaining modes
+// return 501 rather than silently no-oping, matching this app's fail-clearly convention.
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { runBaseResumeCommand } from "@/lib/ai/faloodBaseResume";
+import { runApplicationTailoringCommand } from "@/lib/ai/faloodApplicationTailoring";
 
 type FaloodMode = "candidate_profile_setup" | "base_resume_creation" | "application_resume_tailoring" | "pdf_preview_adjustment";
 
@@ -23,21 +25,33 @@ export async function POST(req: NextRequest) {
   const command = body.command as string | undefined;
   const message = body.message as string | undefined;
   const baseResumeId = body.baseResumeId as string | undefined;
+  const applicationResumeId = body.applicationResumeId as string | undefined;
   const candidateId = body.candidateId as string | undefined;
   let conversationId = body.conversationId as string | undefined;
 
   if (!mode) return NextResponse.json({ error: "mode is required" }, { status: 400 });
   if (!command && !message) return NextResponse.json({ error: "command or message is required" }, { status: 400 });
 
-  if (mode !== "base_resume_creation") {
+  if (mode !== "base_resume_creation" && mode !== "application_resume_tailoring") {
     return NextResponse.json({ error: `Falood mode "${mode}" is not implemented yet.` }, { status: 501 });
   }
-  if (!baseResumeId) return NextResponse.json({ error: "baseResumeId is required for base_resume_creation" }, { status: 400 });
+  if (mode === "base_resume_creation" && !baseResumeId) {
+    return NextResponse.json({ error: "baseResumeId is required for base_resume_creation" }, { status: 400 });
+  }
+  if (mode === "application_resume_tailoring" && !applicationResumeId) {
+    return NextResponse.json({ error: "applicationResumeId is required for application_resume_tailoring" }, { status: 400 });
+  }
 
   if (!conversationId) {
     const { data: created, error } = await supabase
       .from("falood_conversations")
-      .insert({ mode, candidate_id: candidateId ?? null, base_resume_id: baseResumeId, user_id: context!.profile.user_id })
+      .insert({
+        mode,
+        candidate_id: candidateId ?? null,
+        base_resume_id: baseResumeId ?? null,
+        application_resume_id: applicationResumeId ?? null,
+        user_id: context!.profile.user_id,
+      })
       .select("id")
       .single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -51,7 +65,9 @@ export async function POST(req: NextRequest) {
     command: command ?? null,
   });
 
-  const result = await runBaseResumeCommand({ baseResumeId, command, message });
+  const result = mode === "base_resume_creation"
+    ? await runBaseResumeCommand({ baseResumeId: baseResumeId!, command, message })
+    : await runApplicationTailoringCommand({ applicationResumeId: applicationResumeId!, command, message });
 
   if ("error" in result) {
     await supabase.from("falood_messages").insert({

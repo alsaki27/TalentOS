@@ -140,7 +140,7 @@ export async function POST(req: NextRequest) {
 
   await logActivity({
     userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email,
+    actorName: context.profile.display_name || context.profile.email || undefined,
     type: "create",
     description: `Scheduled interview: ${body.roundName}`,
     entityType: "interview",

@@ -141,7 +141,7 @@ export async function POST(req: NextRequest) {
     for (const application of data) {
       await logActivity({
         userId: currentUser.profile.user_id,
-        actorName: currentUser.profile.display_name || currentUser.profile.email,
+        actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
         type: "create",
         description: `Created application for candidate ${application.candidate_id}`,
         entityType: "application",

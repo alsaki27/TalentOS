@@ -147,6 +147,9 @@ export default function ApplicationResumeStudioPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved" | "error">("");
+  const [exporting, setExporting] = useState<"pdf" | "docx" | null>(null);
+  const [fitting, setFitting] = useState(false);
+  const [creatingPacket, setCreatingPacket] = useState(false);
   const [mobileTab, setMobileTab] = useState<"job" | "editor" | "falood">("editor");
 
   /* editing state */
@@ -202,14 +205,21 @@ export default function ApplicationResumeStudioPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  async function refreshSuggestions() {
+    if (!applicationResumeId) return;
+    const res = await fetch(`/api/resume-suggestions?applicationResumeId=${applicationResumeId}`);
+    if (res.ok) setSuggestions(await res.json());
+  }
+
   /* ──────────── derived keyword groups ──────────── */
 
   const keywordGroups = useMemo(() => {
-    if (!targetJob) return { approved: [], rejected: [], pending: [], warnings: [] as typeof targetJob.keywords };
-    const approved: typeof targetJob.keywords = [];
-    const rejected: typeof targetJob.keywords = [];
-    const pending: typeof targetJob.keywords = [];
-    const warnings: typeof targetJob.keywords = [];
+    type Keyword = NonNullable<typeof targetJob>["keywords"][number];
+    if (!targetJob) return { approved: [] as Keyword[], rejected: [] as Keyword[], pending: [] as Keyword[], warnings: [] as Keyword[] };
+    const approved: Keyword[] = [];
+    const rejected: Keyword[] = [];
+    const pending: Keyword[] = [];
+    const warnings: Keyword[] = [];
 
     for (const k of targetJob.keywords) {
       const decision = keywordApprovals.find((ka) => ka.keyword_id === k.id)?.decision ?? "pending";
@@ -241,7 +251,7 @@ export default function ApplicationResumeStudioPage() {
     const next = { ...draftContent };
     switch (section) {
       case "header":
-        next.header = { ...editTemp };
+        next.header = { ...editTemp, fullName: editTemp.fullName || draftContent.header.fullName };
         break;
       case "summary":
         next.summary = { id: draftContent.summary?.id ?? uid(), text: editTemp.text ?? "" };
@@ -305,28 +315,121 @@ export default function ApplicationResumeStudioPage() {
     }
   }
 
-  async function exportPdf() {
+  async function downloadExport(format: "pdf" | "docx") {
     if (!applicationResumeId) return;
-    // Phase 5 placeholder
-    alert("PDF export is coming in Phase 5.");
+    setExporting(format);
+    try {
+      const res = await fetch(`/api/export/${format}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applicationResumeId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || `${format.toUpperCase()} export failed.`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `resume.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function exportPdf() { await downloadExport("pdf"); }
+  async function exportDocx() { await downloadExport("docx"); }
+
+  async function runOnePageFit() {
+    if (!applicationResumeId) return;
+    setFitting(true);
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/auto-fit`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLog((prev) => [...prev, { role: "warning", text: data.error ?? "Auto-fit failed." }]);
+        return;
+      }
+      if (data.fitsOnePage && data.actionsApplied.length === 0) {
+        setLog((prev) => [...prev, { role: "assistant", text: `Already fits on one page (${data.pages} page).` }]);
+        return;
+      }
+      setPendingAction({
+        type: "update_resume_document",
+        newContent: data.content,
+        reason: data.actionsApplied.join("; "),
+      });
+      setLog((prev) => [...prev, {
+        role: "assistant",
+        text: data.fitsOnePage
+          ? `Now fits on one page. Applied: ${data.actionsApplied.join(", ")}. Review the proposed draft and click Apply.`
+          : `Still ${data.pages} pages after formatting adjustments (${data.actionsApplied.join(", ") || "none possible"}) — getting to one page from here means shortening or removing content, which needs your decision, not an automatic one.`,
+      }]);
+    } finally {
+      setFitting(false);
+    }
   }
 
   async function createPacket() {
     if (!appResume) return;
-    const res = await fetch("/api/application-packets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        candidate_id: appResume.candidate_id,
-        application_resume_version_id: appResume.id,
-        target_job_id: appResume.target_job_id,
-      }),
-    });
-    if (res.ok) {
-      const packet = await res.json();
-      router.push(`/candidates/${appResume.candidate_id}/applications`);
-    } else {
-      setError("Failed to create packet");
+    setCreatingPacket(true);
+    try {
+      // application_packets is a 1:1 companion to an existing applications ticket.
+      // Create that ticket now if one doesn't already exist for this candidate+job
+      // (status "in_progress" — not a manager-assignment ticket, so any application
+      // worker can create it from here).
+      const targetJobRes = await fetch(`/api/target-jobs/${appResume.target_job_id}`);
+      const targetJobData = targetJobRes.ok ? await targetJobRes.json() : null;
+      const jobId = targetJobData?.job_id ?? targetJobData?.jobId;
+      if (!jobId) {
+        setError("This target job isn't linked to a job in the masterlist — add it via the jobs list first.");
+        return;
+      }
+
+      const createRes = await fetch("/api/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidate_id: appResume.candidate_id, job_id: jobId, status: "in_progress" }),
+      });
+      const createData = await createRes.json().catch(() => ({}));
+      let applicationId: string | undefined = Array.isArray(createData) ? createData[0]?.id : createData?.id;
+
+      if (!createRes.ok && createRes.status !== 409) {
+        setError(createData.error || "Failed to create application ticket for this packet.");
+        return;
+      }
+      if (!applicationId) {
+        setError(
+          createRes.status === 409
+            ? "An application for this job already exists for this candidate — open it from the candidate's Applications tab to attach this packet there."
+            : "Could not resolve an application ticket for this packet."
+        );
+        return;
+      }
+
+      const res = await fetch("/api/application-packets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          applicationId,
+          candidateId: appResume.candidate_id,
+          targetJobId: appResume.target_job_id,
+          baseResumeId: appResume.base_resume_id,
+          finalResumeVersionId: appResume.id,
+        }),
+      });
+      if (res.ok) {
+        router.push(`/candidates/${appResume.candidate_id}`);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to create packet.");
+      }
+    } finally {
+      setCreatingPacket(false);
     }
   }
 
@@ -396,6 +499,9 @@ export default function ApplicationResumeStudioPage() {
       setPendingAction(data.action);
     } else if (data.action?.type === "create_warning") {
       setLog((prev) => [...prev, { role: "warning", text: data.action.message }]);
+    }
+    if (isCommand && (commandOrMessage === "/suggest-edits" || commandOrMessage === "/inject-approved-keywords")) {
+      refreshSuggestions();
     }
   }
 
@@ -500,10 +606,10 @@ export default function ApplicationResumeStudioPage() {
           <button
             className="btn-primary"
             onClick={createPacket}
-            disabled={appResume.status !== "approved"}
+            disabled={appResume.status !== "approved" || creatingPacket}
             title={appResume.status !== "approved" ? "Status must be approved" : undefined}
           >
-            Create Packet
+            {creatingPacket ? "Creating…" : "Create Packet"}
           </button>
         </div>
       </div>
@@ -604,7 +710,15 @@ export default function ApplicationResumeStudioPage() {
               <button className="btn" onClick={submitForReview} disabled={appResume.status === "in_review" || appResume.status === "approved"}>
                 Submit for Review
               </button>
-              <button className="btn" onClick={exportPdf}>Export to PDF</button>
+              <button className="btn" onClick={runOnePageFit} disabled={fitting}>
+                {fitting ? "Fitting…" : "Fit to One Page"}
+              </button>
+              <button className="btn" onClick={exportPdf} disabled={exporting === "pdf"}>
+                {exporting === "pdf" ? "Exporting…" : "Export PDF"}
+              </button>
+              <button className="btn" onClick={exportDocx} disabled={exporting === "docx"}>
+                {exporting === "docx" ? "Exporting…" : "Export DOCX"}
+              </button>
             </div>
           </div>
 
@@ -1060,7 +1174,12 @@ export default function ApplicationResumeStudioPage() {
             <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
                 {QUICK_COMMANDS.map((c) => (
-                  <button key={c} className="btn btn-compact" onClick={() => sendCommand(c, true)} disabled={sending}>
+                  <button
+                    key={c}
+                    className="btn btn-compact"
+                    onClick={() => (c === "/one-page" ? runOnePageFit() : c === "/export" ? exportPdf() : sendCommand(c, true))}
+                    disabled={sending || fitting}
+                  >
                     {c}
                   </button>
                 ))}

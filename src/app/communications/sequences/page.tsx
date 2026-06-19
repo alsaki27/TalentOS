@@ -15,12 +15,12 @@ interface EmailSequence {
 }
 
 interface SequenceStep {
-  id: string;
+  id?: string;
   step_number: number;
   template_id: string;
   delay_hours: number;
-  send_time: string | null;
-  condition: string | null;
+  send_time?: string | null;
+  condition?: string | null;
   template?: { id: string; name: string; subject: string };
 }
 

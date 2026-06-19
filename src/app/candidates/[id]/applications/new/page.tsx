@@ -219,12 +219,13 @@ export default function NewApplicationPage() {
   /* ─────────── Step 4: load keywords + evidence ─────────── */
   useEffect(() => {
     if (!candidateId || !targetJob?.id || step !== 4) return;
+    const job = targetJob;
     let cancelled = false;
 
     async function load() {
       setKeywordsLoading(true);
       const [tjRes, kaRes, evRes] = await Promise.all([
-        fetch(`/api/target-jobs/${targetJob.id}`),
+        fetch(`/api/target-jobs/${job.id}`),
         fetch(`/api/keyword-approvals?candidateId=${candidateId}`),
         fetch(`/api/candidates/${candidateId}/evidence`),
       ]);
@@ -256,6 +257,7 @@ export default function NewApplicationPage() {
     if (step !== 5) return;
     if (creating || applicationResumeId || createError) return;
     if (!candidateId || !selectedBaseResumeId || !targetJob?.id) return;
+    const job = targetJob;
     let cancelled = false;
 
     async function create() {
@@ -267,7 +269,7 @@ export default function NewApplicationPage() {
         body: JSON.stringify({
           candidateId,
           baseResumeId: selectedBaseResumeId,
-          targetJobId: targetJob.id,
+          targetJobId: job.id,
         }),
       });
 
@@ -277,7 +279,7 @@ export default function NewApplicationPage() {
           setApplicationResumeId(data.id);
           const br = baseResumes.find((b) => b.id === selectedBaseResumeId);
           setBaseResumeName(br?.name ?? "");
-          setJobTitle(targetJob.jobTitle || targetJob.company || "Untitled");
+          setJobTitle(job.jobTitle || job.company || "Untitled");
           setStep(6);
         } else {
           setCreateError("Failed to create application resume.");

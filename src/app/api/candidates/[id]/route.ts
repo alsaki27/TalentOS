@@ -69,7 +69,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (context && data) {
     await logActivity({
       userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email,
+      actorName: context.profile.display_name || context.profile.email || undefined,
       type: "update",
       description: `Updated candidate ${data.name}`,
       entityType: "candidate",
@@ -109,7 +109,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (context) {
     await logActivity({
       userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email,
+      actorName: context.profile.display_name || context.profile.email || undefined,
       type: "delete",
       description: `Deleted candidate ${candidate?.name || params.id}`,
       entityType: "candidate",

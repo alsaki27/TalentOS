@@ -15,6 +15,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const closeNote = body.closeNote as string | undefined;
   const proofRequired = body.proofRequired as boolean | undefined;
 
+  const { data: existingApplication } = await supabase
+    .from("applications")
+    .select("proof_required")
+    .eq("id", params.id)
+    .single();
+  const requiresProof = proofRequired ?? existingApplication?.proof_required ?? false;
+
+  if (requiresProof) {
+    const { count } = await supabase
+      .from("application_proofs")
+      .select("id", { count: "exact", head: true })
+      .eq("application_id", params.id);
+    if (!count) {
+      return NextResponse.json(
+        { error: "Proof of submission is required before closing this ticket. Upload a screenshot first." },
+        { status: 400 },
+      );
+    }
+  }
+
   const updates: Record<string, unknown> = {
     status: "closed",
     completed_at: new Date().toISOString(),

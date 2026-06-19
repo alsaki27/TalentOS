@@ -51,11 +51,11 @@ export async function GET(req: NextRequest) {
   function buildStatsBase() {
     let q = supabase.from("applications").select("id", { count: "exact", head: true })
       .not("follow_up_at", "is", null);
-    if (context.profile.role === "application_engineer") {
+    if (context!.profile.role === "application_engineer") {
       const ownerFilters = [
-        `assigned_to_user_id.eq.${context.profile.user_id}`,
-        context.profile.email ? `assigned_to.eq.${context.profile.email}` : "",
-        context.profile.display_name ? `assigned_to.eq.${context.profile.display_name}` : "",
+        `assigned_to_user_id.eq.${context!.profile.user_id}`,
+        context!.profile.email ? `assigned_to.eq.${context!.profile.email}` : "",
+        context!.profile.display_name ? `assigned_to.eq.${context!.profile.display_name}` : "",
       ].filter(Boolean).join(",");
       q = q.or(ownerFilters);
     }
