@@ -1,14 +1,18 @@
 // src/app/api/jobs/from-jd/route.ts
 // POST -> parse a raw job description, detect duplicates, and optionally create a draft job.
+// Uses the jobsRepository abstraction instead of direct Supabase queries.
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { analyzeJD, JdAnalysisInput } from "@/lib/ai/falood/jdAnalyzer";
-import { findPotentialDuplicateJobs } from "@/lib/jobDedup";
+import {
+  findJobById,
+  createJobFromParsedJD,
+  findPotentialDuplicateJobs,
+} from "@/server/repositories/jobsRepository";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
 
 function buildSalaryRange(
   min: number | null,
@@ -61,12 +65,8 @@ export async function POST(req: NextRequest) {
 
   // --- A. useExistingJobId shortcut ---
   if (useExistingJobId) {
-    const { data: existingJob, error: existingErr } = await supabase
-      .from("jobs")
-      .select("*")
-      .eq("id", useExistingJobId)
-      .single();
-    if (existingErr || !existingJob) {
+    const existingJob = await findJobById(useExistingJobId);
+    if (!existingJob) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });
     }
     return NextResponse.json({
@@ -152,65 +152,59 @@ export async function POST(req: NextRequest) {
     analysis.salaryPeriod
   );
 
-  const insertRow: Record<string, unknown> = {
-    title: safeInsertValue(analysis.title),
-    company: safeInsertValue(analysis.company),
-    location: safeInsertValue(analysis.location),
-    source: "pasted_jd",
-    source_url: safeInsertValue(sourceUrl) ?? null,
-    raw_description: rawText,
-    parsed_description: analysis,
-    ai_extracted_at: new Date().toISOString(),
-    ai_confidence_score: analysis.confidenceScore,
-    employment_type: safeInsertValue(employmentTypeMap[analysis.employmentType] ?? analysis.employmentType) || null,
-    seniority_level: safeInsertValue(analysis.seniorityLevel),
-    salary_min: safeInsertValue(analysis.salaryMin),
-    salary_max: safeInsertValue(analysis.salaryMax),
-    salary_currency: safeInsertValue(analysis.salaryCurrency),
-    salary_period: safeInsertValue(analysis.salaryPeriod === "unknown" ? null : analysis.salaryPeriod),
-    salary_range: safeInsertValue(salaryRange),
-    notes: safeInsertValue(
-      `AI-extracted from pasted JD. Confidence: ${Math.round(analysis.confidenceScore * 100)}%. Workplace: ${analysis.workplaceType}. Employment: ${analysis.employmentType}.`
-    ),
-    is_active: true,
-  };
-
-  // --- G. Insert job ---
-  const { data: job, error: insertError } = await supabase
-    .from("jobs")
-    .insert(insertRow)
-    .select()
-    .single();
-
-  if (insertError) {
-    return NextResponse.json({ error: insertError.message }, { status: 500 });
-  }
-
-  await syncCompanyDirectoryFromJobs([job]);
-
-  if (context) {
-    await logActivity({
-      userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email || undefined,
-      type: "create",
-      description: `Created job from pasted JD: ${job.title}`,
-      entityType: "job",
-      entityId: job.id,
-      entityName: job.title,
-      metadata: { company: job.company, source: "pasted_jd", ai_confidence: analysis.confidenceScore },
-    });
-    void triggerWebhooks("job.created", {
-      job_id: job.id,
-      title: job.title,
-      company: job.company,
+  // --- G. Insert job via repository ---
+  try {
+    const job = await createJobFromParsedJD({
+      title: safeInsertValue(analysis.title),
+      company: safeInsertValue(analysis.company),
+      location: safeInsertValue(analysis.location),
       source: "pasted_jd",
-      created_by: context.profile.user_id,
+      source_url: safeInsertValue(sourceUrl) ?? null,
+      raw_description: rawText,
+      parsed_description: analysis,
+      ai_extracted_at: new Date().toISOString(),
+      ai_confidence_score: analysis.confidenceScore,
+      employment_type: safeInsertValue(employmentTypeMap[analysis.employmentType] ?? analysis.employmentType) || null,
+      seniority_level: safeInsertValue(analysis.seniorityLevel),
+      salary_min: safeInsertValue(analysis.salaryMin),
+      salary_max: safeInsertValue(analysis.salaryMax),
+      salary_currency: safeInsertValue(analysis.salaryCurrency),
+      salary_period: safeInsertValue(analysis.salaryPeriod === "unknown" ? null : analysis.salaryPeriod),
+      salary_range: safeInsertValue(salaryRange),
+      notes: safeInsertValue(
+        `AI-extracted from pasted JD. Confidence: ${Math.round(analysis.confidenceScore * 100)}%. Workplace: ${analysis.workplaceType}. Employment: ${analysis.employmentType}.`
+      ),
+      is_active: true,
     });
-  }
 
-  return NextResponse.json({
-    job,
-    analysis,
-    duplicateCheck: { duplicates: duplicates.map((d) => d.id), forceCreated: true },
-  }, { status: 201 });
+    await syncCompanyDirectoryFromJobs([job]);
+
+    if (context) {
+      await logActivity({
+        userId: context.profile.user_id,
+        actorName: context.profile.display_name || context.profile.email || undefined,
+        type: "create",
+        description: `Created job from pasted JD: ${job.title}`,
+        entityType: "job",
+        entityId: job.id,
+        entityName: job.title,
+        metadata: { company: job.company, source: "pasted_jd", ai_confidence: analysis.confidenceScore },
+      });
+      void triggerWebhooks("job.created", {
+        job_id: job.id,
+        title: job.title,
+        company: job.company,
+        source: "pasted_jd",
+        created_by: context.profile.user_id,
+      });
+    }
+
+    return NextResponse.json({
+      job,
+      analysis,
+      duplicateCheck: { duplicates: duplicates.map((d) => d.id), forceCreated: true },
+    }, { status: 201 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
 }

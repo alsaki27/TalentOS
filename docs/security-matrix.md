@@ -53,6 +53,9 @@ policies; browser code does not query Supabase directly.
 | `/api/ops/restore` | `POST` | `admin` + `RESTORE TALENTOS BACKUP` confirmation | Backup restore upserts rows and logs `backup.restored`. |
 | `/api/ops/digests` | `GET`, `POST` | `admin` | Digest history/manual generation is admin-only. |
 | `/api/ops/categorize` | `GET`, `POST` | `admin` | Categorization review/requeue/process actions are admin-only. |
+| `/api/admin/ai-keys` | `GET`, `POST` | `admin` | AI API key management: list metadata, add new encrypted key. Returns 503 if `AI_KEYS_ENCRYPTION_SECRET` is not set. |
+| `/api/admin/ai-keys/[id]` | `PATCH`, `DELETE` | `admin` | Update label/priority/enable/replace key, or soft-disable a key. |
+| `/api/admin/ai-keys/[id]/test` | `POST` | `admin` | Test a single AI key by sending a tiny request. Updates status, last_tested_at, success/failure counts. |
 | `/api/import/*` | `POST` | `MASTER_DATA_MANAGER_ROLES` | CSV/ATS/LinkedIn/career-page/normalizer imports are manager/recruiter/admin gated. |
 | `/api/import-sources*` | `GET`, `POST`, `PATCH`, `DELETE`, run actions | `MASTER_DATA_MANAGER_ROLES` | Saved import source management/run actions are manager/recruiter/admin gated. |
 | `/api/integrations/gmail/start` | `GET` | authenticated staff; shared mailbox requires `DESTRUCTIVE_MANAGER_ROLES` | Staff Gmail linking is authenticated; shared mailbox linking is admin/manager. |

@@ -259,6 +259,11 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      unless `forceCreate: true`. On success, inserts a `pasted_jd` source job with all
      AI-extracted fields mapped, triggers webhooks, and logs activity. Gated to
      `MASTER_DATA_MANAGER_ROLES`.
+   - Chunk 3.5 (Portability guardrails + Admin AI key manager): Data-access abstractions
+     (`src/server/repositories/`) prevent new feature routes from adding direct Supabase
+     lock-in. Admin-only `/api/admin/ai-keys` CRUD + test routes. Keys encrypted with
+     AES-256-GCM, fingerprinted, never returned to browser. `getActiveProviderAsync()` supports
+     DB-managed keys as fallback. Migration readiness doc: `docs/migration-neon-cloudflare.md`.
    - Next chunks: quick-application modal with "Paste JD" option (Chunk 4), resume source
      selector (Chunk 5), AI suggestion generation (Chunk 6), PDF export (Chunk 7). See
      `plan-application-workflow-redesign.md`.

@@ -137,6 +137,18 @@ complete env var reference table and a list of what's configured vs. what isn't.
   `parsed_description`, and maps all AI-extracted fields (salary, employment type, seniority,
   etc.) into their respective columns. Triggers `job.created` webhooks and logs activity.
   Gated to `MASTER_DATA_MANAGER_ROLES` (admin, manager, recruiter).
+- **Portability Guardrails + Admin AI API Key Manager (Chunk 3.5)** —
+  - Data-access abstractions: `src/server/repositories/jobsRepository.ts` and `aiKeyRepository.ts`.
+    New feature routes must call these instead of direct `supabase.from()` queries.
+  - Admin AI key manager: `POST /api/admin/ai-keys`, `PATCH /api/admin/ai-keys/[id]`,
+    `DELETE /api/admin/ai-keys/[id]`, `POST /api/admin/ai-keys/[id]/test`. Admin-only.
+    Keys are encrypted with `AI_KEYS_ENCRYPTION_SECRET` (AES-256-GCM), never returned to the
+    browser, and show only a fingerprint (first 6 + last 4 chars). Supports priority ordering,
+    health testing, and soft-disable.
+  - AI fallback: `getActiveProviderAsync()` tries env-based keys first, then falls back to
+    DB-managed keys by priority. Tracks usage_count and failure_count per key.
+  - Migration readiness: `docs/migration-neon-cloudflare.md` documents the path from
+    Vercel+Supabase to Neon+Cloudflare Workers.
 - **Resume tailoring workflow** - admins/managers/recruiters can open "Tailor resume for
   job" from a candidate or job page, choose a base resume and target job, generate a
   markdown draft through the configured AI provider, edit it, save it as an

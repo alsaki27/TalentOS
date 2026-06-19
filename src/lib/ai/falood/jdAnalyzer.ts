@@ -2,7 +2,7 @@
 // Parse-only job description analyzer. Extracts structured data from raw JD text
 // via the configured AI provider. Does not write to the database — the caller handles persistence.
 
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 export interface JdAnalysisInput {
@@ -192,7 +192,7 @@ function validateAndSanitize(parsed: any): JdAnalysisOutput {
 }
 
 export async function analyzeJD(input: JdAnalysisInput): Promise<JdAnalysisOutput> {
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
     throw new Error("No AI provider configured");
   }

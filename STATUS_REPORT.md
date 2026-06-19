@@ -57,13 +57,40 @@ Files added/modified:
 - `src/app/api/jobs/from-jd/route.ts` — full workflow endpoint with mapping, dedup, and webhook triggers.
 - `src/lib/jobDedup.ts` — extended with `findPotentialDuplicateJobs()` for the new duplicate detection flow.
 
-Typecheck: clean (`npx tsc --noEmit`). Build: fails on pre-existing missing Supabase env vars only.
+**Chunk 3.5: Portability guardrails + Admin AI API key manager**
+
+New data-access abstractions prevent future feature chunks from deepening Supabase lock-in:
+- `src/server/repositories/jobsRepository.ts` — `findJobById`, `createJobFromParsedJD`, `findPotentialDuplicateJobs`, `listJobsForDedupe`. The `from-jd` route now uses this instead of direct `supabase.from("jobs")` calls.
+- `src/server/repositories/aiKeyRepository.ts` — `listAiKeys`, `listEnabledAiKeys`, `createAiKey`, `updateAiKey`, `disableAiKey`, `recordAiKeySuccess`, `recordAiKeyFailure`.
+- `src/server/security/secretCrypto.ts` — AES-256-GCM encryption for API keys. Uses Node crypto today; documented for Cloudflare Web Crypto migration.
+- `src/server/services/aiProvider.ts` — `buildProviderFromDbKey`, `testAiKey`, `getEnabledAiKeys`, `getActiveProviderWithFallback`.
+
+Admin AI API key manager (admin-only):
+- `GET /api/admin/ai-keys` — list all keys (metadata only, never decrypted).
+- `POST /api/admin/ai-keys` — add a new key. Encrypts with `AI_KEYS_ENCRYPTION_SECRET`. Returns 503 if encryption secret is missing.
+- `PATCH /api/admin/ai-keys/[id]` — update label, priority, is_enabled, or replace key.
+- `DELETE /api/admin/ai-keys/[id]` — soft-disable (sets `is_enabled=false`, `status='disabled'`).
+- `POST /api/admin/ai-keys/[id]/test` — sends a tiny test request, updates health status.
+- Admin UI panel on `/ops` — full CRUD table with status badges, test buttons, inline editing, add form with password input.
+
+AI fallback integration:
+- `getActiveProviderAsync()` in `src/lib/ai/index.ts` — tries env-based keys first, then falls back to DB-managed keys by priority.
+- `analyzeJD()` now uses `getActiveProviderAsync()` for DB fallback support.
+- Env-based keys remain primary; DB keys are additional backups.
+- Provider adapters implemented for `anthropic` and `nvidia`. Others (openai, google, groq, etc.) return "Provider adapter not implemented" cleanly.
+
+Migration readiness:
+- `docs/migration-neon-cloudflare.md` — documents current state, target architecture, abstraction rules, Cloudflare compatibility notes, Neon notes, and recommended migration sequence.
+- New env var: `AI_KEYS_ENCRYPTION_SECRET` (required for admin key manager).
+
+Typecheck: clean. Build: fails on pre-existing missing Supabase env vars only.
 
 **Not yet implemented (Chunk 4+):**
 - Quick-application modal with "Paste JD" as primary option.
 - Resume source selector (Base / Original / Blank) in the studio.
 - AI suggestion generation for application resume tailoring.
 - Real PDF export.
+- Full DB-backed AI provider fallback in chat/digest routes (infrastructure ready, integration pending).
 
 See `plan-application-workflow-redesign.md` for the full phased plan.
 
