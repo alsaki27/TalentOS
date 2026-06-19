@@ -15,6 +15,10 @@
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import {
+  findResumeVersionById,
+  updateApplicationResumeVersion,
+} from "@/server/repositories/applicationResumeVersionsRepository";
+import {
   listApplicationKeywords,
   ApplicationKeywordRow,
 } from "@/server/repositories/applicationKeywordsRepository";
@@ -465,9 +469,9 @@ export async function rejectSuggestion(
 
 // ───────────────────────────────────────────────────────────────
 // Apply an accepted suggestion to a resume version
+// Uses repository for data access, not direct supabase calls.
+// Safe when used on a DRAFT version only.
 // ───────────────────────────────────────────────────────────────
-
-import { supabase } from "@/lib/supabase";
 
 export async function applySuggestionToResume(
   suggestionId: string,
@@ -478,28 +482,18 @@ export async function applySuggestionToResume(
   if (!suggestion) return { ok: false, error: "Suggestion not found" };
   if (suggestion.status !== "accepted") return { ok: false, error: "Suggestion must be accepted first" };
 
-  // Load current resume content
-  const { data: appResume, error: loadError } = await supabase
-    .from("application_resume_versions")
-    .select("content")
-    .eq("id", resumeVersionId)
-    .single();
+  // Load current resume content via repository
+  const appResume = await findResumeVersionById(resumeVersionId);
+  if (!appResume) return { ok: false, error: "Resume version not found" };
 
-  if (loadError || !appResume) return { ok: false, error: "Resume version not found" };
-
-  const content = appResume.content as Record<string, unknown>;
+  const content = structuredClone(appResume.content);
 
   // Apply the change based on target_section and proposed_text
   const applied = applyChangeToContent(content, suggestion);
   if (!applied) return { ok: false, error: "Could not apply suggestion to resume content" };
 
-  // Save updated content
-  const { error: saveError } = await supabase
-    .from("application_resume_versions")
-    .update({ content, updated_at: new Date().toISOString() })
-    .eq("id", resumeVersionId);
-
-  if (saveError) return { ok: false, error: saveError.message };
+  // Save updated content via repository
+  await updateApplicationResumeVersion(resumeVersionId, { content });
 
   // Mark suggestion as applied
   const { updateSuggestion } = await import("@/server/repositories/applicationResumeSuggestionsRepository");

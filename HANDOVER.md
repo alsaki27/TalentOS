@@ -280,3 +280,16 @@ Read **[STATUS_REPORT.md](./STATUS_REPORT.md)** for the prioritized punch list. 
 ROADMAP.md's "Next up" and "Explicitly deferred" sections before re-deciding something
 already deliberately scoped out Ã¢â‚¬â€ the reasoning for each deferral is written down, not
 just the decision.
+
+
+## Chunk 8 (2026-06-20): Resume Draft Builder + Versioning from Accepted Suggestions
+
+- `applicationResumeVersionsRepository.ts` — full data-access abstraction for `application_resume_versions` (find, list, create, update, clone, getCurrentDraft, markAsDraft, markAsFinal, attach to packet via `createOrUpdatePacket`).
+- `resumeDraftBuilderService.ts` — `buildResumeDraftFromAcceptedSuggestions()`: loads source content by `source_type` (base_resume / original_resume / blank / manual), applies only accepted suggestions with `truth_status !== fabrication_risk`, skips truth warnings / missing evidence / format improvements, creates a new draft `application_resume_versions` row or updates an existing draft. Never overwrites original or base resume content.
+- `applySuggestionToResume` in `resumeSuggestionService.ts` refactored to use repository functions instead of direct `supabase.from()` calls.
+- API routes: `GET /api/applications/[id]/resume-drafts`, `POST /api/applications/[id]/resume-drafts/build`, `PATCH /api/applications/[id]/resume-drafts/[versionId]`, `POST /api/applications/[id]/resume-drafts/[versionId]/attach`, and studio convenience routes via `application-resume-versions/[id]/resume-drafts`.
+- Studio UI: Draft tab with Build New Draft / Update Current Draft buttons, accepted/pending suggestion count, fabrication-risk warnings, draft list with status badges, draft preview panel, warnings display, and Attach to Packet button.
+- Activity logging on all draft operations (build, save, attach, suggestion application).
+- Build: clean. No new direct `supabase.from()` calls in new routes or client code.
+
+Still deferred: PDF/DOCX export, cover letter generation, final packet generation, recruiter message generation.

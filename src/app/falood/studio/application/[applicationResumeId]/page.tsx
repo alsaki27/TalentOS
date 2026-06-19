@@ -84,6 +84,19 @@ interface ResumeSuggestion {
   updated_at: string;
 }
 
+interface ResumeDraft {
+  id: string;
+  candidate_id: string;
+  base_resume_id: string | null;
+  target_job_id: string;
+  title: string | null;
+  version_label: string | null;
+  status: string;
+  source_type: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface Candidate {
   id: string;
   name: string;
@@ -148,6 +161,10 @@ export default function ApplicationResumeStudioPage() {
   const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
   const [keywordApprovals, setKeywordApprovals] = useState<KeywordApproval[]>([]);
   const [suggestions, setSuggestions] = useState<ResumeSuggestion[]>([]);
+  const [drafts, setDrafts] = useState<ResumeDraft[]>([]);
+  const [buildingDraft, setBuildingDraft] = useState(false);
+  const [draftPreview, setDraftPreview] = useState<ResumeDraft | null>(null);
+  const [draftBuildResult, setDraftBuildResult] = useState<{ applied: number; skipped: number; warnings: string[] } | null>(null);
   const [generatingSuggestions, setGeneratingSuggestions] = useState(false);
 
   /* UI state */
@@ -165,7 +182,7 @@ export default function ApplicationResumeStudioPage() {
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
   /* right pane tabs */
-  const [rightTab, setRightTab] = useState<"suggestions" | "chat">("suggestions");
+  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "chat">("suggestions");
 
   /* Falood CLI */
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
@@ -203,6 +220,12 @@ export default function ApplicationResumeStudioPage() {
       if (sugRes.ok) {
         const sugData = await sugRes.json();
         setSuggestions(sugData.suggestions ?? []);
+      }
+      // Load drafts
+      const draftRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+      if (draftRes.ok) {
+        const draftData = await draftRes.json();
+        setDrafts(draftData.drafts ?? []);
       }
     } catch (e: any) {
       setError(e.message || "Load failed");
@@ -503,6 +526,97 @@ export default function ApplicationResumeStudioPage() {
         setAppResume(ar);
         setDraftContent(JSON.parse(JSON.stringify(ar.content)));
       }
+    }
+  }
+
+  /* ──────────── draft builder ──────────── */
+
+  async function refreshDrafts() {
+    if (!applicationResumeId) return;
+    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+    if (res.ok) {
+      const data = await res.json();
+      setDrafts(data.drafts ?? []);
+    }
+  }
+
+  async function buildDraft(mode: "new_draft" | "update_existing_draft") {
+    if (!applicationResumeId) return;
+    setBuildingDraft(true);
+    setDraftBuildResult(null);
+    setDraftPreview(null);
+    setError("");
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDrafts((prev) => [data.resumeVersion, ...prev]);
+        setDraftPreview(data.resumeVersion);
+        setDraftBuildResult({
+          applied: data.appliedSuggestions?.length ?? 0,
+          skipped: data.skippedSuggestions?.length ?? 0,
+          warnings: data.warnings ?? [],
+        });
+        setRightTab("draft");
+        // Refresh suggestions to show updated applied status
+        const sugRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`);
+        if (sugRes.ok) {
+          const sugData = await sugRes.json();
+          setSuggestions(sugData.suggestions ?? []);
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || "Failed to build draft");
+      }
+    } catch (e: any) {
+      setError(e.message || "Failed to build draft");
+    } finally {
+      setBuildingDraft(false);
+    }
+  }
+
+  async function saveDraftVersion(resumeVersionId: string, newContent: ResumeDocument) {
+    const res = await fetch(`/api/application-resume-versions/${resumeVersionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: newContent }),
+    });
+    if (!res.ok) {
+      setError("Failed to save draft");
+      return false;
+    }
+    setSaveStatus("saved");
+    setTimeout(() => setSaveStatus(""), 2000);
+    await refreshDrafts();
+    return true;
+  }
+
+  async function attachDraftToPacket(resumeVersionId: string) {
+    const applicationId = appResume?.id ?? null; // appResume is the version row, not the application
+    // We need to find the application ID from the resume version
+    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`, {
+      method: "GET",
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    const appId = data.applicationId;
+    if (!appId) {
+      setError("No application linked to this resume version");
+      return;
+    }
+    const attachRes = await fetch(`/api/applications/${appId}/resume-drafts/${resumeVersionId}/attach`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    if (attachRes.ok) {
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(""), 2000);
+    } else {
+      setError("Failed to attach draft to application packet");
     }
   }
 
@@ -1145,6 +1259,9 @@ export default function ApplicationResumeStudioPage() {
             <button className={rightTab === "suggestions" ? "btn-primary" : "btn"} onClick={() => setRightTab("suggestions")} style={{ flex: 1 }}>
               Suggestions
             </button>
+            <button className={rightTab === "draft" ? "btn-primary" : "btn"} onClick={() => setRightTab("draft")} style={{ flex: 1 }}>
+              Draft
+            </button>
             <button className={rightTab === "chat" ? "btn-primary" : "btn"} onClick={() => setRightTab("chat")} style={{ flex: 1 }}>
               Chat
             </button>
@@ -1278,6 +1395,111 @@ export default function ApplicationResumeStudioPage() {
                     </div>
                   </div>
                 ))
+              )}
+            </div>
+          ) : rightTab === "draft" ? (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              {/* Draft info */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                  <span className="badge" style={{ fontSize: 10, textTransform: "capitalize" }}>
+                    Source: {appResume?.source_type ?? "base_resume"}
+                  </span>
+                  <span className="badge" style={{ fontSize: 10 }}>
+                    {drafts.filter((d) => d.status === "draft").length} draft(s)
+                  </span>
+                  <span className="badge" style={{ fontSize: 10, background: "#f0fdf4", color: "#15803d" }}>
+                    {suggestions.filter((s) => s.status === "accepted").length} accepted
+                  </span>
+                </div>
+
+                {suggestions.filter((s) => s.status === "accepted" && s.truth_status === "fabrication_risk").length > 0 && (
+                  <div style={{ padding: 8, border: "1px solid var(--danger)", borderRadius: 6, background: "#fef2f2", marginBottom: 8 }}>
+                    <p style={{ fontSize: 12, color: "var(--danger)", margin: 0 }}>
+                      ⚠ {suggestions.filter((s) => s.status === "accepted" && s.truth_status === "fabrication_risk").length} accepted suggestion(s) have fabrication risk. Review before building.
+                    </p>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                  <button
+                    className="btn-primary btn-compact"
+                    onClick={() => buildDraft("new_draft")}
+                    disabled={buildingDraft}
+                    style={{ flex: 1, minWidth: 120 }}
+                  >
+                    {buildingDraft ? "Building…" : "Build New Draft"}
+                  </button>
+                  <button className="btn btn-compact" onClick={() => buildDraft("update_existing_draft")} disabled={buildingDraft}>
+                    Update Current Draft
+                  </button>
+                </div>
+
+                {draftBuildResult && (
+                  <div style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 6, background: "var(--accent-soft)", marginBottom: 10 }}>
+                    <p style={{ fontSize: 12, margin: "0 0 4px" }}>
+                      <strong>Draft built:</strong> {draftBuildResult.applied} applied, {draftBuildResult.skipped} skipped
+                    </p>
+                    {draftBuildResult.warnings.length > 0 && (
+                      <div>
+                        <p style={{ fontSize: 11, margin: "4px 0 0", color: "var(--danger)" }}>Warnings:</p>
+                        {draftBuildResult.warnings.map((w, i) => (
+                          <p key={i} style={{ fontSize: 11, margin: "2px 0", color: "var(--danger)" }}>• {w}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Draft list */}
+              {drafts.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Existing Drafts</p>
+                  {drafts.map((d) => (
+                    <div
+                      key={d.id}
+                      style={{
+                        padding: 8,
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        marginBottom: 6,
+                        fontSize: 12,
+                        cursor: "pointer",
+                        background: draftPreview?.id === d.id ? "var(--accent-soft)" : "transparent",
+                      }}
+                      onClick={() => setDraftPreview(d.id === draftPreview?.id ? null : d)}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 600 }}>{d.title ?? "Untitled Draft"}</span>
+                        <span className="badge" style={{ fontSize: 10 }}>{d.status}</span>
+                      </div>
+                      <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        {d.version_label ?? "draft"} — {new Date(d.updated_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Draft preview / editor */}
+              {draftPreview && (
+                <div style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                  <p style={{ fontSize: 12, fontWeight: 600, margin: "0 0 8px" }}>
+                    Draft Preview: {draftPreview.title ?? "Untitled"}
+                  </p>
+                  <p style={{ fontSize: 11, margin: "0 0 8px", color: "var(--ink-soft)" }}>
+                    Diff review will come in the export/finalization chunk.
+                  </p>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                    <button
+                      className="btn-primary btn-compact"
+                      onClick={() => attachDraftToPacket(draftPreview.id)}
+                    >
+                      Attach to Packet
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           ) : (

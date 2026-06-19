@@ -301,6 +301,19 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      `application-resume-versions/[id]/resume-suggestions`. Studio UI: Generate Suggestions button,
      truth-status badges (✓ Verified / ⚠ Fabrication Risk / ? Unverified), suggestion-type color coding,
      Accept & Apply / Accept Only / Reject actions. Warnings are display-only (no apply button).
+   - Chunk 8 (Resume Draft Builder + Versioning from Accepted Suggestions): `applicationResumeVersionsRepository.ts`
+     (find, list, create, update, clone, attach, getCurrentDraft, markAsDraft, markAsFinal, createOrUpdatePacket).
+     `resumeDraftBuilderService.ts` (buildResumeDraftFromAcceptedSuggestions): loads source content by
+     `source_type` (base_resume, original_resume, blank, manual), applies only accepted suggestions with
+     truth_status !== fabrication_risk, skips truth warnings/missing evidence/format improvements, creates
+     a new draft `application_resume_versions` row or updates an existing draft. Never overwrites original
+     or base resume. `applySuggestionToResume` in `resumeSuggestionService.ts` refactored to use repository
+     functions instead of direct `supabase.from()` calls. API routes: `GET /api/applications/[id]/resume-drafts`,
+     `POST /api/applications/[id]/resume-drafts/build`, `PATCH /api/applications/[id]/resume-drafts/[versionId]`,
+     `POST /api/applications/[id]/resume-drafts/[versionId]/attach`, and studio convenience routes via
+     `application-resume-versions/[id]/resume-drafts`. Studio UI: Draft tab with Build New Draft / Update Current
+     Draft buttons, draft list with status badges, draft preview panel, warnings display, Attach to Packet button.
+     Activity logging on draft build, draft save, draft attach, and suggestion application.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 
