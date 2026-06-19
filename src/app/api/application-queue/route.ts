@@ -37,6 +37,9 @@ export async function GET(req: NextRequest) {
     next_action,
     notes,
     applied_at,
+    proof_url,
+    proof_filename,
+    proof_uploaded_at,
     candidates(id, name, email, phone, resume_url, resume_filename),
     jobs(id, title, company, location, source_url, job_category, category_relevance_score)
   `;
@@ -80,7 +83,6 @@ export async function GET(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Compute cross-page stats
   const userId = context!.profile.user_id;
   const userEmail = context!.profile.email ?? null;
   const userDisplayName = context!.profile.display_name ?? null;

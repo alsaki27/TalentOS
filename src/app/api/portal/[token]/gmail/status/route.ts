@@ -4,12 +4,18 @@ import { supabase } from "@/lib/supabase";
 export async function GET(_req: Request, { params }: { params: { token: string } }) {
   const { data: candidate, error: candidateError } = await supabase
     .from("candidates")
-    .select("id")
+    .select("id, portal_token_expires_at, portal_token_revoked_at")
     .eq("portal_token", params.token)
     .single();
 
   if (candidateError || !candidate) {
     return NextResponse.json({ error: "Portal link not found." }, { status: 404 });
+  }
+  if (
+    candidate.portal_token_revoked_at
+    || (candidate.portal_token_expires_at && new Date(candidate.portal_token_expires_at).getTime() < Date.now())
+  ) {
+    return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
   }
 
   const { data, error } = await supabase

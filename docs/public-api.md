@@ -50,6 +50,7 @@ Core data:
 - `jobs:shortlist`
 - `applications:read`
 - `applications:write`
+- `applications:delete`
 - `applications:assign`
 - `applications:status`
 - `applications:comment`

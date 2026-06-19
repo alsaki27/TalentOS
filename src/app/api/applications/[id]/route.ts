@@ -22,6 +22,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "assigned_by_user_id", "assigned_to_user_id",
     "assignment_note", "assignment_due_at", "completed_at",
     "priority", "review_status", "review_note", "reviewed_by_user_id", "reviewed_at",
+    "proof_url", "proof_filename", "proof_uploaded_at", "proof_uploaded_by_user_id",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
@@ -52,6 +53,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (updates.review_status === "approved" || updates.review_status === "changes_requested") {
     updates.reviewed_by_user_id = currentUser.profile.user_id;
     updates.reviewed_at = new Date().toISOString();
+  }
+
+  if ("proof_url" in updates) {
+    updates.proof_uploaded_at = updates.proof_url ? new Date().toISOString() : null;
+    updates.proof_uploaded_by_user_id = updates.proof_url ? currentUser.profile.user_id : null;
   }
 
   let previousStatus: string | null = null;
