@@ -314,6 +314,18 @@ oversight — the reasoning is included so future work doesn't undo it by accide
      `application-resume-versions/[id]/resume-drafts`. Studio UI: Draft tab with Build New Draft / Update Current
      Draft buttons, draft list with status badges, draft preview panel, warnings display, Attach to Packet button.
      Activity logging on draft build, draft save, draft attach, and suggestion application.
+   - Chunk 9 (DOCX/PDF Export + Final Resume Packet Formatting): `application_resume_exports` table
+     (migration with CHECK constraints on export_type and status). `applicationResumeExportsRepository.ts`
+     (create, find, list, markFailed, soft-delete). `resumeExportService.ts` wraps existing `renderResumeDocx`
+     and `renderResumePdf` with export history tracking, safety checks (empty resume, fabrication-risk suggestions),
+     ATS-friendly formatting (removes buzzwords), and professional file naming. `exportResumeAsDocx`,
+     `exportResumeAsPdf`, `exportResumeAsMarkdown` all create export history records before generation and
+     update with file size on success. API routes: `GET /api/applications/[id]/resume-exports`,
+     `POST /api/applications/[id]/resume-exports` (generates file + returns download), `GET /api/applications/[id]/resume-exports/[exportId]/download`
+     (regenerates on demand), and studio convenience route `POST /api/application-resume-versions/[id]/export`.
+     Studio UI: Export tab with DOCX/PDF/Markdown buttons, ATS-friendly/include projects/include summary options,
+     export history list with download buttons and failed status display. Activity logging on all export operations.
+     Cloudflare note: `docx` and `@react-pdf/renderer` are Node-only libraries; adapter review needed during migration.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

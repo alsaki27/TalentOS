@@ -97,6 +97,21 @@ interface ResumeDraft {
   updated_at: string;
 }
 
+interface ResumeExport {
+  id: string;
+  application_id: string;
+  resume_version_id: string;
+  export_type: "docx" | "pdf" | "markdown" | "text";
+  file_name: string;
+  file_path: string | null;
+  storage_provider: string | null;
+  file_size_bytes: number | null;
+  status: "created" | "failed" | "deleted";
+  error: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
 interface Candidate {
   id: string;
   name: string;
@@ -166,6 +181,9 @@ export default function ApplicationResumeStudioPage() {
   const [draftPreview, setDraftPreview] = useState<ResumeDraft | null>(null);
   const [draftBuildResult, setDraftBuildResult] = useState<{ applied: number; skipped: number; warnings: string[] } | null>(null);
   const [generatingSuggestions, setGeneratingSuggestions] = useState(false);
+  const [exports, setExports] = useState<ResumeExport[]>([]);
+  const [exportingResume, setExportingResume] = useState(false);
+  const [exportOptions, setExportOptions] = useState({ atsFriendly: true, onePage: false, includeProjects: true, includeSummary: true });
 
   /* UI state */
   const [loading, setLoading] = useState(true);
@@ -182,7 +200,7 @@ export default function ApplicationResumeStudioPage() {
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
   /* right pane tabs */
-  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "chat">("suggestions");
+  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat">("suggestions");
 
   /* Falood CLI */
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
@@ -226,6 +244,19 @@ export default function ApplicationResumeStudioPage() {
       if (draftRes.ok) {
         const draftData = await draftRes.json();
         setDrafts(draftData.drafts ?? []);
+      }
+      // Load exports
+      const exportRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+      if (exportRes.ok) {
+        const exportData = await exportRes.json();
+        const appId = exportData.applicationId;
+        if (appId) {
+          const historyRes = await fetch(`/api/applications/${appId}/resume-exports`);
+          if (historyRes.ok) {
+            const historyData = await historyRes.json();
+            setExports(historyData.exports ?? []);
+          }
+        }
       }
     } catch (e: any) {
       setError(e.message || "Load failed");
@@ -617,6 +648,75 @@ export default function ApplicationResumeStudioPage() {
       setTimeout(() => setSaveStatus(""), 2000);
     } else {
       setError("Failed to attach draft to application packet");
+    }
+  }
+
+  /* ──────────── export handlers ──────────── */
+
+  async function exportResume(exportType: "docx" | "pdf" | "markdown") {
+    if (!applicationResumeId) return;
+    setExportingResume(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          export_type: exportType,
+          options: exportOptions,
+        }),
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const fileName = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? `resume.${exportType}`;
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+        // Refresh export history
+        const draftRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+        if (draftRes.ok) {
+          const draftData = await draftRes.json();
+          const appId = draftData.applicationId;
+          if (appId) {
+            const historyRes = await fetch(`/api/applications/${appId}/resume-exports`);
+            if (historyRes.ok) {
+              const historyData = await historyRes.json();
+              setExports(historyData.exports ?? []);
+            }
+          }
+        }
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error || `Failed to export ${exportType.toUpperCase()}`);
+      }
+    } catch (e: any) {
+      setError(e.message || `Failed to export ${exportType.toUpperCase()}`);
+    } finally {
+      setExportingResume(false);
+    }
+  }
+
+  async function downloadExportById(exportId: string) {
+    const draftRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+    if (!draftRes.ok) return;
+    const draftData = await draftRes.json();
+    const appId = draftData.applicationId;
+    if (!appId) return;
+    const res = await fetch(`/api/applications/${appId}/resume-exports/${exportId}/download`);
+    if (res.ok) {
+      const blob = await res.blob();
+      const fileName = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "resume";
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      window.URL.revokeObjectURL(url);
     }
   }
 
@@ -1262,6 +1362,9 @@ export default function ApplicationResumeStudioPage() {
             <button className={rightTab === "draft" ? "btn-primary" : "btn"} onClick={() => setRightTab("draft")} style={{ flex: 1 }}>
               Draft
             </button>
+            <button className={rightTab === "export" ? "btn-primary" : "btn"} onClick={() => setRightTab("export")} style={{ flex: 1 }}>
+              Export
+            </button>
             <button className={rightTab === "chat" ? "btn-primary" : "btn"} onClick={() => setRightTab("chat")} style={{ flex: 1 }}>
               Chat
             </button>
@@ -1499,6 +1602,91 @@ export default function ApplicationResumeStudioPage() {
                       Attach to Packet
                     </button>
                   </div>
+                </div>
+              )}
+            </div>
+          ) : rightTab === "export" ? (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <div style={{ marginBottom: 12 }}>
+                <p style={{ fontSize: 12, fontWeight: 600, margin: "0 0 8px" }}>Export Resume</p>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                  <span className="badge" style={{ fontSize: 10, textTransform: "capitalize" }}>
+                    Source: {appResume?.source_type ?? "base_resume"}
+                  </span>
+                  <span className="badge" style={{ fontSize: 10 }}>
+                    {exports.length} export(s)
+                  </span>
+                </div>
+
+                {/* Export options */}
+                <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                  <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Options</p>
+                  <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                    <input type="checkbox" checked={exportOptions.atsFriendly} onChange={(e) => setExportOptions((o) => ({ ...o, atsFriendly: e.target.checked }))} />
+                    ATS-friendly (remove buzzwords)
+                  </label>
+                  <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                    <input type="checkbox" checked={exportOptions.includeSummary} onChange={(e) => setExportOptions((o) => ({ ...o, includeSummary: e.target.checked }))} />
+                    Include summary
+                  </label>
+                  <label style={{ fontSize: 11, display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                    <input type="checkbox" checked={exportOptions.includeProjects} onChange={(e) => setExportOptions((o) => ({ ...o, includeProjects: e.target.checked }))} />
+                    Include projects
+                  </label>
+                </div>
+
+                {/* Export buttons */}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                  <button className="btn-primary btn-compact" onClick={() => exportResume("docx")} disabled={exportingResume} style={{ flex: 1, minWidth: 100 }}>
+                    {exportingResume ? "Exporting…" : "Export DOCX"}
+                  </button>
+                  <button className="btn btn-compact" onClick={() => exportResume("pdf")} disabled={exportingResume} style={{ flex: 1, minWidth: 100 }}>
+                    Export PDF
+                  </button>
+                  <button className="btn btn-compact" onClick={() => exportResume("markdown")} disabled={exportingResume} style={{ flex: 1, minWidth: 100 }}>
+                    Preview Markdown
+                  </button>
+                </div>
+              </div>
+
+              {/* Export history */}
+              {exports.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Export History</p>
+                  {exports.map((ex) => (
+                    <div
+                      key={ex.id}
+                      style={{
+                        padding: 8,
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        marginBottom: 6,
+                        fontSize: 12,
+                        background: ex.status === "failed" ? "#fef2f2" : "transparent",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontWeight: 600, textTransform: "uppercase" }}>{ex.export_type}</span>
+                        <span className="badge" style={{ fontSize: 10, background: ex.status === "failed" ? "#fecaca" : "#e2e8f0", color: ex.status === "failed" ? "var(--danger)" : "#475569" }}>
+                          {ex.status}
+                        </span>
+                      </div>
+                      <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        {ex.file_name} {ex.file_size_bytes ? `(${(ex.file_size_bytes / 1024).toFixed(1)} KB)` : ""}
+                      </p>
+                      <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
+                        {new Date(ex.created_at).toLocaleDateString()} {new Date(ex.created_at).toLocaleTimeString()}
+                      </p>
+                      {ex.status === "failed" && ex.error && (
+                        <p style={{ fontSize: 11, color: "var(--danger)", margin: "4px 0 0" }}>{ex.error}</p>
+                      )}
+                      {ex.status !== "failed" && (
+                        <button className="btn btn-compact" style={{ marginTop: 6 }} onClick={() => downloadExportById(ex.id)}>
+                          Download
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

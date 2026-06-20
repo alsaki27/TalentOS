@@ -132,7 +132,22 @@ See `plan-application-workflow-redesign.md` for the full phased plan.
 - Activity logging on all draft operations (build, save, attach, suggestion application).
 - Build: clean. No new direct `supabase.from()` calls in new routes or client code.
 
-Still deferred: PDF/DOCX export, cover letter generation, final packet generation, recruiter message generation.
+Still deferred: cover letter generation, final packet generation, recruiter message generation.
+
+## Chunk 9 update (2026-06-21)
+
+**DOCX/PDF Export + Final Resume Packet Formatting** — landed.
+
+- `application_resume_exports` table (migration with CHECK constraints on export_type and status).
+- `applicationResumeExportsRepository.ts` — create, find, list, markFailed, soft-delete.
+- `resumeExportService.ts` — wraps existing `renderResumeDocx` (docx library) and `renderResumePdf` (@react-pdf/renderer) with export history tracking, safety checks (empty resume, fabrication-risk suggestions), ATS-friendly formatting (removes buzzwords like "passionate", "dynamic", "results-driven"), and professional file naming. `exportResumeAsDocx`, `exportResumeAsPdf`, `exportResumeAsMarkdown` all create export history records before generation and update with file size on success. Markdown renderer outputs clean structured text from ResumeDocument.
+- API routes: `GET /api/applications/[id]/resume-exports`, `POST /api/applications/[id]/resume-exports` (generates file + returns as download), `GET /api/applications/[id]/resume-exports/[exportId]/download` (regenerates on demand from stored record), and studio convenience route `POST /api/application-resume-versions/[id]/export`.
+- Studio UI: Export tab with Export DOCX / Export PDF / Preview Markdown buttons, ATS-friendly/include projects/include summary options, export history list with download buttons, failed status display, and file size.
+- Activity logging on all export operations (create, success, failure).
+- Build: clean. No new direct `supabase.from()` calls in new routes or client code.
+- Cloudflare note: `docx` and `@react-pdf/renderer` are Node-only libraries; adapter review needed during a Cloudflare Workers migration. Export files are generated on demand and returned directly; no persistent storage of exported files yet.
+
+Still deferred: cover letter generation, final packet generation, recruiter message generation, Gmail sending.
 
 ## Executive summary
 
