@@ -28,7 +28,7 @@ export async function validateApiKey(req: NextRequest): Promise<ApiKeyValidation
   const { data, error } = await supabase
     .from("public_api_keys")
     .select("id, scopes, revoked_at, expires_at")
-    .eq("key_hash", hashPublicApiKey(key))
+    .eq("key_hash", await hashPublicApiKey(key))
     .maybeSingle();
 
   if (!error && data) {

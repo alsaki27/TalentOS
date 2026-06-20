@@ -43,7 +43,15 @@ async function getGraphToken(): Promise<string> {
   return cachedToken.token;
 }
 
-export async function uploadToSharePoint(path: string, buffer: Buffer, contentType: string): Promise<{ url: string }> {
+function base64urlEncodeString(str: string): string {
+  const bytes = new TextEncoder().encode(str);
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/=+$/, "")
+    .replace(/\//g, "_")
+    .replace(/\+/g, "-");
+}
+
+export async function uploadToSharePoint(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
@@ -54,7 +62,7 @@ export async function uploadToSharePoint(path: string, buffer: Buffer, contentTy
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType || "application/octet-stream" },
-      body: new Uint8Array(buffer),
+      body: buffer as any,
     },
   );
   if (!res.ok) {
@@ -66,9 +74,9 @@ export async function uploadToSharePoint(path: string, buffer: Buffer, contentTy
 }
 
 /** Resolves a SharePoint webUrl to its drive item via Graph's shares API, then streams the file bytes — lets the browser download without ever needing Microsoft auth itself. */
-export async function downloadFromSharePoint(webUrl: string): Promise<{ buffer: Buffer; contentType: string; fileName: string }> {
+export async function downloadFromSharePoint(webUrl: string): Promise<{ buffer: Uint8Array; contentType: string; fileName: string }> {
   const token = await getGraphToken();
-  const encodedShareId = "u!" + Buffer.from(webUrl).toString("base64").replace(/=+$/, "").replace(/\//g, "_").replace(/\+/g, "-");
+  const encodedShareId = "u!" + base64urlEncodeString(webUrl);
 
   const itemRes = await fetch(`https://graph.microsoft.com/v1.0/shares/${encodedShareId}/driveItem`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -83,7 +91,7 @@ export async function downloadFromSharePoint(webUrl: string): Promise<{ buffer: 
   if (!fileRes.ok) throw new Error(`SharePoint download failed (${fileRes.status})`);
 
   return {
-    buffer: Buffer.from(await fileRes.arrayBuffer()),
+    buffer: new Uint8Array(await fileRes.arrayBuffer()),
     contentType: fileRes.headers.get("content-type") || "application/octet-stream",
     fileName: item.name || "resume",
   };

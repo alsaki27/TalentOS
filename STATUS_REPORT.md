@@ -317,3 +317,53 @@ In priority order — these aren't equally urgent, ordered by impact if skipped:
       via a real migration, and the Clerk user-mapping script written and run
 - [ ] `ANTHROPIC_API_KEY` obtained if `/chat` reliability matters (optional, but
       recommended over the current NVIDIA-only setup)
+
+
+## Neon + Cloudflare Migration Sprint (2026-07-07)
+
+**Status:** Infrastructure prepared. Preview not yet run. Deploy not yet attempted.
+
+### What was done
+
+- **Full audit:** `docs/neon-cloudflare-audit.md` — comprehensive audit of all Supabase usage, Node-only APIs, and Cloudflare compatibility. Key findings: Supabase Auth is deeply embedded (4 files), ~120 files use `supabase.from()`, service role key is the default client, `crypto` module and `Buffer` are used extensively, `docx`/`@react-pdf/renderer`/`pdf-parse`/`mammoth` are Node-only.
+- **Auth/Storage strategy:** Hybrid Option A. Keep Supabase Auth and Storage temporarily. Neon becomes the main app database. This is the safest path given auth depth.
+- **Neon migration plan:** `docs/neon-migration-plan.md` — migration order, required extensions, schema import methods, verification SQL.
+- **Data migration guide:** `docs/supabase-to-neon-data-migration.md` — export/import commands, Supabase-specific content removal, row count verification, security checklist.
+- **Cloudflare env secrets:** `docs/cloudflare-env-secrets.md` — all `wrangler secret put` commands, local `.dev.vars` setup, security reminders.
+- **Neon database adapter:** `src/server/db/neon.ts` + `src/server/db/index.ts` — uses `@neondatabase/serverless` driver, Cloudflare-compatible via `fetch()` under the hood.
+- **Web Crypto rewrite:** `src/server/security/secretCrypto.ts` — rewrote AES-256-GCM encryption using `crypto.subtle` (works on both Node.js and Cloudflare Workers). Functions are now async; all callers updated.
+- **Buffer → Uint8Array migration:** Fixed file upload routes (`proof`, `attachments`, `photo`, `resumes`, `resume`) and `resumeStorage.ts`, `sharepoint.ts`, `googleGmail.ts`.
+- **HMAC/Web Crypto fixes:** `src/lib/webhookEngine.ts` and `src/lib/publicApiAuth.ts` now use `crypto.subtle`.
+- **Cloudflare config:** `wrangler.toml` with `nodejs_compat` flag, `.worker-next` build output, assets binding.
+- **Package updates:** Added `@neondatabase/serverless`, `@opennextjs/cloudflare`, `wrangler` to dependencies. Added `cf:build`, `cf:preview`, `cf:deploy`, `cf:typegen` scripts.
+- **Production env template:** `.env.example.production` with Neon + Supabase auth vars.
+- **Lazy init fix:** `src/lib/supabaseRLS.ts` now lazy-initializes like `supabase.ts` (fixes import-time `process.env` crash on Cloudflare).
+
+### What remains before deploy
+
+- **Repository migration:** ~120 files still use `supabase.from()`. New repositories (Chunks 5-10) and critical tables should be migrated to Neon adapter first. Existing routes can remain on Supabase temporarily.
+- **Cloudflare preview:** Run `npm run cf:preview` to verify the build works on Cloudflare runtime. This is the next step.
+- **Data migration:** Export data from Supabase and import to Neon. Not yet done.
+- **Cron jobs:** `vercel.json` has 4 cron jobs. Need Cloudflare Cron Triggers or external scheduler.
+- **PDF/DOCX export:** `docx` and `@react-pdf/renderer` are Node-only. These will fail on Cloudflare Workers. Need to either externalize to a Node.js microservice or replace with Cloudflare-compatible libraries.
+- **Auth migration:** Supabase Auth is still required. Full migration to Clerk/Auth.js is a future sprint.
+- **Storage migration:** Supabase Storage is still required. R2 migration is a future sprint.
+- **Hyperdrive (optional):** Consider Cloudflare Hyperdrive for Neon connection pooling if experiencing cold-start latency.
+
+### Build status
+
+- `npm run typecheck`: ✅ clean
+- `npm run build`: ✅ clean (91 static pages)
+- `npm run cf:build`: NOT YET TESTED (next step)
+- `npm run cf:preview`: NOT YET TESTED
+
+### Risk assessment
+
+| Risk | Level | Mitigation |
+|------|-------|------------|
+| Supabase Auth dependency | HIGH | Keep temporarily. Plan Phase 2 migration. |
+| ~120 files on Supabase client | MEDIUM | Migrate repositories incrementally. App still works. |
+| PDF/DOCX export Node-only | HIGH | Externalize or replace before deploy. |
+| `crypto.subtle` compatibility | LOW | Tested pattern. Works on Node 18+ and Cloudflare. |
+| `@neondatabase/serverless` cold start | MEDIUM | Use Hyperdrive if needed. |
+| Cron jobs not migrated | MEDIUM | Use external scheduler or Cloudflare Cron Triggers. |

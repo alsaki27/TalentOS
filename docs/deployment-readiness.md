@@ -1,11 +1,32 @@
 # Deployment Readiness Guide
 
-Last updated: 2026-06-22
+Last updated: 2026-07-07
+
+## Deployment Target
+
+The app supports two deployment targets:
+
+| Target | Database | Auth | Storage | Runtime | Status |
+|--------|----------|------|---------|---------|--------|
+| **Vercel + Supabase** (current) | Supabase Postgres | Supabase Auth | Supabase Storage | Node.js | ✅ Working |
+| **Cloudflare + Neon** (in progress) | Neon Postgres | Supabase Auth (temp) | Supabase Storage (temp) | Cloudflare Workers | 🚧 Infrastructure ready |
 
 ## Required Environment Variables
 
+### Neon (for Cloudflare deployment)
+
 | Variable | Required | Source | Notes |
-|---|---|---|---|
+|----------|----------|--------|-------|
+| `DATABASE_URL` | Yes | Neon Console > Connection Details | Pooled connection string. `sslmode=require`. |
+| `NEON_DATABASE_URL` | Yes | Same as `DATABASE_URL` | Alias for compatibility. |
+| `NEON_DATABASE_URL_DIRECT` | Yes | Same as above but direct (non-pooled) | For migrations only. |
+| `APP_BASE_URL` | Yes | Your production URL | `https://your-app.pages.dev` or custom domain. |
+| `NODE_ENV` | Yes | `production` | Set to `production`. |
+
+### Supabase (still required for auth and storage)
+
+| Variable | Required | Source | Notes |
+|----------|----------|--------|-------|
 | `SUPABASE_URL` | Yes | Supabase Dashboard > Settings > API | Project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes | Supabase Dashboard > Settings > API | Secret key, server-side only |
 | `SUPABASE_ANON_KEY` | Yes | Supabase Dashboard > Settings > API | Anon/public key |
@@ -15,6 +36,32 @@ Last updated: 2026-06-22
 | `AI_PROVIDER` | No | `anthropic` or `nvidia` | Optional; falls back to db config |
 | `ANTHROPIC_API_KEY` | No | Anthropic Console | Required if `AI_PROVIDER=anthropic` or db config |
 | `NVIDIA_API_KEY` | No | NVIDIA API Console | Required if `AI_PROVIDER=nvidia` or db config |
+
+**Note:** Supabase vars are temporary. Phase 2 will replace Supabase Auth. Phase 3 will replace Supabase Storage.
+
+## Cloudflare Deployment Commands
+
+```bash
+# Build for Cloudflare
+npm run cf:build
+
+# Preview locally
+npm run cf:preview
+
+# Deploy to production
+npm run cf:deploy
+
+# Generate types from wrangler.toml
+npm run cf:typegen
+```
+
+Set secrets via Wrangler:
+```bash
+npx wrangler secret put DATABASE_URL
+npx wrangler secret put NEON_DATABASE_URL
+npx wrangler secret put AI_KEYS_ENCRYPTION_SECRET
+# ... etc. See docs/cloudflare-env-secrets.md for full list
+```
 
 ## Required Supabase Migrations
 
@@ -78,9 +125,32 @@ npx supabase db push
 ## Known Build / Runtime Limitations
 
 - **ESLint is not installed** (pre-existing, not a blocker).
-- `docx` and `@react-pdf/renderer` libraries are **Node-only**; adapter review needed for Cloudflare Workers migration.
+- `docx` and `@react-pdf/renderer` libraries are **Node-only**; these will fail on Cloudflare Workers without `nodejs_compat` or externalization. Currently requires external microservice or replacement.
 - **No RLS policies** are defined; auth is enforced at the app layer.
 - AI features require an active AI provider; routes return **503** if none configured.
+- **Supabase Auth is still required** for login/session. Neon migration only covers app database.
+- **Supabase Storage is still required** for resume/photo uploads. R2 migration is Phase 3.
+- **~120 files still use `supabase.from()`** for database queries. New repositories use Neon adapter; old routes still on Supabase. Migration is incremental.
+- **`pdf-parse` and `mammoth`** are Node-only and will not work on Cloudflare Workers without `nodejs_compat`.
+
+## Migration Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1: Audit | ✅ Done | Full Supabase/Node-only API audit in `docs/neon-cloudflare-audit.md` |
+| Phase 2: Strategy | ✅ Done | Hybrid Option A: Neon DB + Supabase Auth/Storage (temp) |
+| Phase 3: Schema Plan | ✅ Done | `docs/neon-migration-plan.md` with migration order |
+| Phase 4: Data Migration Guide | ✅ Done | `docs/supabase-to-neon-data-migration.md` |
+| Phase 5: Neon Adapter | ✅ Done | `src/server/db/neon.ts` + `src/server/db/index.ts` |
+| Phase 6: Web Crypto Rewrite | ✅ Done | `secretCrypto.ts` now uses `crypto.subtle` (async) |
+| Phase 7: Buffer → Uint8Array | ✅ Done | All file upload routes fixed |
+| Phase 8: Cloudflare Config | ✅ Done | `wrangler.toml`, `package.json` scripts |
+| Phase 9: Repository Migration | 🚧 Next | Migrate ~120 files from Supabase to Neon adapter |
+| Phase 10: Data Export/Import | 🚧 Next | Export Supabase data, import to Neon |
+| Phase 11: Cloudflare Preview | 🚧 Next | Run `npm run cf:preview` |
+| Phase 12: Auth Independence | ⏳ Future | Replace Supabase Auth with Clerk/Auth.js |
+| Phase 13: Storage Independence | ⏳ Future | Replace Supabase Storage with Cloudflare R2 |
+| Phase 14: Export Externalization | ⏳ Future | Replace Node-only PDF/DOCX libraries |
 
 ## Security Checklist
 
@@ -114,13 +184,33 @@ npm run build
 
 ## Production Environment Checklist
 
-- [ ] All required env vars set in production (Vercel/Cloudflare/other).
+### For Vercel + Supabase (current)
+- [ ] All required env vars set in production (Vercel).
 - [ ] `CRON_SECRET` set and matches Vercel cron config.
 - [ ] `AI_KEYS_ENCRYPTION_SECRET` is 32-byte hex string.
 - [ ] Supabase project is on a **paid plan** (required for production).
 - [ ] Database backups enabled.
 
-## Post-Deploy Smoke Test Checklist
+### For Cloudflare + Neon (in progress)
+- [ ] Neon project created and migrations applied.
+- [ ] All secrets set via `npx wrangler secret put`.
+- [ ] `DATABASE_URL` uses pooled connection with `sslmode=require`.
+- [ ] `APP_BASE_URL` set to production domain.
+- [ ] `nodejs_compat` flag enabled in `wrangler.toml`.
+- [ ] Supabase project still active for auth/storage.
+- [ ] Cloudflare Pages/Workers deployment configured.
+- [ ] Cron jobs migrated from `vercel.json` to Cloudflare Cron Triggers or external scheduler.
+- [ ] Neon backups enabled.
+
+## Rollback Checklist
+
+- [ ] Database backup before migration run.
+- [ ] `supabase db reset` can restore to baseline (destroys data).
+- [ ] Git commit hash of last known good deploy recorded.
+- [ ] Env vars backed up securely.
+- [ ] Rollback to previous Vercel deployment is one-click.
+- [ ] Neon branch from pre-migration point available for rollback.
+- [ ] Supabase project remains active as fallback.
 
 - [ ] Login as admin.
 - [ ] Open `/ops`.

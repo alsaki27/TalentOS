@@ -33,7 +33,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const ext = file.name.split(".").pop();
   const path = `candidates/${params.id}/variants/${Date.now()}.${ext}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = new Uint8Array(await file.arrayBuffer());
 
   let uploaded: { url: string };
   try {

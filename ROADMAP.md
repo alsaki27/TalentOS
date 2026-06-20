@@ -278,6 +278,19 @@ oversight — the reasoning is included so future work doesn't undo it by accide
 
 v1 internal workflow is feature-complete. Next phase: deployment audit and stabilization.
 
+## In Progress — Neon + Cloudflare Migration
+
+- **Phase 1 (Done):** Full audit of Supabase usage, Node-only APIs, and Cloudflare compatibility.
+- **Phase 2 (Done):** Auth/storage strategy — Hybrid Option A (keep Supabase Auth/Storage temporarily, Neon for app database).
+- **Phase 3 (Done):** Neon migration plan, schema order, verification SQL, data export/import guide.
+- **Phase 4 (Done):** Neon adapter (`src/server/db/neon.ts`), Web Crypto rewrite (`secretCrypto.ts`), Buffer → Uint8Array fixes, Cloudflare config (`wrangler.toml`), package updates.
+- **Phase 5 (Next):** Run `npm run cf:preview` to validate Cloudflare build.
+- **Phase 6 (Next):** Migrate repositories incrementally from Supabase to Neon.
+- **Phase 7 (Next):** Export data from Supabase and import to Neon.
+- **Phase 8 (Future):** Phase 2 auth migration — replace Supabase Auth with Clerk/Auth.js.
+- **Phase 9 (Future):** Phase 3 storage migration — replace Supabase Storage with Cloudflare R2.
+- **Phase 10 (Future):** PDF/DOCX export externalization — Node-only libraries need replacement or microservice.
+
 ## Explicitly deferred (not just "later" — needs a real decision first)
 
 - **Communication Intelligence (Gmail/Outlook sync).** Email/calendar sync, interview
@@ -297,9 +310,6 @@ v1 internal workflow is feature-complete. Next phase: deployment audit and stabi
   events). What exists today is the narrow slice that's actually load-bearing —
   `application_events` for the status timeline. Don't build the general version until a
   second real consumer of "events" shows up (e.g. scheduled ingestion, or notifications).
-- **Cloudflare full-stack hosting / D1 / R2 migration.** The current app remains Vercel +
-  Supabase oriented. Cloudflare hosting is not configured, and D1/R2 migration is not part
-  of the current architecture.
 
 ## Source documents
 

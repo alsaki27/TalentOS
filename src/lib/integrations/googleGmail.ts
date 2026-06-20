@@ -1,4 +1,5 @@
-import crypto from "crypto";
+// src/lib/integrations/googleGmail.ts
+// Gmail OAuth helpers. Uses Web Crypto API for Cloudflare Workers compatibility.
 
 export const GMAIL_SCOPES = [
   "openid",
@@ -11,8 +12,13 @@ export function googleRedirectUri(origin: string) {
   return process.env.GOOGLE_OAUTH_REDIRECT_URI || `${origin}/api/integrations/gmail/callback`;
 }
 
-export function newOAuthState() {
-  return crypto.randomBytes(24).toString("base64url");
+export function newOAuthState(): string {
+  const array = new Uint8Array(24);
+  crypto.getRandomValues(array);
+  return btoa(String.fromCharCode(...array))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 export function gmailAuthUrl(params: { state: string; origin: string }) {
@@ -64,12 +70,19 @@ export async function exchangeGmailCode(code: string, origin: string) {
   };
 }
 
+function base64urlDecode(str: string): string {
+  const padding = "=".repeat((4 - (str.length % 4)) % 4);
+  const base64 = str.replace(/-/g, "+").replace(/_/g, "/") + padding;
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
 function decodeJwtPayload(token: string | undefined) {
   if (!token) return null;
   const [, payload] = token.split(".");
   if (!payload) return null;
   try {
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return JSON.parse(base64urlDecode(payload));
   } catch {
     return null;
   }

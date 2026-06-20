@@ -13,7 +13,7 @@ export function activeResumeStorageProvider(): ResumeStorageProvider {
   return (process.env.RESUME_STORAGE_PROVIDER || "").toLowerCase() === "sharepoint" ? "sharepoint" : "supabase";
 }
 
-export async function uploadResumeFile(path: string, buffer: Buffer, contentType: string): Promise<{ url: string }> {
+export async function uploadResumeFile(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
   if (activeResumeStorageProvider() === "sharepoint") {
     return uploadToSharePoint(path, buffer, contentType);
   }

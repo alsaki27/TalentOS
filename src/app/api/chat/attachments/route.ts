@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `File too large (max ${MAX_SIZE_BYTES / 1024 / 1024}MB).` }, { status: 400 });
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = new Uint8Array(await file.arrayBuffer());
   const path = `chat-attachments/${context!.profile.user_id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
 
   const { error: uploadErr } = await supabase.storage
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
 
   let textContent: string | null = null;
   if (isTextFile(file.name)) {
-    textContent = buffer.toString("utf-8").slice(0, MAX_EXTRACTED_TEXT_CHARS);
+    textContent = new TextDecoder().decode(buffer).slice(0, MAX_EXTRACTED_TEXT_CHARS);
   }
 
   return NextResponse.json({

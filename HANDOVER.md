@@ -326,3 +326,47 @@ Updated files:
 - `src/server/repositories/applicationPacketsRepository.ts` — fixed type error (offset + limit check)
 
 Deployment readiness: see `docs/deployment-readiness.md` for full env var list, security checklist, and smoke test.
+
+
+## Migration Sprint (2026-07-07) — Neon + Cloudflare Infrastructure
+
+**Strategy:** Hybrid Option A. Neon becomes the main app database. Supabase Auth and Storage remain temporarily. Full auth/storage independence is a future Phase 2 sprint.
+
+### New files
+- `src/server/db/neon.ts` — Neon serverless driver adapter (Cloudflare-compatible)
+- `src/server/db/index.ts` — Database abstraction layer
+- `docs/neon-cloudflare-audit.md` — Full Supabase/Node-only API audit (comprehensive)
+- `docs/neon-migration-plan.md` — Migration order, extensions, schema import, verification SQL
+- `docs/supabase-to-neon-data-migration.md` — Export/import commands, security checklist
+- `docs/cloudflare-env-secrets.md` — All `wrangler secret put` commands, `.dev.vars` setup
+- `.env.example.production` — Production env template with Neon + Supabase auth vars
+- `wrangler.toml` — Cloudflare Workers config (`nodejs_compat`, `.worker-next` output)
+
+### Modified files
+- `src/server/security/secretCrypto.ts` — Rewrote with Web Crypto API (`crypto.subtle`). AES-256-GCM. Async. Compatible with Node.js and Cloudflare Workers.
+- `src/lib/webhookEngine.ts` — `crypto.createHmac` → `crypto.subtle.sign("HMAC", ...)`
+- `src/lib/publicApiAuth.ts` — `crypto.randomBytes`/`createHash` → `crypto.getRandomValues`/`crypto.subtle.digest`
+- `src/lib/apiKeyAuth.ts` — Added `await` for async hash function
+- `src/app/api/api-keys/route.ts` — Added `await` for async key generation/hash
+- `src/lib/resumeStorage.ts` — `Buffer` → `Uint8Array` parameter type
+- `src/lib/resumeParsing.ts` — `Buffer` → `Uint8Array` parameter type
+- `src/lib/integrations/sharepoint.ts` — `Buffer` → `Uint8Array`, pure JS base64url
+- `src/lib/integrations/googleGmail.ts` — `crypto.randomBytes` → `crypto.getRandomValues`, pure JS base64url decode
+- `src/lib/supabaseRLS.ts` — Import-time `createClient` → lazy-initialized proxy (fixes Cloudflare import crash)
+- `src/app/api/applications/[id]/proof/route.ts` — `Buffer.from` → `new Uint8Array`
+- `src/app/api/chat/attachments/route.ts` — `Buffer.from` → `new Uint8Array`
+- `src/app/api/candidates/[id]/photo/route.ts` — `Buffer.from` → `new Uint8Array`
+- `src/app/api/candidates/[id]/resumes/route.ts` — `Buffer.from` → `new Uint8Array`
+- `src/app/api/candidates/[id]/resume/route.ts` — `Buffer.from` → `new Uint8Array`
+- `src/server/repositories/aiKeyRepository.ts` — Added `await` for async crypto functions
+- `package.json` — Added `@neondatabase/serverless`, `@opennextjs/cloudflare`, `wrangler`. Added `cf:build`, `cf:preview`, `cf:deploy`, `cf:typegen` scripts.
+
+### What remains
+- Repository migration (~120 files still use `supabase.from()`). Migrate incrementally.
+- Cloudflare preview (`npm run cf:preview`) — not yet tested.
+- Data export from Supabase and import to Neon — not yet done.
+- Cron job migration (4 jobs in `vercel.json`) — needs Cloudflare Cron Triggers or external scheduler.
+- PDF/DOCX export (`docx`, `@react-pdf/renderer`) are Node-only — need externalization or replacement.
+- Full Supabase Auth removal — Phase 2 sprint.
+- Full Supabase Storage removal — Phase 3 sprint (R2).
+- Build: `npm run typecheck` ✅, `npm run build` ✅. `npm run cf:build` not yet tested.

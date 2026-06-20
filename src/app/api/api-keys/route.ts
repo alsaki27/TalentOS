@@ -36,13 +36,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Invalid scope(s): ${invalidScopes.join(", ")}` }, { status: 400 });
   }
 
-  const key = generatePublicApiKey();
+  const key = await generatePublicApiKey();
   const { data, error } = await supabase
     .from("public_api_keys")
     .insert({
       name,
       key_prefix: publicApiKeyPrefix(key),
-      key_hash: hashPublicApiKey(key),
+      key_hash: await hashPublicApiKey(key),
       scopes,
       expires_at: body.expires_at || null,
       metadata: body.metadata ?? {},

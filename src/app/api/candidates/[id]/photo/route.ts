@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const ext = file.name.split(".").pop();
   const path = `avatars/${params.id}/${Date.now()}.${ext}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = new Uint8Array(await file.arrayBuffer());
 
   const { error: uploadErr } = await supabase.storage
     .from("resumes")

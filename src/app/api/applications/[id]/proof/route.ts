@@ -22,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `application-proofs/${params.id}/${Date.now()}-${safeName}`;
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const buffer = new Uint8Array(await file.arrayBuffer());
 
   const { error: uploadErr } = await supabase.storage
     .from("resumes")

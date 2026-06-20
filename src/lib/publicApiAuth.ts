@@ -1,4 +1,3 @@
-import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
@@ -44,13 +43,23 @@ export interface PublicApiContext {
   key_prefix: string;
 }
 
-export function generatePublicApiKey() {
-  const secret = crypto.randomBytes(32).toString("base64url");
+export async function generatePublicApiKey(): Promise<string> {
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  const secret = btoa(String.fromCharCode(...array))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
   return `sk_live_${secret}`;
 }
 
-export function hashPublicApiKey(key: string) {
-  return crypto.createHash("sha256").update(key).digest("hex");
+export async function hashPublicApiKey(key: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(key));
+  const hex = Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return hex;
 }
 
 export function publicApiKeyPrefix(key: string) {
@@ -80,7 +89,7 @@ export async function requirePublicApiScope(req: NextRequest, required: PublicAp
   const { data, error } = await supabase
     .from("public_api_keys")
     .select("id, name, key_prefix, scopes, expires_at, revoked_at")
-    .eq("key_hash", hashPublicApiKey(key))
+    .eq("key_hash", await hashPublicApiKey(key))
     .maybeSingle();
 
   if (error) {

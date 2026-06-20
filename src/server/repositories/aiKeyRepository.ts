@@ -133,7 +133,7 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
   const row = data as AiApiKeyRow;
   return {
     ...row,
-    decrypted_key: decryptSecret(row.encrypted_key),
+    decrypted_key: await decryptSecret(row.encrypted_key),
   };
 }
 
@@ -141,8 +141,8 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
  * Create a new AI API key. Encrypts the key before storage.
  */
 export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMetadata> {
-  const encrypted = encryptSecret(input.apiKey);
-  const fingerprint = fingerprintKey(input.apiKey);
+  const encrypted = await encryptSecret(input.apiKey);
+  const fingerprint = await fingerprintKey(input.apiKey);
 
   const { data, error } = await supabase
     .from("ai_api_keys")
@@ -171,8 +171,8 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
   if (input.priority !== undefined) updates.priority = input.priority;
   if (input.is_enabled !== undefined) updates.is_enabled = input.is_enabled;
   if (input.apiKey !== undefined) {
-    updates.encrypted_key = encryptSecret(input.apiKey);
-    updates.key_fingerprint = fingerprintKey(input.apiKey);
+    updates.encrypted_key = await encryptSecret(input.apiKey);
+    updates.key_fingerprint = await fingerprintKey(input.apiKey);
   }
   updates.updated_at = new Date().toISOString();
 

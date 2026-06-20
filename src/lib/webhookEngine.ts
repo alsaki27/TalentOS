@@ -1,7 +1,7 @@
 // src/lib/webhookEngine.ts
 // Webhook delivery engine with HMAC signatures, retries, and event logging.
+// Uses Web Crypto API (crypto.subtle) for Cloudflare Workers compatibility.
 
-import crypto from "crypto";
 import { supabase } from "./supabase";
 
 export interface WebhookEndpoint {
@@ -24,6 +24,22 @@ export interface WebhookDeliveryResult {
   error?: string;
 }
 
+async function generateWebhookSignature(secret: string, body: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+  const hex = Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `sha256=${hex}`;
+}
+
 export async function deliverWebhook(
   endpoint: WebhookEndpoint,
   event: string,
@@ -35,9 +51,7 @@ export async function deliverWebhook(
     timestamp: new Date().toISOString(),
   });
 
-  const signature = endpoint.secret
-    ? `sha256=${crypto.createHmac("sha256", endpoint.secret).update(body).digest("hex")}`
-    : undefined;
+  const signature = endpoint.secret ? await generateWebhookSignature(endpoint.secret, body) : undefined;
 
   const maxAttempts = 5;
   let attempt = 0;

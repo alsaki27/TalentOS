@@ -36,19 +36,21 @@ export interface ParsedResume {
 /**
  * Extract raw text from a resume buffer (PDF or DOCX).
  */
-export async function extractText(buffer: Buffer, mimeType: string): Promise<string> {
+export async function extractText(buffer: Uint8Array, mimeType: string): Promise<string> {
   const type = mimeType.toLowerCase();
 
   if (type.includes("pdf")) {
     const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
+    const nodeBuffer = Buffer.from(buffer);
+    const parser = new PDFParse({ data: nodeBuffer });
     const result = await parser.getText();
     return result.text ?? "";
   }
 
   if (type.includes("docx") || type.includes("wordprocessingml")) {
     const mammoth = await import("mammoth");
-    const result = await mammoth.extractRawText({ buffer });
+    const nodeBuffer = Buffer.from(buffer);
+    const result = await mammoth.extractRawText({ buffer: nodeBuffer });
     return result.value ?? "";
   }
 
@@ -59,7 +61,7 @@ export async function extractText(buffer: Buffer, mimeType: string): Promise<str
 
   // Fallback: try utf-8 text
   try {
-    return buffer.toString("utf-8");
+    return new TextDecoder().decode(buffer);
   } catch {
     return "";
   }

@@ -1,0 +1,23 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "skarion-talent-os"
+main = ".worker-next/index.mjs"
+compatibility_date = "2026-07-07"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers + Assets: host static frontend files
+assets = { directory = ".worker-next/assets", binding = "ASSETS" }
+
+[observability]
+enabled = true
+
+# Secrets are set via `wrangler secret put`, not here:
+# DATABASE_URL, NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT
+# SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+# AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY
+# ANTHROPIC_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY
+# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
+
+# Optional: ISR cache via KV
+# [[kv_namespaces]]
+# binding = "NEXT_CACHE_WORKERS_KV"
+# id = "..."
