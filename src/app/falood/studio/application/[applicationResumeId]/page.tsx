@@ -37,6 +37,7 @@ interface ApplicationResumeVersion {
   candidate_id: string;
   base_resume_id: string;
   target_job_id: string;
+  application_id?: string;
   status: "draft" | "in_review" | "approved" | "rejected";
   content: ResumeDocument;
   fit_score?: number | null;
@@ -136,6 +137,36 @@ interface LogEntry {
   text: string;
 }
 
+interface ApplicationPacketRow {
+  id: string;
+  application_id: string;
+  packet_status: "draft" | "ready_for_review" | "approved" | "sent" | "archived";
+  final_resume_version_id?: string | null;
+  resume_export_id?: string | null;
+  cover_letter?: string | null;
+  recruiter_message?: string | null;
+  final_notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface PacketData {
+  packet: ApplicationPacketRow | null;
+  checklist: Record<string, "pass" | "warning" | "missing">;
+  warnings: Array<{ type: string; severity: "warning" | "block"; message: string }>;
+  summary: string;
+  metadata: {
+    candidateName?: string;
+    jobTitle?: string;
+    companyName?: string;
+    approvedKeywordCount: number;
+    rejectedKeywordCount: number;
+    acceptedSuggestionCount: number;
+    draftExists: boolean;
+    exportExists: boolean;
+  };
+}
+
 /* ──────────── helpers ──────────── */
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -171,6 +202,7 @@ export default function ApplicationResumeStudioPage() {
 
   /* core data */
   const [appResume, setAppResume] = useState<ApplicationResumeVersion | null>(null);
+  const [applicationId, setApplicationId] = useState<string | null>(null);
   const [targetJob, setTargetJob] = useState<TargetJob | null>(null);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
@@ -200,7 +232,14 @@ export default function ApplicationResumeStudioPage() {
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
   /* right pane tabs */
-  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat">("suggestions");
+  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat" | "packet">("suggestions");
+
+  /* packet state */
+  const [packet, setPacket] = useState<PacketData | null>(null);
+  const [packetLoading, setPacketLoading] = useState(false);
+  const [generatingCoverLetter, setGeneratingCoverLetter] = useState(false);
+  const [generatingRecruiterMessage, setGeneratingRecruiterMessage] = useState(false);
+  const [savingPacket, setSavingPacket] = useState(false);
 
   /* Falood CLI */
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
@@ -221,6 +260,7 @@ export default function ApplicationResumeStudioPage() {
       if (!res.ok) throw new Error("Failed to load application resume version");
       const ar: ApplicationResumeVersion = await res.json();
       setAppResume(ar);
+      setApplicationId((ar as any).application_id || (ar as any).applicationId || null);
       setDraftContent(JSON.parse(JSON.stringify(ar.content)));
 
       const [jobRes, baseRes, candRes, kaRes, sugRes] = await Promise.all([
@@ -267,12 +307,134 @@ export default function ApplicationResumeStudioPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => { if (applicationId) loadPacket(); }, [applicationId]);
+
   async function refreshSuggestions() {
     if (!applicationResumeId) return;
     const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`);
     if (res.ok) {
       const data = await res.json();
       setSuggestions(data.suggestions ?? []);
+    }
+  }
+
+  /* ──────────── packet ──────────── */
+
+  async function loadPacket() {
+    if (!applicationId) return;
+    setPacketLoading(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet`);
+      if (res.ok) {
+        const data = await res.json();
+        setPacket(data);
+      }
+    } catch (e) {
+      console.error("Failed to load packet", e);
+    } finally {
+      setPacketLoading(false);
+    }
+  }
+
+  async function buildPacket() {
+    if (!applicationId) return;
+    setPacketLoading(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet/build`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setPacket(data);
+      }
+    } catch (e) {
+      console.error("Failed to build packet", e);
+    } finally {
+      setPacketLoading(false);
+    }
+  }
+
+  async function generateCoverLetter() {
+    if (!applicationId) return;
+    if (packet?.packet?.cover_letter && !confirm("This will overwrite the existing cover letter. Continue?")) return;
+    setGeneratingCoverLetter(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet/cover-letter`, { method: "POST" });
+      if (res.ok) {
+        await loadPacket();
+      }
+    } catch (e) {
+      console.error("Failed to generate cover letter", e);
+    } finally {
+      setGeneratingCoverLetter(false);
+    }
+  }
+
+  async function generateRecruiterMessage() {
+    if (!applicationId) return;
+    if (packet?.packet?.recruiter_message && !confirm("This will overwrite the existing recruiter message. Continue?")) return;
+    setGeneratingRecruiterMessage(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet/recruiter-message`, { method: "POST" });
+      if (res.ok) {
+        await loadPacket();
+      }
+    } catch (e) {
+      console.error("Failed to generate recruiter message", e);
+    } finally {
+      setGeneratingRecruiterMessage(false);
+    }
+  }
+
+  async function savePacket(updates: { cover_letter?: string; recruiter_message?: string; final_notes?: string }) {
+    if (!applicationId) return;
+    setSavingPacket(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
+      if (res.ok) await loadPacket();
+    } catch (e) {
+      console.error("Failed to save packet", e);
+    } finally {
+      setSavingPacket(false);
+    }
+  }
+
+  async function savePacketStatus(status: string) {
+    if (!applicationId) return;
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ packet_status: status }),
+      });
+      if (res.ok) await loadPacket();
+    } catch (e) {
+      console.error("Failed to update packet status", e);
+    }
+  }
+
+  async function approvePacket() {
+    if (!applicationId) return;
+    if (!packet?.packet?.resume_export_id) {
+      if (!confirm("No resume export is attached to this packet. Approve anyway?")) return;
+    }
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet/approve`, { method: "POST" });
+      if (res.ok) await loadPacket();
+    } catch (e) {
+      console.error("Failed to approve packet", e);
+    }
+  }
+
+  async function markSent() {
+    if (!applicationId) return;
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/packet/mark-sent`, { method: "POST" });
+      if (res.ok) await loadPacket();
+    } catch (e) {
+      console.error("Failed to mark packet as sent", e);
     }
   }
 
@@ -1368,6 +1530,9 @@ export default function ApplicationResumeStudioPage() {
             <button className={rightTab === "chat" ? "btn-primary" : "btn"} onClick={() => setRightTab("chat")} style={{ flex: 1 }}>
               Chat
             </button>
+            <button className={rightTab === "packet" ? "btn-primary" : "btn"} onClick={() => setRightTab("packet")} style={{ flex: 1 }}>
+              Packet
+            </button>
           </div>
 
           {rightTab === "suggestions" ? (
@@ -1687,6 +1852,233 @@ export default function ApplicationResumeStudioPage() {
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+          ) : rightTab === "packet" ? (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              {packetLoading && <p className="muted" style={{ fontSize: 12 }}>Loading packet…</p>}
+              {!packetLoading && !packet && (
+                <div>
+                  <p className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                    No packet found for this application. Build a packet to get started.
+                  </p>
+                  <button className="btn-primary btn-compact" onClick={buildPacket} disabled={packetLoading}>
+                    {packetLoading ? "Building…" : "Build Packet"}
+                  </button>
+                </div>
+              )}
+              {packet && (
+                <div>
+                  {/* Status Badge */}
+                  <div style={{ marginBottom: 10, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="badge" style={{
+                      fontSize: 10,
+                      background: packet.packet?.packet_status === "approved" ? "#f0fdf4"
+                        : packet.packet?.packet_status === "sent" ? "#e0f2fe"
+                        : packet.packet?.packet_status === "ready_for_review" ? "#fffbeb"
+                        : "#e2e8f0",
+                      color: packet.packet?.packet_status === "approved" ? "#15803d"
+                        : packet.packet?.packet_status === "sent" ? "#0369a1"
+                        : packet.packet?.packet_status === "ready_for_review" ? "#a16207"
+                        : "#475569",
+                    }}>
+                      {packet.packet?.packet_status?.replace(/_/g, " ") ?? "draft"}
+                    </span>
+                  </div>
+
+                  {/* Selected Resume Draft */}
+                  {packet.packet?.final_resume_version_id && (
+                    <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                      <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 4px" }}>Selected Resume Draft</p>
+                      <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                        Version ID: {packet.packet.final_resume_version_id}
+                      </p>
+                      <Link href={`/falood/studio/application/${packet.packet.final_resume_version_id}`} style={{ fontSize: 11 }}>
+                        View draft →
+                      </Link>
+                    </div>
+                  )}
+
+                  {/* Latest Export */}
+                  {packet.packet?.resume_export_id && (
+                    <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                      <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 4px" }}>Latest Export</p>
+                      <button className="btn btn-compact" onClick={() => downloadExportById(packet.packet!.resume_export_id!)}>
+                        Download Export
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Checklist */}
+                  <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Checklist</p>
+                    {Object.entries(packet.checklist).map(([key, status]) => (
+                      <div key={key} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4, fontSize: 12 }}>
+                        <span style={{
+                          color: status === "pass" ? "#15803d" : status === "warning" ? "#a16207" : "var(--danger)",
+                          fontWeight: 600,
+                        }}>
+                          {status === "pass" ? "✓" : status === "warning" ? "⚠" : "✗"}
+                        </span>
+                        <span style={{ textTransform: "capitalize" }}>{key.replace(/([A-Z])/g, " $1").trim()}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Warnings */}
+                  {packet.warnings.length > 0 && (
+                    <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                      <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Warnings</p>
+                      {packet.warnings.map((w, i) => (
+                        <div key={i} style={{
+                          marginBottom: 4,
+                          padding: 6,
+                          borderRadius: 4,
+                          background: w.severity === "block" ? "#fef2f2" : "#fffbeb",
+                          fontSize: 12,
+                          color: w.severity === "block" ? "var(--danger)" : "#a16207",
+                        }}>
+                          <strong>{w.type}:</strong> {w.message}
+                        </div>
+                      ))}
+                      {packet.warnings.some((w) => w.severity === "block") && (
+                        <p style={{ fontSize: 11, color: "var(--danger)", margin: "6px 0 0", fontWeight: 600 }}>
+                          Cannot approve — resolve block-level warnings first.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Cover Letter Editor */}
+                  <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Cover Letter</p>
+                    <textarea
+                      value={packet.packet?.cover_letter ?? ""}
+                      onChange={(e) => {
+                        if (!packet) return;
+                        setPacket({
+                          ...packet,
+                          packet: packet.packet ? { ...packet.packet, cover_letter: e.target.value } : null,
+                        });
+                      }}
+                      placeholder="Enter or generate cover letter…"
+                      rows={4}
+                      style={{ width: "100%", fontSize: 12, marginBottom: 6 }}
+                    />
+                    <button
+                      className="btn btn-compact"
+                      onClick={generateCoverLetter}
+                      disabled={generatingCoverLetter}
+                    >
+                      {generatingCoverLetter ? "Generating…" : "Generate Cover Letter"}
+                    </button>
+                  </div>
+
+                  {/* Recruiter Message Editor */}
+                  <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Recruiter Message</p>
+                    <textarea
+                      value={packet.packet?.recruiter_message ?? ""}
+                      onChange={(e) => {
+                        if (!packet) return;
+                        setPacket({
+                          ...packet,
+                          packet: packet.packet ? { ...packet.packet, recruiter_message: e.target.value } : null,
+                        });
+                      }}
+                      placeholder="Enter or generate recruiter message…"
+                      rows={4}
+                      style={{ width: "100%", fontSize: 12, marginBottom: 6 }}
+                    />
+                    <button
+                      className="btn btn-compact"
+                      onClick={generateRecruiterMessage}
+                      disabled={generatingRecruiterMessage}
+                    >
+                      {generatingRecruiterMessage ? "Generating…" : "Generate Recruiter Message"}
+                    </button>
+                  </div>
+
+                  {/* Final Notes */}
+                  <div style={{ marginBottom: 10, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Final Notes</p>
+                    <textarea
+                      value={packet.packet?.final_notes ?? ""}
+                      onChange={(e) => {
+                        if (!packet) return;
+                        setPacket({
+                          ...packet,
+                          packet: packet.packet ? { ...packet.packet, final_notes: e.target.value } : null,
+                        });
+                      }}
+                      placeholder="Add any final notes for the reviewer…"
+                      rows={3}
+                      style={{ width: "100%", fontSize: 12 }}
+                    />
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                    <button className="btn btn-compact" onClick={buildPacket} disabled={packetLoading}>
+                      {packetLoading ? "Refreshing…" : "Build / Refresh Packet"}
+                    </button>
+                    <button
+                      className="btn-primary btn-compact"
+                      onClick={() => {
+                        if (!packet?.packet) return;
+                        savePacket({
+                          cover_letter: packet.packet.cover_letter ?? undefined,
+                          recruiter_message: packet.packet.recruiter_message ?? undefined,
+                          final_notes: packet.packet.final_notes ?? undefined,
+                        });
+                      }}
+                      disabled={savingPacket}
+                    >
+                      {savingPacket ? "Saving…" : "Save Packet"}
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                    <button
+                      className="btn btn-compact"
+                      onClick={() => {
+                        if (!applicationId) return;
+                        if (!confirm("Mark this packet as ready for review?")) return;
+                        savePacketStatus("ready_for_review");
+                      }}
+                    >
+                      Mark Ready for Review
+                    </button>
+                    <button
+                      className="btn-primary btn-compact"
+                      onClick={approvePacket}
+                      disabled={packet.warnings.some((w) => w.severity === "block")}
+                    >
+                      Approve Packet
+                    </button>
+                    <button
+                      className="btn btn-compact"
+                      onClick={markSent}
+                    >
+                      Mark Sent
+                    </button>
+                  </div>
+
+                  {/* Links */}
+                  <div style={{ marginBottom: 10 }}>
+                    <p style={{ fontSize: 11, fontWeight: 600, margin: "0 0 6px" }}>Links</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <Link href={`/candidates/${appResume?.candidate_id}`} style={{ fontSize: 12 }}>
+                        View Candidate →
+                      </Link>
+                      <Link href={`/jobs/${appResume?.target_job_id}`} style={{ fontSize: 12 }}>
+                        View Job →
+                      </Link>
+                      <Link href="/application-queue" style={{ fontSize: 12 }}>
+                        View Application Queue →
+                      </Link>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

@@ -293,3 +293,36 @@ just the decision.
 - Build: clean. No new direct `supabase.from()` calls in new routes or client code.
 
 Still deferred: PDF/DOCX export, cover letter generation, final packet generation, recruiter message generation.
+
+## Chunk 9 (2026-06-21): DOCX/PDF Export + Final Resume Packet Formatting
+
+- `application_resume_exports` table (migration with CHECK constraints on export_type and status).
+- `applicationResumeExportsRepository.ts` — create, find, list, markFailed, soft-delete.
+- `resumeExportService.ts` — wraps existing `renderResumeDocx` and `renderResumePdf` with export history tracking, safety checks (empty resume, fabrication-risk suggestions), ATS-friendly formatting (removes buzzwords), and professional file naming. `exportResumeAsDocx`, `exportResumeAsPdf`, `exportResumeAsMarkdown` all create export history records before generation and update with file size on success. Markdown renderer outputs clean structured text from ResumeDocument.
+- API routes: `GET /api/applications/[id]/resume-exports`, `POST /api/applications/[id]/resume-exports` (generates file + returns as download), `GET /api/applications/[id]/resume-exports/[exportId]/download` (regenerates on demand), and studio convenience route `POST /api/application-resume-versions/[id]/export`.
+- Studio UI: Export tab with Export DOCX / Export PDF / Preview Markdown buttons, ATS-friendly/include projects/include summary options, export history list with download buttons and failed status display.
+- Activity logging on all export operations (create, success, failure).
+- Build: clean. No new direct `supabase.from()` calls in new routes or client code.
+
+## Chunk 10 (2026-06-22) — Application Packet Builder
+
+The final v1 feature chunk. The internal workflow is now complete:
+- Quick Application → JD Analysis → Job Creation → Keyword Approval → Resume Suggestions → Draft Builder → Export → Packet Builder → Cover Letter → Recruiter Message → Review → Approve → Mark Sent.
+
+New files:
+- `src/server/repositories/applicationPacketsRepository.ts`
+- `src/server/services/applicationPacketBuilderService.ts`
+- `src/server/services/applicationPacketAiService.ts`
+- `src/app/api/applications/[id]/packet/route.ts`
+- `src/app/api/applications/[id]/packet/cover-letter/route.ts`
+- `src/app/api/applications/[id]/packet/recruiter-message/route.ts`
+- `src/app/api/applications/[id]/packet/approve/route.ts`
+- `src/app/api/applications/[id]/packet/mark-sent/route.ts`
+- `supabase/migrations/20260622120000_application_packet_v1.sql`
+- `docs/deployment-readiness.md`
+
+Updated files:
+- `src/app/falood/studio/application/[applicationResumeId]/page.tsx` — added Packet tab
+- `src/server/repositories/applicationPacketsRepository.ts` — fixed type error (offset + limit check)
+
+Deployment readiness: see `docs/deployment-readiness.md` for full env var list, security checklist, and smoke test.

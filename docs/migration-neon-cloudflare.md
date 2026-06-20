@@ -67,3 +67,14 @@ When implementing the quick-application modal (Chunk 4):
 - Do NOT add direct `supabase.from()` calls in the modal or any new feature routes.
 - Use `logActivity()` for activity logging — it's the stable abstraction.
 - Use `getActiveProviderAsync()` for AI calls — it supports DB fallback keys.
+
+## Chunk 10 progress (2026-06-22)
+
+New abstractions added:
+- `applicationPacketsRepository.ts` — packet data-access abstraction
+- `applicationPacketBuilderService.ts` — packet orchestration logic
+- `applicationPacketAiService.ts` — AI generation with safety rules
+
+All new packet routes use repository abstractions. No direct `supabase.from()` calls.
+
+The `docx` and `@react-pdf/renderer` libraries remain Node-only. For Cloudflare Workers migration, these will need adapter review or replacement.

@@ -149,6 +149,24 @@ Still deferred: cover letter generation, final packet generation, recruiter mess
 
 Still deferred: cover letter generation, final packet generation, recruiter message generation, Gmail sending.
 
+## Chunk 10 update (2026-06-22)
+
+**Application Packet Builder + Production Deployment Readiness** — landed.
+
+- `application_packets` table extended with `packet_status`, `resume_export_id`, `final_notes`, `checklist`, `warnings`, `ai_summary`, `reviewed_by`, `approved_by`, `sent_by`, `reviewed_at`, `approved_at`, `sent_at`, `updated_at` (migration `20260622120000_application_packet_v1.sql`).
+- `applicationPacketsRepository.ts` — full CRUD, upsert, status transitions, list with candidate filtering.
+- `applicationPacketBuilderService.ts` — builds packet from application state: loads candidate, job, keywords, evidence, suggestions, resume draft, exports, then builds 11-item checklist and 8 warning types with severity. Upserts packet record automatically.
+- `applicationPacketAiService.ts` — `generateCoverLetterDraft`, `generateRecruiterMessageDraft`, `generatePacketSummary`. Loads approved keywords, rejected keywords (banned), evidence, accepted suggestions, final resume draft. Uses structured AI prompts with safety rules: no invention, no rejected keywords, no missing-evidence claims, professional tone. Returns drafts with optional subject lines and warnings.
+- API routes: `GET /api/applications/[id]/packet` (enriched with builder), `POST /build`, `POST /cover-letter`, `POST /recruiter-message`, `PATCH /packet` (editable fields), `POST /approve`, `POST /mark-sent`. All use repository abstractions, no direct `supabase.from()`.
+- Studio UI: "Packet" tab added to right pane. Shows status badge, selected resume draft, latest export, checklist with pass/warning/missing icons, warnings list, cover letter textarea with generate button (overwrite confirmation), recruiter message textarea with generate button, final notes, action buttons (Build/Refresh, Save, Ready for Review, Approve, Mark Sent), links to candidate/job/queue. Auto-loads on mount. Approval blocked if block-level warnings exist. Export missing warns but can be overridden.
+- `docs/deployment-readiness.md` created with full env var reference, migration order, seed setup, security checklist, rollback checklist, post-deploy smoke test.
+- Build: clean. Typecheck: clean. No new direct `supabase.from()` calls.
+- Deployment target remains Supabase-backed Vercel. Neon/Cloudflare migration documented but not implemented.
+
+Still deferred: Gmail sending, LinkedIn automation, candidate self-login, full Neon migration, full Cloudflare migration, auth migration, R2 migration, NestJS migration.
+
+v1 internal workflow is feature-complete through packet review.
+
 ## Executive summary
 
 The frontend (Next.js + Supabase) is a working internal recruiting/placement tool —

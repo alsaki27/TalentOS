@@ -228,104 +228,55 @@ oversight — the reasoning is included so future work doesn't undo it by accide
   own implementations of the same ideas, built to fit its existing architecture (Supabase
   Realtime instead of Socket.IO, a pluggable storage interface instead of a hard
   dependency on SharePoint).
+- **Chunk 10: Application Packet Builder (Done).** Final v1 workflow feature. Combines all prior
+  chunks into a reviewable application packet: packet status (draft → ready_for_review → approved
+  → sent → archived), checklist with pass/warning/missing states for each workflow step, cover
+  letter and recruiter message generation with AI safety rules, warnings for missing evidence /
+  fabrication risk / missing exports, full studio UI panel with packet management. `docs/deployment-readiness.md`
+  created with full env var reference, security checklist, and smoke test. v1 internal workflow is
+  feature-complete. Next phase: deployment audit and stabilization.
 
 ## Next up (priority order)
 
 1. ~~Bootstrap the first admin account.~~ **Done** — confirmed live: `admin@skarion.local`
    and `engineer@skarion.local` exist in Supabase Auth now. Login is usable.
-2. **Candidate self-login dashboard.** Scoped in
+2. ~~Quick Application Modal.~~ **Done** — Chunk 4 landed 2026-06-19.
+3. ~~JD Keyword Approval + Evidence Mapping.~~ **Done** — Chunk 6 landed.
+4. ~~AI Resume Suggestions + Truth Check.~~ **Done** — Chunk 7 landed.
+5. ~~Resume Draft Builder + Versioning.~~ **Done** — Chunk 8 landed.
+6. ~~DOCX/PDF Export + Final Resume Packet Formatting.~~ **Done** — Chunk 9 landed.
+7. ~~Application Packet Builder + Production Deployment Readiness.~~ **Done** — Chunk 10 landed.
+8. **Candidate self-login dashboard.** Scoped in
    [docs/candidate-self-login.md](./docs/candidate-self-login.md), still not built. The
    current candidate portal is still a magic-link page, not an account/session dashboard.
-3. **Gmail intelligence/email classification.** Gmail OAuth/linking exists, but rejection
+9. **Gmail intelligence/email classification.** Gmail OAuth/linking exists, but rejection
    detection, recruiter-reply detection, interview invite detection, follow-up generation,
    and application-status updates from email are still not implemented.
-4. **Cover-letter generation and deeper tailoring QA.** Resume tailoring now covers
-   editable markdown resume drafts. Cover letters, automated truth scoring, and richer
-   approval workflows are still not implemented as a production workflow.
-5. **Company career pages via Google's `JobPosting` structured data — UI wiring only.**
-   Backend done (see "Done" above) and now also runnable on a schedule via
-   `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
-   one-off manual option — that file is mid-flight with the auth work.
-5. **Application workflow redesign (in progress — Chunk 1 done, Chunk 2 done, Chunk 3 done).**
-   - Chunk 1 (schema foundation): nullable `job_id`, pasted JD storage, AI-extracted job
-     metadata, resume source tracking — landed.
-   - Chunk 2 (JD Analyzer API, parse-only): `POST /api/jobs/analyze` extracts structured
-     data from raw JD text via AI. Returns title, company, skills, salary, red flags, etc.
-     Does NOT create jobs yet — pure analysis endpoint. Role-gated (admin/manager/recruiter/
-     application_engineer only; reviewer excluded).
-   - Chunk 3 (Auto-create job from parsed JD): `POST /api/jobs/from-jd` runs the full
-     parse → dedup → create workflow. Three-pass duplicate detection (exact URL, exact
-     normalized title+company+location, fuzzy Levenshtein). Returns 409 if duplicates found
-     unless `forceCreate: true`. On success, inserts a `pasted_jd` source job with all
-     AI-extracted fields mapped, triggers webhooks, and logs activity. Gated to
-     `MASTER_DATA_MANAGER_ROLES`.
-   - Chunk 3.5 (Portability guardrails + Admin AI key manager): Data-access abstractions
-     (`src/server/repositories/`) prevent new feature routes from adding direct Supabase
-     lock-in. Admin-only `/api/admin/ai-keys` CRUD + test routes. Keys encrypted with
-     AES-256-GCM, fingerprinted, never returned to browser. `getActiveProviderAsync()` supports
-     DB-managed keys as fallback. Migration readiness doc: `docs/migration-neon-cloudflare.md`.
-   - Chunk 4 (Quick Application modal): Global "+ New Application" button in nav bar,
-     visible to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application_engineer).
-     Reviewers excluded. 4-step modal using existing API routes only: (1) candidate search
-     from `/api/candidates`, (2) paste JD + auto-analyze via `/api/jobs/analyze`, (3) review
-     job + handle duplicates via `/api/jobs/from-jd`, (4) create application via
-     `/api/applications` with resume source, status, notes, optional assignment. Ad-hoc
-     path available (skip masterlist job). Does not yet implement full resume source studio
-     integration, keyword approval, or ATS suggestions.
-   - Chunk 5 (Application service abstraction + Resume Source Studio integration):
-     `src/server/repositories/applicationsRepository.ts` provides full data-access abstraction
-     for applications (CRUD, dedup, queue listing, events). `source_type` badge added to
-     `/application-queue` and candidate detail applications table. Resume source selector
-     added to Step 1 of `/candidates/[id]/applications/new` (base_resume / original_resume /
-     blank / manual). `source_type` displayed in Application Resume Studio top bar.
-     Legacy null values fall back to "Legacy" label.
-   - Next chunks: ~~AI suggestion generation (Chunk 6)~~ done, ~~PDF export (Chunk 7)~~ done. See `plan-application-workflow-redesign.md`.
-   - Chunk 6 (JD Keyword Approval + Evidence Mapping): `application_job_keywords` table with CHECK
-     constraints, `src/server/repositories/applicationKeywordsRepository.ts` (CRUD + dedup + bulk update),
-     `src/server/services/applicationKeywordService.ts` (generates keywords from parsed JD or AI fallback),
-     `src/server/services/evidenceMappingService.ts` (deterministic evidence mapping: profile → resume →
-     base resume → evidence bank, never invents). API routes: `GET/PATCH
-     /api/applications/[id]/keywords`, `POST /api/applications/[id]/keywords/generate`, and studio
-     convenience routes via `application-resume-versions/[id]/keywords`. Studio UI panel with
-     approve/reject/pending keyword badges and evidence status indicators.
-   - Chunk 7 (AI Resume Suggestions + Truth Check): `application_resume_suggestions` table with CHECK
-     constraints (suggestion_type, target_section, truth_status, status). Truth-check guardrails:
-     rejected keywords are blocked, missing evidence converts keyword_injection to missing_evidence or
-     truth_warning, fabrication_risk flagged with red background. `src/server/services/resumeContextService.ts`
-     gathers all candidate evidence sources. `src/server/services/resumeSuggestionService.ts` builds AI
-     prompt with approved/rejected keywords + evidence, parses structured JSON response, runs deterministic
-     truth-check, persists suggestions. API routes: `GET/POST
-     /api/applications/[id]/resume-suggestions`, `POST /api/applications/[id]/resume-suggestions/generate`,
-     `PATCH /api/applications/[id]/resume-suggestions/[suggestionId]`, `POST
-     /api/applications/[id]/resume-suggestions/[suggestionId]/apply`, and studio convenience routes via
-     `application-resume-versions/[id]/resume-suggestions`. Studio UI: Generate Suggestions button,
-     truth-status badges (✓ Verified / ⚠ Fabrication Risk / ? Unverified), suggestion-type color coding,
-     Accept & Apply / Accept Only / Reject actions. Warnings are display-only (no apply button).
-   - Chunk 8 (Resume Draft Builder + Versioning from Accepted Suggestions): `applicationResumeVersionsRepository.ts`
-     (find, list, create, update, clone, attach, getCurrentDraft, markAsDraft, markAsFinal, createOrUpdatePacket).
-     `resumeDraftBuilderService.ts` (buildResumeDraftFromAcceptedSuggestions): loads source content by
-     `source_type` (base_resume, original_resume, blank, manual), applies only accepted suggestions with
-     truth_status !== fabrication_risk, skips truth warnings/missing evidence/format improvements, creates
-     a new draft `application_resume_versions` row or updates an existing draft. Never overwrites original
-     or base resume. `applySuggestionToResume` in `resumeSuggestionService.ts` refactored to use repository
-     functions instead of direct `supabase.from()` calls. API routes: `GET /api/applications/[id]/resume-drafts`,
-     `POST /api/applications/[id]/resume-drafts/build`, `PATCH /api/applications/[id]/resume-drafts/[versionId]`,
-     `POST /api/applications/[id]/resume-drafts/[versionId]/attach`, and studio convenience routes via
-     `application-resume-versions/[id]/resume-drafts`. Studio UI: Draft tab with Build New Draft / Update Current
-     Draft buttons, draft list with status badges, draft preview panel, warnings display, Attach to Packet button.
-     Activity logging on draft build, draft save, draft attach, and suggestion application.
-   - Chunk 9 (DOCX/PDF Export + Final Resume Packet Formatting): `application_resume_exports` table
-     (migration with CHECK constraints on export_type and status). `applicationResumeExportsRepository.ts`
-     (create, find, list, markFailed, soft-delete). `resumeExportService.ts` wraps existing `renderResumeDocx`
-     and `renderResumePdf` with export history tracking, safety checks (empty resume, fabrication-risk suggestions),
-     ATS-friendly formatting (removes buzzwords), and professional file naming. `exportResumeAsDocx`,
-     `exportResumeAsPdf`, `exportResumeAsMarkdown` all create export history records before generation and
-     update with file size on success. API routes: `GET /api/applications/[id]/resume-exports`,
-     `POST /api/applications/[id]/resume-exports` (generates file + returns download), `GET /api/applications/[id]/resume-exports/[exportId]/download`
-     (regenerates on demand), and studio convenience route `POST /api/application-resume-versions/[id]/export`.
-     Studio UI: Export tab with DOCX/PDF/Markdown buttons, ATS-friendly/include projects/include summary options,
-     export history list with download buttons and failed status display. Activity logging on all export operations.
-     Cloudflare note: `docx` and `@react-pdf/renderer` are Node-only libraries; adapter review needed during migration.
+10. **Company career pages via Google's `JobPosting` structured data — UI wiring only.**
+    Backend done (see "Done" above) and now also runnable on a schedule via
+    `/import-sources`, but still not wired into the `/jobs` "Import from ATS" modal as a
+    one-off manual option — that file is mid-flight with the auth work.
+11. **Backend migration continuation** — the team's own next-module list in
+    `backend/MIGRATION.md` is accurate and already prioritized; no need to re-derive it here.
+12. **SharePoint delete cleanup** — `deleteStorageFile()` only knows how to clean up
+    Supabase Storage URLs today; switching to SharePoint means replaced/deleted resumes will
+    leak as orphaned files until someone adds a SharePoint-aware delete path. Low urgency
+    (storage-quota drip, not a security or correctness issue), but worth a ticket.
+13. **USAJobs import** — wired but never live-tested end-to-end (no API key was ever
+    available in any environment this was built in). Low priority unless USAJobs is an
+    active sourcing channel.
+
+## Deferred (post-v1)
+
+- Gmail sending integration
+- LinkedIn automation
+- Candidate self-login portal
+- Full Neon Postgres + Cloudflare Workers migration
+- Auth migration (Clerk or Cloudflare Access)
+- R2 / SharePoint storage migration
+- NestJS API migration (if needed)
+
+v1 internal workflow is feature-complete. Next phase: deployment audit and stabilization.
 
 ## Explicitly deferred (not just "later" — needs a real decision first)
 

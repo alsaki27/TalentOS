@@ -1,6 +1,6 @@
 # Security Matrix
 
-Last reviewed: 2026-06-19.
+Last reviewed: 2026-06-22.
 
 TalentOS enforces authorization in the Next.js app layer with `src/middleware.ts`,
 `getCurrentUserContext()`, `requireCurrentUser(roles?)`, public API scopes, and a few
@@ -64,6 +64,13 @@ policies; browser code does not query Supabase directly.
 | `/api/webhooks*` | management/test/event reads | `DESTRUCTIVE_MANAGER_ROLES` | Webhook management is admin/manager. |
 | `/api/interviews*` | create/update/delete/panel management | `MASTER_DATA_MANAGER_ROLES` for mutations; authenticated staff for reads/scorecards | Interview management is gated. |
 | `/api/base-resumes*`, `/api/application-packets*`, `/api/application-resume-versions*`, `/api/target-jobs*` | worker-facing create/edit/delete | `APPLICATION_WORKER_ROLES` for normal work; `DESTRUCTIVE_MANAGER_ROLES` for deletes | Falood/resume workflow routes are role-gated, but ownership rules should be audited before wider rollout. |
+| `/api/applications/[id]/packet` | `GET` | `APPLICATION_WORKER_ROLES` + `reviewer` | Returns packet, checklist, warnings, summary. Reviewer can view. |
+| `/api/applications/[id]/packet` | `POST` | `APPLICATION_WORKER_ROLES` | Builds/refreshes packet from current application state. |
+| `/api/applications/[id]/packet` | `PATCH` | `APPLICATION_WORKER_ROLES` | Updates editable fields: cover_letter, recruiter_message, final_notes, checklist. |
+| `/api/applications/[id]/packet/cover-letter` | `POST` | `APPLICATION_WORKER_ROLES` | Generates/regenerates cover letter draft via AI. |
+| `/api/applications/[id]/packet/recruiter-message` | `POST` | `APPLICATION_WORKER_ROLES` | Generates/regenerates recruiter message draft via AI. |
+| `/api/applications/[id]/packet/approve` | `POST` | `ASSIGNMENT_MANAGER_ROLES` | Marks packet approved. Admin/manager/recruiter only. |
+| `/api/applications/[id]/packet/mark-sent` | `POST` | `ASSIGNMENT_MANAGER_ROLES` | Marks packet sent. Admin/manager/recruiter only. |
 | `/api/cron/*` | `GET` | `CRON_SECRET` bearer token | Cron routes fail closed without `CRON_SECRET`. |
 | `/api/integrations/crawler/jobs`, `/heartbeat` | `POST` | `CRAWLER_API_KEY`, integration keys, or `CRON_SECRET` depending route logic | Bot ingestion is bearer-secret gated. |
 
