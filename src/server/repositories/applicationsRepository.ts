@@ -5,6 +5,8 @@
 // Rule: new feature routes should call this repository, not supabase.from("applications") directly.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | null;
 
@@ -155,6 +157,12 @@ export interface ApplicationQueueResult extends PaginatedApplicationsResult {
  * Find an application by its primary key.
  */
 export async function findApplicationById(id: string): Promise<ApplicationRow | null> {
+  if (isNeon()) {
+    return queryOne<ApplicationRow>(
+      "SELECT * FROM applications WHERE id = $1",
+      [id]
+    );
+  }
   const { data, error } = await supabase
     .from("applications")
     .select("*")
@@ -196,6 +204,24 @@ export async function createApplications(
     created_by: input.created_by ?? null,
   }));
 
+  if (isNeon()) {
+    if (rows.length === 0) return [];
+    const cols = Object.keys(rows[0]);
+    const values: (string | number | boolean | null | Date | object)[] = [];
+    const placeholders: string[] = [];
+    let paramIdx = 1;
+    for (const row of rows) {
+      const rowPlaceholders: string[] = [];
+      for (const col of cols) {
+        rowPlaceholders.push(`$${paramIdx++}`);
+        values.push((row as any)[col]);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+    }
+    const sql = `INSERT INTO applications (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+    return query<ApplicationRow>(sql, values);
+  }
+
   const { data, error } = await supabase.from("applications").insert(rows).select();
   if (error) throw new Error(error.message);
   return (data ?? []) as ApplicationRow[];
@@ -208,6 +234,26 @@ export async function updateApplication(
   id: string,
   input: UpdateApplicationInput
 ): Promise<ApplicationRow> {
+  if (isNeon()) {
+    const updates: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(input)) {
+      if (value !== undefined) updates[key] = value;
+    }
+    if (Object.keys(updates).length === 0) {
+      throw new Error("No fields to update");
+    }
+    updates.updated_at = new Date().toISOString();
+
+    const keys = Object.keys(updates);
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
+    values.push(id);
+    const sql = `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
+    const result = await queryOne<ApplicationRow>(sql, values);
+    if (!result) throw new Error("Update failed");
+    return result;
+  }
+
   const updates: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(input)) {
     if (value !== undefined) updates[key] = value;
@@ -231,6 +277,10 @@ export async function updateApplication(
  * Delete an application by ID.
  */
 export async function deleteApplication(id: string): Promise<void> {
+  if (isNeon()) {
+    await execute("DELETE FROM applications WHERE id = $1", [id]);
+    return;
+  }
   const { error } = await supabase.from("applications").delete().eq("id", id);
   if (error) throw new Error(error.message);
 }
@@ -246,6 +296,13 @@ export async function findExistingCandidateIdsForJob(
   jobId: string,
   candidateIds: string[]
 ): Promise<Set<string>> {
+  if (isNeon()) {
+    const rows = await query<{ candidate_id: string }>(
+      "SELECT candidate_id FROM applications WHERE job_id = $1 AND candidate_id = ANY($2)",
+      [jobId, candidateIds]
+    );
+    return new Set(rows.map((r) => r.candidate_id));
+  }
   const { data: existing } = await supabase
     .from("applications")
     .select("candidate_id")
@@ -266,11 +323,56 @@ const MAX_PAGE_SIZE = 200;
  * List applications with pagination and search (general listing).
  */
 export async function listApplications(
-  query: ListApplicationsQuery
+  queryParams: ListApplicationsQuery
 ): Promise<PaginatedApplicationsResult> {
-  const page = Math.max(1, query.page ?? DEFAULT_PAGE);
-  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, query.pageSize ?? DEFAULT_PAGE_SIZE));
-  const search = (query.search || "").trim().replace(/[,()]/g, "");
+  const page = Math.max(1, queryParams.page ?? DEFAULT_PAGE);
+  const pageSize = Math.min(
+    MAX_PAGE_SIZE,
+    Math.max(1, queryParams.pageSize ?? DEFAULT_PAGE_SIZE)
+  );
+  const search = (queryParams.search || "").trim().replace(/[,()]/g, "");
+
+  if (isNeon()) {
+    const offset = (page - 1) * pageSize;
+    const searchParam = `%${search}%`;
+
+    const dataSql = `
+      SELECT a.*,
+        jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email) as candidates,
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company) as jobs
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2 OR j.title ILIKE $2)
+      ORDER BY a.created_at DESC
+      OFFSET $3 LIMIT $4
+    `;
+    const items = await query<ApplicationRow>(dataSql, [
+      search,
+      searchParam,
+      offset,
+      pageSize,
+    ]);
+
+    const countSql = `
+      SELECT COUNT(*)::int as total
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2 OR j.title ILIKE $2)
+    `;
+    const countRow = await queryOne<{ total: number }>(countSql, [
+      search,
+      searchParam,
+    ]);
+
+    return {
+      items,
+      total: countRow?.total ?? 0,
+      page,
+      pageSize,
+    };
+  }
 
   let dbQuery = supabase
     .from("applications")
@@ -300,16 +402,107 @@ export async function listApplications(
  * List application queue items (assigned/stacked/in_progress) with filters.
  */
 export async function listApplicationQueue(
-  query: ListApplicationsQuery
+  queryParams: ListApplicationsQuery
 ): Promise<ApplicationQueueResult> {
-  const page = Math.max(1, query.page ?? DEFAULT_PAGE);
-  const pageSize = Math.min(100, Math.max(1, query.pageSize ?? DEFAULT_PAGE_SIZE));
-  const search = (query.search || "").trim().replace(/[,()]/g, "");
-  const status = query.status || "";
-  const owner = query.owner || "";
-  const priority = query.priority || "";
-  const review = query.review || "";
-  const view = query.view || "all";
+  const page = Math.max(1, queryParams.page ?? DEFAULT_PAGE);
+  const pageSize = Math.min(100, Math.max(1, queryParams.pageSize ?? DEFAULT_PAGE_SIZE));
+  const search = (queryParams.search || "").trim().replace(/[,()]/g, "");
+  const status = queryParams.status || "";
+  const owner = queryParams.owner || "";
+  const priority = queryParams.priority || "";
+  const review = queryParams.review || "";
+  const view = queryParams.view || "all";
+
+  if (isNeon()) {
+    const offset = (page - 1) * pageSize;
+    const searchParam = `%${search}%`;
+    const statuses = queryParams.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
+    const today = new Date().toISOString().slice(0, 10);
+
+    const dataSql = `
+      SELECT a.id, a.status, a.assigned_by, a.assigned_to, a.assigned_by_user_id, a.assigned_to_user_id,
+        a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
+        a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
+        jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename) as candidates,
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE a.status = ANY($1)
+        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5))
+        AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
+        AND ($8 = '' OR a.status = $8)
+        AND ($9 = '' OR a.assigned_to_user_id = $9 OR a.assigned_to = $9)
+        AND ($10 = '' OR a.priority = $10)
+        AND ($11 = '' OR a.review_status = $11)
+        AND ($12 <> 'mine' OR $13 IS NULL OR a.assigned_to_user_id = $13)
+        AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
+        AND ($12 <> 'review' OR a.review_status = 'pending')
+      ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
+      OFFSET $15 LIMIT $16
+    `;
+    const items = await query<ApplicationRow>(dataSql, [
+      statuses,
+      queryParams.userRole ?? "",
+      queryParams.userId ?? null,
+      queryParams.userEmail ?? null,
+      queryParams.userDisplayName ?? null,
+      search,
+      searchParam,
+      status,
+      owner,
+      priority,
+      review,
+      view,
+      queryParams.userId ?? null,
+      today,
+      offset,
+      pageSize,
+    ]);
+
+    const countSql = `
+      SELECT COUNT(*)::int as total
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE a.status = ANY($1)
+        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5))
+        AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
+        AND ($8 = '' OR a.status = $8)
+        AND ($9 = '' OR a.assigned_to_user_id = $9 OR a.assigned_to = $9)
+        AND ($10 = '' OR a.priority = $10)
+        AND ($11 = '' OR a.review_status = $11)
+        AND ($12 <> 'mine' OR $13 IS NULL OR a.assigned_to_user_id = $13)
+        AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
+        AND ($12 <> 'review' OR a.review_status = 'pending')
+    `;
+    const countRow = await queryOne<{ total: number }>(countSql, [
+      statuses,
+      queryParams.userRole ?? "",
+      queryParams.userId ?? null,
+      queryParams.userEmail ?? null,
+      queryParams.userDisplayName ?? null,
+      search,
+      searchParam,
+      status,
+      owner,
+      priority,
+      review,
+      view,
+      queryParams.userId ?? null,
+      today,
+    ]);
+
+    const stats = await buildQueueStats(queryParams);
+
+    return {
+      items,
+      total: countRow?.total ?? 0,
+      page,
+      pageSize,
+      stats,
+    };
+  }
 
   const selectString = `
     id,
@@ -338,14 +531,14 @@ export async function listApplicationQueue(
   let dbQuery = supabase
     .from("applications")
     .select(selectString, { count: "exact" })
-    .in("status", query.pipelineStatuses ?? ["assigned", "stacked", "in_progress"]);
+    .in("status", queryParams.pipelineStatuses ?? ["assigned", "stacked", "in_progress"]);
 
   // Role-based ownership filter
-  if (query.userRole === "application_engineer") {
+  if (queryParams.userRole === "application_engineer") {
     const ownerFilters = [
-      `assigned_to_user_id.eq.${query.userId}`,
-      query.userEmail ? `assigned_to.eq.${query.userEmail}` : "",
-      query.userDisplayName ? `assigned_to.eq.${query.userDisplayName}` : "",
+      `assigned_to_user_id.eq.${queryParams.userId}`,
+      queryParams.userEmail ? `assigned_to.eq.${queryParams.userEmail}` : "",
+      queryParams.userDisplayName ? `assigned_to.eq.${queryParams.userDisplayName}` : "",
     ]
       .filter(Boolean)
       .join(",");
@@ -365,8 +558,8 @@ export async function listApplicationQueue(
   if (review) dbQuery = dbQuery.eq("review_status", review);
 
   const today = new Date().toISOString().slice(0, 10);
-  if (view === "mine" && query.userId) {
-    dbQuery = dbQuery.eq("assigned_to_user_id", query.userId);
+  if (view === "mine" && queryParams.userId) {
+    dbQuery = dbQuery.eq("assigned_to_user_id", queryParams.userId);
   } else if (view === "overdue") {
     dbQuery = dbQuery.not("assignment_due_at", "is", null).lte("assignment_due_at", today);
   } else if (view === "review") {
@@ -382,7 +575,7 @@ export async function listApplicationQueue(
   if (error) throw new Error(error.message);
 
   // Stats
-  const stats = await buildQueueStats(query);
+  const stats = await buildQueueStats(queryParams);
 
   return {
     items: (data ?? []) as ApplicationRow[],
@@ -393,17 +586,61 @@ export async function listApplicationQueue(
   };
 }
 
-async function buildQueueStats(query: ListApplicationsQuery): Promise<ApplicationQueueStats> {
+async function buildQueueStats(params: ListApplicationsQuery): Promise<ApplicationQueueStats> {
+  if (isNeon()) {
+    const statuses = params.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
+    const today = new Date().toISOString().slice(0, 10);
+
+    const baseWhere = `
+      status = ANY($1)
+      AND ($2 <> 'application_engineer' OR assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $5))
+    `;
+
+    const baseParams = [
+      statuses,
+      params.userRole ?? "",
+      params.userId ?? null,
+      params.userEmail ?? null,
+      params.userDisplayName ?? null,
+    ];
+
+    const [allRow, mineRow, overdueRow, reviewRow] = await Promise.all([
+      queryOne<{ total: number }>(
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere}`,
+        baseParams
+      ),
+      queryOne<{ total: number }>(
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id = $6`,
+        [...baseParams, params.userId ?? ""]
+      ),
+      queryOne<{ total: number }>(
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $6`,
+        [...baseParams, today]
+      ),
+      queryOne<{ total: number }>(
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND review_status = 'pending'`,
+        baseParams
+      ),
+    ]);
+
+    return {
+      all: allRow?.total ?? 0,
+      mine: mineRow?.total ?? 0,
+      overdue: overdueRow?.total ?? 0,
+      pendingReview: reviewRow?.total ?? 0,
+    };
+  }
+
   let q = supabase
     .from("applications")
     .select("id", { count: "exact", head: true })
-    .in("status", query.pipelineStatuses ?? ["assigned", "stacked", "in_progress"]);
+    .in("status", params.pipelineStatuses ?? ["assigned", "stacked", "in_progress"]);
 
-  if (query.userRole === "application_engineer") {
+  if (params.userRole === "application_engineer") {
     const ownerFilters = [
-      `assigned_to_user_id.eq.${query.userId}`,
-      query.userEmail ? `assigned_to.eq.${query.userEmail}` : "",
-      query.userDisplayName ? `assigned_to.eq.${query.userDisplayName}` : "",
+      `assigned_to_user_id.eq.${params.userId}`,
+      params.userEmail ? `assigned_to.eq.${params.userEmail}` : "",
+      params.userDisplayName ? `assigned_to.eq.${params.userDisplayName}` : "",
     ]
       .filter(Boolean)
       .join(",");
@@ -413,7 +650,7 @@ async function buildQueueStats(query: ListApplicationsQuery): Promise<Applicatio
   const today = new Date().toISOString().slice(0, 10);
   const [allRes, mineRes, overdueRes, reviewRes] = await Promise.all([
     q,
-    q.clone().eq("assigned_to_user_id", query.userId ?? ""),
+    q.clone().eq("assigned_to_user_id", params.userId ?? ""),
     q.clone().not("assignment_due_at", "is", null).lte("assignment_due_at", today),
     q.clone().eq("review_status", "pending"),
   ]);
@@ -432,6 +669,22 @@ async function buildQueueStats(query: ListApplicationsQuery): Promise<Applicatio
 export async function listApplicationsForCandidate(
   candidateId: string
 ): Promise<ApplicationRow[]> {
+  if (isNeon()) {
+    const sql = `
+      SELECT a.*,
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs,
+        COALESCE(
+          (SELECT jsonb_agg(ap.*) FROM application_packets ap WHERE ap.application_id = a.id),
+          '[]'::jsonb
+        ) as application_packets
+      FROM applications a
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE a.candidate_id = $1
+      ORDER BY a.applied_at DESC
+    `;
+    return query<ApplicationRow>(sql, [candidateId]);
+  }
+
   const { data, error } = await supabase
     .from("applications")
     .select(
@@ -465,6 +718,23 @@ export interface CreateApplicationEventInput {
 export async function createApplicationEvent(
   input: CreateApplicationEventInput
 ): Promise<ApplicationEventRow> {
+  if (isNeon()) {
+    const sql = `
+      INSERT INTO application_events (application_id, from_status, to_status, note, created_by)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `;
+    const result = await queryOne<ApplicationEventRow>(sql, [
+      input.application_id,
+      input.from_status ?? null,
+      input.to_status ?? null,
+      input.note ?? null,
+      input.created_by ?? null,
+    ]);
+    if (!result) throw new Error("Failed to create application event");
+    return result;
+  }
+
   const { data, error } = await supabase
     .from("application_events")
     .insert({
@@ -486,6 +756,13 @@ export async function createApplicationEvent(
 export async function listApplicationEvents(
   applicationId: string
 ): Promise<ApplicationEventRow[]> {
+  if (isNeon()) {
+    return query<ApplicationEventRow>(
+      "SELECT * FROM application_events WHERE application_id = $1 ORDER BY created_at DESC",
+      [applicationId]
+    );
+  }
+
   const { data, error } = await supabase
     .from("application_events")
     .select("*")

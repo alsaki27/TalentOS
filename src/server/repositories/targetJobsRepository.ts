@@ -1,8 +1,10 @@
 // src/server/repositories/targetJobsRepository.ts
 // Data-access abstraction for the target_jobs table.
-// Implementation uses Supabase today; interface designed for portability.
+// Supports both Neon and Supabase via DB_PROVIDER switch.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne } from "@/server/db/neon";
 
 export interface TargetJobRow {
   id: string;
@@ -20,6 +22,12 @@ export async function findTargetJobByCandidateAndJob(
   candidateId: string,
   jobId: string
 ): Promise<TargetJobRow | null> {
+  if (isNeon()) {
+    return queryOne<TargetJobRow>(
+      "SELECT * FROM target_jobs WHERE candidate_id = $1 AND job_id = $2",
+      [candidateId, jobId]
+    );
+  }
   const { data, error } = await supabase
     .from("target_jobs")
     .select("*")

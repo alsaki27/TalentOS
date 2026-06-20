@@ -1,8 +1,10 @@
 // src/server/repositories/candidatesRepository.ts
 // Data-access abstraction for the candidates table.
-// Implementation uses Supabase today; interface designed for portability.
+// Implementation supports both Supabase and Neon backends.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface CandidateRow {
   id: string;
@@ -28,11 +30,19 @@ export interface CandidateRow {
 }
 
 export async function findCandidateById(id: string): Promise<CandidateRow | null> {
-  const { data, error } = await supabase
-    .from("candidates")
-    .select("*")
-    .eq("id", id)
-    .single();
-  if (error || !data) return null;
-  return data as CandidateRow;
+  if (isNeon()) {
+    const row = await queryOne<CandidateRow>(
+      `SELECT * FROM candidates WHERE id = $1`,
+      [id]
+    );
+    return row ?? null;
+  } else {
+    const { data, error } = await supabase
+      .from("candidates")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error || !data) return null;
+    return data as CandidateRow;
+  }
 }

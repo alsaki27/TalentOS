@@ -1,8 +1,10 @@
 // src/server/repositories/applicationResumeSuggestionsRepository.ts
 // Data-access abstraction for application_resume_suggestions table.
-// Implementation uses Supabase today; interface designed for portability.
+// Implementation supports both Supabase and Neon backends.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db/index";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export type SuggestionType =
   | "content_change"
@@ -74,39 +76,63 @@ export interface UpdateSuggestionInput {
 export async function findSuggestionById(
   id: string
 ): Promise<ApplicationResumeSuggestionRow | null> {
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .select("*")
-    .eq("id", id)
-    .single();
-  if (error || !data) return null;
-  return data as ApplicationResumeSuggestionRow;
+  if (isNeon()) {
+    const row = await queryOne<ApplicationResumeSuggestionRow>(
+      "SELECT * FROM application_resume_suggestions WHERE id = $1",
+      [id]
+    );
+    return row;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error || !data) return null;
+    return data as ApplicationResumeSuggestionRow;
+  }
 }
 
 export async function listSuggestionsByApplication(
   applicationId: string
 ): Promise<ApplicationResumeSuggestionRow[]> {
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .select("*")
-    .eq("application_id", applicationId)
-    .order("created_at", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ApplicationResumeSuggestionRow[];
+  if (isNeon()) {
+    const rows = await query<ApplicationResumeSuggestionRow>(
+      "SELECT * FROM application_resume_suggestions WHERE application_id = $1 ORDER BY created_at ASC",
+      [applicationId]
+    );
+    return rows;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .select("*")
+      .eq("application_id", applicationId)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []) as ApplicationResumeSuggestionRow[];
+  }
 }
 
 export async function listSuggestionsByApplicationAndStatus(
   applicationId: string,
   status: SuggestionStatus
 ): Promise<ApplicationResumeSuggestionRow[]> {
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .select("*")
-    .eq("application_id", applicationId)
-    .eq("status", status)
-    .order("created_at", { ascending: true });
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ApplicationResumeSuggestionRow[];
+  if (isNeon()) {
+    const rows = await query<ApplicationResumeSuggestionRow>(
+      "SELECT * FROM application_resume_suggestions WHERE application_id = $1 AND status = $2 ORDER BY created_at ASC",
+      [applicationId, status]
+    );
+    return rows;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .select("*")
+      .eq("application_id", applicationId)
+      .eq("status", status)
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data ?? []) as ApplicationResumeSuggestionRow[];
+  }
 }
 
 export async function createSuggestion(
@@ -129,13 +155,43 @@ export async function createSuggestion(
     user_notes: input.user_notes ?? null,
   };
 
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .insert(row)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
-  return data as ApplicationResumeSuggestionRow;
+  if (isNeon()) {
+    const created = await queryOne<ApplicationResumeSuggestionRow>(
+      `INSERT INTO application_resume_suggestions (
+        application_id, resume_version_id, keyword_id, suggestion_type,
+        target_section, target_subsection_id, original_text, proposed_text,
+        ai_reasoning, truth_status, truth_check_details, source_evidence,
+        status, user_notes
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *`,
+      [
+        row.application_id,
+        row.resume_version_id,
+        row.keyword_id,
+        row.suggestion_type,
+        row.target_section,
+        row.target_subsection_id,
+        row.original_text,
+        row.proposed_text,
+        row.ai_reasoning,
+        row.truth_status,
+        row.truth_check_details,
+        row.source_evidence,
+        row.status,
+        row.user_notes,
+      ]
+    );
+    if (!created) throw new Error("Failed to create suggestion");
+    return created;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .insert(row)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as ApplicationResumeSuggestionRow;
+  }
 }
 
 export async function createManySuggestions(
@@ -160,12 +216,60 @@ export async function createManySuggestions(
     user_notes: input.user_notes ?? null,
   }));
 
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .insert(rows)
-    .select();
-  if (error) throw new Error(error.message);
-  return (data ?? []) as ApplicationResumeSuggestionRow[];
+  if (isNeon()) {
+    const columns = [
+      "application_id",
+      "resume_version_id",
+      "keyword_id",
+      "suggestion_type",
+      "target_section",
+      "target_subsection_id",
+      "original_text",
+      "proposed_text",
+      "ai_reasoning",
+      "truth_status",
+      "truth_check_details",
+      "source_evidence",
+      "status",
+      "user_notes",
+    ];
+    const values: (string | number | boolean | object | Date | null)[] = [];
+    const placeholders: string[] = [];
+    let paramIndex = 1;
+    for (const r of rows) {
+      const rowPlaceholders: string[] = [];
+      for (let i = 0; i < columns.length; i++) {
+        rowPlaceholders.push(`$${paramIndex++}`);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+      values.push(
+        r.application_id,
+        r.resume_version_id,
+        r.keyword_id,
+        r.suggestion_type,
+        r.target_section,
+        r.target_subsection_id,
+        r.original_text,
+        r.proposed_text,
+        r.ai_reasoning,
+        r.truth_status,
+        r.truth_check_details,
+        r.source_evidence,
+        r.status,
+        r.user_notes
+      );
+    }
+    const sql = `INSERT INTO application_resume_suggestions (${columns.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+    const created = await query<ApplicationResumeSuggestionRow>(sql, values);
+    return created;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .insert(rows)
+      .select();
+    if (error) throw new Error(error.message);
+    return (data ?? []) as ApplicationResumeSuggestionRow[];
+  }
 }
 
 export async function updateSuggestion(
@@ -181,32 +285,51 @@ export async function updateSuggestion(
   }
   updates.updated_at = new Date().toISOString();
 
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .update(updates)
-    .eq("id", id)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
-  return data as ApplicationResumeSuggestionRow;
+  if (isNeon()) {
+    const setFields = Object.keys(updates);
+    const values = setFields.map((k) => updates[k]) as (string | number | boolean | object | Date | null)[];
+    const setClause = setFields.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const sql = `UPDATE application_resume_suggestions SET ${setClause} WHERE id = $${setFields.length + 1} RETURNING *`;
+    values.push(id);
+    const updated = await queryOne<ApplicationResumeSuggestionRow>(sql, values);
+    if (!updated) throw new Error("Failed to update suggestion");
+    return updated;
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .update(updates)
+      .eq("id", id)
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as ApplicationResumeSuggestionRow;
+  }
 }
 
 export async function deleteSuggestion(id: string): Promise<void> {
-  const { error } = await supabase
-    .from("application_resume_suggestions")
-    .delete()
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+  if (isNeon()) {
+    await execute("DELETE FROM application_resume_suggestions WHERE id = $1", [id]);
+  } else {
+    const { error } = await supabase
+      .from("application_resume_suggestions")
+      .delete()
+      .eq("id", id);
+    if (error) throw new Error(error.message);
+  }
 }
 
 export async function deleteSuggestionsByApplicationId(
   applicationId: string
 ): Promise<void> {
-  const { error } = await supabase
-    .from("application_resume_suggestions")
-    .delete()
-    .eq("application_id", applicationId);
-  if (error) throw new Error(error.message);
+  if (isNeon()) {
+    await execute("DELETE FROM application_resume_suggestions WHERE application_id = $1", [applicationId]);
+  } else {
+    const { error } = await supabase
+      .from("application_resume_suggestions")
+      .delete()
+      .eq("application_id", applicationId);
+    if (error) throw new Error(error.message);
+  }
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -227,24 +350,41 @@ export interface SuggestionStats {
 export async function getSuggestionStats(
   applicationId: string
 ): Promise<SuggestionStats> {
-  const { data, error } = await supabase
-    .from("application_resume_suggestions")
-    .select("status, truth_status")
-    .eq("application_id", applicationId);
+  if (isNeon()) {
+    const rows = await query<{ status: SuggestionStatus; truth_status: SuggestionTruthStatus }>(
+      "SELECT status, truth_status FROM application_resume_suggestions WHERE application_id = $1",
+      [applicationId]
+    );
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === "pending").length,
+      accepted: rows.filter((r) => r.status === "accepted").length,
+      rejected: rows.filter((r) => r.status === "rejected").length,
+      applied: rows.filter((r) => r.status === "applied").length,
+      verified: rows.filter((r) => r.truth_status === "verified").length,
+      unverified: rows.filter((r) => r.truth_status === "unverified").length,
+      fabricationRisk: rows.filter((r) => r.truth_status === "fabrication_risk").length,
+    };
+  } else {
+    const { data, error } = await supabase
+      .from("application_resume_suggestions")
+      .select("status, truth_status")
+      .eq("application_id", applicationId);
 
-  if (error) throw new Error(error.message);
+    if (error) throw new Error(error.message);
 
-  const rows = (data ?? []) as { status: SuggestionStatus; truth_status: SuggestionTruthStatus }[];
-  return {
-    total: rows.length,
-    pending: rows.filter((r) => r.status === "pending").length,
-    accepted: rows.filter((r) => r.status === "accepted").length,
-    rejected: rows.filter((r) => r.status === "rejected").length,
-    applied: rows.filter((r) => r.status === "applied").length,
-    verified: rows.filter((r) => r.truth_status === "verified").length,
-    unverified: rows.filter((r) => r.truth_status === "unverified").length,
-    fabricationRisk: rows.filter((r) => r.truth_status === "fabrication_risk").length,
-  };
+    const rows = (data ?? []) as { status: SuggestionStatus; truth_status: SuggestionTruthStatus }[];
+    return {
+      total: rows.length,
+      pending: rows.filter((r) => r.status === "pending").length,
+      accepted: rows.filter((r) => r.status === "accepted").length,
+      rejected: rows.filter((r) => r.status === "rejected").length,
+      applied: rows.filter((r) => r.status === "applied").length,
+      verified: rows.filter((r) => r.truth_status === "verified").length,
+      unverified: rows.filter((r) => r.truth_status === "unverified").length,
+      fabricationRisk: rows.filter((r) => r.truth_status === "fabrication_risk").length,
+    };
+  }
 }
 
 export function groupSuggestionsBySection(

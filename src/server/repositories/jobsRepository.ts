@@ -1,11 +1,12 @@
 // src/server/repositories/jobsRepository.ts
 // Data-access abstraction for the jobs table.
-// Implementation uses Supabase today; the interface is designed to be portable
-// to Neon Postgres or any other SQL-compatible backend.
+// Implementation supports both Supabase and Neon backends.
 // Rule for future chunks: new feature routes should call this repository, not
 // supabase.from("jobs") directly.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface JobRow {
   id: string;
@@ -103,45 +104,91 @@ function similarity(a: string, b: string): number {
  * Find a job by its primary key.
  */
 export async function findJobById(id: string): Promise<JobRow | null> {
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("*")
-    .eq("id", id)
-    .single();
-  if (error || !data) return null;
-  return data as JobRow;
+  if (isNeon()) {
+    const row = await queryOne<JobRow>(
+      `SELECT * FROM jobs WHERE id = $1`,
+      [id]
+    );
+    return row ?? null;
+  } else {
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error || !data) return null;
+    return data as JobRow;
+  }
 }
 
 /**
  * Create a new job row from parsed JD data.
  */
 export async function createJobFromParsedJD(input: CreateJobInput): Promise<JobRow> {
-  const { data, error } = await supabase
-    .from("jobs")
-    .insert({
-      title: input.title,
-      company: input.company ?? null,
-      location: input.location ?? null,
-      source: input.source ?? "manual",
-      source_url: input.source_url ?? null,
-      raw_description: input.raw_description ?? null,
-      parsed_description: input.parsed_description ?? null,
-      ai_extracted_at: input.ai_extracted_at ?? null,
-      ai_confidence_score: input.ai_confidence_score ?? null,
-      employment_type: input.employment_type ?? null,
-      seniority_level: input.seniority_level ?? null,
-      salary_min: input.salary_min ?? null,
-      salary_max: input.salary_max ?? null,
-      salary_currency: input.salary_currency ?? null,
-      salary_period: input.salary_period ?? null,
-      salary_range: input.salary_range ?? null,
-      notes: input.notes ?? null,
-      is_active: input.is_active ?? true,
-    })
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
-  return data as JobRow;
+  if (isNeon()) {
+    const row = await queryOne<JobRow>(
+      `INSERT INTO jobs (
+        title, company, location, source, source_url,
+        raw_description, parsed_description, ai_extracted_at, ai_confidence_score,
+        employment_type, seniority_level, salary_min, salary_max,
+        salary_currency, salary_period, salary_range, notes, is_active
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9,
+        $10, $11, $12, $13,
+        $14, $15, $16, $17, $18
+      ) RETURNING *`,
+      [
+        input.title ?? null,
+        input.company ?? null,
+        input.location ?? null,
+        input.source ?? "manual",
+        input.source_url ?? null,
+        input.raw_description ?? null,
+        input.parsed_description ?? null,
+        input.ai_extracted_at ?? null,
+        input.ai_confidence_score ?? null,
+        input.employment_type ?? null,
+        input.seniority_level ?? null,
+        input.salary_min ?? null,
+        input.salary_max ?? null,
+        input.salary_currency ?? null,
+        input.salary_period ?? null,
+        input.salary_range ?? null,
+        input.notes ?? null,
+        input.is_active ?? true,
+      ]
+    );
+    if (!row) throw new Error("Failed to insert job");
+    return row;
+  } else {
+    const { data, error } = await supabase
+      .from("jobs")
+      .insert({
+        title: input.title,
+        company: input.company ?? null,
+        location: input.location ?? null,
+        source: input.source ?? "manual",
+        source_url: input.source_url ?? null,
+        raw_description: input.raw_description ?? null,
+        parsed_description: input.parsed_description ?? null,
+        ai_extracted_at: input.ai_extracted_at ?? null,
+        ai_confidence_score: input.ai_confidence_score ?? null,
+        employment_type: input.employment_type ?? null,
+        seniority_level: input.seniority_level ?? null,
+        salary_min: input.salary_min ?? null,
+        salary_max: input.salary_max ?? null,
+        salary_currency: input.salary_currency ?? null,
+        salary_period: input.salary_period ?? null,
+        salary_range: input.salary_range ?? null,
+        notes: input.notes ?? null,
+        is_active: input.is_active ?? true,
+      })
+      .select()
+      .single();
+    if (error) throw new Error(error.message);
+    return data as JobRow;
+  }
 }
 
 /**
@@ -157,21 +204,39 @@ export async function findPotentialDuplicateJobs(
 
   // 1. Exact URL match
   if (input.sourceUrl) {
-    const { data: urlMatches } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .eq("source_url", input.sourceUrl);
-    if (urlMatches) {
+    if (isNeon()) {
+      const urlMatches = await query<Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">>(
+        `SELECT id, title, company, location, source_url FROM jobs WHERE source_url = $1`,
+        [input.sourceUrl]
+      );
       for (const job of urlMatches) {
         results.push({
-          id: job.id as string,
-          title: job.title as string,
+          id: job.id,
+          title: job.title,
           company: job.company ?? null,
           location: job.location ?? null,
           source_url: job.source_url ?? null,
           matchType: "exact_url",
           matchScore: 1.0,
         });
+      }
+    } else {
+      const { data: urlMatches } = await supabase
+        .from("jobs")
+        .select("id, title, company, location, source_url")
+        .eq("source_url", input.sourceUrl);
+      if (urlMatches) {
+        for (const job of urlMatches) {
+          results.push({
+            id: job.id as string,
+            title: job.title as string,
+            company: job.company ?? null,
+            location: job.location ?? null,
+            source_url: job.source_url ?? null,
+            matchType: "exact_url",
+            matchScore: 1.0,
+          });
+        }
       }
     }
   }
@@ -182,20 +247,18 @@ export async function findPotentialDuplicateJobs(
   const nLocation = normalizeForMatch(input.location);
 
   if (nTitle && nCompany) {
-    const { data: exactMatches } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .not("title", "is", null);
-
-    if (exactMatches) {
+    if (isNeon()) {
+      const exactMatches = await query<Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">>(
+        `SELECT id, title, company, location, source_url FROM jobs WHERE title IS NOT NULL`
+      );
       for (const job of exactMatches) {
         if (results.some((r) => r.id === job.id)) continue;
         const jobKey = matchKey(job.title ?? "", job.company, job.location);
         const inputKey = matchKey(input.title ?? "", input.company, input.location);
         if (jobKey === inputKey) {
           results.push({
-            id: job.id as string,
-            title: job.title as string,
+            id: job.id,
+            title: job.title,
             company: job.company ?? null,
             location: job.location ?? null,
             source_url: job.source_url ?? null,
@@ -204,17 +267,39 @@ export async function findPotentialDuplicateJobs(
           });
         }
       }
+    } else {
+      const { data: exactMatches } = await supabase
+        .from("jobs")
+        .select("id, title, company, location, source_url")
+        .not("title", "is", null);
+
+      if (exactMatches) {
+        for (const job of exactMatches) {
+          if (results.some((r) => r.id === job.id)) continue;
+          const jobKey = matchKey(job.title ?? "", job.company, job.location);
+          const inputKey = matchKey(input.title ?? "", input.company, input.location);
+          if (jobKey === inputKey) {
+            results.push({
+              id: job.id as string,
+              title: job.title as string,
+              company: job.company ?? null,
+              location: job.location ?? null,
+              source_url: job.source_url ?? null,
+              matchType: "exact_match",
+              matchScore: 1.0,
+            });
+          }
+        }
+      }
     }
   }
 
   // 3. Fuzzy match against all existing jobs
   if (nTitle && nCompany) {
-    const { data: allJobs } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .not("title", "is", null);
-
-    if (allJobs) {
+    if (isNeon()) {
+      const allJobs = await query<Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">>(
+        `SELECT id, title, company, location, source_url FROM jobs WHERE title IS NOT NULL`
+      );
       for (const job of allJobs) {
         if (results.some((r) => r.id === job.id)) continue;
         const existingTitle = normalizeForMatch(job.title);
@@ -229,14 +314,46 @@ export async function findPotentialDuplicateJobs(
 
         if (titleSim >= 0.9 && companySim >= 0.86 && locationSim >= 0.86) {
           results.push({
-            id: job.id as string,
-            title: job.title as string,
+            id: job.id,
+            title: job.title,
             company: job.company ?? null,
             location: job.location ?? null,
             source_url: job.source_url ?? null,
             matchType: "fuzzy",
             matchScore: Math.round(score * 1000) / 1000,
           });
+        }
+      }
+    } else {
+      const { data: allJobs } = await supabase
+        .from("jobs")
+        .select("id, title, company, location, source_url")
+        .not("title", "is", null);
+
+      if (allJobs) {
+        for (const job of allJobs) {
+          if (results.some((r) => r.id === job.id)) continue;
+          const existingTitle = normalizeForMatch(job.title);
+          const existingCompany = normalizeForMatch(job.company);
+          const existingLocation = normalizeForMatch(job.location);
+
+          const titleSim = existingTitle ? similarity(nTitle, existingTitle) : 0;
+          const companySim = nCompany && existingCompany ? similarity(nCompany, existingCompany) : 1;
+          const locationSim = nLocation && existingLocation ? similarity(nLocation, existingLocation) : 1;
+
+          const score = (titleSim + companySim + locationSim) / 3;
+
+          if (titleSim >= 0.9 && companySim >= 0.86 && locationSim >= 0.86) {
+            results.push({
+              id: job.id as string,
+              title: job.title as string,
+              company: job.company ?? null,
+              location: job.location ?? null,
+              source_url: job.source_url ?? null,
+              matchType: "fuzzy",
+              matchScore: Math.round(score * 1000) / 1000,
+            });
+          }
         }
       }
     }
@@ -252,11 +369,18 @@ export async function findPotentialDuplicateJobs(
 export async function listJobsForDedupe(): Promise<
   Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">[]
 > {
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("id, title, company, location, source_url")
-    .not("title", "is", null)
-    .eq("is_active", true);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">[];
+  if (isNeon()) {
+    const rows = await query<Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">>(
+      `SELECT id, title, company, location, source_url FROM jobs WHERE title IS NOT NULL AND is_active = true`
+    );
+    return rows ?? [];
+  } else {
+    const { data, error } = await supabase
+      .from("jobs")
+      .select("id, title, company, location, source_url")
+      .not("title", "is", null)
+      .eq("is_active", true);
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">[];
+  }
 }
