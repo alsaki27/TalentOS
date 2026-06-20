@@ -24,6 +24,11 @@ yarn-error.log*
 # env files (secrets — never commit)
 .env*.local
 .env
+.dev.vars
+
+# wrangler build output
+.worker-next/
+.open-next/
 
 # vercel
 .vercel

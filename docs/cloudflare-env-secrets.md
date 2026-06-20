@@ -1,8 +1,10 @@
 # Cloudflare Environment Secrets Setup — TalentOS/Skarion Tracker
 
 **Created:** 2026-07-07
-**Target:** Cloudflare Workers/Pages with OpenNext
+**Target:** Cloudflare Workers/Pages with OpenNext (FREE TIER)
 **Auth:** Supabase Auth kept temporarily (Hybrid Option A)
+
+> **Free Tier Limits:** 100,000 requests/day, 10ms CPU per request, 128MB memory per worker. No Hyperdrive. No Durable Objects. KV: 1,000 reads/day, 1,000 writes/day, 1GB storage.
 
 ---
 

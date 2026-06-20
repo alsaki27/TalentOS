@@ -2,6 +2,8 @@
 
 Last updated: 2026-07-07
 
+> **Deployment Target:** Cloudflare Workers FREE TIER + Neon Postgres (free tier also available). Supabase Auth/Storage kept temporarily.
+
 ## Deployment Target
 
 The app supports two deployment targets:
@@ -9,7 +11,9 @@ The app supports two deployment targets:
 | Target | Database | Auth | Storage | Runtime | Status |
 |--------|----------|------|---------|---------|--------|
 | **Vercel + Supabase** (current) | Supabase Postgres | Supabase Auth | Supabase Storage | Node.js | ✅ Working |
-| **Cloudflare + Neon** (in progress) | Neon Postgres | Supabase Auth (temp) | Supabase Storage (temp) | Cloudflare Workers | 🚧 Infrastructure ready |
+| **Cloudflare + Neon** (in progress) | Neon Postgres | Supabase Auth (temp) | Supabase Storage (temp) | Cloudflare Workers FREE TIER | 🚧 Infrastructure ready |
+
+> **Free Tier Limits:** 100,000 requests/day, 10ms CPU per request, 128MB memory. No Hyperdrive needed. KV optional for ISR cache (1,000 reads/day, 1,000 writes/day).
 
 ## Required Environment Variables
 
