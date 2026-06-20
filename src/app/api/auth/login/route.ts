@@ -1,76 +1,66 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, publicUserProfile } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-
-function authClient() {
-  const url = process.env.SUPABASE_URL;
-  const authKey = process.env.SUPABASE_ANON_KEY
-    ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!url || !authKey) return null;
-
-  return createClient(url, authKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: {
-      fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }),
-    },
-  });
-}
+import { verifyPassword } from "@/server/auth/crypto";
+import { createJWT } from "@/server/auth/jwt";
+import { queryOne } from "@/server/db/neon";
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const email = String(body.email ?? "").trim();
+  const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
 
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password are required." }, { status: 400 });
   }
 
-  const client = authClient();
-  if (!client) {
-    return NextResponse.json(
-      { error: "Supabase auth environment variables are required for login." },
-      { status: 500 },
-    );
-  }
+  const profile = await queryOne<{
+    user_id: string;
+    email: string;
+    display_name: string;
+    role: string;
+    is_active: boolean;
+    password_hash: string | null;
+  }>(
+    "SELECT user_id, email, display_name, role, is_active, password_hash FROM profiles WHERE email = $1",
+    [email]
+  );
 
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
-  if (error || !data.session || !data.user) {
+  if (!profile) {
     return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("user_id, email, display_name, role, is_active")
-    .eq("user_id", data.user.id)
-    .maybeSingle();
-
-  if (profileError) {
-    return NextResponse.json({ error: "Could not complete login." }, { status: 500 });
-  }
-
-  if (!profile) {
-    return NextResponse.json(
-      { error: "Login succeeded, but no TalentOS profile exists. Run npm run seed:admin or contact admin." },
-      { status: 403 },
-    );
-  }
-
-  if (!profile?.is_active) {
+  if (!profile.is_active) {
     return NextResponse.json({ error: "This user is inactive." }, { status: 403 });
   }
 
+  if (!profile.password_hash) {
+    return NextResponse.json(
+      { error: "Account requires password reset. Contact your administrator." },
+      { status: 403 }
+    );
+  }
+
+  const valid = await verifyPassword(password, profile.password_hash);
+  if (!valid) {
+    return NextResponse.json({ error: "Invalid email or password." }, { status: 401 });
+  }
+
+  const token = await createJWT({
+    user_id: profile.user_id,
+    email: profile.email,
+    role: profile.role,
+  });
+
   const secure = process.env.NODE_ENV === "production";
-  cookies().set(ACCESS_TOKEN_COOKIE, data.session.access_token, {
+  cookies().set(ACCESS_TOKEN_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure,
     path: "/",
-    maxAge: data.session.expires_in,
+    maxAge: 60 * 60 * 24 * 7,
   });
-  cookies().set(REFRESH_TOKEN_COOKIE, data.session.refresh_token, {
+  cookies().set(REFRESH_TOKEN_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure,
@@ -79,7 +69,7 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({
-    user: { id: data.user.id, email: data.user.email },
-    profile: publicUserProfile(profile),
+    user: { id: profile.user_id, email: profile.email },
+    profile: publicUserProfile(profile as any),
   });
 }

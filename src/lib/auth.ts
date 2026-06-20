@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import type { User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { verifyJWT } from "@/server/auth/jwt";
+import { queryOne } from "@/server/db/neon";
 
 export const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 export const REFRESH_TOKEN_COOKIE = "skarion_refresh_token";
@@ -17,7 +17,7 @@ export interface UserProfile {
 }
 
 export interface CurrentUserContext {
-  user: User;
+  user: { id: string; email: string | null };
   profile: UserProfile;
 }
 
@@ -35,17 +35,20 @@ export async function getCurrentUserContext(): Promise<CurrentUserContext | null
   const token = cookies().get(ACCESS_TOKEN_COOKIE)?.value;
   if (!token) return null;
 
-  const { data, error } = await supabase.auth.getUser(token);
-  if (error || !data.user) return null;
+  const jwtPayload = await verifyJWT(token);
+  if (!jwtPayload) return null;
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .select("user_id, email, display_name, role, is_active")
-    .eq("user_id", data.user.id)
-    .maybeSingle();
+  const profile = await queryOne<UserProfile>(
+    "SELECT user_id, email, display_name, role, is_active FROM profiles WHERE user_id = $1",
+    [jwtPayload.user_id]
+  );
 
-  if (profileError || !profile || !profile.is_active) return null;
-  return { user: data.user, profile: profile as UserProfile };
+  if (!profile || !profile.is_active) return null;
+
+  return {
+    user: { id: jwtPayload.user_id, email: jwtPayload.email },
+    profile,
+  };
 }
 
 export async function requireCurrentUser(allowedRoles?: UserRole[]) {

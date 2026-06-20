@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, type UserRole } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { hashPassword } from "@/server/auth/crypto";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -11,7 +11,6 @@ export async function GET() {
   if (response) return response;
 
   let data: any[];
-  let error: any;
 
   if (isNeon()) {
     let sql = 'SELECT user_id, email, display_name, role, is_active FROM profiles ORDER BY display_name ASC';
@@ -21,8 +20,8 @@ export async function GET() {
       params.push(true);
     }
     data = await query(sql, params);
-    error = null;
   } else {
+    const { supabase } = await import("@/lib/supabase");
     let dbQuery = supabase
       .from("profiles")
       .select("user_id, email, display_name, role, is_active")
@@ -34,10 +33,8 @@ export async function GET() {
 
     const res = await dbQuery;
     data = res.data ?? [];
-    error = res.error;
   }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
 }
 
@@ -61,43 +58,32 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid role." }, { status: 400 });
   }
 
-  // Auth stays on Supabase
-  const { data: created, error: createError } = await supabase.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: {
-      display_name: displayName,
-      role,
-    },
-  });
-
-  if (createError || !created.user) {
-    return NextResponse.json({ error: createError?.message ?? "Could not create user." }, { status: 500 });
-  }
+  // Generate user_id and hash password
+  const userId = crypto.randomUUID();
+  const passwordHash = await hashPassword(password);
 
   let profile: any;
-  let profileError: any;
 
   if (isNeon()) {
     profile = await queryOne(
-      `INSERT INTO profiles (user_id, email, display_name, role, is_active, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO profiles (user_id, email, display_name, role, is_active, password_hash, email_verified, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id) DO UPDATE SET
          email = EXCLUDED.email,
          display_name = EXCLUDED.display_name,
          role = EXCLUDED.role,
          is_active = EXCLUDED.is_active,
+         password_hash = EXCLUDED.password_hash,
          updated_at = EXCLUDED.updated_at
        RETURNING user_id, email, display_name, role, is_active`,
-      [created.user.id, email, displayName, role, true, new Date().toISOString()]
+      [userId, email, displayName, role, true, passwordHash, true, new Date().toISOString()]
     );
-    profileError = profile ? null : { message: 'Profile upsert failed' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("profiles")
       .upsert({
-        user_id: created.user.id,
+        user_id: userId,
         email,
         display_name: displayName,
         role,
@@ -107,10 +93,11 @@ export async function POST(req: NextRequest) {
       .select("user_id, email, display_name, role, is_active")
       .single();
     profile = res.data;
-    profileError = res.error;
   }
 
-  if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
+  if (!profile) {
+    return NextResponse.json({ error: "Could not create user." }, { status: 500 });
+  }
 
   if (isNeon()) {
     await execute(
@@ -120,17 +107,18 @@ export async function POST(req: NextRequest) {
         context?.profile.email,
         'user.created',
         'profile',
-        created.user.id,
+        userId,
         { email, role },
       ]
     );
   } else {
+    const { supabase } = await import("@/lib/supabase");
     await supabase.from("audit_logs").insert({
       actor_user_id: context?.profile.user_id,
       actor_email: context?.profile.email,
       action: "user.created",
       entity_type: "profile",
-      entity_id: created.user.id,
+      entity_id: userId,
       metadata: { email, role },
     });
   }

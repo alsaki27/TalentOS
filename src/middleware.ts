@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyJWT } from "@/server/auth/jwt";
+import { queryOne } from "@/server/db/neon";
 
 const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 
@@ -21,42 +23,16 @@ function isPublicPath(pathname: string) {
 }
 
 async function getVerifiedSession(token: string) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    ?? process.env.SUPABASE_ANON_KEY
-    ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const jwtPayload = await verifyJWT(token);
+  if (!jwtPayload) return null;
 
-  if (!supabaseUrl || !supabaseKey) return null;
-
-  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    headers: {
-      apikey: supabaseKey,
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-
-  if (!userRes.ok) return null;
-  const user = await userRes.json();
-  if (!user?.id) return null;
-
-  const profileRes = await fetch(
-    `${supabaseUrl}/rest/v1/profiles?select=user_id,role,is_active&user_id=eq.${user.id}&limit=1`,
-    {
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-      },
-      cache: "no-store",
-    },
+  const profile = await queryOne<{ user_id: string; role: string; is_active: boolean }>(
+    "SELECT user_id, role, is_active FROM profiles WHERE user_id = $1",
+    [jwtPayload.user_id]
   );
 
-  if (!profileRes.ok) return null;
-  const profiles = await profileRes.json();
-  const profile = profiles?.[0];
-  if (!profile?.is_active) return null;
-
-  return { userId: user.id as string, role: profile.role as string };
+  if (!profile || !profile.is_active) return null;
+  return { userId: jwtPayload.user_id, role: profile.role };
 }
 
 // Vercel Cron invokes this without a session cookie — gated by a bearer secret
