@@ -13,6 +13,9 @@
 // resumes (see ROADMAP/PLAN — Architecture decision #9).
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
+import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { getActiveProvider } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { emptyResumeDocument, FaloodCommandResult, ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
@@ -40,38 +43,58 @@ const SKARION_STYLE_GUIDE = `Skarion resume format:
 
 interface BaseResumeContext {
   baseResume: { id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string };
-  candidate: { id: string; name: string; email: string | null; phone: string | null; work_authorization: string | null; linkedin_url: string | null; github_url: string | null; portfolio_url: string | null };
+  candidate: { id: string; name: string | null; email: string | null; phone: string | null; work_authorization: string | null; linkedin_url: string | null; github_url: string | null; portfolio_url: string | null };
   evidence: Array<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>;
   originalParsedResume: Record<string, unknown> | null;
 }
 
 async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | null> {
-  const { data: baseResume } = await supabase
-    .from("base_resumes")
-    .select("id, name, target_industry, target_roles, content, status, candidate_id")
-    .eq("id", baseResumeId)
-    .single();
+  const baseResume = isNeon()
+    ? await queryOne<{ id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string; candidate_id: string }>(
+        "SELECT * FROM base_resumes WHERE id = $1",
+        [baseResumeId]
+      )
+    : await supabase
+        .from("base_resumes")
+        .select("id, name, target_industry, target_roles, content, status, candidate_id")
+        .eq("id", baseResumeId)
+        .single()
+        .then((r: any) => r.data ?? null);
   if (!baseResume) return null;
 
-  const [{ data: candidate }, { data: evidence }, { data: originalResume }] = await Promise.all([
-    supabase.from("candidates")
-      .select("id, name, email, phone, work_authorization, linkedin_url, github_url, portfolio_url")
-      .eq("id", baseResume.candidate_id).single(),
-    supabase.from("candidate_evidence")
-      .select("title, description, related_skills, source_type, confidence_score")
-      .eq("candidate_id", baseResume.candidate_id),
-    supabase.from("resumes")
-      .select("parsed_json")
-      .eq("candidate_id", baseResume.candidate_id)
-      .eq("is_original_upload", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+  const [candidate, evidence, originalResume] = await Promise.all([
+    findCandidateById(baseResume.candidate_id),
+    isNeon()
+      ? query<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>(
+          "SELECT title, description, related_skills, source_type, confidence_score FROM candidate_evidence WHERE candidate_id = $1",
+          [baseResume.candidate_id]
+        )
+      : supabase
+          .from("candidate_evidence")
+          .select("title, description, related_skills, source_type, confidence_score")
+          .eq("candidate_id", baseResume.candidate_id)
+          .then((r: { data: any[] | null }) => r.data ?? []),
+    isNeon()
+      ? queryOne<{ parsed_json: Record<string, unknown> }>(
+          "SELECT parsed_json FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
+          [baseResume.candidate_id]
+        )
+      : supabase
+          .from("resumes")
+          .select("parsed_json")
+          .eq("candidate_id", baseResume.candidate_id)
+          .eq("is_original_upload", true)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .then((r: { data: { parsed_json: Record<string, unknown> } | null }) => r.data ?? null),
   ]);
+
+  if (!candidate) return null;
 
   return {
     baseResume,
-    candidate: candidate!,
+    candidate,
     evidence: evidence ?? [],
     originalParsedResume: (originalResume?.parsed_json as Record<string, unknown>) ?? null,
   };

@@ -6,6 +6,9 @@
 // `jobs` table instead of a separate one.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
+import { findJobByExternalIdAndSource, updateJob, createJob } from "@/server/repositories/jobsRepository";
 
 export interface CrawlerJobPayload {
   title: string;
@@ -33,12 +36,7 @@ export async function upsertCrawlerJob(payload: CrawlerJobPayload) {
     throw new Error("title and externalId are required");
   }
 
-  const { data: existing } = await supabase
-    .from("jobs")
-    .select("id")
-    .eq("external_job_id", payload.externalId)
-    .eq("source", "crawler")
-    .maybeSingle();
+  const existing = await findJobByExternalIdAndSource(payload.externalId, "crawler");
 
   const row = {
     title: payload.title,
@@ -55,17 +53,24 @@ export async function upsertCrawlerJob(payload: CrawlerJobPayload) {
   };
 
   if (existing) {
-    const { data, error } = await supabase.from("jobs").update(row).eq("id", existing.id).select().single();
-    if (error) throw error;
+    const data = await updateJob(existing.id, row);
     return { job: data, created: false };
   }
 
-  const { data, error } = await supabase.from("jobs").insert(row).select().single();
-  if (error) throw error;
+  const data = await createJob(row);
   return { job: data, created: true };
 }
 
 export async function recordHeartbeat(crawlerName: string, isActive: boolean, message?: string) {
+  if (isNeon()) {
+    const data = await queryOne<any>(
+      `INSERT INTO job_crawler_status (crawler_name, is_active, message, last_heartbeat_at, updated_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (crawler_name) DO UPDATE SET is_active = EXCLUDED.is_active, message = EXCLUDED.message, last_heartbeat_at = EXCLUDED.last_heartbeat_at, updated_at = EXCLUDED.updated_at
+       RETURNING *`,
+      [crawlerName, isActive, message ?? null, new Date().toISOString(), new Date().toISOString()]
+    );
+    return data;
+  }
   const { data, error } = await supabase
     .from("job_crawler_status")
     .upsert(
@@ -87,6 +92,13 @@ export function computeIsOnline(lastHeartbeatAt: string | null, offlineThreshold
 }
 
 export async function getCrawlerStatuses() {
+  if (isNeon()) {
+    const data = await query<any>("SELECT * FROM job_crawler_status ORDER BY crawler_name ASC");
+    return (data ?? []).map((row: any) => ({
+      ...row,
+      isOnline: row.is_active && computeIsOnline(row.last_heartbeat_at, row.offline_threshold_minutes),
+    }));
+  }
   const { data, error } = await supabase.from("job_crawler_status").select("*").order("crawler_name", { ascending: true });
   if (error) throw error;
   return (data ?? []).map((row: any) => ({

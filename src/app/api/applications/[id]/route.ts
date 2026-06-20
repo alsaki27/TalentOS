@@ -8,6 +8,13 @@ import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
+import {
+  findApplicationById,
+  updateApplication,
+  deleteApplication,
+} from "@/server/repositories/applicationsRepository";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json();
@@ -64,11 +71,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
   if ("status" in updates) {
-    const { data: current } = await supabase
-      .from("applications")
-      .select("status, review_status")
-      .eq("id", params.id)
-      .single();
+    const current = await findApplicationById(params.id);
     previousStatus = current?.status ?? null;
     previousReviewStatus = current?.review_status ?? null;
   }
@@ -102,51 +105,69 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  const { data, error } = await supabase
-    .from("applications")
-    .update(updates)
-    .eq("id", params.id)
-    .select()
-    .single();
+  try {
+    const data = await updateApplication(params.id, updates);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if ("status" in updates && updates.status !== previousStatus) {
+      if (isNeon()) {
+        await execute(
+          'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
+          [params.id, previousStatus, updates.status, body.event_note ?? null]
+        );
+      } else {
+        await supabase.from("application_events").insert({
+          application_id: params.id,
+          from_status: previousStatus,
+          to_status: updates.status,
+          note: body.event_note ?? null,
+        });
+      }
+    }
 
-  if ("status" in updates && updates.status !== previousStatus) {
-    await supabase.from("application_events").insert({
-      application_id: params.id,
-      from_status: previousStatus,
-      to_status: updates.status,
-      note: body.event_note ?? null,
-    });
+    if (currentUser) {
+      if (isNeon()) {
+        await execute(
+          'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+          [
+            currentUser.profile.user_id,
+            currentUser.profile.email,
+            'application.updated',
+            'application',
+            params.id,
+            JSON.stringify({ fields: Object.keys(updates) }),
+          ]
+        );
+      } else {
+        await supabase.from("audit_logs").insert({
+          actor_user_id: currentUser.profile.user_id,
+          actor_email: currentUser.profile.email,
+          action: "application.updated",
+          entity_type: "application",
+          entity_id: params.id,
+          metadata: { fields: Object.keys(updates) },
+        });
+      }
+
+      await logActivity({
+        userId: currentUser.profile.user_id,
+        actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
+        type: "update",
+        description: `Updated application ${params.id}`,
+        entityType: "application",
+        entityId: params.id,
+        metadata: { fields: Object.keys(updates) },
+      });
+      void triggerWebhooks("application.updated", {
+        application_id: params.id,
+        updates: Object.keys(updates),
+        updated_by: currentUser.profile.user_id,
+      });
+    }
+
+    return NextResponse.json(data);
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  if (currentUser) {
-    await supabase.from("audit_logs").insert({
-      actor_user_id: currentUser.profile.user_id,
-      actor_email: currentUser.profile.email,
-      action: "application.updated",
-      entity_type: "application",
-      entity_id: params.id,
-      metadata: { fields: Object.keys(updates) },
-    });
-
-    await logActivity({
-      userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
-      type: "update",
-      description: `Updated application ${params.id}`,
-      entityType: "application",
-      entityId: params.id,
-      metadata: { fields: Object.keys(updates) },
-    });
-    void triggerWebhooks("application.updated", {
-      application_id: params.id,
-      updates: Object.keys(updates),
-      updated_by: currentUser.profile.user_id,
-    });
-  }
-
-  return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -157,30 +178,47 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (!hasRole(currentUser.profile, ASSIGNMENT_MANAGER_ROLES)) {
     return NextResponse.json({ error: "Only admins, managers, and recruiters can remove assignments." }, { status: 403 });
   }
-  const { error } = await supabase.from("applications").delete().eq("id", params.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (currentUser) {
-    await supabase.from("audit_logs").insert({
-      actor_user_id: currentUser.profile.user_id,
-      actor_email: currentUser.profile.email,
-      action: "application.deleted",
-      entity_type: "application",
-      entity_id: params.id,
-    });
+  try {
+    await deleteApplication(params.id);
 
-    await logActivity({
-      userId: currentUser.profile.user_id,
-      actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
-      type: "delete",
-      description: `Deleted application ${params.id}`,
-      entityType: "application",
-      entityId: params.id,
-    });
-    void triggerWebhooks("application.deleted", {
-      application_id: params.id,
-      deleted_by: currentUser.profile.user_id,
-    });
+    if (currentUser) {
+      if (isNeon()) {
+        await execute(
+          'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)',
+          [
+            currentUser.profile.user_id,
+            currentUser.profile.email,
+            'application.deleted',
+            'application',
+            params.id,
+          ]
+        );
+      } else {
+        await supabase.from("audit_logs").insert({
+          actor_user_id: currentUser.profile.user_id,
+          actor_email: currentUser.profile.email,
+          action: "application.deleted",
+          entity_type: "application",
+          entity_id: params.id,
+        });
+      }
+
+      await logActivity({
+        userId: currentUser.profile.user_id,
+        actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
+        type: "delete",
+        description: `Deleted application ${params.id}`,
+        entityType: "application",
+        entityId: params.id,
+      });
+      void triggerWebhooks("application.deleted", {
+        application_id: params.id,
+        deleted_by: currentUser.profile.user_id,
+      });
+    }
+    return NextResponse.json({ ok: true });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ ok: true });
 }

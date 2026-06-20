@@ -4,6 +4,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -15,25 +17,70 @@ export async function GET(req: NextRequest) {
   const dateFrom = url.searchParams.get("dateFrom") || null;
   const dateTo = url.searchParams.get("dateTo") || null;
 
-  // 1. Candidates sourced
-  let candQuery = supabase.from("candidates").select("created_by");
-  if (dateFrom) candQuery = candQuery.gte("created_at", dateFrom);
-  if (dateTo) candQuery = candQuery.lte("created_at", dateTo);
-  const { data: candidates } = await candQuery;
+  let candidates: any[];
+  let applications: any[];
+  let interviews: any[];
 
-  // 2. Applications processed
-  let appQuery = supabase
-    .from("applications")
-    .select("created_by, status, job_id, created_at");
-  if (dateFrom) appQuery = appQuery.gte("created_at", dateFrom);
-  if (dateTo) appQuery = appQuery.lte("created_at", dateTo);
-  const { data: applications } = await appQuery;
+  if (isNeon()) {
+    let candSql = 'SELECT created_by FROM candidates WHERE 1=1';
+    const candParams: any[] = [];
+    if (dateFrom) {
+      candParams.push(dateFrom);
+      candSql += ` AND created_at >= $${candParams.length}`;
+    }
+    if (dateTo) {
+      candParams.push(dateTo);
+      candSql += ` AND created_at <= $${candParams.length}`;
+    }
+    candidates = await query(candSql, candParams);
 
-  // 3. Interviews scheduled
-  let intQuery = supabase.from("interview_schedules").select("created_by");
-  if (dateFrom) intQuery = intQuery.gte("created_at", dateFrom);
-  if (dateTo) intQuery = intQuery.lte("created_at", dateTo);
-  const { data: interviews } = await intQuery;
+    let appSql = 'SELECT created_by, status, job_id, created_at FROM applications WHERE 1=1';
+    const appParams: any[] = [];
+    if (dateFrom) {
+      appParams.push(dateFrom);
+      appSql += ` AND created_at >= $${appParams.length}`;
+    }
+    if (dateTo) {
+      appParams.push(dateTo);
+      appSql += ` AND created_at <= $${appParams.length}`;
+    }
+    applications = await query(appSql, appParams);
+
+    let intSql = 'SELECT created_by FROM interview_schedules WHERE 1=1';
+    const intParams: any[] = [];
+    if (dateFrom) {
+      intParams.push(dateFrom);
+      intSql += ` AND created_at >= $${intParams.length}`;
+    }
+    if (dateTo) {
+      intParams.push(dateTo);
+      intSql += ` AND created_at <= $${intParams.length}`;
+    }
+    interviews = await query(intSql, intParams);
+  } else {
+    // 1. Candidates sourced
+    let candQuery = supabase.from("candidates").select("created_by");
+    if (dateFrom) candQuery = candQuery.gte("created_at", dateFrom);
+    if (dateTo) candQuery = candQuery.lte("created_at", dateTo);
+    const { data: candidatesData } = await candQuery;
+    candidates = candidatesData ?? [];
+
+    // 2. Applications processed
+    let appQuery = supabase
+      .from("applications")
+      .select("created_by, status, job_id, created_at");
+    if (dateFrom) appQuery = appQuery.gte("created_at", dateFrom);
+    if (dateTo) appQuery = appQuery.lte("created_at", dateTo);
+    const { data: applicationsData } = await appQuery;
+    applications = applicationsData ?? [];
+
+    // 3. Interviews scheduled
+    let intQuery = supabase.from("interview_schedules").select("created_by");
+    if (dateFrom) intQuery = intQuery.gte("created_at", dateFrom);
+    if (dateTo) intQuery = intQuery.lte("created_at", dateTo);
+    const { data: interviewsData } = await intQuery;
+    interviews = interviewsData ?? [];
+  }
 
   // 4. Resolve names
   const userIds = new Set<string>();
@@ -41,10 +88,23 @@ export async function GET(req: NextRequest) {
   for (const a of applications ?? []) if ((a as any).created_by) userIds.add((a as any).created_by as string);
   for (const i of interviews ?? []) if ((i as any).created_by) userIds.add((i as any).created_by as string);
 
-  const { data: profiles } = await supabase
-    .from("profiles")
-    .select("user_id, display_name")
-    .in("user_id", [...userIds]);
+  let profiles: any[];
+  if (isNeon()) {
+    if (userIds.size > 0) {
+      profiles = await query(
+        'SELECT user_id, display_name FROM profiles WHERE user_id = ANY($1)',
+        [Array.from(userIds)]
+      );
+    } else {
+      profiles = [];
+    }
+  } else {
+    const { data: profilesData } = await supabase
+      .from("profiles")
+      .select("user_id, display_name")
+      .in("user_id", [...userIds]);
+    profiles = profilesData ?? [];
+  }
   const profileMap = new Map(
     profiles?.map((p: { user_id: string; display_name: string | null }) => [p.user_id, p.display_name]) ?? []
   );
@@ -54,10 +114,21 @@ export async function GET(req: NextRequest) {
     (a: any) => a.status === "placed" && a.job_id
   );
   const jobIds = [...new Set(placedApps.map((a: any) => a.job_id))];
-  const { data: jobs } = await supabase
-    .from("jobs")
-    .select("id, created_at")
-    .in("id", jobIds);
+
+  let jobs: any[];
+  if (isNeon()) {
+    if (jobIds.length > 0) {
+      jobs = await query('SELECT id, created_at FROM jobs WHERE id = ANY($1)', [jobIds]);
+    } else {
+      jobs = [];
+    }
+  } else {
+    const { data: jobsData } = await supabase
+      .from("jobs")
+      .select("id, created_at")
+      .in("id", jobIds);
+    jobs = jobsData ?? [];
+  }
   const jobCreatedMap = new Map<string, string>(jobs?.map((j: any) => [j.id as string, j.created_at as string]) ?? []);
 
   const jobFirstPlaced: Record<string, string> = {};

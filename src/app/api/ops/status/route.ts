@@ -8,6 +8,8 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 import { getActiveProvider } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
@@ -16,23 +18,73 @@ export async function GET() {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
-  const pingStart = Date.now();
-  const { error: pingError } = await supabase.from("candidates").select("id", { head: true, count: "exact" });
-  const supabaseLatencyMs = Date.now() - pingStart;
+  let supabaseLatencyMs: number;
+  let pingError: any;
+  let candidatesCount: number;
+  let jobsCount: number;
+  let applicationsCount: number;
+  let resumesCount: number;
+  let recentRuns: any[];
+  let sources: any[];
 
-  const [candidatesRes, jobsRes, applicationsRes, resumesRes] = await Promise.all([
-    supabase.from("candidates").select("id", { count: "exact", head: true }),
-    supabase.from("jobs").select("id", { count: "exact", head: true }),
-    supabase.from("applications").select("id", { count: "exact", head: true }),
-    supabase.from("resumes").select("id", { count: "exact", head: true }),
-  ]);
+  if (isNeon()) {
+    const pingStart = Date.now();
+    try {
+      await queryOne('SELECT id FROM candidates LIMIT 1', []);
+      pingError = null;
+    } catch (err: any) {
+      pingError = { message: err.message };
+    }
+    supabaseLatencyMs = Date.now() - pingStart;
 
-  // import_runs/import_sources may not exist yet if that migration hasn't been pushed —
-  // degrade gracefully rather than failing the whole health check over it.
-  const [recentRunsRes, sourcesRes] = await Promise.all([
-    supabase.from("import_runs").select("id, import_source_id, imported, skipped, error, ran_at").order("ran_at", { ascending: false }).limit(10),
-    supabase.from("import_sources").select("id, label, is_active, last_run_at, last_result"),
-  ]);
+    const [candidatesRes, jobsRes, applicationsRes, resumesRes] = await Promise.all([
+      queryOne<{ count: string }>('SELECT COUNT(*) as count FROM candidates', []),
+      queryOne<{ count: string }>('SELECT COUNT(*) as count FROM jobs', []),
+      queryOne<{ count: string }>('SELECT COUNT(*) as count FROM applications', []),
+      queryOne<{ count: string }>('SELECT COUNT(*) as count FROM resumes', []),
+    ]);
+
+    candidatesCount = parseInt(candidatesRes?.count ?? '0', 10);
+    jobsCount = parseInt(jobsRes?.count ?? '0', 10);
+    applicationsCount = parseInt(applicationsRes?.count ?? '0', 10);
+    resumesCount = parseInt(resumesRes?.count ?? '0', 10);
+
+    recentRuns = await query(
+      'SELECT id, import_source_id, imported, skipped, error, ran_at FROM import_runs ORDER BY ran_at DESC LIMIT $1',
+      [10]
+    );
+    sources = await query(
+      'SELECT id, label, is_active, last_run_at, last_result FROM import_sources',
+      []
+    );
+  } else {
+    const pingStart = Date.now();
+    const { error: pingErrorRes } = await supabase.from("candidates").select("id", { head: true, count: "exact" });
+    supabaseLatencyMs = Date.now() - pingStart;
+    pingError = pingErrorRes;
+
+    const [candidatesRes, jobsRes, applicationsRes, resumesRes] = await Promise.all([
+      supabase.from("candidates").select("id", { count: "exact", head: true }),
+      supabase.from("jobs").select("id", { count: "exact", head: true }),
+      supabase.from("applications").select("id", { count: "exact", head: true }),
+      supabase.from("resumes").select("id", { count: "exact", head: true }),
+    ]);
+
+    candidatesCount = candidatesRes.count ?? 0;
+    jobsCount = jobsRes.count ?? 0;
+    applicationsCount = applicationsRes.count ?? 0;
+    resumesCount = resumesRes.count ?? 0;
+
+    // import_runs/import_sources may not exist yet if that migration hasn't been pushed —
+    // degrade gracefully rather than failing the whole health check over it.
+    const [recentRunsRes, sourcesRes] = await Promise.all([
+      supabase.from("import_runs").select("id, import_source_id, imported, skipped, error, ran_at").order("ran_at", { ascending: false }).limit(10),
+      supabase.from("import_sources").select("id, label, is_active, last_run_at, last_result"),
+    ]);
+
+    recentRuns = recentRunsRes.data ?? [];
+    sources = sourcesRes.data ?? [];
+  }
 
   return NextResponse.json({
     supabase: {
@@ -41,13 +93,13 @@ export async function GET() {
       error: pingError?.message ?? null,
     },
     counts: {
-      candidates: candidatesRes.count ?? 0,
-      jobs: jobsRes.count ?? 0,
-      applications: applicationsRes.count ?? 0,
-      resumes: resumesRes.count ?? 0,
+      candidates: candidatesCount,
+      jobs: jobsCount,
+      applications: applicationsCount,
+      resumes: resumesCount,
     },
-    recentImportRuns: recentRunsRes.data ?? [],
-    importSources: sourcesRes.data ?? [],
+    recentImportRuns: recentRuns,
+    importSources: sources,
     aiAssistant: {
       configured: Boolean(getActiveProvider()),
       provider: getActiveProvider()?.name ?? null,

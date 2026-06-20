@@ -3,6 +3,11 @@ import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { getActiveProvider } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
+import { findCandidateById } from "@/server/repositories/candidatesRepository";
+import { findJobById } from "@/server/repositories/jobsRepository";
+import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -42,11 +47,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "candidateId, baseResumeId, and jobId are required." }, { status: 400 });
   }
 
-  const [{ data: candidate }, { data: baseResume }, { data: job }, { data: evidence }] = await Promise.all([
-    supabase.from("candidates").select("*").eq("id", candidateId).single(),
-    supabase.from("base_resumes").select("*").eq("id", baseResumeId).eq("candidate_id", candidateId).single(),
-    supabase.from("jobs").select("*").eq("id", jobId).single(),
-    supabase.from("candidate_evidence").select("title, description, related_skills, confidence_score").eq("candidate_id", candidateId).order("created_at", { ascending: false }).limit(50),
+  const [candidate, baseResume, job, evidence] = await Promise.all([
+    findCandidateById(candidateId),
+    isNeon()
+      ? queryOne<any>("SELECT * FROM base_resumes WHERE id = $1 AND candidate_id = $2", [baseResumeId, candidateId])
+      : supabase.from("base_resumes").select("*").eq("id", baseResumeId).eq("candidate_id", candidateId).single().then((r: { data: any }) => r.data ?? null),
+    findJobById(jobId),
+    isNeon()
+      ? query<{ title: string; description: string | null; related_skills: string[] | null; confidence_score: number | null }>(
+          "SELECT title, description, related_skills, confidence_score FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
+          [candidateId]
+        )
+      : supabase.from("candidate_evidence").select("title, description, related_skills, confidence_score").eq("candidate_id", candidateId).order("created_at", { ascending: false }).limit(50).then((r: { data: any }) => r.data ?? []),
   ]);
 
   if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
@@ -58,19 +70,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "This job does not have enough description text to tailor against." }, { status: 400 });
   }
 
-  const { data: targetJob, error: targetError } = await supabase
-    .from("target_jobs")
-    .upsert({
-      candidate_id: candidateId,
-      job_id: jobId,
+  const targetJob = await upsertTargetJobByCandidateAndJob(
+    candidateId,
+    jobId,
+    {
       raw_description: rawDescription,
       created_by: context!.profile.user_id,
-    }, { onConflict: "candidate_id,job_id" })
-    .select()
-    .single();
+    }
+  );
 
-  if (targetError || !targetJob) {
-    return NextResponse.json({ error: targetError?.message ?? "Could not prepare target job." }, { status: 500 });
+  if (!targetJob) {
+    return NextResponse.json({ error: "Could not prepare target job." }, { status: 500 });
   }
 
   const prompt = `Create a tailored resume draft in Markdown.
@@ -90,7 +100,7 @@ ${JSON.stringify({
   email: candidate.email,
   phone: candidate.phone,
   target_roles: candidate.target_roles,
-  preferred_locations: candidate.preferred_locations,
+  preferred_locations: (candidate as any).preferred_locations,
   work_authorization: candidate.work_authorization,
   linkedin_url: candidate.linkedin_url,
   github_url: candidate.github_url,

@@ -13,6 +13,7 @@ export interface CandidateRow {
   phone: string | null;
   target_roles: string | null;
   target_industries: string[] | null;
+  preferred_locations: string[] | null;
   work_authorization: string | null;
   visa_status: string | null;
   notes: string | null;
@@ -45,4 +46,52 @@ export async function findCandidateById(id: string): Promise<CandidateRow | null
     if (error || !data) return null;
     return data as CandidateRow;
   }
+}
+
+// ───────────────────────────────────────────────────────────────
+// Listing / counts
+// ───────────────────────────────────────────────────────────────
+
+export async function listCandidates(
+  opts: { status?: string | null; target_tier?: string | null; search?: string | null; limit?: number } = {}
+): Promise<CandidateRow[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 50));
+  if (isNeon()) {
+    const conditions: string[] = [];
+    const values: (string | number | null)[] = [];
+    let idx = 1;
+    if (opts.status) {
+      conditions.push(`status = $${idx++}`);
+      values.push(opts.status);
+    }
+    if (opts.target_tier) {
+      conditions.push(`target_tier = $${idx++}`);
+      values.push(opts.target_tier);
+    }
+    if (opts.search) {
+      conditions.push(`(name ILIKE $${idx++} OR email ILIKE $${idx++})`);
+      values.push(`%${opts.search}%`, `%${opts.search}%`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `SELECT * FROM candidates ${where} ORDER BY created_at DESC LIMIT $${idx}`;
+    values.push(limit);
+    return query<CandidateRow>(sql, values);
+  }
+  let q = supabase.from("candidates").select("*");
+  if (opts.status) q = q.eq("status", opts.status);
+  if (opts.target_tier) q = q.eq("target_tier", opts.target_tier);
+  if (opts.search) q = q.or(`name.ilike.%${opts.search}%,email.ilike.%${opts.search}%`);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data ?? []) as CandidateRow[];
+}
+
+export async function countCandidates(): Promise<number> {
+  if (isNeon()) {
+    const row = await queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM candidates");
+    return row?.count ?? 0;
+  }
+  const { count, error } = await supabase.from("candidates").select("id", { count: "exact", head: true });
+  if (error) throw error;
+  return count ?? 0;
 }

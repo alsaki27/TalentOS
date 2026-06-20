@@ -5,20 +5,16 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { findTargetJobById, updateTargetJob, deleteTargetJob } from "@/server/repositories/targetJobsRepository";
 import { logActivity } from "@/lib/activity";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
-  const { data, error } = await supabase
-    .from("target_jobs")
-    .select("*, job_keywords(*)")
-    .eq("id", params.id)
-    .single();
+  const data = await findTargetJobById(params.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(data);
 }
 
@@ -35,14 +31,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (f in body) updates[f] = body[f];
   }
 
-  const { data, error } = await supabase
-    .from("target_jobs")
-    .update(updates)
-    .eq("id", params.id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await updateTargetJob(params.id, updates);
 
   if (context) {
     await logActivity({
@@ -63,17 +52,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const { context, response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
   if (response) return response;
 
-  const { data: existing } = await supabase
-    .from("target_jobs")
-    .select("id")
-    .eq("id", params.id)
-    .single();
+  const existing = await findTargetJobById(params.id);
 
   if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  const { error } = await supabase.from("target_jobs").delete().eq("id", params.id);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await deleteTargetJob(params.id);
 
   if (context) {
     await logActivity({

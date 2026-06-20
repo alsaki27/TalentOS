@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { buildSkeletonDocument } from "@/lib/ai/faloodBaseResume";
 import { ResumeDocument } from "@/lib/falood/types";
@@ -20,11 +22,24 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("base_resumes")
-    .select("id, name, target_industry, target_roles, style_id, status, created_at, updated_at")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: false });
+  let data: any[];
+  let error: any;
+
+  if (isNeon()) {
+    data = await query(
+      'SELECT id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
+      [candidateId]
+    );
+    error = null;
+  } else {
+    const res = await supabase
+      .from("base_resumes")
+      .select("id, name, target_industry, target_roles, style_id, status, created_at, updated_at")
+      .eq("candidate_id", candidateId)
+      .order("created_at", { ascending: false });
+    data = res.data ?? [];
+    error = res.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -47,30 +62,71 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "candidateId and name are required" }, { status: 400 });
   }
 
-  const { data: candidate, error: candidateError } = await supabase
-    .from("candidates")
-    .select("id, name, email, phone, linkedin_url, github_url, portfolio_url")
-    .eq("id", candidateId)
-    .single();
+  let candidate: any;
+  let candidateError: any;
+
+  if (isNeon()) {
+    candidate = await queryOne(
+      'SELECT id, name, email, phone, linkedin_url, github_url, portfolio_url FROM candidates WHERE id = $1',
+      [candidateId]
+    );
+    candidateError = candidate ? null : { message: 'Candidate not found' };
+  } else {
+    const res = await supabase
+      .from("candidates")
+      .select("id, name, email, phone, linkedin_url, github_url, portfolio_url")
+      .eq("id", candidateId)
+      .single();
+    candidate = res.data;
+    candidateError = res.error;
+  }
+
   if (candidateError || !candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
 
-  const { data: style } = await supabase.from("resume_styles").select("formatting_defaults").eq("id", styleId).single();
+  let style: any;
+  if (isNeon()) {
+    style = await queryOne(
+      'SELECT formatting_defaults FROM resume_styles WHERE id = $1',
+      [styleId]
+    );
+  } else {
+    const res = await supabase.from("resume_styles").select("formatting_defaults").eq("id", styleId).single();
+    style = res.data;
+  }
   const formatting = { styleId, ...(style?.formatting_defaults ?? {}) };
 
   let content: ResumeDocument;
 
   if (startingSource === "duplicate" && sourceBaseResumeId) {
-    const { data: source } = await supabase.from("base_resumes").select("content").eq("id", sourceBaseResumeId).single();
+    let source: any;
+    if (isNeon()) {
+      source = await queryOne(
+        'SELECT content FROM base_resumes WHERE id = $1',
+        [sourceBaseResumeId]
+      );
+    } else {
+      const res = await supabase.from("base_resumes").select("content").eq("id", sourceBaseResumeId).single();
+      source = res.data;
+    }
     content = source?.content ?? buildSkeletonDocument(candidate, formatting);
   } else if (startingSource === "uploaded_resume") {
-    const { data: originalResume } = await supabase
-      .from("resumes")
-      .select("parsed_json")
-      .eq("candidate_id", candidateId)
-      .eq("is_original_upload", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    let originalResume: any;
+    if (isNeon()) {
+      originalResume = await queryOne(
+        'SELECT parsed_json FROM resumes WHERE candidate_id = $1 AND is_original_upload = $2 ORDER BY created_at DESC LIMIT 1',
+        [candidateId, true]
+      );
+    } else {
+      const res = await supabase
+        .from("resumes")
+        .select("parsed_json")
+        .eq("candidate_id", candidateId)
+        .eq("is_original_upload", true)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      originalResume = res.data;
+    }
     const parsed = originalResume?.parsed_json as any;
     content = buildSkeletonDocument(candidate, formatting);
     if (parsed) {
@@ -101,20 +157,34 @@ export async function POST(req: NextRequest) {
     content = buildSkeletonDocument(candidate, formatting);
   }
 
-  const { data, error } = await supabase
-    .from("base_resumes")
-    .insert({
-      candidate_id: candidateId,
-      name,
-      target_industry: targetIndustry ?? null,
-      target_roles: targetRoles,
-      style_id: styleId,
-      content,
-      created_by: context!.profile.user_id,
-      updated_by: context!.profile.user_id,
-    })
-    .select()
-    .single();
+  let data: any;
+  let error: any;
+
+  if (isNeon()) {
+    data = await queryOne(
+      `INSERT INTO base_resumes (candidate_id, name, target_industry, target_roles, style_id, content, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [candidateId, name, targetIndustry ?? null, targetRoles, styleId, content, context!.profile.user_id, context!.profile.user_id]
+    );
+    error = data ? null : { message: 'Insert failed' };
+  } else {
+    const res = await supabase
+      .from("base_resumes")
+      .insert({
+        candidate_id: candidateId,
+        name,
+        target_industry: targetIndustry ?? null,
+        target_roles: targetRoles,
+        style_id: styleId,
+        content,
+        created_by: context!.profile.user_id,
+        updated_by: context!.profile.user_id,
+      })
+      .select()
+      .single();
+    data = res.data;
+    error = res.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

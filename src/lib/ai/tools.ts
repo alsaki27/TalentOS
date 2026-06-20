@@ -6,6 +6,11 @@
 // (and API cost) bounded.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
+import { listCandidates, countCandidates } from "@/server/repositories/candidatesRepository";
+import { listJobs, countJobs } from "@/server/repositories/jobsRepository";
+import { listApplicationsForTool, listAllApplicationsWithStatus } from "@/server/repositories/applicationsRepository";
 import { AiTool } from "@/lib/ai/provider";
 import type { UserRole } from "@/lib/auth";
 
@@ -114,34 +119,34 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
   try {
     switch (name) {
       case "query_candidates": {
-        let q = supabase.from("candidates").select("id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, created_at");
-        if (input.status) q = q.eq("status", input.status as string);
-        if (input.target_tier) q = q.eq("target_tier", input.target_tier as string);
-        if (input.search) q = q.or(`name.ilike.%${input.search}%,email.ilike.%${input.search}%`);
-        const { data, error } = await q.order("created_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        const data = await listCandidates({
+          status: input.status as string | undefined,
+          target_tier: input.target_tier as string | undefined,
+          search: input.search as string | undefined,
+          limit: cappedLimit(input.limit),
+        });
         return JSON.stringify(data);
       }
 
       case "query_jobs": {
-        let q = supabase.from("jobs").select("id, title, company, location, source, role_tier, job_category, is_active, posted_at, category_relevance_score");
-        if (input.source) q = q.eq("source", input.source as string);
-        if (input.role_tier) q = q.eq("role_tier", input.role_tier as string);
-        if (input.job_category) q = q.eq("job_category", input.job_category as string);
-        if (typeof input.is_active === "boolean") q = q.eq("is_active", input.is_active);
-        if (input.search) q = q.or(`title.ilike.%${input.search}%,company.ilike.%${input.search}%,location.ilike.%${input.search}%`);
-        const { data, error } = await q.order("created_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        const data = await listJobs({
+          source: input.source as string | undefined,
+          role_tier: input.role_tier as string | undefined,
+          job_category: input.job_category as string | undefined,
+          is_active: typeof input.is_active === "boolean" ? input.is_active : undefined,
+          search: input.search as string | undefined,
+          limit: cappedLimit(input.limit),
+        });
         return JSON.stringify(data);
       }
 
       case "query_applications": {
-        let q = supabase.from("applications").select("id, status, priority, review_status, review_note, applied_at, follow_up_at, assigned_to, assignment_due_at, candidates(name, email), jobs(title, company)");
-        if (input.status) q = q.eq("status", input.status as string);
-        if (input.priority) q = q.eq("priority", input.priority as string);
-        if (input.review_status) q = q.eq("review_status", input.review_status as string);
-        const { data, error } = await q.order("applied_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        const data = await listApplicationsForTool({
+          status: input.status as string | undefined,
+          priority: input.priority as string | undefined,
+          review_status: input.review_status as string | undefined,
+          limit: cappedLimit(input.limit),
+        });
         let rows = data ?? [];
         if (input.search) {
           const needle = String(input.search).toLowerCase();
@@ -152,6 +157,20 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       }
 
       case "query_companies": {
+        if (isNeon()) {
+          const search = input.search as string | undefined;
+          const limit = cappedLimit(input.limit);
+          let sql = "SELECT id, name, website, linkedin_url, employees_count, last_seen_at FROM companies";
+          const values: (string | number)[] = [];
+          if (search) {
+            sql += " WHERE name ILIKE $1";
+            values.push(`%${search}%`);
+          }
+          sql += ` ORDER BY last_seen_at DESC LIMIT $${values.length + 1}`;
+          values.push(limit);
+          const data = await query<any>(sql, values);
+          return JSON.stringify(data);
+        }
         let q = supabase.from("companies").select("id, name, website, linkedin_url, employees_count, last_seen_at");
         if (input.search) q = q.ilike("name", `%${input.search}%`);
         const { data, error } = await q.order("last_seen_at", { ascending: false }).limit(cappedLimit(input.limit));
@@ -160,6 +179,20 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       }
 
       case "query_application_activity_log": {
+        if (isNeon()) {
+          const applicationId = input.application_id as string | undefined;
+          const limit = cappedLimit(input.limit);
+          let sql = "SELECT id, application_id, commenter_name, body, visible_to_candidate, parent_comment_id, created_at FROM application_comments";
+          const values: (string | number)[] = [];
+          if (applicationId) {
+            sql += " WHERE application_id = $1";
+            values.push(applicationId);
+          }
+          sql += ` ORDER BY created_at DESC LIMIT $${values.length + 1}`;
+          values.push(limit);
+          const data = await query<any>(sql, values);
+          return JSON.stringify(data);
+        }
         let q = supabase.from("application_comments").select("id, application_id, commenter_name, body, visible_to_candidate, parent_comment_id, created_at");
         if (input.application_id) q = q.eq("application_id", input.application_id as string);
         const { data, error } = await q.order("created_at", { ascending: false }).limit(cappedLimit(input.limit));
@@ -173,22 +206,21 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         // with no cookie always 401s. Compute it directly instead — same definitions as
         // that route (pipeline tickets excluded from conversion-rate math).
         const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
-        const [candidatesRes, applicationsRes] = await Promise.all([
-          supabase.from("candidates").select("id", { count: "exact", head: true }),
-          supabase.from("applications").select("id, status"),
+        const [candidatesCount, allTickets, jobsCount] = await Promise.all([
+          countCandidates(),
+          listAllApplicationsWithStatus(),
+          countJobs(),
         ]);
-        const allTickets = applicationsRes.data ?? [];
         const submitted = allTickets.filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
         const responded = submitted.filter((a: any) => a.status !== "applied").length;
         const interviews = submitted.filter((a: any) => a.status === "interview" || a.status === "offer").length;
         const offers = submitted.filter((a: any) => a.status === "offer").length;
         const rate = (count: number, total: number) => (total === 0 ? 0 : Math.round((count / total) * 1000) / 10);
-        const { count: jobsCount } = await supabase.from("jobs").select("id", { count: "exact", head: true });
 
         return JSON.stringify({
           totals: {
-            candidates: candidatesRes.count ?? 0,
-            jobs: jobsCount ?? 0,
+            candidates: candidatesCount,
+            jobs: jobsCount,
             applications: submitted.length,
             pipelineTickets: allTickets.length - submitted.length,
           },
@@ -201,6 +233,10 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       }
 
       case "query_import_sources": {
+        if (isNeon()) {
+          const data = await query<any>("SELECT id, label, provider, is_active, last_run_at, last_result FROM import_sources");
+          return JSON.stringify(data);
+        }
         const { data, error } = await supabase.from("import_sources").select("id, label, provider, is_active, last_run_at, last_result");
         if (error) throw error;
         return JSON.stringify(data);
@@ -209,6 +245,30 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       case "query_audit_logs": {
         if (ctx.role !== "admin") {
           return JSON.stringify({ error: "Permission denied: audit logs are admin-only." });
+        }
+        if (isNeon()) {
+          const limit = cappedLimit(input.limit);
+          const action = input.action as string | undefined;
+          const entity_type = input.entity_type as string | undefined;
+          let sql = "SELECT id, actor_email, action, entity_type, entity_id, metadata, created_at FROM audit_logs";
+          const conditions: string[] = [];
+          const values: (string | number)[] = [];
+          let idx = 1;
+          if (action) {
+            conditions.push(`action = $${idx++}`);
+            values.push(action);
+          }
+          if (entity_type) {
+            conditions.push(`entity_type = $${idx++}`);
+            values.push(entity_type);
+          }
+          if (conditions.length > 0) {
+            sql += " WHERE " + conditions.join(" AND ");
+          }
+          sql += ` ORDER BY created_at DESC LIMIT $${idx}`;
+          values.push(limit);
+          const data = await query<any>(sql, values);
+          return JSON.stringify(data);
         }
         let q = supabase.from("audit_logs").select("id, actor_email, action, entity_type, entity_id, metadata, created_at");
         if (input.action) q = q.eq("action", input.action as string);

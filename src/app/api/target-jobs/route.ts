@@ -6,6 +6,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, execute } from "@/server/db/neon";
+import { listTargetJobsByCandidate, createTargetJob } from "@/server/repositories/targetJobsRepository";
 import { getActiveProvider } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
@@ -16,13 +19,7 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("target_jobs")
-    .select("*, job_keywords(*)")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: false });
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await listTargetJobsByCandidate(candidateId);
   return NextResponse.json(data ?? []);
 }
 
@@ -93,21 +90,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const { data: targetJob, error: tjError } = await supabase
-    .from("target_jobs")
-    .insert({
-      candidate_id: candidateId,
-      job_id: jobId ?? null,
-      raw_description: rawDescription,
-      parsed_description: parsedDescription,
-      fit_score: fitScore,
-      recommendation,
-      created_by: context!.profile.user_id,
-    })
-    .select()
-    .single();
-
-  if (tjError) return NextResponse.json({ error: tjError.message }, { status: 500 });
+  const targetJob = await createTargetJob({
+    candidate_id: candidateId,
+    job_id: jobId ?? null,
+    raw_description: rawDescription,
+    parsed_description: parsedDescription,
+    fit_score: fitScore,
+    recommendation,
+    created_by: context!.profile.user_id,
+  });
 
   const keywordsToInsert: any[] = [];
   const categories: [string, string][] = [
@@ -131,7 +122,24 @@ export async function POST(req: NextRequest) {
   }
 
   if (keywordsToInsert.length > 0) {
-    await supabase.from("job_keywords").insert(keywordsToInsert);
+    if (isNeon()) {
+      const cols = Object.keys(keywordsToInsert[0]);
+      const values: (string | number | null)[] = [];
+      const placeholders: string[] = [];
+      let paramIdx = 1;
+      for (const r of keywordsToInsert) {
+        const rowPlaceholders: string[] = [];
+        for (const col of cols) {
+          rowPlaceholders.push(`$${paramIdx++}`);
+          values.push((r as any)[col]);
+        }
+        placeholders.push(`(${rowPlaceholders.join(", ")})`);
+      }
+      const sql = `INSERT INTO job_keywords (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`;
+      await query(sql, values);
+    } else {
+      await supabase.from("job_keywords").insert(keywordsToInsert);
+    }
   }
 
   await logActivity({

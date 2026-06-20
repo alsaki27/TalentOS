@@ -3,6 +3,8 @@
 // Uses Web Crypto API (crypto.subtle) for Cloudflare Workers compatibility.
 
 import { supabase } from "./supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface WebhookEndpoint {
   id: string;
@@ -74,23 +76,35 @@ export async function deliverWebhook(
       responseStatus = res.status;
       responseBody = await res.text().catch(() => "");
       if (res.ok) {
-        await supabase.from("webhook_events").insert({
-          endpoint_id: endpoint.id,
-          event_type: event,
-          payload,
-          response_status: responseStatus,
-          response_body: responseBody.slice(0, 5000),
-          attempt_count: attempt,
-          max_attempts: maxAttempts,
-          delivered_at: new Date().toISOString(),
-        });
-        await supabase
-          .from("webhook_endpoints")
-          .update({
-            last_delivered_at: new Date().toISOString(),
-            failure_count: 0,
-          })
-          .eq("id", endpoint.id);
+        if (isNeon()) {
+          await execute(
+            `INSERT INTO webhook_events (endpoint_id, event_type, payload, response_status, response_body, attempt_count, max_attempts, delivered_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [endpoint.id, event, payload, responseStatus, responseBody.slice(0, 5000), attempt, maxAttempts, new Date().toISOString()]
+          );
+          await execute(
+            `UPDATE webhook_endpoints SET last_delivered_at = $1, failure_count = 0 WHERE id = $2`,
+            [new Date().toISOString(), endpoint.id]
+          );
+        } else {
+          await supabase.from("webhook_events").insert({
+            endpoint_id: endpoint.id,
+            event_type: event,
+            payload,
+            response_status: responseStatus,
+            response_body: responseBody.slice(0, 5000),
+            attempt_count: attempt,
+            max_attempts: maxAttempts,
+            delivered_at: new Date().toISOString(),
+          });
+          await supabase
+            .from("webhook_endpoints")
+            .update({
+              last_delivered_at: new Date().toISOString(),
+              failure_count: 0,
+            })
+            .eq("id", endpoint.id);
+        }
         return { success: true, status: responseStatus };
       }
       lastError = `HTTP ${res.status}`;
@@ -106,25 +120,37 @@ export async function deliverWebhook(
     }
   }
 
-  await supabase.from("webhook_events").insert({
-    endpoint_id: endpoint.id,
-    event_type: event,
-    payload,
-    response_status: responseStatus,
-    response_body: responseBody?.slice(0, 5000) ?? null,
-    attempt_count: attempt,
-    max_attempts: maxAttempts,
-    failed_at: new Date().toISOString(),
-    error_message: lastError,
-  });
+  if (isNeon()) {
+    await execute(
+      `INSERT INTO webhook_events (endpoint_id, event_type, payload, response_status, response_body, attempt_count, max_attempts, failed_at, error_message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [endpoint.id, event, payload, responseStatus, responseBody?.slice(0, 5000) ?? null, attempt, maxAttempts, new Date().toISOString(), lastError]
+    );
+    await execute(
+      `UPDATE webhook_endpoints SET last_failure_at = $1, failure_count = $2 WHERE id = $3`,
+      [new Date().toISOString(), endpoint.failure_count + 1, endpoint.id]
+    );
+  } else {
+    await supabase.from("webhook_events").insert({
+      endpoint_id: endpoint.id,
+      event_type: event,
+      payload,
+      response_status: responseStatus,
+      response_body: responseBody?.slice(0, 5000) ?? null,
+      attempt_count: attempt,
+      max_attempts: maxAttempts,
+      failed_at: new Date().toISOString(),
+      error_message: lastError,
+    });
 
-  await supabase
-    .from("webhook_endpoints")
-    .update({
-      last_failure_at: new Date().toISOString(),
-      failure_count: endpoint.failure_count + 1,
-    })
-    .eq("id", endpoint.id);
+    await supabase
+      .from("webhook_endpoints")
+      .update({
+        last_failure_at: new Date().toISOString(),
+        failure_count: endpoint.failure_count + 1,
+      })
+      .eq("id", endpoint.id);
+  }
 
   return { success: false, error: lastError ?? undefined };
 }
@@ -133,10 +159,20 @@ export async function triggerWebhooks(
   event: string,
   payload: any
 ): Promise<WebhookDeliveryResult[]> {
-  const { data: endpoints, error } = await supabase
-    .from("webhook_endpoints")
-    .select("*")
-    .eq("status", "active");
+  let endpoints: any[];
+  let error: any;
+
+  if (isNeon()) {
+    endpoints = await query('SELECT * FROM webhook_endpoints WHERE status = $1', ['active']);
+    error = null;
+  } else {
+    const res = await supabase
+      .from("webhook_endpoints")
+      .select("*")
+      .eq("status", "active");
+    endpoints = res.data ?? [];
+    error = res.error;
+  }
 
   if (error || !endpoints || endpoints.length === 0) {
     return [];

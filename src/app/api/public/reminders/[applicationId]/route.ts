@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { updateApplication } from "@/server/repositories/applicationsRepository";
 
 export async function PATCH(req: NextRequest, { params }: { params: { applicationId: string } }) {
   const { response } = await requirePublicApiScope(req, "reminders:write");
@@ -18,7 +20,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { applicatio
       follow_up_completed_at: null,
     };
 
-  const { data, error } = await supabase.from("applications").update(updates).eq("id", params.applicationId).select().single();
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+  if (isNeon()) {
+    try {
+      const data = await updateApplication(params.applicationId, updates);
+      return NextResponse.json(data);
+    } catch (err: any) {
+      return NextResponse.json({ error: err.message }, { status: 500 });
+    }
+  } else {
+    const { data, error } = await supabase.from("applications").update(updates).eq("id", params.applicationId).select().single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  }
 }

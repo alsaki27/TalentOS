@@ -3,6 +3,8 @@
 // Replace with Resend/SendGrid integration when ready.
 
 import { supabase } from "./supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface SendEmailOptions {
   to: string;
@@ -43,6 +45,17 @@ export function renderTemplate(templateBody: string, mergeData: Record<string, s
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   try {
     // Mock: just log to DB. Replace with Resend/SendGrid integration.
+    if (isNeon()) {
+      const data = await queryOne<{ id: string }>(
+        `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+        [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, "sent", opts.sentBy ?? null, new Date().toISOString()]
+      );
+      if (!data) {
+        return { success: false, error: "Insert failed" };
+      }
+      return { success: true, logId: data.id };
+    }
+
     const { data, error } = await supabase
       .from("email_logs")
       .insert({
@@ -76,11 +89,20 @@ export async function triggerSequence(
   mergeData: Record<string, string> = {}
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const { data: sequence } = await supabase
-      .from("email_sequences")
-      .select("id, trigger_event, is_active")
-      .eq("id", sequenceId)
-      .maybeSingle();
+    let sequence: any;
+    if (isNeon()) {
+      sequence = await queryOne(
+        "SELECT id, trigger_event, is_active FROM email_sequences WHERE id = $1",
+        [sequenceId]
+      );
+    } else {
+      const { data } = await supabase
+        .from("email_sequences")
+        .select("id, trigger_event, is_active")
+        .eq("id", sequenceId)
+        .maybeSingle();
+      sequence = data;
+    }
 
     if (!sequence) return { success: false, error: "Sequence not found" };
     if (!sequence.is_active) return { success: false, error: "Sequence is paused" };
@@ -88,11 +110,27 @@ export async function triggerSequence(
       return { success: false, error: "Trigger event mismatch" };
     }
 
-    const { data: steps } = await supabase
-      .from("email_sequence_steps")
-      .select("*, templates:email_templates(*)")
-      .eq("sequence_id", sequenceId)
-      .order("step_number", { ascending: true });
+    let steps: any[];
+    if (isNeon()) {
+      steps = await query(
+        `
+        SELECT s.*,
+          CASE WHEN t.id IS NOT NULL THEN jsonb_build_object('id', t.id, 'name', t.name, 'subject', t.subject, 'body', t.body) END as templates
+        FROM email_sequence_steps s
+        LEFT JOIN email_templates t ON s.template_id = t.id
+        WHERE s.sequence_id = $1
+        ORDER BY s.step_number ASC
+        `,
+        [sequenceId]
+      );
+    } else {
+      const { data } = await supabase
+        .from("email_sequence_steps")
+        .select("*, templates:email_templates(*)")
+        .eq("sequence_id", sequenceId)
+        .order("step_number", { ascending: true });
+      steps = data ?? [];
+    }
 
     if (!steps || steps.length === 0) {
       return { success: false, error: "No steps in sequence" };
@@ -120,17 +158,27 @@ export async function triggerSequence(
     }
 
     // Log remaining steps as pending for the email queue processor
-    for (let i = 1; i < steps.length; i++) {
-      const step = steps[i];
-      await supabase.from("email_queue").insert({
-        candidate_id: candidateId,
-        sequence_id: sequenceId,
-        step_number: step.step_number,
-        template_id: step.template_id,
-        delay_hours: step.delay_hours,
-        trigger_at: new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(),
-        status: "pending",
-      });
+    if (isNeon()) {
+      for (let i = 1; i < steps.length; i++) {
+        const step = steps[i];
+        await execute(
+          "INSERT INTO email_queue (candidate_id, sequence_id, step_number, template_id, delay_hours, trigger_at, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+          [candidateId, sequenceId, step.step_number, step.template_id, step.delay_hours, new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(), "pending"]
+        );
+      }
+    } else {
+      for (let i = 1; i < steps.length; i++) {
+        const step = steps[i];
+        await supabase.from("email_queue").insert({
+          candidate_id: candidateId,
+          sequence_id: sequenceId,
+          step_number: step.step_number,
+          template_id: step.template_id,
+          delay_hours: step.delay_hours,
+          trigger_at: new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(),
+          status: "pending",
+        });
+      }
     }
 
     return { success: true };

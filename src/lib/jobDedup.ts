@@ -3,6 +3,17 @@
 // Matches first on source_url, then on title + company + posted_at + applicants_count.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
+import {
+  findJobsBySourceUrls,
+  updateJobsLastSeenAtByUrls,
+  findJobsForSignatureDedupe,
+  findJobsBySourceUrlWithId,
+  updateJobBySourceUrl,
+  findPotentialDuplicateJobs as findPotentialDuplicateJobsRepo,
+  listAllJobsForFuzzyDedupe,
+} from "@/server/repositories/jobsRepository";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 
 type DedupeCandidate = {
@@ -30,26 +41,16 @@ export async function filterNewJobs<T extends DedupeCandidate>(
   rows: T[]
 ): Promise<{ newRows: T[]; duplicates: number }> {
   const urls = rows.map((r) => r.source_url).filter((u): u is string => !!u);
-  const { data: existingByUrl } = urls.length > 0 ? await supabase
-    .from("jobs")
-    .select("source_url")
-    .in("source_url", urls) : { data: [] };
+  const existingByUrl = urls.length > 0 ? await findJobsBySourceUrls(urls) : [];
 
   const existingUrls = new Set((existingByUrl ?? []).map((j: any) => j.source_url as string));
 
   if (existingUrls.size > 0) {
-    await supabase
-      .from("jobs")
-      .update({ last_seen_at: new Date().toISOString() })
-      .in("source_url", Array.from(existingUrls));
+    await updateJobsLastSeenAtByUrls(Array.from(existingUrls));
   }
 
   const incomingSignatures = rows.map(jobDuplicateSignature).filter((key): key is string => !!key);
-  const { data: existingJobs } = incomingSignatures.length > 0 ? await supabase
-    .from("jobs")
-    .select("title, company, posted_at, applicants_count")
-    .not("posted_at", "is", null)
-    .not("applicants_count", "is", null) : { data: [] };
+  const existingJobs = incomingSignatures.length > 0 ? await findJobsForSignatureDedupe() : [];
 
   const existingSignatures = new Set(
     (existingJobs ?? [])
@@ -78,10 +79,7 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
   if (rowsWithUrl.length === 0) return 0;
 
   const urls = rowsWithUrl.map((r) => r.source_url).filter((u): u is string => !!u);
-  const { data: existing } = await supabase
-    .from("jobs")
-    .select("id, source_url")
-    .in("source_url", urls);
+  const existing = await findJobsBySourceUrlWithId(urls);
 
   const existingByUrl = new Map((existing ?? []).map((j: any) => [j.source_url as string, j.id as string]));
   const existingUrls = new Set(existingByUrl.keys());
@@ -97,15 +95,10 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
       if (value !== null && value !== undefined && value !== "") updates[key] = value;
     }
 
-    const { error } = await supabase
-      .from("jobs")
-      .update(updates)
-      .eq("source_url", row.source_url);
-    if (!error) {
-      updated++;
-      const id = existingByUrl.get(row.source_url) as string | undefined;
-      if (id) syncedRows.push({ ...row, id });
-    }
+    await updateJobBySourceUrl(row.source_url, updates);
+    updated++;
+    const id = existingByUrl.get(row.source_url) as string | undefined;
+    if (id) syncedRows.push({ ...row, id });
   }
 
   if (syncedRows.length > 0) await syncCompanyDirectoryFromJobs(syncedRows);
@@ -194,97 +187,7 @@ interface DuplicateCheckResult {
 export async function findPotentialDuplicateJobs(
   input: DuplicateCheckInput
 ): Promise<DuplicateCheckResult[]> {
-  const results: DuplicateCheckResult[] = [];
-
-  // 1. Exact URL match
-  if (input.sourceUrl) {
-    const { data: urlMatches } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .eq("source_url", input.sourceUrl);
-    if (urlMatches) {
-      for (const job of urlMatches) {
-        results.push({
-          id: job.id as string,
-          title: job.title as string,
-          company: job.company ?? null,
-          location: job.location ?? null,
-          source_url: job.source_url ?? null,
-          matchType: "exact_url",
-          matchScore: 1.0,
-        });
-      }
-    }
-  }
-
-  // 2. Exact normalized title+company+location match
-  const nTitle = normalizeForMatch(input.title);
-  const nCompany = normalizeForMatch(input.company);
-  const nLocation = normalizeForMatch(input.location);
-
-  if (nTitle && nCompany) {
-    const { data: exactMatches } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .not("title", "is", null);
-
-    if (exactMatches) {
-      for (const job of exactMatches) {
-        if (results.some((r) => r.id === job.id)) continue;
-        const jobKey = matchKey(job.title ?? "", job.company, job.location);
-        const inputKey = matchKey(input.title ?? "", input.company, input.location);
-        if (jobKey === inputKey) {
-          results.push({
-            id: job.id as string,
-            title: job.title as string,
-            company: job.company ?? null,
-            location: job.location ?? null,
-            source_url: job.source_url ?? null,
-            matchType: "exact_match",
-            matchScore: 1.0,
-          });
-        }
-      }
-    }
-  }
-
-  // 3. Fuzzy match against all existing jobs
-  if (nTitle && nCompany) {
-    const { data: allJobs } = await supabase
-      .from("jobs")
-      .select("id, title, company, location, source_url")
-      .not("title", "is", null);
-
-    if (allJobs) {
-      for (const job of allJobs) {
-        if (results.some((r) => r.id === job.id)) continue;
-        const existingTitle = normalizeForMatch(job.title);
-        const existingCompany = normalizeForMatch(job.company);
-        const existingLocation = normalizeForMatch(job.location);
-
-        const titleSim = existingTitle ? similarity(nTitle, existingTitle) : 0;
-        const companySim = nCompany && existingCompany ? similarity(nCompany, existingCompany) : 1;
-        const locationSim = nLocation && existingLocation ? similarity(nLocation, existingLocation) : 1;
-
-        const score = (titleSim + companySim + locationSim) / 3;
-
-        if (titleSim >= 0.9 && companySim >= 0.86 && locationSim >= 0.86) {
-          results.push({
-            id: job.id as string,
-            title: job.title as string,
-            company: job.company ?? null,
-            location: job.location ?? null,
-            source_url: job.source_url ?? null,
-            matchType: "fuzzy",
-            matchScore: Math.round(score * 1000) / 1000,
-          });
-        }
-      }
-    }
-  }
-
-  // Sort by score descending
-  return results.sort((a, b) => b.matchScore - a.matchScore);
+  return findPotentialDuplicateJobsRepo(input);
 }
 
 // Used only by the normalizer pipeline (src/lib/normalizer), where rows commonly have no
@@ -304,7 +207,7 @@ export async function filterNewJobsWithFuzzyFallback<
     return { newRows: newWithUrl, duplicates: urlDuplicates };
   }
 
-  const { data: existingJobs } = await supabase.from("jobs").select("title, company, location");
+  const existingJobs = await listAllJobsForFuzzyDedupe();
   const existing = existingJobs ?? [];
   const existingKeys = new Set(existing.map((j: any) => matchKey(j.title as string, j.company as string, j.location as string)));
   const acceptedKeys = new Set<string>();

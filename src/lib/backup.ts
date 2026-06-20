@@ -5,6 +5,8 @@
 // for next time that isn't down to luck.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 const BACKUP_TABLES = ["candidates", "jobs", "applications", "resumes"] as const;
 const RESTORE_TABLES = ["candidates", "jobs", "resumes", "applications"] as const;
@@ -20,10 +22,16 @@ export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
   const counts: Record<string, number> = {};
 
   for (const table of BACKUP_TABLES) {
-    const { data, error } = await supabase.from(table).select("*");
-    if (error) throw new Error(`Failed to read ${table}: ${error.message}`);
-    tables[table] = data ?? [];
-    counts[table] = data?.length ?? 0;
+    if (isNeon()) {
+      const rows = await query(`SELECT * FROM ${table}`, []);
+      tables[table] = rows ?? [];
+      counts[table] = rows?.length ?? 0;
+    } else {
+      const { data, error } = await supabase.from(table).select("*");
+      if (error) throw new Error(`Failed to read ${table}: ${error.message}`);
+      tables[table] = data ?? [];
+      counts[table] = data?.length ?? 0;
+    }
   }
 
   return { takenAt: new Date().toISOString(), tables, counts };
@@ -77,9 +85,24 @@ export async function restoreBackupSnapshot(snapshot: BackupSnapshot) {
       continue;
     }
 
-    const { error } = await supabase.from(table).upsert(rows);
-    if (error) throw new Error(`Failed to restore ${table}: ${error.message}`);
-    restored[table] = rows.length;
+    if (isNeon()) {
+      // For Neon, we use upsert via INSERT ... ON CONFLICT for each row
+      // This is a simplified approach - for production, batch upsert would be better
+      const cols = Object.keys(rows[0] as Record<string, unknown>);
+      for (const row of rows) {
+        const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+        const values = cols.map((col) => (row as any)[col]);
+        await query(
+          `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${cols.map((col) => `${col} = EXCLUDED.${col}`).join(", ")}`,
+          values
+        );
+      }
+      restored[table] = rows.length;
+    } else {
+      const { error } = await supabase.from(table).upsert(rows);
+      if (error) throw new Error(`Failed to restore ${table}: ${error.message}`);
+      restored[table] = rows.length;
+    }
   }
 
   return restored;

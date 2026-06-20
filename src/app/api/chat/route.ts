@@ -6,10 +6,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 import { getActiveProvider } from "@/lib/ai";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
+import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 const MAX_TOOL_ITERATIONS = 6;
 const MAX_HISTORY_TURNS = 40;
@@ -41,23 +43,42 @@ export async function POST(req: NextRequest) {
   // Cost guardrail: this calls a paid, unsupervised external API. A per-user daily cap
   // bounds worst-case spend from a runaway client/script far more cheaply than discovering
   // the bill later.
-  const { data: userConversations } = await supabase
-    .from("chat_conversations")
-    .select("id")
-    .eq("user_id", context!.profile.user_id);
-  const conversationIds = (userConversations ?? []).map((c: any) => c.id as string);
+  let conversationIds: string[] = [];
+  if (isNeon()) {
+    const userConversations = await query<{ id: string }>(
+      "SELECT id FROM chat_conversations WHERE user_id = $1",
+      [context!.profile.user_id]
+    );
+    conversationIds = (userConversations ?? []).map((c) => c.id);
+  } else {
+    const { data: userConversations } = await supabase
+      .from("chat_conversations")
+      .select("id")
+      .eq("user_id", context!.profile.user_id);
+    conversationIds = (userConversations ?? []).map((c: any) => c.id as string);
+  }
 
   if (conversationIds.length > 0) {
     const sinceMidnight = new Date();
     sinceMidnight.setHours(0, 0, 0, 0);
-    const { count: messagesToday } = await supabase
-      .from("chat_messages")
-      .select("id", { count: "exact", head: true })
-      .eq("role", "user")
-      .gte("created_at", sinceMidnight.toISOString())
-      .in("conversation_id", conversationIds);
+    let messagesToday = 0;
+    if (isNeon()) {
+      const countRow = await queryOne<{ count: string }>(
+        "SELECT COUNT(*) as count FROM chat_messages WHERE role = $1 AND created_at >= $2 AND conversation_id = ANY($3)",
+        ["user", sinceMidnight.toISOString(), conversationIds]
+      );
+      messagesToday = parseInt(countRow?.count ?? "0", 10);
+    } else {
+      const { count } = await supabase
+        .from("chat_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "user")
+        .gte("created_at", sinceMidnight.toISOString())
+        .in("conversation_id", conversationIds);
+      messagesToday = count ?? 0;
+    }
 
-    if ((messagesToday ?? 0) >= MAX_USER_MESSAGES_PER_DAY) {
+    if (messagesToday >= MAX_USER_MESSAGES_PER_DAY) {
       return NextResponse.json(
         { error: `Daily assistant message limit (${MAX_USER_MESSAGES_PER_DAY}) reached. Try again tomorrow.` },
         { status: 429 },
@@ -69,22 +90,40 @@ export async function POST(req: NextRequest) {
   const title = userMessage.slice(0, 60) || attachment?.name || "New conversation";
 
   if (!conversationId) {
-    const { data: created, error } = await supabase
-      .from("chat_conversations")
-      .insert({ user_id: context!.profile.user_id, title })
-      .select("id")
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    conversationId = created.id;
+    if (isNeon()) {
+      const created = await queryOne<{ id: string }>(
+        "INSERT INTO chat_conversations (user_id, title) VALUES ($1, $2) RETURNING id",
+        [context!.profile.user_id, title]
+      );
+      if (!created) return NextResponse.json({ error: "Failed to create conversation" }, { status: 500 });
+      conversationId = created.id;
+    } else {
+      const { data: created, error } = await supabase
+        .from("chat_conversations")
+        .insert({ user_id: context!.profile.user_id, title })
+        .select("id")
+        .single();
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      conversationId = created.id;
+    }
   }
 
-  const { data: priorMessages } = await supabase
-    .from("chat_messages")
-    .select("role, content, attachment_name, attachment_type, attachment_text")
-    .eq("conversation_id", conversationId)
-    .in("role", ["user", "assistant"])
-    .order("created_at", { ascending: true })
-    .limit(MAX_HISTORY_TURNS);
+  let priorMessages: any[] = [];
+  if (isNeon()) {
+    priorMessages = await query(
+      "SELECT role, content, attachment_name, attachment_type, attachment_text FROM chat_messages WHERE conversation_id = $1 AND role = ANY($2) ORDER BY created_at ASC LIMIT $3",
+      [conversationId, ["user", "assistant"], MAX_HISTORY_TURNS]
+    );
+  } else {
+    const { data } = await supabase
+      .from("chat_messages")
+      .select("role, content, attachment_name, attachment_type, attachment_text")
+      .eq("conversation_id", conversationId)
+      .in("role", ["user", "assistant"])
+      .order("created_at", { ascending: true })
+      .limit(MAX_HISTORY_TURNS);
+    priorMessages = data ?? [];
+  }
 
   const history: AiMessage[] = (priorMessages ?? []).map((m: any) => {
     let text = m.content as string;
@@ -110,15 +149,22 @@ export async function POST(req: NextRequest) {
 
   const messages: AiMessage[] = [...history, { role: "user", content: [{ type: "text", text: modelText }] }];
 
-  await supabase.from("chat_messages").insert({
-    conversation_id: conversationId,
-    role: "user",
-    content: userMessage || `Attached: ${attachment?.name}`,
-    attachment_url: attachment?.url ?? null,
-    attachment_name: attachment?.name ?? null,
-    attachment_type: attachment?.type ?? null,
-    attachment_text: attachment?.textContent ?? null,
-  });
+  if (isNeon()) {
+    await execute(
+      "INSERT INTO chat_messages (conversation_id, role, content, attachment_url, attachment_name, attachment_type, attachment_text) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+      [conversationId, "user", userMessage || `Attached: ${attachment?.name}`, attachment?.url ?? null, attachment?.name ?? null, attachment?.type ?? null, attachment?.textContent ?? null]
+    );
+  } else {
+    await supabase.from("chat_messages").insert({
+      conversation_id: conversationId,
+      role: "user",
+      content: userMessage || `Attached: ${attachment?.name}`,
+      attachment_url: attachment?.url ?? null,
+      attachment_name: attachment?.name ?? null,
+      attachment_type: attachment?.type ?? null,
+      attachment_text: attachment?.textContent ?? null,
+    });
+  }
 
   const systemPrompt = [
     "You are the internal data assistant for TalentOS, a candidate placement tracker.",
@@ -131,11 +177,18 @@ export async function POST(req: NextRequest) {
   // On failure, persist a visible error turn instead of leaving the transcript looking
   // like it silently dropped the user's message (which was already saved above).
   async function failWithVisibleError(message: string, status: number) {
-    await supabase.from("chat_messages").insert({
-      conversation_id: conversationId,
-      role: "assistant",
-      content: `(error) ${message}`,
-    });
+    if (isNeon()) {
+      await execute(
+        "INSERT INTO chat_messages (conversation_id, role, content) VALUES ($1, $2, $3)",
+        [conversationId, "assistant", `(error) ${message}`]
+      );
+    } else {
+      await supabase.from("chat_messages").insert({
+        conversation_id: conversationId,
+        role: "assistant",
+        content: `(error) ${message}`,
+      });
+    }
     return NextResponse.json({ conversation_id: conversationId, error: message }, { status });
   }
 
@@ -163,8 +216,19 @@ export async function POST(req: NextRequest) {
           ...lastToolCalls.map((t) => `\n${t.name}:\n${t.result}`),
         ].join("\n");
       }
-      await supabase.from("chat_messages").insert({ conversation_id: conversationId, role: "assistant", content: finalText });
-      await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
+      if (isNeon()) {
+        await execute(
+          "INSERT INTO chat_messages (conversation_id, role, content) VALUES ($1, $2, $3)",
+          [conversationId, "assistant", finalText]
+        );
+        await execute(
+          "UPDATE chat_conversations SET updated_at = $1 WHERE id = $2",
+          [new Date().toISOString(), conversationId]
+        );
+      } else {
+        await supabase.from("chat_messages").insert({ conversation_id: conversationId, role: "assistant", content: finalText });
+        await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
+      }
       return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: active.name });
     }
 
@@ -176,12 +240,19 @@ export async function POST(req: NextRequest) {
       toolsUsed.push(toolUse.name);
       const result = await executeTool(toolUse.name, toolUse.input, { role: context!.profile.role });
       lastToolCalls.push({ name: toolUse.name, result });
-      await supabase.from("chat_messages").insert({
-        conversation_id: conversationId,
-        role: "tool",
-        tool_name: toolUse.name,
-        content: JSON.stringify({ input: toolUse.input, result }),
-      });
+      if (isNeon()) {
+        await execute(
+          "INSERT INTO chat_messages (conversation_id, role, tool_name, content) VALUES ($1, $2, $3, $4)",
+          [conversationId, "tool", toolUse.name, JSON.stringify({ input: toolUse.input, result })]
+        );
+      } else {
+        await supabase.from("chat_messages").insert({
+          conversation_id: conversationId,
+          role: "tool",
+          tool_name: toolUse.name,
+          content: JSON.stringify({ input: toolUse.input, result }),
+        });
+      }
       toolResults.push({ type: "tool_result", toolUseId: toolUse.id, content: result });
     }
     messages.push({ role: "user", content: toolResults });

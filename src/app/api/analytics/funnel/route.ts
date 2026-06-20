@@ -15,6 +15,7 @@ export async function GET(req: NextRequest) {
   const dateFrom = url.searchParams.get("dateFrom") || null;
   const dateTo = url.searchParams.get("dateTo") || null;
 
+  // TODO: Neon equivalent needed for RPC get_funnel_counts
   const { data: rows, error } = await supabase.rpc("get_funnel_counts", {
     date_from: dateFrom,
     date_to: dateTo,

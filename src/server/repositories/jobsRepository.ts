@@ -384,3 +384,251 @@ export async function listJobsForDedupe(): Promise<
     return (data ?? []) as Pick<JobRow, "id" | "title" | "company" | "location" | "source_url">[];
   }
 }
+
+// ───────────────────────────────────────────────────────────────
+// Update / Delete
+// ───────────────────────────────────────────────────────────────
+
+export async function updateJob(
+  id: string,
+  updates: Record<string, unknown>
+): Promise<JobRow> {
+  if (isNeon()) {
+    const keys = Object.keys(updates).filter((k) => updates[k] !== undefined);
+    if (keys.length === 0) throw new Error("No fields to update");
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
+    values.push(id);
+    const sql = `UPDATE jobs SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
+    const result = await queryOne<JobRow>(sql, values);
+    if (!result) throw new Error("Update failed");
+    return result;
+  }
+  const { data, error } = await supabase.from("jobs").update(updates).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data as JobRow;
+}
+
+export async function deleteJob(id: string): Promise<void> {
+  if (isNeon()) {
+    await execute("DELETE FROM jobs WHERE id = $1", [id]);
+    return;
+  }
+  const { error } = await supabase.from("jobs").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ───────────────────────────────────────────────────────────────
+// Listing / counts
+// ───────────────────────────────────────────────────────────────
+
+export async function listJobs(
+  opts: { source?: string | null; role_tier?: string | null; job_category?: string | null; is_active?: boolean | null; search?: string | null; limit?: number } = {}
+): Promise<JobRow[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 50));
+  if (isNeon()) {
+    const conditions: string[] = [];
+    const values: (string | number | boolean | null)[] = [];
+    let idx = 1;
+    if (opts.source) {
+      conditions.push(`source = $${idx++}`);
+      values.push(opts.source);
+    }
+    if (opts.role_tier) {
+      conditions.push(`role_tier = $${idx++}`);
+      values.push(opts.role_tier);
+    }
+    if (opts.job_category) {
+      conditions.push(`job_category = $${idx++}`);
+      values.push(opts.job_category);
+    }
+    if (opts.is_active !== undefined && opts.is_active !== null) {
+      conditions.push(`is_active = $${idx++}`);
+      values.push(opts.is_active);
+    }
+    if (opts.search) {
+      conditions.push(`(title ILIKE $${idx++} OR company ILIKE $${idx++} OR location ILIKE $${idx++})`);
+      values.push(`%${opts.search}%`, `%${opts.search}%`, `%${opts.search}%`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `SELECT * FROM jobs ${where} ORDER BY created_at DESC LIMIT $${idx}`;
+    values.push(limit);
+    return query<JobRow>(sql, values);
+  }
+  let q = supabase.from("jobs").select("*");
+  if (opts.source) q = q.eq("source", opts.source);
+  if (opts.role_tier) q = q.eq("role_tier", opts.role_tier);
+  if (opts.job_category) q = q.eq("job_category", opts.job_category);
+  if (opts.is_active !== undefined && opts.is_active !== null) q = q.eq("is_active", opts.is_active);
+  if (opts.search) q = q.or(`title.ilike.%${opts.search}%,company.ilike.%${opts.search}%,location.ilike.%${opts.search}%`);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return (data ?? []) as JobRow[];
+}
+
+export async function countJobs(): Promise<number> {
+  if (isNeon()) {
+    const row = await queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM jobs");
+    return row?.count ?? 0;
+  }
+  const { count, error } = await supabase.from("jobs").select("id", { count: "exact", head: true });
+  if (error) throw error;
+  return count ?? 0;
+}
+
+export async function countJobsSince(since: string): Promise<number> {
+  if (isNeon()) {
+    const row = await queryOne<{ count: number }>(
+      "SELECT COUNT(*)::int as count FROM jobs WHERE created_at >= $1",
+      [since]
+    );
+    return row?.count ?? 0;
+  }
+  const { count, error } = await supabase.from("jobs").select("id", { count: "exact", head: true }).gte("created_at", since);
+  if (error) throw error;
+  return count ?? 0;
+}
+
+// ───────────────────────────────────────────────────────────────
+// Crawler / dedup helpers
+// ───────────────────────────────────────────────────────────────
+
+export async function findJobByExternalIdAndSource(
+  externalId: string,
+  source: string
+): Promise<JobRow | null> {
+  if (isNeon()) {
+    return queryOne<JobRow>(
+      "SELECT * FROM jobs WHERE external_job_id = $1 AND source = $2",
+      [externalId, source]
+    );
+  }
+  const { data, error } = await supabase
+    .from("jobs")
+    .select("*")
+    .eq("external_job_id", externalId)
+    .eq("source", source)
+    .maybeSingle();
+  if (error || !data) return null;
+  return data as JobRow;
+}
+
+export async function createJob(row: Record<string, unknown>): Promise<JobRow> {
+  if (isNeon()) {
+    const cols = Object.keys(row);
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+    const values = cols.map((c) => row[c]);
+    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
+    const result = await queryOne<JobRow>(sql, values);
+    if (!result) throw new Error("Failed to insert job");
+    return result;
+  }
+  const { data, error } = await supabase.from("jobs").insert(row).select().single();
+  if (error) throw new Error(error.message);
+  return data as JobRow;
+}
+
+export async function createJobs(rows: Record<string, any>[]): Promise<JobRow[]> {
+  if (rows.length === 0) return [];
+  if (isNeon()) {
+    const cols = Object.keys(rows[0]);
+    const values: (string | number | boolean | null | Date | object)[] = [];
+    const placeholders: string[] = [];
+    let paramIdx = 1;
+    for (const row of rows) {
+      const rowPlaceholders: string[] = [];
+      for (const col of cols) {
+        rowPlaceholders.push(`$${paramIdx++}`);
+        values.push((row as Record<string, any>)[col] ?? null);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+    }
+    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+    return query<JobRow>(sql, values);
+  }
+  const { data, error } = await supabase.from("jobs").insert(rows).select();
+  if (error) throw error;
+  return (data ?? []) as JobRow[];
+}
+
+export async function findJobsBySourceUrls(urls: string[]): Promise<{ source_url: string }[]> {
+  if (urls.length === 0) return [];
+  if (isNeon()) {
+    return query<{ source_url: string }>(
+      "SELECT source_url FROM jobs WHERE source_url = ANY($1)",
+      [urls]
+    );
+  }
+  const { data, error } = await supabase.from("jobs").select("source_url").in("source_url", urls);
+  if (error) throw error;
+  return (data ?? []) as { source_url: string }[];
+}
+
+export async function updateJobsLastSeenAtByUrls(urls: string[]): Promise<void> {
+  if (urls.length === 0) return;
+  if (isNeon()) {
+    await execute(
+      "UPDATE jobs SET last_seen_at = $1 WHERE source_url = ANY($2)",
+      [new Date().toISOString(), urls]
+    );
+    return;
+  }
+  const { error } = await supabase.from("jobs").update({ last_seen_at: new Date().toISOString() }).in("source_url", urls);
+  if (error) throw error;
+}
+
+export async function findJobsForSignatureDedupe(): Promise<{ title: string; company: string | null; posted_at: string | null; applicants_count: number | null }[]> {
+  if (isNeon()) {
+    return query<{ title: string; company: string | null; posted_at: string | null; applicants_count: number | null }>(
+      "SELECT title, company, posted_at, applicants_count FROM jobs WHERE posted_at IS NOT NULL AND applicants_count IS NOT NULL"
+    );
+  }
+  const { data, error } = await supabase
+    .from("jobs")
+    .select("title, company, posted_at, applicants_count")
+    .not("posted_at", "is", null)
+    .not("applicants_count", "is", null);
+  if (error) throw error;
+  return (data ?? []) as { title: string; company: string | null; posted_at: string | null; applicants_count: number | null }[];
+}
+
+export async function findJobsBySourceUrlWithId(urls: string[]): Promise<{ id: string; source_url: string }[]> {
+  if (urls.length === 0) return [];
+  if (isNeon()) {
+    return query<{ id: string; source_url: string }>(
+      "SELECT id, source_url FROM jobs WHERE source_url = ANY($1)",
+      [urls]
+    );
+  }
+  const { data, error } = await supabase.from("jobs").select("id, source_url").in("source_url", urls);
+  if (error) throw error;
+  return (data ?? []) as { id: string; source_url: string }[];
+}
+
+export async function updateJobBySourceUrl(sourceUrl: string, updates: Record<string, unknown>): Promise<void> {
+  if (isNeon()) {
+    const keys = Object.keys(updates).filter((k) => updates[k] !== undefined);
+    if (keys.length === 0) return;
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
+    values.push(sourceUrl);
+    await execute(
+      `UPDATE jobs SET ${setClause}, updated_at = NOW() WHERE source_url = $${keys.length + 1}`,
+      values
+    );
+    return;
+  }
+  const { error } = await supabase.from("jobs").update(updates).eq("source_url", sourceUrl);
+  if (error) throw error;
+}
+
+export async function listAllJobsForFuzzyDedupe(): Promise<{ title: string; company: string | null; location: string | null }[]> {
+  if (isNeon()) {
+    return query<{ title: string; company: string | null; location: string | null }>(
+      "SELECT title, company, location FROM jobs WHERE title IS NOT NULL"
+    );
+  }
+  const { data, error } = await supabase.from("jobs").select("title, company, location").not("title", "is", null);
+  if (error) throw error;
+  return (data ?? []) as { title: string; company: string | null; location: string | null }[];
+}

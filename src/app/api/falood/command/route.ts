@@ -11,6 +11,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne, execute } from "@/server/db/neon";
 import { runBaseResumeCommand } from "@/lib/ai/faloodBaseResume";
 import { runApplicationTailoringCommand } from "@/lib/ai/faloodApplicationTailoring";
 
@@ -32,65 +34,120 @@ export async function POST(req: NextRequest) {
   if (!mode) return NextResponse.json({ error: "mode is required" }, { status: 400 });
   if (!command && !message) return NextResponse.json({ error: "command or message is required" }, { status: 400 });
 
-  if (mode !== "base_resume_creation" && mode !== "application_resume_tailoring") {
-    return NextResponse.json({ error: `Falood mode "${mode}" is not implemented yet.` }, { status: 501 });
+  const activeMode = mode;
+  const activeCommand = command;
+  const activeMessage = message;
+
+  if (activeMode !== "base_resume_creation" && activeMode !== "application_resume_tailoring") {
+    return NextResponse.json({ error: `Falood mode "${activeMode}" is not implemented yet.` }, { status: 501 });
   }
-  if (mode === "base_resume_creation" && !baseResumeId) {
+  if (activeMode === "base_resume_creation" && !baseResumeId) {
     return NextResponse.json({ error: "baseResumeId is required for base_resume_creation" }, { status: 400 });
   }
-  if (mode === "application_resume_tailoring" && !applicationResumeId) {
+  if (activeMode === "application_resume_tailoring" && !applicationResumeId) {
     return NextResponse.json({ error: "applicationResumeId is required for application_resume_tailoring" }, { status: 400 });
   }
 
   if (!conversationId) {
-    const { data: created, error } = await supabase
-      .from("falood_conversations")
-      .insert({
-        mode,
-        candidate_id: candidateId ?? null,
-        base_resume_id: baseResumeId ?? null,
-        application_resume_id: applicationResumeId ?? null,
-        user_id: context!.profile.user_id,
-      })
-      .select("id")
-      .single();
+    let created: any;
+    let error: any;
+
+    if (isNeon()) {
+      created = await queryOne(
+        `INSERT INTO falood_conversations (mode, candidate_id, base_resume_id, application_resume_id, user_id)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [activeMode, candidateId ?? null, baseResumeId ?? null, applicationResumeId ?? null, context!.profile.user_id]
+      );
+      error = created ? null : { message: 'Insert failed' };
+    } else {
+      const res = await supabase
+        .from("falood_conversations")
+        .insert({
+          mode: activeMode,
+          candidate_id: candidateId ?? null,
+          base_resume_id: baseResumeId ?? null,
+          application_resume_id: applicationResumeId ?? null,
+          user_id: context!.profile.user_id,
+        })
+        .select("id")
+        .single();
+      created = res.data;
+      error = res.error;
+    }
+
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     conversationId = created.id;
   }
 
-  await supabase.from("falood_messages").insert({
-    conversation_id: conversationId,
-    role: "user",
-    content: command ?? message,
-    command: command ?? null,
-  });
+  const userContent = activeCommand ?? activeMessage;
+  const userCommand = activeCommand ?? null;
 
-  const result = mode === "base_resume_creation"
-    ? await runBaseResumeCommand({ baseResumeId: baseResumeId!, command, message })
-    : await runApplicationTailoringCommand({ applicationResumeId: applicationResumeId!, command, message });
+  const finalConversationId = conversationId!;
+
+  if (isNeon()) {
+    await execute(
+      `INSERT INTO falood_messages (conversation_id, role, content, command) VALUES ($1, $2, $3, $4)`,
+      [finalConversationId, "user", userContent, userCommand]
+    );
+  } else {
+    await supabase.from("falood_messages").insert({
+      conversation_id: finalConversationId,
+      role: "user",
+      content: userContent,
+      command: userCommand,
+    });
+  }
+
+  const result = activeMode === "base_resume_creation"
+    ? await runBaseResumeCommand({ baseResumeId: baseResumeId!, command: activeCommand, message: activeMessage })
+    : await runApplicationTailoringCommand({ applicationResumeId: applicationResumeId!, command: activeCommand, message: activeMessage });
 
   if ("error" in result) {
+    if (isNeon()) {
+      await execute(
+        `INSERT INTO falood_messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
+        [finalConversationId, "assistant", `(error) ${result.error}`]
+      );
+    } else {
+      await supabase.from("falood_messages").insert({
+        conversation_id: finalConversationId,
+        role: "assistant",
+        content: `(error) ${result.error}`,
+      });
+    }
+    return NextResponse.json({ conversationId: finalConversationId, error: result.error }, { status: 502 });
+  }
+
+  if (isNeon()) {
+    await execute(
+      `INSERT INTO falood_messages (conversation_id, role, content) VALUES ($1, $2, $3)`,
+      [finalConversationId, "assistant", result.message]
+    );
+    if (result.action) {
+      await execute(
+        `INSERT INTO falood_messages (conversation_id, role, action_json) VALUES ($1, $2, $3)`,
+        [finalConversationId, "action", result.action]
+      );
+    }
+    await execute(
+      `UPDATE falood_conversations SET updated_at = $1 WHERE id = $2`,
+      [new Date().toISOString(), finalConversationId]
+    );
+  } else {
     await supabase.from("falood_messages").insert({
-      conversation_id: conversationId,
+      conversation_id: finalConversationId,
       role: "assistant",
-      content: `(error) ${result.error}`,
+      content: result.message,
     });
-    return NextResponse.json({ conversationId, error: result.error }, { status: 502 });
+    if (result.action) {
+      await supabase.from("falood_messages").insert({
+        conversation_id: finalConversationId,
+        role: "action",
+        action_json: result.action,
+      });
+    }
+    await supabase.from("falood_conversations").update({ updated_at: new Date().toISOString() }).eq("id", finalConversationId);
   }
 
-  await supabase.from("falood_messages").insert({
-    conversation_id: conversationId,
-    role: "assistant",
-    content: result.message,
-  });
-  if (result.action) {
-    await supabase.from("falood_messages").insert({
-      conversation_id: conversationId,
-      role: "action",
-      action_json: result.action,
-    });
-  }
-  await supabase.from("falood_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
-
-  return NextResponse.json({ conversationId, ...result });
+  return NextResponse.json({ conversationId: finalConversationId, ...result });
 }

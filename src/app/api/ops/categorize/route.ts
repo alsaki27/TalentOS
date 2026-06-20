@@ -14,6 +14,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
 
 export const dynamic = "force-dynamic";
@@ -22,19 +24,52 @@ export async function GET() {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
-  const [{ count: pendingCount }, needsReview, recentRuns, categories] = await Promise.all([
-    supabase.from("jobs").select("id", { count: "exact", head: true }).eq("category_status", "pending"),
-    supabase.from("jobs").select("id, title, company, ai_suggested_category, category_relevance_score")
-      .eq("category_status", "needs_review").order("categorized_at", { ascending: false }).limit(50),
-    supabase.from("categorization_runs").select("*").order("started_at", { ascending: false }).limit(10),
-    supabase.from("job_categories").select("id, label, description, is_active").order("label", { ascending: true }),
-  ]);
+  let pendingCount: number;
+  let needsReview: any[];
+  let recentRuns: any[];
+  let categories: any[];
+
+  if (isNeon()) {
+    const pendingRes = await queryOne<{ count: string }>(
+      'SELECT COUNT(*) as count FROM jobs WHERE category_status = $1',
+      ['pending']
+    );
+    pendingCount = parseInt(pendingRes?.count ?? '0', 10);
+
+    needsReview = await query(
+      'SELECT id, title, company, ai_suggested_category, category_relevance_score FROM jobs WHERE category_status = $1 ORDER BY categorized_at DESC LIMIT $2',
+      ['needs_review', 50]
+    );
+
+    recentRuns = await query(
+      'SELECT * FROM categorization_runs ORDER BY started_at DESC LIMIT $1',
+      [10]
+    );
+
+    categories = await query(
+      'SELECT id, label, description, is_active FROM job_categories ORDER BY label ASC',
+      []
+    );
+  } else {
+    const [{ count: pendingCountRes }, needsReviewRes, recentRunsRes, categoriesRes] = await Promise.all([
+      supabase.from("jobs").select("id", { count: "exact", head: true }).eq("category_status", "pending"),
+      supabase.from("jobs").select("id, title, company, ai_suggested_category, category_relevance_score")
+        .eq("category_status", "needs_review").order("categorized_at", { ascending: false }).limit(50),
+      supabase.from("categorization_runs").select("*").order("started_at", { ascending: false }).limit(10),
+      supabase.from("job_categories").select("id, label, description, is_active").order("label", { ascending: true }),
+    ]);
+
+    pendingCount = pendingCountRes ?? 0;
+    needsReview = needsReviewRes.data ?? [];
+    recentRuns = recentRunsRes.data ?? [];
+    categories = categoriesRes.data ?? [];
+  }
 
   return NextResponse.json({
-    pendingCount: pendingCount ?? 0,
-    needsReview: needsReview.data ?? [],
-    recentRuns: recentRuns.data ?? [],
-    categories: categories.data ?? [],
+    pendingCount,
+    needsReview,
+    recentRuns,
+    categories,
   });
 }
 
@@ -51,12 +86,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "requeue_all") {
-    const { error, count } = await supabase
-      .from("jobs")
-      .update({ category_status: "pending", job_category: null, ai_suggested_category: null }, { count: "exact" })
-      .in("category_status", ["done", "needs_review"]);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ requeued: count ?? 0 });
+    if (isNeon()) {
+      const res = await execute(
+        "UPDATE jobs SET category_status = $1, job_category = NULL, ai_suggested_category = NULL WHERE category_status = ANY($2)",
+        ["pending", ["done", "needs_review"]]
+      );
+      return NextResponse.json({ requeued: res.rowCount });
+    } else {
+      const { error, count } = await supabase
+        .from("jobs")
+        .update({ category_status: "pending", job_category: null, ai_suggested_category: null }, { count: "exact" })
+        .in("category_status", ["done", "needs_review"]);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json({ requeued: count ?? 0 });
+    }
   }
 
   if (action === "approve_category" || action === "assign_category") {
@@ -67,25 +110,48 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "approve_category") {
-      const { error: insertError } = await supabase
-        .from("job_categories")
-        .insert({ label })
-        .select()
-        .single();
-      // Ignore unique-violation (category already exists) — assigning still proceeds.
-      if (insertError && insertError.code !== "23505") {
-        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      if (isNeon()) {
+        try {
+          await execute(
+            'INSERT INTO job_categories (label) VALUES ($1)',
+            [label]
+          );
+        } catch (err: any) {
+          // Ignore unique-violation (category already exists) — assigning still proceeds.
+          if (err.code !== '23505') {
+            return NextResponse.json({ error: err.message }, { status: 500 });
+          }
+        }
+      } else {
+        const { error: insertError } = await supabase
+          .from("job_categories")
+          .insert({ label })
+          .select()
+          .single();
+        // Ignore unique-violation (category already exists) — assigning still proceeds.
+        if (insertError && insertError.code !== "23505") {
+          return NextResponse.json({ error: insertError.message }, { status: 500 });
+        }
       }
     }
 
-    const { data, error } = await supabase
-      .from("jobs")
-      .update({ job_category: label, ai_suggested_category: null, category_status: "done" })
-      .eq("id", jobId)
-      .select()
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json(data);
+    if (isNeon()) {
+      const data = await queryOne(
+        'UPDATE jobs SET job_category = $1, ai_suggested_category = NULL, category_status = $2 WHERE id = $3 RETURNING *',
+        [label, 'done', jobId]
+      );
+      if (!data) return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+      return NextResponse.json(data);
+    } else {
+      const { data, error } = await supabase
+        .from("jobs")
+        .update({ job_category: label, ai_suggested_category: null, category_status: "done" })
+        .eq("id", jobId)
+        .select()
+        .single();
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json(data);
+    }
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

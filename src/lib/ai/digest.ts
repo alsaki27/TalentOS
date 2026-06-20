@@ -7,34 +7,33 @@
 // second turn for the model to degenerate on.
 
 import { supabase } from "@/lib/supabase";
+import { countJobsSince } from "@/server/repositories/jobsRepository";
+import { listOverdueApplications, listApplicationsSince, countApplicationsByStatus } from "@/server/repositories/applicationsRepository";
 import { getActiveProvider } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 async function gatherSnapshot() {
   const since = new Date();
   since.setHours(0, 0, 0, 0);
+  const sinceIso = since.toISOString();
 
-  const [newJobsRes, overdueRes, recentAppsRes, pipelineRes] = await Promise.all([
-    supabase.from("jobs").select("id", { count: "exact", head: true }).gte("created_at", since.toISOString()),
-    supabase.from("applications").select("id, assignment_due_at, assigned_to, candidates(name), jobs(title)")
-      .in("status", ["assigned", "stacked", "in_progress"])
-      .lte("assignment_due_at", since.toISOString())
-      .not("assignment_due_at", "is", null)
-      .limit(20),
-    supabase.from("applications").select("status, applied_at").gte("applied_at", since.toISOString()),
-    supabase.from("applications").select("status").in("status", ["assigned", "stacked", "in_progress"]),
+  const [newJobsToday, overdueTickets, recentAppsRes, pipelineCount] = await Promise.all([
+    countJobsSince(sinceIso),
+    listOverdueApplications(sinceIso, 20),
+    listApplicationsSince(sinceIso),
+    countApplicationsByStatus(["assigned", "stacked", "in_progress"]),
   ]);
 
   return {
-    newJobsToday: newJobsRes.count ?? 0,
-    overdueTickets: (overdueRes.data ?? []).map((t: any) => ({
+    newJobsToday,
+    overdueTickets: (overdueTickets ?? []).map((t: any) => ({
       candidate: t.candidates?.name,
       job: t.jobs?.title,
       owner: t.assigned_to,
       dueAt: t.assignment_due_at,
     })),
-    applicationsToday: (recentAppsRes.data ?? []).length,
-    pipelineTicketCount: (pipelineRes.data ?? []).length,
+    applicationsToday: (recentAppsRes ?? []).length,
+    pipelineTicketCount: pipelineCount,
   };
 }
 

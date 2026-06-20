@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 import { generateDailyDigest } from "@/lib/ai/digest";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +25,15 @@ export async function GET(req: NextRequest) {
   const result = await generateDailyDigest();
   if ("error" in result) return NextResponse.json(result, { status: 502 });
 
-  const { error } = await supabase.from("ai_digests").insert({ content: result.content, provider: result.provider });
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (isNeon()) {
+    await query(
+      "INSERT INTO ai_digests (content, provider) VALUES ($1, $2)",
+      [result.content, result.provider]
+    );
+  } else {
+    const { error } = await supabase.from("ai_digests").insert({ content: result.content, provider: result.provider });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true, provider: result.provider });
 }

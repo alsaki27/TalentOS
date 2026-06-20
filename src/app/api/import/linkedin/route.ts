@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 import { mapLinkedInJob, LinkedInScrapedJob, JobRow } from "@/lib/linkedinMapper";
 import { enrichExistingJobsBySourceUrl, filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
@@ -35,7 +37,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ imported: 0, skipped: rows.length - cleanRows.length + duplicates });
   }
 
-  const { data, error } = await supabase.from("jobs").insert(newRows).select("*");
+  let data: any[];
+  let error: any;
+
+  if (isNeon()) {
+    const cols = Object.keys(newRows[0]);
+    const values: any[] = [];
+    const placeholders: string[] = [];
+    let paramIdx = 1;
+    for (const row of newRows) {
+      const rowPlaceholders: string[] = [];
+      for (const col of cols) {
+        rowPlaceholders.push(`$${paramIdx++}`);
+        values.push((row as any)[col]);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+    }
+    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+    data = await query(sql, values);
+    error = null;
+  } else {
+    const res = await supabase.from("jobs").insert(newRows).select("*");
+    data = res.data ?? [];
+    error = res.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   await syncCompanyDirectoryFromJobs(data ?? []);

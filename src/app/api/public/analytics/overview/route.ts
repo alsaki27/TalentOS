@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 
 function rate(count: number, total: number): number {
   return total === 0 ? 0 : Math.round((count / total) * 1000) / 10;
@@ -10,17 +12,30 @@ export async function GET(req: NextRequest) {
   const { response } = await requirePublicApiScope(req, "analytics:read");
   if (response) return response;
 
-  const [candidatesRes, jobsRes, applicationsRes] = await Promise.all([
-    supabase.from("candidates").select("id", { count: "exact", head: true }),
-    supabase.from("jobs").select("id, source, company_id"),
-    supabase.from("applications").select("id, status, job_id, priority, review_status"),
-  ]);
+  let jobs: any[];
+  let allApplications: any[];
+  let candidatesCount: number;
 
-  if (jobsRes.error) return NextResponse.json({ error: jobsRes.error.message }, { status: 500 });
-  if (applicationsRes.error) return NextResponse.json({ error: applicationsRes.error.message }, { status: 500 });
+  if (isNeon()) {
+    const candidatesRes = await queryOne<{ count: string }>('SELECT COUNT(*) as count FROM candidates', []);
+    candidatesCount = parseInt(candidatesRes?.count ?? '0', 10);
+    jobs = await query('SELECT id, source, company_id FROM jobs', []);
+    allApplications = await query('SELECT id, status, job_id, priority, review_status FROM applications', []);
+  } else {
+    const [candidatesRes, jobsRes, applicationsRes] = await Promise.all([
+      supabase.from("candidates").select("id", { count: "exact", head: true }),
+      supabase.from("jobs").select("id, source, company_id"),
+      supabase.from("applications").select("id, status, job_id, priority, review_status"),
+    ]);
 
-  const jobs = jobsRes.data ?? [];
-  const allApplications = applicationsRes.data ?? [];
+    if (jobsRes.error) return NextResponse.json({ error: jobsRes.error.message }, { status: 500 });
+    if (applicationsRes.error) return NextResponse.json({ error: applicationsRes.error.message }, { status: 500 });
+
+    candidatesCount = candidatesRes.count ?? 0;
+    jobs = jobsRes.data ?? [];
+    allApplications = applicationsRes.data ?? [];
+  }
+
   const pipelineStatuses = new Set(["assigned", "stacked", "in_progress"]);
   const submitted = allApplications.filter((app: any) => !pipelineStatuses.has(app.status as string));
   const respondedCount = submitted.filter((app: any) => app.status !== "applied").length;
@@ -29,7 +44,7 @@ export async function GET(req: NextRequest) {
 
   return NextResponse.json({
     totals: {
-      candidates: candidatesRes.count ?? 0,
+      candidates: candidatesCount,
       jobs: jobs.length,
       applications: submitted.length,
       pipelineTickets: allApplications.length - submitted.length,

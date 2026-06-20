@@ -14,6 +14,10 @@
 // /api/resume-suggestions/[id]/apply endpoint (accept/reject/customize), unchanged.
 
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
+import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
+import { findTargetJobById } from "@/server/repositories/targetJobsRepository";
 import { getActiveProvider } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { FaloodCommandResult } from "@/lib/falood/types";
@@ -27,23 +31,46 @@ interface TailoringContext {
 }
 
 async function gatherContext(applicationResumeId: string): Promise<TailoringContext | null> {
-  const { data: appResume } = await supabase
-    .from("application_resume_versions")
-    .select("id, candidate_id, target_job_id, content")
-    .eq("id", applicationResumeId)
-    .single();
+  const appResume = await findResumeVersionById(applicationResumeId);
   if (!appResume) return null;
 
-  const [{ data: targetJob }, { data: keywords }, { data: evidence }] = await Promise.all([
-    supabase.from("target_jobs").select("parsed_description").eq("id", appResume.target_job_id).single(),
-    supabase.from("job_keywords").select("id, keyword, category, importance").eq("target_job_id", appResume.target_job_id),
-    supabase.from("candidate_evidence").select("title, description, related_skills").eq("candidate_id", appResume.candidate_id),
+  const [targetJob, keywords, evidence] = await Promise.all([
+    findTargetJobById(appResume.target_job_id),
+    isNeon()
+      ? query<{ id: string; keyword: string; category: string | null; importance: string | null }>(
+          "SELECT id, keyword, category, importance FROM job_keywords WHERE target_job_id = $1",
+          [appResume.target_job_id]
+        )
+      : supabase
+          .from("job_keywords")
+          .select("id, keyword, category, importance")
+          .eq("target_job_id", appResume.target_job_id)
+          .then((r: any) => r.data ?? []),
+    isNeon()
+      ? query<{ title: string; description: string | null; related_skills: string[] | null }>(
+          "SELECT title, description, related_skills FROM candidate_evidence WHERE candidate_id = $1",
+          [appResume.candidate_id]
+        )
+      : supabase
+          .from("candidate_evidence")
+          .select("title, description, related_skills")
+          .eq("candidate_id", appResume.candidate_id)
+          .then((r: any) => r.data ?? []),
   ]);
 
   const keywordIds = (keywords ?? []).map((k: any) => k.id as string);
-  const { data: approvals } = keywordIds.length
-    ? await supabase.from("keyword_approvals").select("keyword_id, decision").in("keyword_id", keywordIds)
-    : { data: [] as { keyword_id: string; decision: string }[] };
+  const approvals = keywordIds.length
+    ? isNeon()
+      ? await query<{ keyword_id: string; decision: string }>(
+          "SELECT keyword_id, decision FROM keyword_approvals WHERE keyword_id = ANY($1)",
+          [keywordIds]
+        )
+      : await supabase
+          .from("keyword_approvals")
+          .select("keyword_id, decision")
+          .in("keyword_id", keywordIds)
+          .then((r: any) => r.data ?? [])
+    : [];
 
   const approvedIds = new Set((approvals ?? []).filter((a: any) => a.decision === "approved" || a.decision === "already_present").map((a: any) => a.keyword_id as string));
   const rejectedIds = new Set((approvals ?? []).filter((a: any) => a.decision === "rejected").map((a: any) => a.keyword_id as string));
@@ -112,8 +139,26 @@ export async function generateResumeSuggestions(applicationResumeId: string): Pr
     created_by: "ai",
   }));
 
-  const { error } = await supabase.from("resume_suggestions").insert(rows);
-  if (error) return { error: error.message };
+  if (isNeon()) {
+    const columns = Object.keys(rows[0]);
+    const values: (string | number | boolean | null)[] = [];
+    const placeholders: string[] = [];
+    let paramIndex = 1;
+    for (const r of rows) {
+      const rowPlaceholders: string[] = [];
+      for (const col of columns) {
+        rowPlaceholders.push(`$${paramIndex++}`);
+        values.push((r as any)[col]);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+    }
+    const sql = `INSERT INTO resume_suggestions (${columns.join(", ")}) VALUES ${placeholders.join(", ")}`;
+    await query(sql, values);
+  } else {
+    const { error } = await supabase.from("resume_suggestions").insert(rows);
+    if (error) return { error: error.message };
+  }
+
   return { created: rows.length };
 }
 

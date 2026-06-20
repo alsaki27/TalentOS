@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 
 function tokens(value: string | null | undefined) {
   return new Set((value ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length >= 3));
@@ -17,23 +19,54 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (response) return response;
 
   const limit = Math.min(100, Math.max(1, parseInt(new URL(req.url).searchParams.get("limit") || "25", 10) || 25));
-  const { data: job, error: jobError } = await supabase
-    .from("jobs")
-    .select("id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries")
-    .eq("id", params.id)
-    .single();
+
+  let job: any;
+  let candidates: any[];
+  let existingApplications: any[];
+  let jobError: any;
+  let candidateError: any;
+
+  if (isNeon()) {
+    job = await queryOne(
+      'SELECT id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries FROM jobs WHERE id = $1',
+      [params.id]
+    );
+    jobError = job ? null : { message: 'Not found' };
+
+    candidates = await query(
+      'SELECT id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url FROM candidates ORDER BY created_at DESC LIMIT 500',
+      []
+    );
+    candidateError = null;
+
+    existingApplications = await query(
+      'SELECT candidate_id FROM applications WHERE job_id = $1',
+      [params.id]
+    );
+  } else {
+    const jobRes = await supabase
+      .from("jobs")
+      .select("id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries")
+      .eq("id", params.id)
+      .single();
+    job = jobRes.data;
+    jobError = jobRes.error;
+
+    const [candidatesRes, existingApplicationsRes] = await Promise.all([
+      supabase
+        .from("candidates")
+        .select("id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url")
+        .order("created_at", { ascending: false })
+        .limit(500),
+      supabase.from("applications").select("candidate_id").eq("job_id", params.id),
+    ]);
+
+    candidates = candidatesRes.data ?? [];
+    candidateError = candidatesRes.error;
+    existingApplications = existingApplicationsRes.data ?? [];
+  }
 
   if (jobError) return NextResponse.json({ error: jobError.message }, { status: 404 });
-
-  const [{ data: candidates, error: candidateError }, { data: existingApplications }] = await Promise.all([
-    supabase
-      .from("candidates")
-      .select("id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url")
-      .order("created_at", { ascending: false })
-      .limit(500),
-    supabase.from("applications").select("candidate_id").eq("job_id", params.id),
-  ]);
-
   if (candidateError) return NextResponse.json({ error: candidateError.message }, { status: 500 });
 
   const alreadyApplied = new Set((existingApplications ?? []).map((application: any) => application.candidate_id as string));

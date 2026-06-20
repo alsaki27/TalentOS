@@ -771,3 +771,127 @@ export async function listApplicationEvents(
   if (error) throw new Error(error.message);
   return (data ?? []) as ApplicationEventRow[];
 }
+
+// ───────────────────────────────────────────────────────────────
+// Tool / digest helpers
+// ───────────────────────────────────────────────────────────────
+
+export async function listApplicationsForTool(
+  opts: { status?: string | null; priority?: string | null; review_status?: string | null; search?: string | null; limit?: number } = {}
+): Promise<any[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 20, 50));
+  if (isNeon()) {
+    const conditions: string[] = [];
+    const values: (string | number | null)[] = [];
+    let idx = 1;
+    if (opts.status) {
+      conditions.push(`a.status = $${idx++}`);
+      values.push(opts.status);
+    }
+    if (opts.priority) {
+      conditions.push(`a.priority = $${idx++}`);
+      values.push(opts.priority);
+    }
+    if (opts.review_status) {
+      conditions.push(`a.review_status = $${idx++}`);
+      values.push(opts.review_status);
+    }
+    if (opts.search) {
+      conditions.push(`(c.name ILIKE $${idx++} OR j.title ILIKE $${idx++})`);
+      values.push(`%${opts.search}%`, `%${opts.search}%`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `
+      SELECT a.id, a.status, a.priority, a.review_status, a.review_note, a.applied_at, a.follow_up_at, a.assigned_to, a.assignment_due_at,
+        jsonb_build_object('name', c.name, 'email', c.email) as candidates,
+        jsonb_build_object('title', j.title, 'company', j.company) as jobs
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      ${where}
+      ORDER BY a.applied_at DESC
+      LIMIT $${idx}
+    `;
+    values.push(limit);
+    return query<any>(sql, values);
+  }
+  let dbQuery = supabase
+    .from("applications")
+    .select("id, status, priority, review_status, review_note, applied_at, follow_up_at, assigned_to, assignment_due_at, candidates(name, email), jobs(title, company)");
+  if (opts.status) dbQuery = dbQuery.eq("status", opts.status);
+  if (opts.priority) dbQuery = dbQuery.eq("priority", opts.priority);
+  if (opts.review_status) dbQuery = dbQuery.eq("review_status", opts.review_status);
+  const { data, error } = await dbQuery.order("applied_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listAllApplicationsWithStatus(): Promise<{ status: string }[]> {
+  if (isNeon()) {
+    return query<{ status: string }>("SELECT status FROM applications");
+  }
+  const { data, error } = await supabase.from("applications").select("status");
+  if (error) throw error;
+  return (data ?? []) as { status: string }[];
+}
+
+export async function listOverdueApplications(since: string, limit = 20): Promise<any[]> {
+  if (isNeon()) {
+    return query<any>(
+      `
+      SELECT a.id, a.assignment_due_at, a.assigned_to,
+        jsonb_build_object('name', c.name) as candidates,
+        jsonb_build_object('title', j.title) as jobs
+      FROM applications a
+      LEFT JOIN candidates c ON a.candidate_id = c.id
+      LEFT JOIN jobs j ON a.job_id = j.id
+      WHERE a.status = ANY($1)
+        AND a.assignment_due_at <= $2
+        AND a.assignment_due_at IS NOT NULL
+      ORDER BY a.assignment_due_at ASC
+      LIMIT $3
+      `,
+      [["assigned", "stacked", "in_progress"], since, limit]
+    );
+  }
+  const { data, error } = await supabase
+    .from("applications")
+    .select("id, assignment_due_at, assigned_to, candidates(name), jobs(title)")
+    .in("status", ["assigned", "stacked", "in_progress"])
+    .lte("assignment_due_at", since)
+    .not("assignment_due_at", "is", null)
+    .limit(limit);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listApplicationsSince(since: string): Promise<any[]> {
+  if (isNeon()) {
+    return query<any>(
+      "SELECT status, applied_at FROM applications WHERE applied_at >= $1",
+      [since]
+    );
+  }
+  const { data, error } = await supabase
+    .from("applications")
+    .select("status, applied_at")
+    .gte("applied_at", since);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function countApplicationsByStatus(statuses: string[]): Promise<number> {
+  if (isNeon()) {
+    const row = await queryOne<{ count: number }>(
+      "SELECT COUNT(*)::int as count FROM applications WHERE status = ANY($1)",
+      [statuses]
+    );
+    return row?.count ?? 0;
+  }
+  const { count, error } = await supabase
+    .from("applications")
+    .select("id", { count: "exact", head: true })
+    .in("status", statuses);
+  if (error) throw error;
+  return count ?? 0;
+}

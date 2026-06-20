@@ -3,6 +3,8 @@ import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 export async function POST(req: NextRequest) {
   const { response } = await requirePublicApiScope(req, "jobs:import");
@@ -62,9 +64,36 @@ export async function POST(req: NextRequest) {
     }));
 
   const { newRows, duplicates } = await filterNewJobs(normalizedRows);
-  const { data, error } = newRows.length
-    ? await supabase.from("jobs").insert(newRows).select("*")
-    : { data: [], error: null };
+
+  let data: any[];
+  let error: any;
+
+  if (newRows.length) {
+    if (isNeon()) {
+      const cols = Object.keys(newRows[0]);
+      const values: any[] = [];
+      const placeholders: string[] = [];
+      let paramIdx = 1;
+      for (const row of newRows) {
+        const rowPlaceholders: string[] = [];
+        for (const col of cols) {
+          rowPlaceholders.push(`$${paramIdx++}`);
+          values.push((row as any)[col]);
+        }
+        placeholders.push(`(${rowPlaceholders.join(", ")})`);
+      }
+      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+      data = await query(sql, values);
+      error = null;
+    } else {
+      const res = await supabase.from("jobs").insert(newRows).select("*");
+      data = res.data ?? [];
+      error = res.error;
+    }
+  } else {
+    data = [];
+    error = null;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (data?.length) await syncCompanyDirectoryFromJobs(data);

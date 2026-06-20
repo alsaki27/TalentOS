@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, type UserRole } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 const roles: UserRole[] = ["admin", "manager", "application_engineer", "recruiter"];
 
@@ -8,16 +10,32 @@ export async function GET() {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  let query = supabase
-    .from("profiles")
-    .select("user_id, email, display_name, role, is_active")
-    .order("display_name", { ascending: true });
+  let data: any[];
+  let error: any;
 
-  if (context?.profile.role !== "admin") {
-    query = query.eq("is_active", true);
+  if (isNeon()) {
+    let sql = 'SELECT user_id, email, display_name, role, is_active FROM profiles ORDER BY display_name ASC';
+    const params: any[] = [];
+    if (context?.profile.role !== "admin") {
+      sql = 'SELECT user_id, email, display_name, role, is_active FROM profiles WHERE is_active = $1 ORDER BY display_name ASC';
+      params.push(true);
+    }
+    data = await query(sql, params);
+    error = null;
+  } else {
+    let dbQuery = supabase
+      .from("profiles")
+      .select("user_id, email, display_name, role, is_active")
+      .order("display_name", { ascending: true });
+
+    if (context?.profile.role !== "admin") {
+      dbQuery = dbQuery.eq("is_active", true);
+    }
+
+    const res = await dbQuery;
+    data = res.data ?? [];
+    error = res.error;
   }
-
-  const { data, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -43,6 +61,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid role." }, { status: 400 });
   }
 
+  // Auth stays on Supabase
   const { data: created, error: createError } = await supabase.auth.admin.createUser({
     email,
     password,
@@ -57,29 +76,64 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: createError?.message ?? "Could not create user." }, { status: 500 });
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from("profiles")
-    .upsert({
-      user_id: created.user.id,
-      email,
-      display_name: displayName,
-      role,
-      is_active: true,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "user_id" })
-    .select("user_id, email, display_name, role, is_active")
-    .single();
+  let profile: any;
+  let profileError: any;
+
+  if (isNeon()) {
+    profile = await queryOne(
+      `INSERT INTO profiles (user_id, email, display_name, role, is_active, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (user_id) DO UPDATE SET
+         email = EXCLUDED.email,
+         display_name = EXCLUDED.display_name,
+         role = EXCLUDED.role,
+         is_active = EXCLUDED.is_active,
+         updated_at = EXCLUDED.updated_at
+       RETURNING user_id, email, display_name, role, is_active`,
+      [created.user.id, email, displayName, role, true, new Date().toISOString()]
+    );
+    profileError = profile ? null : { message: 'Profile upsert failed' };
+  } else {
+    const res = await supabase
+      .from("profiles")
+      .upsert({
+        user_id: created.user.id,
+        email,
+        display_name: displayName,
+        role,
+        is_active: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "user_id" })
+      .select("user_id, email, display_name, role, is_active")
+      .single();
+    profile = res.data;
+    profileError = res.error;
+  }
 
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 500 });
 
-  await supabase.from("audit_logs").insert({
-    actor_user_id: context?.profile.user_id,
-    actor_email: context?.profile.email,
-    action: "user.created",
-    entity_type: "profile",
-    entity_id: created.user.id,
-    metadata: { email, role },
-  });
+  if (isNeon()) {
+    await execute(
+      'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+      [
+        context?.profile.user_id,
+        context?.profile.email,
+        'user.created',
+        'profile',
+        created.user.id,
+        { email, role },
+      ]
+    );
+  } else {
+    await supabase.from("audit_logs").insert({
+      actor_user_id: context?.profile.user_id,
+      actor_email: context?.profile.email,
+      action: "user.created",
+      entity_type: "profile",
+      entity_id: created.user.id,
+      metadata: { email, role },
+    });
+  }
 
   return NextResponse.json(profile, { status: 201 });
 }

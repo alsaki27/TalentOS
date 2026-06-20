@@ -6,6 +6,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, execute } from "@/server/db/neon";
 import { detectFormat } from "@/lib/normalizer/detect";
 import { parseTable } from "@/lib/normalizer/parse";
 import { applyMapping, FieldMapping } from "@/lib/normalizer";
@@ -52,17 +54,52 @@ export async function POST(req: NextRequest) {
 
   let imported = 0;
   if (newRows.length > 0) {
-    const { data, error } = await supabase.from("jobs").insert(newRows).select("*");
+    let data: any[];
+    let error: any;
+
+    if (isNeon()) {
+      const cols = Object.keys(newRows[0]);
+      const values: any[] = [];
+      const placeholders: string[] = [];
+      let paramIdx = 1;
+      for (const row of newRows) {
+        const rowPlaceholders: string[] = [];
+        for (const col of cols) {
+          rowPlaceholders.push(`$${paramIdx++}`);
+          values.push((row as any)[col]);
+        }
+        placeholders.push(`(${rowPlaceholders.join(", ")})`);
+      }
+      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+      data = await query(sql, values);
+      error = null;
+    } else {
+      const res = await supabase.from("jobs").insert(newRows).select("*");
+      data = res.data ?? [];
+      error = res.error;
+    }
+
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     await syncCompanyDirectoryFromJobs(data ?? []);
     imported = data.length;
   }
 
   if (profileLabel) {
-    const { error } = await supabase
-      .from("import_profiles")
-      .insert({ label: profileLabel.trim(), column_map: mapping });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (isNeon()) {
+      try {
+        await execute(
+          'INSERT INTO import_profiles (label, column_map) VALUES ($1, $2)',
+          [profileLabel.trim(), mapping]
+        );
+      } catch (err: any) {
+        return NextResponse.json({ error: err.message }, { status: 500 });
+      }
+    } else {
+      const { error } = await supabase
+        .from("import_profiles")
+        .insert({ label: profileLabel.trim(), column_map: mapping });
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    }
   }
 
   return NextResponse.json({
