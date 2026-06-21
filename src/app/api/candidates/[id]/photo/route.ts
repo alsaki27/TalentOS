@@ -36,27 +36,42 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const path = `avatars/${params.id}/${Date.now()}.${ext}`;
   const buffer = new Uint8Array(await file.arrayBuffer());
 
-  const { url: publicUrl } = await uploadFile(path, buffer, file.type || "application/octet-stream");
-
-  let data;
-  if (isNeon()) {
-    data = await queryOne<Record<string, any>>(
-      'UPDATE candidates SET avatar_url = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
-      [publicUrl, params.id]
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data: d, error } = await supabase
-      .from("candidates")
-      .update({ avatar_url: publicUrl })
-      .eq("id", params.id)
-      .select()
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    data = d;
+  let publicUrl: string;
+  try {
+    const result = await uploadFile(path, buffer, file.type || "application/octet-stream");
+    publicUrl = result.url;
+  } catch (err: any) {
+    console.error("Photo upload failed:", err);
+    return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
   }
 
-  await deleteStorageFile(existing?.avatar_url);
+  let data;
+  try {
+    if (isNeon()) {
+      data = await queryOne<Record<string, any>>(
+        'UPDATE candidates SET avatar_url = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+        [publicUrl, params.id]
+      );
+    } else {
+      const { supabase } = await import("@/lib/supabase");
+      const { data: d, error } = await supabase
+        .from("candidates")
+        .update({ avatar_url: publicUrl })
+        .eq("id", params.id)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      data = d;
+    }
+  } catch (err: any) {
+    // Same rollback rationale as src/app/api/candidates/[id]/resume/route.ts -
+    // don't leave an uploaded file the DB has no record of.
+    await deleteStorageFile(publicUrl).catch(() => {});
+    console.error("Photo upload DB update failed, rolled back uploaded file:", err);
+    return NextResponse.json({ error: err.message ?? "Failed to save photo reference" }, { status: 500 });
+  }
+
+  await deleteStorageFile(existing?.avatar_url).catch(() => {});
 
   return NextResponse.json(data);
 }

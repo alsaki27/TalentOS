@@ -55,11 +55,9 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
 }
 
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
-  const [{ pdf }, { SkarionResumePdf }] = await Promise.all([
-    import("@react-pdf/renderer"),
-    import("@/lib/falood/skarionPdfDocument"),
-  ]);
-  return pdf(<SkarionResumePdf content={content} />).toBlob();
+  const { renderResumePdfDoc } = await import("@/lib/falood/skarionPdfDocument");
+  const doc = renderResumePdfDoc(content);
+  return doc.output("blob");
 }
 
 export async function generateResumeDocxBlob(content: ResumeDocument): Promise<Blob> {
