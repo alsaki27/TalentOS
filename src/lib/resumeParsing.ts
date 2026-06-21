@@ -1,74 +1,108 @@
 // src/lib/resumeParsing.ts
 // Extract text from PDF/DOCX, then parse structured fields via AI.
-// Dependencies: pdfjs-dist (legacy build), mammoth
+// Dependencies: mammoth (DOCX). PDF extraction is hand-rolled - see extractText.
 
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import type { AiMessage } from "@/lib/ai/provider";
 
-// Minimal DOMMatrix polyfill for Cloudflare Workers. Confirmed via `wrangler tail`
-// against the live Worker: pdfjs-dist's legacy build still throws
-// "DOMMatrix is not defined" even when only calling getTextContent() (no canvas
-// rendering at all) - some real-world PDFs (this was reproduced with an actual
-// uploaded resume, not a minimal synthetic test PDF) trigger an internal pdf.js
-// code path - gradient/pattern fills, certain font handling - that constructs a
-// DOMMatrix regardless of whether anything is ever rendered to a canvas. Neither
-// plain Node.js (confirmed: `typeof DOMMatrix` is `undefined` there too) nor
-// workerd provide this global; the difference is real Node.js apparently never
-// exercises that particular code path for simple text-only PDFs, while a real
-// resume's content stream does. Implementing the real 2D affine matrix math
-// (not no-op stubs) since getTextContent()'s reported text positions can depend on
-// correct transform composition, not just on construction not throwing.
-if (typeof globalThis.DOMMatrix === "undefined") {
-  class DOMMatrixPolyfill {
-    a: number; b: number; c: number; d: number; e: number; f: number;
-    constructor(init?: number[] | DOMMatrixPolyfill) {
-      const m = Array.isArray(init) ? init : init ? [init.a, init.b, init.c, init.d, init.e, init.f] : [1, 0, 0, 1, 0, 0];
-      [this.a, this.b, this.c, this.d, this.e, this.f] = m.length >= 6 ? m : [1, 0, 0, 1, 0, 0];
+// PDF text extraction, decompressing /FlateDecode content streams via the
+// standard Web Platform DecompressionStream API, then regex-matching Tj/TJ
+// text-show operators on the decompressed result.
+//
+// History: three different library-based approaches were each confirmed broken
+// specifically on the Cloudflare Workers deploy (never reproducible locally):
+//   1. pdf-parse depends on @napi-rs/canvas, a native/compiled addon - workerd
+//      cannot load native binaries at all.
+//   2. pdfjs-dist's legacy build (no native deps) still throws
+//      "DOMMatrix is not defined" from an internal code path unrelated to text
+//      extraction, triggered by some feature of the real PDF tested against (not
+//      reproducible with a minimal synthetic test PDF) - fixable with a polyfill,
+//      but then:
+//   3. pdfjs-dist's own isNodeJS environment check doesn't pass in workerd (its
+//      process global lacks the same Symbol.toStringTag real Node sets), so it
+//      tries to spawn a literal `new Worker(workerSrc)` and throws 'No
+//      "GlobalWorkerOptions.workerSrc" specified.' Patching that check to pass
+//      then required importing pdfjs-dist's separate pdf.worker.mjs bundle (its
+//      actual parsing engine, needed even for the in-process "fake worker" path),
+//      which alone pushed the gzipped Worker over Cloudflare's 3072 KiB limit.
+//
+// All three failure modes are different facets of the same root cause: pdf.js
+// (any version, any build target) is built assuming a real browser or a real
+// Node.js process, and Cloudflare Workers is neither. Writing the extraction
+// directly against APIs workerd actually supports avoids the whole category of
+// problem. Confirmed against a real uploaded resume (not a synthetic test PDF):
+// extracted more text than the pdfjs-dist path managed (7251 vs 5503 chars) -
+// this implementation doesn't need a font/glyph layer to know where on the page
+// each character would render, only to find the literal strings PDF's Tj/TJ
+// operators pass to the renderer.
+async function inflateDeflateStream(data: Uint8Array): Promise<Uint8Array> {
+  // The extra `new Uint8Array(data)` copy guarantees a plain ArrayBuffer-backed
+  // view, which is what BlobPart actually requires - same fix as
+  // src/lib/integrations/sharepoint.ts and src/lib/markitdown.ts.
+  const stream = new Blob([new Uint8Array(data)]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of stream as unknown as AsyncIterable<Uint8Array>) chunks.push(chunk);
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
+
+function extractTextShowOperators(content: string): string[] {
+  const extracted: string[] = [];
+  const btEtBlocks = content.match(/BT[\s\S]*?ET/g) ?? [];
+  for (const block of btEtBlocks) {
+    const tjMatches = block.match(/\([^)]*\)\s*Tj/g) ?? [];
+    for (const m of tjMatches) {
+      const start = m.indexOf("(");
+      const end = m.lastIndexOf(")");
+      extracted.push(m.slice(start + 1, end).replace(/\\(.)/g, "$1"));
     }
-    multiplySelf(other: DOMMatrixPolyfill) {
-      const { a, b, c, d, e, f } = this;
-      this.a = a * other.a + c * other.b;
-      this.b = b * other.a + d * other.b;
-      this.c = a * other.c + c * other.d;
-      this.d = b * other.c + d * other.d;
-      this.e = a * other.e + c * other.f + e;
-      this.f = b * other.e + d * other.f + f;
-      return this;
-    }
-    preMultiplySelf(other: DOMMatrixPolyfill) {
-      const result = new DOMMatrixPolyfill([other.a, other.b, other.c, other.d, other.e, other.f]);
-      result.multiplySelf(this);
-      ({ a: this.a, b: this.b, c: this.c, d: this.d, e: this.e, f: this.f } = result);
-      return this;
-    }
-    multiply(other: DOMMatrixPolyfill) {
-      return new DOMMatrixPolyfill([this.a, this.b, this.c, this.d, this.e, this.f]).multiplySelf(other);
-    }
-    invertSelf() {
-      const { a, b, c, d, e, f } = this;
-      const det = a * d - b * c;
-      if (det === 0) { this.a = this.b = this.c = this.d = this.e = this.f = NaN; return this; }
-      this.a = d / det;
-      this.b = -b / det;
-      this.c = -c / det;
-      this.d = a / det;
-      this.e = (c * f - d * e) / det;
-      this.f = (b * e - a * f) / det;
-      return this;
-    }
-    translate(tx: number, ty: number) {
-      return this.multiply(new DOMMatrixPolyfill([1, 0, 0, 1, tx, ty]));
-    }
-    scale(sx: number, sy: number = sx) {
-      return this.multiply(new DOMMatrixPolyfill([sx, 0, 0, sy, 0, 0]));
-    }
-    addPath() {
-      // Path geometry is canvas-rendering-only and never reached by getTextContent.
-      throw new Error("DOMMatrix polyfill: addPath is not implemented (rendering-only, not used for text extraction)");
+    const tjArrayMatches = block.match(/\[[^\]]*\]\s*TJ/g) ?? [];
+    for (const arr of tjArrayMatches) {
+      const strings = arr.match(/\([^)]*\)/g) ?? [];
+      for (const s of strings) extracted.push(s.slice(1, -1).replace(/\\(.)/g, "$1"));
     }
   }
-  (globalThis as any).DOMMatrix = DOMMatrixPolyfill;
+  return extracted;
+}
+
+async function extractTextFromPdfBuffer(buffer: Uint8Array): Promise<string> {
+  const raw = Buffer.from(buffer);
+  const latin1 = raw.toString("latin1");
+  const streamHeaderRe = /(<<[^>]*?>>)\s*stream\r?\n/g;
+  const allText: string[] = [];
+  let match: RegExpExecArray | null;
+
+  while ((match = streamHeaderRe.exec(latin1))) {
+    const dict = match[1];
+    const streamStart = match.index + match[0].length;
+    const endIdx = latin1.indexOf("endstream", streamStart);
+    if (endIdx === -1) continue;
+    let streamEnd = endIdx;
+    while (streamEnd > streamStart && (latin1[streamEnd - 1] === "\n" || latin1[streamEnd - 1] === "\r")) streamEnd--;
+
+    const rawBytes = raw.subarray(streamStart, streamEnd);
+
+    if (dict.includes("/FlateDecode")) {
+      try {
+        const inflated = await inflateDeflateStream(new Uint8Array(rawBytes));
+        allText.push(...extractTextShowOperators(Buffer.from(inflated).toString("latin1")));
+      } catch {
+        // Not actually deflate-compressed text (e.g. an image stream that
+        // happens to also be tagged /FlateDecode) - skip it.
+      }
+    } else if (!dict.includes("/Filter")) {
+      allText.push(...extractTextShowOperators(rawBytes.toString("latin1")));
+    }
+  }
+
+  return allText.join(" ").replace(/\s+/g, " ").trim();
 }
 
 export interface ParsedResume {
@@ -105,51 +139,7 @@ export async function extractText(buffer: Uint8Array, mimeType: string): Promise
   const type = mimeType.toLowerCase();
 
   if (type.includes("pdf")) {
-    // pdf-parse depends on @napi-rs/canvas, a native/compiled addon - Cloudflare
-    // Workers' workerd runtime cannot load native binaries at all, so that path
-    // works fine in local Node.js (confirmed: extracted 5189 chars from a real
-    // uploaded resume locally) but silently fails on the deployed Worker every
-    // time. @napi-rs/canvas is only needed for rendering pages to images -
-    // pdfjs-dist (the actual parsing engine pdf-parse wraps) lists it as an
-    // *optional* dependency and explicitly stubs out canvas/fs in its own
-    // package.json "browser" field, confirming text extraction alone doesn't
-    // need it. Using pdfjs-dist's "legacy" build directly (the variant meant for
-    // non-browser environments without DOM - the default build needs a real
-    // DOMMatrix global, confirmed it throws ReferenceError without one) avoids
-    // the native dependency entirely.
-    //
-    // pdfjs-dist only auto-disables its real-Worker path when its own internal
-    // `isNodeJS` check passes: `typeof process === "object" && process + "" ===
-    // "[object process]"` - that `process + ""` string coercion relies on real
-    // Node's process object having Symbol.toStringTag set to "process" (so
-    // Object.prototype.toString resolves it to "[object process]"). Confirmed via
-    // `wrangler tail` against the live Worker that this check does *not* pass in
-    // workerd even with nodejs_compat providing a `process` global (it apparently
-    // doesn't set that same Symbol.toStringTag), so pdfjs-dist tries to spawn a
-    // real `Worker(workerSrc)` and throws 'No "GlobalWorkerOptions.workerSrc"
-    // specified.' (no separate worker script is ever bundled here). Local Node.js
-    // never hits this path, which is why every prior local test worked despite
-    // this. Patching that one tag is enough to make pdfjs-dist's own isNodeJS
-    // check pass and take its lightweight no-worker path - importing the full
-    // separate pdf.worker.mjs bundle as an alternative was tried and rejected: it
-    // duplicates most of the parsing engine pdf.mjs already contains and pushed
-    // the gzipped Worker size to ~3405 KiB, over Cloudflare's 3072 KiB limit.
-    if (typeof process === "object" && process !== null && (process as any)[Symbol.toStringTag] !== "process") {
-      (process as any)[Symbol.toStringTag] = "process";
-    }
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    const pdf = await pdfjsLib.getDocument({
-      data: buffer,
-      isEvalSupported: false,
-    }).promise;
-
-    const pageTexts: string[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      pageTexts.push(content.items.map((item: any) => item.str ?? "").join(" "));
-    }
-    return pageTexts.join("\n\n");
+    return extractTextFromPdfBuffer(buffer);
   }
 
   if (type.includes("docx") || type.includes("wordprocessingml")) {

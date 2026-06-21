@@ -11,14 +11,11 @@ import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
-// Real PDF text extraction via resumeParsing.ts's extractText (pdfjs-dist's legacy
-// build directly - see that file for why: pdf-parse depends on @napi-rs/canvas, a
-// native addon that Cloudflare Workers' runtime can't load, so it worked locally
-// but silently failed on every real deploy). An earlier version of this function
-// used a hand-rolled regex over raw BT...ET text-show operators before that - that
-// only works for PDFs with literally uncompressed content streams, which
-// essentially none of the PDFs produced by Word, Google Docs, Acrobat, or Canva are
-// (confirmed empirically: zero regex matches on a compressed test PDF).
+// Real PDF text extraction via resumeParsing.ts's extractText - see that file for
+// the history of why this isn't pdf-parse or pdfjs-dist (both confirmed broken
+// specifically on the Cloudflare Workers deploy, never locally) and is instead a
+// hand-rolled extractor using the standard DecompressionStream API to handle real
+// PDFs' /FlateDecode-compressed content streams.
 async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
   try {
     const text = await extractText(buffer, "application/pdf");
