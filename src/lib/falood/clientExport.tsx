@@ -14,7 +14,40 @@ import { pdf } from "@react-pdf/renderer";
 import { Packer } from "docx";
 import { SkarionResumePdf } from "@/lib/falood/skarionPdfDocument";
 import { buildResumeDocxDocument } from "@/lib/falood/docxExport";
-import { ResumeDocument } from "@/lib/falood/types";
+import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
+
+const DEFAULT_FORMATTING: ResumeFormatting = {
+  styleId: "default",
+  pageFormat: "letter",
+  fontFamily: "Helvetica",
+  fontSize: 10.5,
+  marginTop: 0.5,
+  marginRight: 0.5,
+  marginBottom: 0.5,
+  marginLeft: 0.5,
+  sectionSpacing: 8,
+  bulletSpacing: 2,
+  lineHeight: 1.15,
+};
+
+/**
+ * Several resume-studio pages predate the current shared ResumeDocument type and
+ * have their own slightly different local interface for the same underlying JSONB
+ * content (missing `formatting` entirely; `projects[].title` instead of `.name`).
+ * The runtime data is the same JSONB column either way - this just reconciles the
+ * type-level drift so callers can pass whatever shape they have without each page
+ * needing its own adapter.
+ */
+export function normalizeResumeContentForExport(content: any): ResumeDocument {
+  return {
+    ...content,
+    formatting: { ...DEFAULT_FORMATTING, ...(content.formatting ?? {}) },
+    projects: (content.projects ?? []).map((p: any) => ({
+      ...p,
+      name: p.name ?? p.title ?? "",
+    })),
+  };
+}
 
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
   return pdf(<SkarionResumePdf content={content} />).toBlob();
@@ -82,10 +115,11 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
 
 /** Convenience wrapper: generate, download immediately, then upload in the background for history. */
 export async function exportAndDownloadResume(
-  content: ResumeDocument,
+  rawContent: any,
   format: "pdf" | "docx",
   uploadContext?: { applicationId: string; resumeVersionId: string }
 ): Promise<void> {
+  const content = normalizeResumeContentForExport(rawContent);
   const blob = format === "pdf" ? await generateResumePdfBlob(content) : await generateResumeDocxBlob(content);
   const fileName = fileNameFor(content, format);
   downloadBlob(blob, fileName);

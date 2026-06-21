@@ -106,7 +106,13 @@ export async function uploadToSharePoint(path: string, buffer: Uint8Array, conte
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType || "application/octet-stream" },
-      body: buffer,
+      // Wrapped in a Blob rather than passing the Uint8Array directly - fetch's
+      // BodyInit type doesn't always structurally accept Uint8Array depending on
+      // TS lib/target version (a type-level issue, not a runtime one). The extra
+      // `new Uint8Array(buffer)` copy guarantees a plain ArrayBuffer-backed view
+      // (not the generic ArrayBufferLike/SharedArrayBuffer-compatible type some
+      // @types/node versions infer), which is what BlobPart actually requires.
+      body: new Blob([new Uint8Array(buffer)]),
     },
   );
   if (!res.ok) {
