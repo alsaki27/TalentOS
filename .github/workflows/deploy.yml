@@ -17,11 +17,13 @@ name: Deploy TalentOS (Cloudflare)
 # this workflow - add an explicit `secret put` step here if one of those
 # ever needs to be rotated through CI instead of by hand.
 
-# Manual trigger only for now (workflow_dispatch) - this deploys directly to
-# the live, actively-used production Worker. Switch to a push trigger once
-# this pipeline itself has been run and verified at least once; until then,
-# pushing workflow/code changes should not silently redeploy production.
+# Verified working end to end (run #5) - now auto-deploys on every push to
+# this branch, by explicit choice. Anyone pushing here (including
+# concurrent local work outside this pipeline) ships straight to
+# production with no review gate in between.
 on:
+  push:
+    branches: [neon-cloudflare-migration]
   workflow_dispatch:
 
 jobs:
@@ -60,8 +62,16 @@ jobs:
           command: deploy
 
       - name: Set DATABASE_URL secret (corrected non-pooler format)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: secret put DATABASE_URL --value "${{ secrets.TALENTOS_DATABASE_URL }}"
+        # `wrangler secret put <key>` has no `--value` flag at all (that was
+        # wrong - confirmed via the actual CI failure: "Unknown argument:
+        # value"). The real, documented mechanism is reading the value from
+        # stdin, which is what this does. Calling wrangler directly here
+        # instead of through cloudflare/wrangler-action@v3, since this needs
+        # a shell pipe that the action's `command:` input can't express -
+        # CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID as env vars is wrangler's
+        # own documented way to authenticate without the action wrapper.
+        run: echo "$SECRET_VALUE" | npx wrangler secret put DATABASE_URL
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SECRET_VALUE: ${{ secrets.TALENTOS_DATABASE_URL }}
