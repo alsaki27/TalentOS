@@ -54,6 +54,59 @@ jobs:
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
           NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
+      - name: Check Worker bundle size before deploying
+        # Cloudflare's 3 MiB free-plan script-size rejection only surfaced at the
+        # real `wrangler deploy` step, after the build already ran - a slow,
+        # unclear failure mode discovered the hard way (a single library, @react-
+        # pdf/renderer's PDFKit dependency, silently pushed the script over the
+        # limit; the real error wasn't visible until this exact point in CI three
+        # separate times). A dry-run deploy reports the same size without
+        # touching the live Worker, so this fails fast with a clear message
+        # instead of waiting for Cloudflare's own rejection.
+        #
+        # Budget is the real 3072 KiB (3 MiB) free-plan hard limit, not a more
+        # conservative number below it - the app is *already* at ~3052 KiB gzipped
+        # (confirmed at the time this check was added), so there's only ~20 KiB of
+        # real headroom left regardless of what budget this check uses. A tighter
+        # budget would fail CI on every deploy today even though nothing is
+        # actually broken. If you want real headroom back, it has to come from
+        # removing weight from the bundle (the @react-pdf/renderer -> jsPDF swap
+        # bought back ~900 KiB once already) - this check can only warn, not
+        # create margin that doesn't exist.
+        run: |
+          OUTPUT=$(npx wrangler deploy --dry-run --outdir /tmp/wrangler-dryrun 2>&1)
+          echo "$OUTPUT"
+          # Cloudflare's free-plan limit applies to the *gzipped* size, not the raw
+          # upload total - "Total Upload: 17329.79 KiB / gzip: 3052.37 KiB" - the
+          # raw figure is an order of magnitude larger and not the right number to
+          # budget against.
+          SIZE_KIB=$(echo "$OUTPUT" | grep -oP 'gzip: \K[0-9.]+' || echo "0")
+          echo "Worker gzipped upload size: ${SIZE_KIB} KiB"
+          BUDGET_KIB=3072
+          if awk -v s="$SIZE_KIB" -v b="$BUDGET_KIB" 'BEGIN { exit !(s > b) }'; then
+            echo "::error::Worker bundle is ${SIZE_KIB} KiB, over the ${BUDGET_KIB} KiB budget (Cloudflare free-plan hard limit is 3072 KiB / 3 MiB). Deploy would be rejected by Cloudflare - check the output above for the largest dependencies before merging."
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Run Neon schema fixes (sql/neon_fixes/)
+        # Additive-only, idempotent patches - see sql/neon_fixes/README.md for why
+        # this exists and the rules for what's allowed in this directory. Runs
+        # before the deploy so any new column/sequence the deploy's code depends
+        # on already exists by the time the new Worker version goes live. This
+        # closes the exact gap that broke production earlier: a correct,
+        # idempotent migration was written but never actually executed.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          for f in sql/neon_fixes/*.sql; do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
         with:
@@ -75,3 +128,24 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SECRET_VALUE: ${{ secrets.TALENTOS_DATABASE_URL }}
+
+      - name: Verify live health after deploy
+        # Every prior deploy this pipeline shipped was manually checked with a
+        # one-off curl against /api/health afterward - this just makes that
+        # check part of the pipeline instead of a step a human has to remember.
+        # A few retries since a fresh Worker version can take a moment to
+        # propagate after `wrangler deploy` returns.
+        run: |
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w '\n%{http_code}' "https://skarion-talent-os.skarion-talentos.workers.dev/api/health" || echo "000")
+            CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            if [ "$CODE" = "200" ]; then
+              echo "Health check passed: $BODY"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $CODE - $BODY"
+            sleep 5
+          done
+          echo "::error::Live health check failed after deploy - site is not responding healthy at /api/health"
+          exit 1

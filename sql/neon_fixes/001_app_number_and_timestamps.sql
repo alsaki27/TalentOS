@@ -1,6 +1,8 @@
 -- ============================================================
 -- TalentOS Neon Fixes — Missing sequence and columns
--- Run this against Neon after deploying the app.
+-- Auto-applied by .github/workflows/deploy.yml on every deploy (see
+-- sql/neon_fixes/README.md) - every statement here must stay additive
+-- and idempotent (IF NOT EXISTS / DROP...IF EXISTS / guarded DO blocks).
 -- ============================================================
 
 -- Fix 1: Application number sequence (used by generateAppNumbers in applicationsRepository.ts)
