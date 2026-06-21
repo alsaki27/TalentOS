@@ -38,7 +38,19 @@ jobs:
       - run: npm run lint
 
       - name: Build for Cloudflare (OpenNext)
+        # Next.js's "Collecting page data" build phase evaluates route
+        # modules in a way that, at least in this CI environment, ends up
+        # calling code that checks for DATABASE_URL - even though that
+        # value is otherwise only needed at runtime, not build time
+        # (confirmed: this exact build succeeds locally with no
+        # DATABASE_URL set at all, so it's environment-specific, not a
+        # universal requirement - but providing the real value here costs
+        # nothing and sidesteps the question of exactly which code path
+        # triggers it).
         run: npm run cf:build
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
