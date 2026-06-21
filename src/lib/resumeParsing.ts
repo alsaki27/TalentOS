@@ -116,14 +116,27 @@ export async function extractText(buffer: Uint8Array, mimeType: string): Promise
     // need it. Using pdfjs-dist's "legacy" build directly (the variant meant for
     // non-browser environments without DOM - the default build needs a real
     // DOMMatrix global, confirmed it throws ReferenceError without one) avoids
-    // the native dependency entirely. No GlobalWorkerOptions.workerSrc is set here,
-    // so pdfjs-dist automatically falls back to its in-process "fake worker" mode -
-    // confirmed working locally without any worker-related option at all. An
-    // earlier attempt passed a `disableWorker` option, but that property doesn't
-    // actually exist on DocumentInitParameters (TypeScript caught it) and had no
-    // effect either way, since the fake-worker fallback is already the default
-    // when no real worker is configured - Workers doesn't support spinning up a
-    // separate worker thread the way Node/browsers do.
+    // the native dependency entirely.
+    //
+    // pdfjs-dist only auto-disables its real-Worker path when its own internal
+    // `isNodeJS` check passes: `typeof process === "object" && process + "" ===
+    // "[object process]"` - that `process + ""` string coercion relies on real
+    // Node's process object having Symbol.toStringTag set to "process" (so
+    // Object.prototype.toString resolves it to "[object process]"). Confirmed via
+    // `wrangler tail` against the live Worker that this check does *not* pass in
+    // workerd even with nodejs_compat providing a `process` global (it apparently
+    // doesn't set that same Symbol.toStringTag), so pdfjs-dist tries to spawn a
+    // real `Worker(workerSrc)` and throws 'No "GlobalWorkerOptions.workerSrc"
+    // specified.' (no separate worker script is ever bundled here). Local Node.js
+    // never hits this path, which is why every prior local test worked despite
+    // this. Patching that one tag is enough to make pdfjs-dist's own isNodeJS
+    // check pass and take its lightweight no-worker path - importing the full
+    // separate pdf.worker.mjs bundle as an alternative was tried and rejected: it
+    // duplicates most of the parsing engine pdf.mjs already contains and pushed
+    // the gzipped Worker size to ~3405 KiB, over Cloudflare's 3072 KiB limit.
+    if (typeof process === "object" && process !== null && (process as any)[Symbol.toStringTag] !== "process") {
+      (process as any)[Symbol.toStringTag] = "process";
+    }
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
     const pdf = await pdfjsLib.getDocument({
       data: buffer,
