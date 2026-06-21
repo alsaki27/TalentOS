@@ -128,6 +128,8 @@ export default function CandidateProfilePage() {
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
+  const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
+  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; markdown: string } | null>(null);
 
   async function load() {
     if (!id) return;
@@ -162,6 +164,45 @@ export default function CandidateProfilePage() {
     const res = await fetch(`/api/base-resumes?candidateId=${id}`);
     setBaseResumes(res.ok ? await res.json() : []);
     setBaseResumesLoading(false);
+  }
+
+  async function parseWithMarkitdown(resumeId: string) {
+    if (!candidate) return;
+    setParsingMarkitdown(true);
+    try {
+      const res = await fetch(`/api/candidates/${candidate.id}/parse-markitdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_id: resumeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to parse resume");
+        return;
+      }
+      setMarkitdownResult(data);
+      // After successful parse, create a base resume
+      const createRes = await fetch("/api/base-resumes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: candidate.id,
+          name: `${candidate.name} — Base Resume`,
+          startingSource: "uploaded_resume",
+        }),
+      });
+      if (createRes.ok) {
+        const baseResume = await createRes.json();
+        // Reload to show the new base resume
+        loadBaseResumes();
+        // Optionally redirect to the studio
+        // router.push(`/falood/studio/base/${baseResume.id}`);
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to parse with markitdown");
+    } finally {
+      setParsingMarkitdown(false);
+    }
   }
 
   async function handleResumeUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -414,6 +455,27 @@ export default function CandidateProfilePage() {
               )}
               <input type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
               {uploading && <p className="muted">Uploading…</p>}
+
+              {primaryResume && (
+                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => parseWithMarkitdown(primaryResume.id)}
+                    disabled={parsingMarkitdown}
+                    className="btn-primary"
+                  >
+                    {parsingMarkitdown ? "Parsing…" : "Parse with markitdown & Create Base Resume"}
+                  </button>
+                </div>
+              )}
+
+              {markitdownResult && (
+                <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
+                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed with markitdown</h3>
+                  <p className="muted" style={{ fontSize: 12 }}>Skills: {markitdownResult.parsed.skills?.join(", ") || "—"}</p>
+                  <p className="muted" style={{ fontSize: 12 }}>Experience: {markitdownResult.parsed.experience?.length || 0} entries</p>
+                  <p className="muted" style={{ fontSize: 12 }}>Education: {markitdownResult.parsed.education?.length || 0} entries</p>
+                </div>
+              )}
 
               {primaryResume?.parsed_json && (
                 <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>

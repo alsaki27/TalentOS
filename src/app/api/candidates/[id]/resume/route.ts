@@ -41,7 +41,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   try {
     uploaded = await uploadResumeFile(path, buffer, file.type);
   } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
+    console.error("Resume upload failed:", err);
+    return NextResponse.json({ error: err.message ?? "Upload failed", details: String(err) }, { status: 500 });
   }
 
   let data;
@@ -61,7 +62,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     data = d;
   }
 
-  await deleteResumeFile(existing?.resume_url);
+  try {
+    await deleteResumeFile(existing?.resume_url);
+  } catch {
+    // Old file delete failure is non-critical; upload already succeeded
+  }
 
   return NextResponse.json(data);
 }

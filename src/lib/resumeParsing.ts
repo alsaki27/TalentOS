@@ -108,10 +108,98 @@ Rules:
 - Do NOT hallucinate information not present in the text.
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
 
+const MARKDOWN_PARSE_PROMPT = `You are a resume parser. The input is a resume converted to clean Markdown. Extract structured information and return ONLY a JSON object matching this exact schema (no markdown, no commentary, just raw JSON):
+
+{
+  "name": string | null,
+  "email": string | null,
+  "phone": string | null,
+  "location": string | null,
+  "linkedin_url": string | null,
+  "github_url": string | null,
+  "portfolio_url": string | null,
+  "summary": string | null,
+  "skills": string[],
+  "experience": [
+    {
+      "company": string,
+      "title": string,
+      "start_date": string | null,
+      "end_date": string | null,
+      "description": string | null
+    }
+  ],
+  "education": [
+    {
+      "school": string,
+      "degree": string,
+      "field": string | null,
+      "graduation_year": string | null
+    }
+  ],
+  "certifications": string[]
+}
+
+Rules:
+- Markdown headers (##) usually indicate sections. Experience entries often have dates in them.
+- Bullet points (- or *) are individual job responsibilities or achievements.
+- Skills may be in a dedicated section or scattered. Collect them all.
+- Dates: prefer ISO format (YYYY-MM) or just year (YYYY). Use null if unparseable.
+- Do NOT hallucinate information not present in the markdown.
+- Return ONLY the JSON object, no markdown code fences, no explanation.`;
+
+// New: Parse from markdown (better quality, fewer tokens)
+export async function parseResumeFromMarkdown(markdown: string): Promise<ParsedResume> {
+  const active = await getActiveProviderAsync();
+  if (!active) {
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
+  }
+
+  const messages: AiMessage[] = [
+    { role: "user", content: [{ type: "text", text: `${MARKDOWN_PARSE_PROMPT}\n\n--- RESUME MARKDOWN ---\n${markdown}\n--- END RESUME MARKDOWN ---` }] },
+  ];
+
+  try {
+    const response = await active.provider.send({
+      system: "You are a resume parser. Extract structured data from markdown and return ONLY raw JSON.",
+      messages,
+      tools: [],
+    });
+
+    const text = textOf(response.content) ?? "";
+    const clean = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "").trim();
+    const parsed = JSON.parse(clean) as Partial<ParsedResume>;
+
+    return {
+      name: parsed.name || undefined,
+      email: parsed.email || undefined,
+      phone: parsed.phone || undefined,
+      location: parsed.location || undefined,
+      linkedin_url: parsed.linkedin_url || undefined,
+      github_url: parsed.github_url || undefined,
+      portfolio_url: parsed.portfolio_url || undefined,
+      summary: parsed.summary || undefined,
+      skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+      experience: Array.isArray(parsed.experience) ? parsed.experience : [],
+      education: Array.isArray(parsed.education) ? parsed.education : [],
+      certifications: Array.isArray(parsed.certifications) ? parsed.certifications : [],
+      raw_text: markdown,
+    };
+  } catch (err: any) {
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
+  }
+}
+
 /**
  * Parse structured fields from raw resume text using AI.
+ * If markdown is provided and substantial, uses the markdown parser (better quality, fewer tokens).
  */
-export async function parseResumeFields(rawText: string): Promise<ParsedResume> {
+export async function parseResumeFields(rawText: string, markdown?: string): Promise<ParsedResume> {
+  // If markdown is provided and available, use the markdown parser (better quality, fewer tokens)
+  if (markdown && markdown.trim().length > 100) {
+    return parseResumeFromMarkdown(markdown);
+  }
+  // Otherwise fall back to the existing raw text parser
   const active = await getActiveProviderAsync();
   if (!active) {
     // No AI available — return raw text with empty structure
