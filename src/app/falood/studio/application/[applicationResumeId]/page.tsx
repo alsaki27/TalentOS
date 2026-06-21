@@ -1034,6 +1034,7 @@ export default function ApplicationResumeStudioPage() {
           {saveStatus === "saved" && <span className="form-success" style={{ fontSize: 12 }}>Saved</span>}
           {saveStatus === "error" && <span className="form-error" style={{ fontSize: 12 }}>Error</span>}
           <button className="btn" onClick={() => router.push(`/candidates/${candidateId}`)}>Save & Exit</button>
+          <Link className="btn" href={`/falood/cli-editor?type=application&id=${appResume.id}`}>CLI Editor</Link>
           <button
             className="btn-primary"
             onClick={createPacket}

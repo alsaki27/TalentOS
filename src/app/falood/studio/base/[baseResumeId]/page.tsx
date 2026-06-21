@@ -159,6 +159,7 @@ export default function BaseResumeStudioPage() {
         <h1>{baseResume.name}</h1>
         <div style={{ display: "flex", gap: 10 }}>
           <Link className="btn" href={`/candidates/${baseResume.candidate_id}`}>Back to candidate</Link>
+          <Link className="btn" href={`/falood/cli-editor?type=base&id=${baseResume.id}`}>CLI Editor</Link>
           <span className="badge">{baseResume.status}</span>
           <button className="btn-primary" onClick={saveAsApproved} disabled={baseResume.status === "approved"}>
             Save as approved
