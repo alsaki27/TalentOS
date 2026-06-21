@@ -17,11 +17,13 @@ name: Deploy TalentOS (Cloudflare)
 # this workflow - add an explicit `secret put` step here if one of those
 # ever needs to be rotated through CI instead of by hand.
 
-# Manual trigger only for now (workflow_dispatch) - this deploys directly to
-# the live, actively-used production Worker. Switch to a push trigger once
-# this pipeline itself has been run and verified at least once; until then,
-# pushing workflow/code changes should not silently redeploy production.
+# Verified working end to end (run #5) - now auto-deploys on every push to
+# this branch, by explicit choice. Anyone pushing here (including
+# concurrent local work outside this pipeline) ships straight to
+# production with no review gate in between.
 on:
+  push:
+    branches: [neon-cloudflare-migration]
   workflow_dispatch:
 
 jobs:
