@@ -6,6 +6,7 @@ import Pagination from "@/components/Pagination";
 
 interface QueueItem {
   id: string;
+  app_number: number | null;
   status: string;
   assigned_by: string | null;
   assigned_to: string | null;

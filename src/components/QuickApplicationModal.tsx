@@ -62,6 +62,7 @@ interface ApplicationResult {
 
 interface Props {
   onClose: () => void;
+  userRole?: string;
 }
 
 const STEP_LABELS = ["Candidate", "Paste JD", "Review Job", "Create Application"];
@@ -80,7 +81,8 @@ const STATUS_OPTIONS = [
   { value: "applied", label: "Applied" },
 ];
 
-export default function QuickApplicationModal({ onClose }: Props) {
+export default function QuickApplicationModal({ onClose, userRole = "" }: Props) {
+  const canCreateJob = ["admin", "manager", "recruiter"].includes(userRole);
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -498,18 +500,35 @@ export default function QuickApplicationModal({ onClose }: Props) {
               </div>
             ) : (
               <div className="card" style={{ marginBottom: 14 }}>
-                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Create job from pasted JD</h3>
+                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
+                  {canCreateJob ? "Create job from pasted JD" : "Ad-hoc application"}
+                </h3>
                 <p className="muted" style={{ fontSize: 12 }}>
                   Title: <strong>{analysis?.title}</strong> · {analysis?.company} · {analysis?.location}
                 </p>
-                <p style={{ marginTop: 8, fontSize: 12 }}>
-                  Click "Create Job" to save this as a masterlist job. If duplicates exist, you will be prompted to choose.
-                </p>
-                <div style={{ marginTop: 10 }}>
-                  <button className="btn-primary" onClick={() => createJobFromJD()} disabled={loading}>
-                    {loading ? "Creating..." : "Create Job"}
-                  </button>
-                </div>
+                {canCreateJob ? (
+                  <>
+                    <p style={{ marginTop: 8, fontSize: 12 }}>
+                      Click "Create Job" to save this as a masterlist job. If duplicates exist, you will be prompted to choose.
+                    </p>
+                    <div style={{ marginTop: 10 }}>
+                      <button className="btn-primary" onClick={() => createJobFromJD()} disabled={loading}>
+                        {loading ? "Creating..." : "Create Job"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+                      Application engineers can create ad-hoc applications without saving a masterlist job. The JD analysis and raw text will be attached to the application ticket.
+                    </p>
+                    <div style={{ marginTop: 10 }}>
+                      <button className="btn-primary" onClick={() => { setSelectedJob(null); setStep(4); }} disabled={loading}>
+                        Continue to Ad-hoc Application
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
