@@ -1,6 +1,6 @@
 // src/lib/resumeParsing.ts
 // Extract text from PDF/DOCX, then parse structured fields via AI.
-// Dependencies: pdf-parse, mammoth (install via npm i pdf-parse mammoth)
+// Dependencies: pdfjs-dist (legacy build), mammoth
 
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
@@ -40,11 +40,38 @@ export async function extractText(buffer: Uint8Array, mimeType: string): Promise
   const type = mimeType.toLowerCase();
 
   if (type.includes("pdf")) {
-    const { PDFParse } = await import("pdf-parse");
-    const nodeBuffer = Buffer.from(buffer);
-    const parser = new PDFParse({ data: nodeBuffer });
-    const result = await parser.getText();
-    return result.text ?? "";
+    // pdf-parse depends on @napi-rs/canvas, a native/compiled addon - Cloudflare
+    // Workers' workerd runtime cannot load native binaries at all, so that path
+    // works fine in local Node.js (confirmed: extracted 5189 chars from a real
+    // uploaded resume locally) but silently fails on the deployed Worker every
+    // time. @napi-rs/canvas is only needed for rendering pages to images -
+    // pdfjs-dist (the actual parsing engine pdf-parse wraps) lists it as an
+    // *optional* dependency and explicitly stubs out canvas/fs in its own
+    // package.json "browser" field, confirming text extraction alone doesn't
+    // need it. Using pdfjs-dist's "legacy" build directly (the variant meant for
+    // non-browser environments without DOM - the default build needs a real
+    // DOMMatrix global, confirmed it throws ReferenceError without one) avoids
+    // the native dependency entirely. No GlobalWorkerOptions.workerSrc is set here,
+    // so pdfjs-dist automatically falls back to its in-process "fake worker" mode -
+    // confirmed working locally without any worker-related option at all. An
+    // earlier attempt passed a `disableWorker` option, but that property doesn't
+    // actually exist on DocumentInitParameters (TypeScript caught it) and had no
+    // effect either way, since the fake-worker fallback is already the default
+    // when no real worker is configured - Workers doesn't support spinning up a
+    // separate worker thread the way Node/browsers do.
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdf = await pdfjsLib.getDocument({
+      data: buffer,
+      isEvalSupported: false,
+    }).promise;
+
+    const pageTexts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      pageTexts.push(content.items.map((item: any) => item.str ?? "").join(" "));
+    }
+    return pageTexts.join("\n\n");
   }
 
   if (type.includes("docx") || type.includes("wordprocessingml")) {

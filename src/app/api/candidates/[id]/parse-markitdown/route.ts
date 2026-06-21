@@ -11,16 +11,14 @@ import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
-// Real PDF text extraction via pdf-parse (already a dependency, used the same way
-// in resumeParsing.ts's extractText). An earlier version of this function used a
-// hand-rolled regex over raw BT...ET text-show operators - that only works for PDFs
-// with literally uncompressed content streams, which essentially none of the PDFs
-// produced by Word, Google Docs, Acrobat, or Canva are (they default to
-// /FlateDecode-compressed streams, where the actual Tj/TJ operators are inside
-// compressed binary data, not visible as plain text in the raw buffer at all -
-// confirmed empirically: a compressed test PDF produced zero regex matches while an
-// uncompressed one matched fine, meaning the fallback would have silently failed for
-// the overwhelming majority of real-world resume uploads).
+// Real PDF text extraction via resumeParsing.ts's extractText (pdfjs-dist's legacy
+// build directly - see that file for why: pdf-parse depends on @napi-rs/canvas, a
+// native addon that Cloudflare Workers' runtime can't load, so it worked locally
+// but silently failed on every real deploy). An earlier version of this function
+// used a hand-rolled regex over raw BT...ET text-show operators before that - that
+// only works for PDFs with literally uncompressed content streams, which
+// essentially none of the PDFs produced by Word, Google Docs, Acrobat, or Canva are
+// (confirmed empirically: zero regex matches on a compressed test PDF).
 async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
   try {
     const text = await extractText(buffer, "application/pdf");
@@ -28,8 +26,8 @@ async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
     return trimmed.length > 50 ? trimmed : null;
   } catch (err: any) {
     // Logged (not returned to the client - may reflect internals) so a real
-    // extraction failure in the Workers runtime is distinguishable in Cloudflare's
-    // logs from "this PDF genuinely has no extractable text" (e.g. a scan).
+    // extraction failure is distinguishable in Cloudflare's logs from "this PDF
+    // genuinely has no extractable text" (e.g. a scan).
     console.error("PDF text extraction failed:", err?.message ?? err);
     return null;
   }
