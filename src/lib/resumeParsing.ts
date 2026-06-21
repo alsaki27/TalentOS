@@ -6,6 +6,71 @@ import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import type { AiMessage } from "@/lib/ai/provider";
 
+// Minimal DOMMatrix polyfill for Cloudflare Workers. Confirmed via `wrangler tail`
+// against the live Worker: pdfjs-dist's legacy build still throws
+// "DOMMatrix is not defined" even when only calling getTextContent() (no canvas
+// rendering at all) - some real-world PDFs (this was reproduced with an actual
+// uploaded resume, not a minimal synthetic test PDF) trigger an internal pdf.js
+// code path - gradient/pattern fills, certain font handling - that constructs a
+// DOMMatrix regardless of whether anything is ever rendered to a canvas. Neither
+// plain Node.js (confirmed: `typeof DOMMatrix` is `undefined` there too) nor
+// workerd provide this global; the difference is real Node.js apparently never
+// exercises that particular code path for simple text-only PDFs, while a real
+// resume's content stream does. Implementing the real 2D affine matrix math
+// (not no-op stubs) since getTextContent()'s reported text positions can depend on
+// correct transform composition, not just on construction not throwing.
+if (typeof globalThis.DOMMatrix === "undefined") {
+  class DOMMatrixPolyfill {
+    a: number; b: number; c: number; d: number; e: number; f: number;
+    constructor(init?: number[] | DOMMatrixPolyfill) {
+      const m = Array.isArray(init) ? init : init ? [init.a, init.b, init.c, init.d, init.e, init.f] : [1, 0, 0, 1, 0, 0];
+      [this.a, this.b, this.c, this.d, this.e, this.f] = m.length >= 6 ? m : [1, 0, 0, 1, 0, 0];
+    }
+    multiplySelf(other: DOMMatrixPolyfill) {
+      const { a, b, c, d, e, f } = this;
+      this.a = a * other.a + c * other.b;
+      this.b = b * other.a + d * other.b;
+      this.c = a * other.c + c * other.d;
+      this.d = b * other.c + d * other.d;
+      this.e = a * other.e + c * other.f + e;
+      this.f = b * other.e + d * other.f + f;
+      return this;
+    }
+    preMultiplySelf(other: DOMMatrixPolyfill) {
+      const result = new DOMMatrixPolyfill([other.a, other.b, other.c, other.d, other.e, other.f]);
+      result.multiplySelf(this);
+      ({ a: this.a, b: this.b, c: this.c, d: this.d, e: this.e, f: this.f } = result);
+      return this;
+    }
+    multiply(other: DOMMatrixPolyfill) {
+      return new DOMMatrixPolyfill([this.a, this.b, this.c, this.d, this.e, this.f]).multiplySelf(other);
+    }
+    invertSelf() {
+      const { a, b, c, d, e, f } = this;
+      const det = a * d - b * c;
+      if (det === 0) { this.a = this.b = this.c = this.d = this.e = this.f = NaN; return this; }
+      this.a = d / det;
+      this.b = -b / det;
+      this.c = -c / det;
+      this.d = a / det;
+      this.e = (c * f - d * e) / det;
+      this.f = (b * e - a * f) / det;
+      return this;
+    }
+    translate(tx: number, ty: number) {
+      return this.multiply(new DOMMatrixPolyfill([1, 0, 0, 1, tx, ty]));
+    }
+    scale(sx: number, sy: number = sx) {
+      return this.multiply(new DOMMatrixPolyfill([sx, 0, 0, sy, 0, 0]));
+    }
+    addPath() {
+      // Path geometry is canvas-rendering-only and never reached by getTextContent.
+      throw new Error("DOMMatrix polyfill: addPath is not implemented (rendering-only, not used for text extraction)");
+    }
+  }
+  (globalThis as any).DOMMatrix = DOMMatrixPolyfill;
+}
+
 export interface ParsedResume {
   name?: string;
   email?: string;
