@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { exportAndDownloadResume } from "@/lib/falood/clientExport";
 
 interface ResumeDocument {
   header: { fullName: string; location?: string; phone?: string; email?: string; linkedin?: string; github?: string; portfolio?: string };
@@ -71,6 +72,7 @@ export default function BaseResumeStudioPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [exporting, setExporting] = useState<"pdf" | "docx" | null>(null);
 
   async function load() {
     if (!baseResumeId) return;
@@ -153,6 +155,20 @@ export default function BaseResumeStudioPage() {
 
   const content = pendingAction?.newContent ?? baseResume.content;
 
+  async function downloadBaseResume(format: "pdf" | "docx") {
+    setExporting(format);
+    try {
+      // Base resumes aren't linked to an application, so there's no
+      // application_resume_exports row to write - this is download-only, no R2
+      // history, unlike the application-level export in the other studio page.
+      await exportAndDownloadResume(content, format);
+    } catch (err: any) {
+      setError(err?.message || `${format.toUpperCase()} export failed.`);
+    } finally {
+      setExporting(null);
+    }
+  }
+
   return (
     <>
       <div className="page-header">
@@ -161,6 +177,12 @@ export default function BaseResumeStudioPage() {
           <Link className="btn" href={`/candidates/${baseResume.candidate_id}`}>Back to candidate</Link>
           <Link className="btn" href={`/falood/cli-editor?type=base&id=${baseResume.id}`}>CLI Editor</Link>
           <span className="badge">{baseResume.status}</span>
+          <button className="btn" onClick={() => downloadBaseResume("pdf")} disabled={exporting === "pdf"}>
+            {exporting === "pdf" ? "Exporting…" : "Export PDF"}
+          </button>
+          <button className="btn" onClick={() => downloadBaseResume("docx")} disabled={exporting === "docx"}>
+            {exporting === "docx" ? "Exporting…" : "Export DOCX"}
+          </button>
           <button className="btn-primary" onClick={saveAsApproved} disabled={baseResume.status === "approved"}>
             Save as approved
           </button>

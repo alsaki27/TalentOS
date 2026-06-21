@@ -1,13 +1,7 @@
 // src/lib/integrations/sharepoint.ts
 // Optional alternative resume storage backend via Microsoft Graph / SharePoint, selected
-// with RESUME_STORAGE_PROVIDER=sharepoint (default stays Supabase Storage — see
-// src/lib/resumeStorage.ts). Brought over from comparing against the team's skarion-api
-// repo, which stores resumes in SharePoint for teams already standardized on
-// Microsoft 365 — that's an infrastructure preference, not a feature this app lacked
-// (Supabase Storage + resume variants is already a more complete equivalent), but it's
-// useful as a real option for a team that wants files living in their own tenant.
-// App-only auth (client credentials flow), raw fetch — no Microsoft Graph SDK, same
-// "no SDK dependency" convention as every other external integration in this app.
+// with RESUME_STORAGE_PROVIDER=sharepoint (default is R2 — see src/lib/resumeStorage.ts).
+// App-only auth (client credentials flow), raw fetch — no Microsoft Graph SDK.
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
@@ -51,18 +45,68 @@ function base64urlEncodeString(str: string): string {
     .replace(/\+/g, "-");
 }
 
+// Encode each path segment individually so '/' stays as a separator but special chars
+// like '#', '?', spaces are properly escaped.
+function encodeGraphPath(path: string): string {
+  if (!path) return "";
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+// Ensure every folder in the chain exists. SharePoint PUT /content fails with 404
+// if the parent folder does not already exist, so we create them first.
+async function ensureFolderPath(token: string, siteId: string, folderPath: string): Promise<void> {
+  const segments = folderPath.split("/").filter(Boolean);
+
+  for (let i = 0; i < segments.length; i++) {
+    const parentPath = segments.slice(0, i).join("/");
+    const folderName = segments[i];
+
+    const url = parentPath
+      ? `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeGraphPath(parentPath)}:/children`
+      : `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root/children`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: folderName,
+        folder: {},
+        "@microsoft.graph.conflictBehavior": "fail",
+      }),
+    });
+
+    // 201 = created, 409 = already exists (conflict). Anything else is a real error.
+    if (!res.ok && res.status !== 409) {
+      const text = await res.text().catch(() => "");
+      throw new Error(
+        `SharePoint folder creation failed (${res.status}) for '${folderName}' under '${parentPath || "root"}': ${text}`.trim()
+      );
+    }
+  }
+}
+
 export async function uploadToSharePoint(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
   const graphPath = `${folder}/${path}`;
 
+  // Ensure parent folders exist before uploading (SharePoint PUT /content does not auto-create parents)
+  const lastSlash = graphPath.lastIndexOf("/");
+  if (lastSlash > 0) {
+    const parentPath = graphPath.substring(0, lastSlash);
+    await ensureFolderPath(token, siteId, parentPath);
+  }
+
   const res = await fetch(
-    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeURI(graphPath)}:/content`,
+    `https://graph.microsoft.com/v1.0/sites/${siteId}/drive/root:/${encodeGraphPath(graphPath)}:/content`,
     {
       method: "PUT",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": contentType || "application/octet-stream" },
-      body: buffer as any,
+      body: buffer,
     },
   );
   if (!res.ok) {
@@ -73,7 +117,37 @@ export async function uploadToSharePoint(path: string, buffer: Uint8Array, conte
   return { url: item.webUrl as string };
 }
 
-/** Resolves a SharePoint webUrl to its drive item via Graph's shares API, then streams the file bytes — lets the browser download without ever needing Microsoft auth itself. */
+export async function deleteFromSharePoint(webUrl: string): Promise<void> {
+  if (!process.env.MS_TENANT_ID || !process.env.MS_CLIENT_ID || !process.env.MS_CLIENT_SECRET || !process.env.SHAREPOINT_SITE_ID) {
+    throw new Error("SharePoint credentials not configured");
+  }
+
+  const token = await getGraphToken();
+  const encodedShareId = "u!" + base64urlEncodeString(webUrl);
+
+  const itemRes = await fetch(`https://graph.microsoft.com/v1.0/shares/${encodedShareId}/driveItem`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!itemRes.ok) {
+    if (itemRes.status === 404) {
+      console.warn(`SharePoint delete: item already deleted or not found ${webUrl}`);
+      return;
+    }
+    throw new Error(`SharePoint delete: failed to resolve item (${itemRes.status})`);
+  }
+  const item = await itemRes.json();
+
+  const siteId = process.env.SHAREPOINT_SITE_ID;
+  const deleteRes = await fetch(`https://graph.microsoft.com/v1.0/sites/${siteId}/drive/items/${item.id}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!deleteRes.ok && deleteRes.status !== 404) {
+    throw new Error(`SharePoint delete failed (${deleteRes.status})`);
+  }
+}
+
+/** Resolves a SharePoint webUrl to its drive item via Graph's shares API, then streams the file bytes. */
 export async function downloadFromSharePoint(webUrl: string): Promise<{ buffer: Uint8Array; contentType: string; fileName: string }> {
   const token = await getGraphToken();
   const encodedShareId = "u!" + base64urlEncodeString(webUrl);

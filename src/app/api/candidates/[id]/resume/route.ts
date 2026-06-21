@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { deleteStorageFile } from "@/lib/storage";
+import { deleteResumeFile } from "@/lib/resumeStorage";
 import { uploadResumeFile } from "@/lib/resumeStorage";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     data = d;
   }
 
-  await deleteStorageFile(existing?.resume_url);
+  await deleteResumeFile(existing?.resume_url);
 
   return NextResponse.json(data);
 }

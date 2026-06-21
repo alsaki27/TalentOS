@@ -8,6 +8,7 @@ import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUse
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { deleteStorageFile } from "@/lib/storage";
+import { deleteResumeFile } from "@/lib/resumeStorage";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -165,9 +166,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       await execute('DELETE FROM candidates WHERE id = $1', [params.id]);
 
       await Promise.all([
-        deleteStorageFile(candidate?.resume_url),
+        deleteResumeFile(candidate?.resume_url),
         deleteStorageFile(candidate?.avatar_url),
-        ...(resumes ?? []).map((r: any) => deleteStorageFile(r.file_url)),
+        ...(resumes ?? []).map((r: any) => deleteResumeFile(r.file_url)),
       ]);
 
       if (context) {
@@ -204,9 +205,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   await Promise.all([
-    deleteStorageFile(candidate?.resume_url),
+    deleteResumeFile(candidate?.resume_url),
     deleteStorageFile(candidate?.avatar_url),
-    ...(resumes ?? []).map((r: any) => deleteStorageFile(r.file_url)),
+    ...(resumes ?? []).map((r: any) => deleteResumeFile(r.file_url)),
   ]);
 
   if (context) {

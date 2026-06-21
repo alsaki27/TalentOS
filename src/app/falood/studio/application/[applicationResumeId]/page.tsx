@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { exportAndDownloadResume } from "@/lib/falood/clientExport";
 
 /* ──────────── interfaces ──────────── */
 
@@ -543,26 +544,20 @@ export default function ApplicationResumeStudioPage() {
   }
 
   async function downloadExport(format: "pdf" | "docx") {
-    if (!applicationResumeId) return;
+    if (!applicationResumeId || !content) return;
     setExporting(format);
     try {
-      const res = await fetch(`/api/export/${format}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ applicationResumeId }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || `${format.toUpperCase()} export failed.`);
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `resume.${format}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Generated entirely client-side (see clientExport.tsx) - this never hits the
+      // Cloudflare Worker. Download happens immediately; saving a re-downloadable
+      // copy to R2 happens best-effort in the background, so a slow/failed upload
+      // never blocks the user from getting their file.
+      await exportAndDownloadResume(
+        content,
+        format,
+        applicationId ? { applicationId, resumeVersionId: applicationResumeId } : undefined
+      );
+    } catch (err: any) {
+      setError(err?.message || `${format.toUpperCase()} export failed.`);
     } finally {
       setExporting(null);
     }

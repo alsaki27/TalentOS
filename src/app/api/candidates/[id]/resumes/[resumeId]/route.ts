@@ -6,7 +6,7 @@ import { getCurrentUserContext } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { deleteStorageFile } from "@/lib/storage";
+import { deleteResumeFile } from "@/lib/resumeStorage";
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string; resumeId: string } }) {
   const currentUser = await getCurrentUserContext();
@@ -41,7 +41,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  await deleteStorageFile(resume?.file_url);
+  await deleteResumeFile(resume?.file_url);
 
   if (currentUser) {
     await logActivity({
