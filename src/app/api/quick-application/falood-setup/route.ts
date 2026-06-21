@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { isNeon } from "@/server/db";
-import { query, queryOne } from "@/server/db/neon";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { findJobById } from "@/server/repositories/jobsRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { logActivity } from "@/lib/activity";
@@ -186,39 +186,36 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  /* ── 5. Optionally create application_packet linking version to application ── */
+  /* ── 5. Optionally create/update application_packet linking version to application ──
+   * application_packets has no separate id column - application_id IS the primary
+   * key (one packet per application), and the real columns are resume_version_id /
+   * cover_letter_version_id / packet_status / notes, not base_resume_id /
+   * target_job_id / final_resume_version_id / created_by, which don't exist on this
+   * table at all (confirmed against the live schema - the original INSERT here would
+   * have failed with a "column does not exist" error on every call). Upserting on
+   * application_id rather than plain INSERT so re-running Falood setup for the same
+   * application updates the packet's resume_version_id instead of silently no-op'ing
+   * on the primary-key conflict. */
   let packetId: string | null = null;
   if (applicationId) {
     try {
       if (isNeon()) {
-        const packet = await queryOne(
-          `INSERT INTO application_packets
-            (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING *`,
-          [
-            applicationId,
-            insertData.base_resume_id ?? null,
-            targetJobId,
-            version.id,
-            context!.profile.user_id,
-          ]
+        await execute(
+          `INSERT INTO application_packets (application_id, resume_version_id, updated_at)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (application_id) DO UPDATE
+             SET resume_version_id = EXCLUDED.resume_version_id, updated_at = NOW()`,
+          [applicationId, version.id]
         );
-        packetId = packet?.id ?? null;
+        packetId = applicationId;
       } else {
         const { supabase } = await import("@/lib/supabase");
         const res = await supabase
           .from("application_packets")
-          .insert({
-            application_id: applicationId,
-            base_resume_id: insertData.base_resume_id ?? null,
-            target_job_id: targetJobId,
-            final_resume_version_id: version.id,
-            created_by: context!.profile.user_id,
-          })
+          .upsert({ application_id: applicationId, resume_version_id: version.id }, { onConflict: "application_id" })
           .select()
           .single();
-        if (res.data) packetId = res.data.id;
+        if (res.data) packetId = res.data.application_id;
       }
     } catch (e: any) {
       // 23505 = duplicate packet; ignore since we just want the version created
