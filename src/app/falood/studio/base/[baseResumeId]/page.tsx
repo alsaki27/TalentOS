@@ -97,6 +97,23 @@ export default function BaseResumeStudioPage() {
 
   useEffect(() => { load(); }, [baseResumeId]);
 
+  // Keyboard shortcut: Ctrl+S saves JSON editor when it's open. Must be declared
+  // here, before the `if (!baseResume) return ...` early return below - React
+  // hooks must run in the same order on every render, and a hook placed after an
+  // early return gets skipped whenever that return fires (e.g. on first render
+  // while baseResume is still loading), which is a real rules-of-hooks violation,
+  // not just a lint nitpick.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s" && showJsonEditor) {
+        e.preventDefault();
+        saveJsonEditor();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showJsonEditor, jsonText, jsonError]);
+
   async function saveJsonEditor() {
     if (!baseResumeId || jsonError) return;
     try {
@@ -202,18 +219,6 @@ export default function BaseResumeStudioPage() {
       setExporting(null);
     }
   }
-
-  // Keyboard shortcut: Ctrl+S saves JSON editor when it's open
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s" && showJsonEditor) {
-        e.preventDefault();
-        saveJsonEditor();
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [showJsonEditor, jsonText, jsonError]);
 
   return (
     <>

@@ -6,70 +6,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
-import { parseResumeFromMarkdown } from "@/lib/resumeParsing";
+import { parseResumeFromMarkdown, extractText } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
-// Simple text extraction for text-based PDFs.
-// Looks for text objects between BT...ET markers and extracts Tj/TJ operands.
-// This is not perfect but works for many simple text-based PDFs.
-function extractTextFromPDF(buffer: Uint8Array): string | null {
+// Real PDF text extraction via pdf-parse (already a dependency, used the same way
+// in resumeParsing.ts's extractText). An earlier version of this function used a
+// hand-rolled regex over raw BT...ET text-show operators - that only works for PDFs
+// with literally uncompressed content streams, which essentially none of the PDFs
+// produced by Word, Google Docs, Acrobat, or Canva are (they default to
+// /FlateDecode-compressed streams, where the actual Tj/TJ operators are inside
+// compressed binary data, not visible as plain text in the raw buffer at all -
+// confirmed empirically: a compressed test PDF produced zero regex matches while an
+// uncompressed one matched fine, meaning the fallback would have silently failed for
+// the overwhelming majority of real-world resume uploads).
+async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
   try {
-    const text = new TextDecoder("utf-8").decode(buffer);
-    // Try to find text between BT and ET markers
-    const btEtMatches = text.match(/BT[\s\S]*?ET/g);
-    if (!btEtMatches) return null;
-
-    const extracted: string[] = [];
-    for (const block of btEtMatches) {
-      // Find Tj (text show) operators: (text) Tj
-      const tjMatches = block.match(/\(([^)]*)\)\s*Tj/g);
-      if (tjMatches) {
-        for (const m of tjMatches) {
-          const content = m.match(/\(([^)]*)\)/)?.[1] ?? "";
-          // Unescape PDF string escapes
-          const unescaped = content
-            .replace(/\\n/g, "\n")
-            .replace(/\\r/g, "\r")
-            .replace(/\\t/g, "\t")
-            .replace(/\\b/g, "\b")
-            .replace(/\\f/g, "\f")
-            .replace(/\\\(/g, "(")
-            .replace(/\\\)/g, ")")
-            .replace(/\\\\/g, "\\")
-            .replace(/\\\d{1,3}/g, (m) => String.fromCharCode(parseInt(m.slice(1), 8)));
-          extracted.push(unescaped);
-        }
-      }
-
-      // Find TJ (text show with positioning) operators: [(text) (text)] TJ
-      const tjArrayMatches = block.match(/\[[^\]]*\]\s*TJ/g);
-      if (tjArrayMatches) {
-        for (const m of tjArrayMatches) {
-          const strings = m.match(/\(([^)]*)\)/g);
-          if (strings) {
-            for (const s of strings) {
-              const content = s.slice(1, -1);
-              const unescaped = content
-                .replace(/\\n/g, "\n")
-                .replace(/\\r/g, "\r")
-                .replace(/\\t/g, "\t")
-                .replace(/\\b/g, "\b")
-                .replace(/\\f/g, "\f")
-                .replace(/\\\(/g, "(")
-                .replace(/\\\)/g, ")")
-                .replace(/\\\\/g, "\\")
-                .replace(/\\\d{1,3}/g, (m) => String.fromCharCode(parseInt(m.slice(1), 8)));
-              extracted.push(unescaped);
-            }
-          }
-        }
-      }
-    }
-
-    const result = extracted.join(" ").replace(/\s+/g, " ").trim();
-    return result.length > 50 ? result : null;
+    const text = await extractText(buffer, "application/pdf");
+    const trimmed = text.replace(/\s+/g, " ").trim();
+    return trimmed.length > 50 ? trimmed : null;
   } catch {
     return null;
   }
@@ -217,7 +173,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // 4. Fallback: try simple text extraction from PDF
-  const extractedText = extractTextFromPDF(buffer);
+  const extractedText = await extractTextFromPDF(buffer);
   if (extractedText) {
     try {
       const { parsed } = await parseResumeWithAI(extractedText);

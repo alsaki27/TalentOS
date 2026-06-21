@@ -13,6 +13,7 @@ export type AiProvider =
   | "nvidia"
   | "openai"
   | "google"
+  | "google_vertex_proxy"
   | "groq"
   | "openrouter"
   | "deepseek"

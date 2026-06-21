@@ -8,6 +8,7 @@ import { AiProvider } from "@/lib/ai/provider";
 import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
 import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
 import { getGoogleProvider } from "@/lib/ai/googleProvider";
+import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
 import {
   listEnabledAiKeys,
   getAiKeyWithDecryptedKey,
@@ -20,7 +21,7 @@ import {
 // Re-declare to avoid circular import with src/lib/ai/index.ts
 interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia" | "google";
+  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy";
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
@@ -34,6 +35,43 @@ export function buildProviderFromDbKey(
   apiKey: string
 ): AiProvider | null {
   switch (provider) {
+    case "google_vertex_proxy": {
+      const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
+      if (!proxyUrl) return null;
+      return {
+        async send({ system, messages }) {
+          const res = await fetch(`${proxyUrl}/generate`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-proxy-secret": apiKey,
+            },
+            body: JSON.stringify({
+              system,
+              messages: messages.map((m) => ({
+                role: m.role,
+                content: m.content.map((b) => {
+                  if (b.type === "text") return b.text;
+                  if (b.type === "tool_use") return `[Tool use: ${b.name}]`;
+                  return `[Tool result: ${(b as { content: string }).content}]`;
+                }).join("\n"),
+              })),
+              model: process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
+              temperature: 0.2,
+              maxOutputTokens: 256,
+              responseMimeType: "application/json",
+            }),
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            throw new Error(`Google Vertex Proxy error (${res.status}): ${body}`);
+          }
+          const data = await res.json();
+          const text = data.text ?? "";
+          return { content: [{ type: "text", text }], stopReason: "end_turn" };
+        },
+      };
+    }
     case "anthropic": {
       // Reuse the anthropic provider logic but with a custom key
       const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
@@ -159,6 +197,7 @@ export function buildProviderFromDbKey(
     }
     case "openai":
     case "google":
+    case "google_vertex_proxy":
     case "groq":
     case "openrouter":
     case "deepseek":
@@ -230,6 +269,9 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
   const google = getGoogleProvider();
   if (google) return { provider: google, name: "google" };
 
+  const googleVertex = getGoogleVertexProxyProvider();
+  if (googleVertex) return { provider: googleVertex, name: "google_vertex_proxy" };
+
   // Fallback to DB-managed keys
   const dbKeys = await listEnabledAiKeys();
   for (const key of dbKeys) {
@@ -237,7 +279,7 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
     if (!keyRow) continue;
     const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key);
     if (provider) {
-      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" };
+      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" };
     }
   }
 
