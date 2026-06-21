@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
@@ -30,10 +30,10 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
     return NextResponse.json(
-      { error: "AI provider is not configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY, then try again." },
+      { error: "AI provider is not configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY, then try again." },
       { status: 503 },
     );
   }

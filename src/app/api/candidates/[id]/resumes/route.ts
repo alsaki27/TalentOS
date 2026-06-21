@@ -5,18 +5,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { uploadResumeFile } from "@/lib/resumeStorage";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { data, error } = await supabase
-    .from("resumes")
-    .select("*")
-    .eq("candidate_id", params.id)
-    .order("created_at", { ascending: false });
+  if (isNeon()) {
+    const data = await query<Record<string, any>>(
+      'SELECT * FROM resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
+      [params.id]
+    );
+    return NextResponse.json(data);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase
+      .from("resumes")
+      .select("*")
+      .eq("candidate_id", params.id)
+      .order("created_at", { ascending: false });
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  }
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -55,21 +65,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  const { data, error } = await supabase
-    .from("resumes")
-    .insert({
-      candidate_id: params.id,
-      label: label || (isOriginalUpload ? "Original Upload" : "Untitled"),
-      kind,
-      file_url: uploaded.url,
-      filename: file.name,
-      is_original_upload: isOriginalUpload,
-      parsed_json: parsedJson,
-    })
-    .select()
-    .single();
+  let data;
+  if (isNeon()) {
+    data = await queryOne<Record<string, any>>(
+      `INSERT INTO resumes (candidate_id, label, kind, file_url, filename, is_original_upload, parsed_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [
+        params.id,
+        label || (isOriginalUpload ? "Original Upload" : "Untitled"),
+        kind,
+        uploaded.url,
+        file.name,
+        isOriginalUpload,
+        parsedJson,
+      ]
+    );
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: d, error } = await supabase
+      .from("resumes")
+      .insert({
+        candidate_id: params.id,
+        label: label || (isOriginalUpload ? "Original Upload" : "Untitled"),
+        kind,
+        file_url: uploaded.url,
+        filename: file.name,
+        is_original_upload: isOriginalUpload,
+        parsed_json: parsedJson,
+      })
+      .select()
+      .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    data = d;
+  }
 
   if (currentUser && data) {
     await logActivity({

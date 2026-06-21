@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
         AND ($3 = '' OR j.role_tier = $3)
         AND ($4 = '' OR j.is_active = ($4 = 'active'))
         AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category = $6 OR j.category_tags @> jsonb_build_array($6))
+        AND ($6 = '' OR j.job_category = $6 OR $6 = ANY(j.category_tags))
         AND ($7 = '' OR j.work_authorization = $7)
       ORDER BY
         CASE WHEN $8 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
@@ -94,16 +94,16 @@ export async function GET(req: NextRequest) {
         AND ($3 = '' OR j.role_tier = $3)
         AND ($4 = '' OR j.is_active = ($4 = 'active'))
         AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category = $6 OR j.category_tags @> jsonb_build_array($6))
+        AND ($6 = '' OR j.job_category = $6 OR $6 = ANY(j.category_tags))
         AND ($7 = '' OR j.work_authorization = $7)
     `;
 
     try {
       const jobs = await query<Record<string, any>>(dataSql, [
-        search, searchParam, source, roleTier, active, employmentType, category, sort, offset, pageSize,
+        searchParam, source, roleTier, active, employmentType, category, workAuthorization, sort, offset, pageSize,
       ]);
       const countRow = await queryOne<{ total: number }>(countSql, [
-        search, searchParam, source, roleTier, active, employmentType, category,
+        searchParam, source, roleTier, active, employmentType, category, workAuthorization,
       ]);
 
       const shaped = (jobs ?? []).map((job: any) => ({

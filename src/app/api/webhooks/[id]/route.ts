@@ -4,7 +4,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
@@ -38,6 +37,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
     error = data ? null : { message: 'Update failed' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("webhook_endpoints")
       .update(updates)
@@ -62,6 +62,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     const res = await execute('DELETE FROM webhook_endpoints WHERE id = $1', [params.id]);
     error = res.rowCount === 0 ? { message: 'Not found' } : null;
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase.from("webhook_endpoints").delete().eq("id", params.id);
     error = res.error;
   }

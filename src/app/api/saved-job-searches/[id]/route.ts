@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne, execute } from "@/server/db/neon";
 
 const ALLOWED_FILTERS = [
   "search",
@@ -42,26 +43,42 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
   if ("is_shared" in body) updates.is_shared = body.is_shared !== false;
 
-  const { data, error } = await supabase
-    .from("saved_job_searches")
-    .update(updates)
-    .eq("id", params.id)
-    .select()
-    .single();
+  if (isNeon()) {
+    const entries = Object.entries(updates);
+    const setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
+    const sqlParams = entries.map(([, val]) => val);
+    sqlParams.push(params.id);
+    const data = await queryOne<any>(`UPDATE saved_job_searches SET ${setClauses.join(", ")} WHERE id = $${sqlParams.length} RETURNING *`, sqlParams);
+    return NextResponse.json(data);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase
+      .from("saved_job_searches")
+      .update(updates)
+      .eq("id", params.id)
+      .select()
+      .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  }
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
-  const { error } = await supabase
-    .from("saved_job_searches")
-    .delete()
-    .eq("id", params.id);
+  if (isNeon()) {
+    await execute(`DELETE FROM saved_job_searches WHERE id = $1`, [params.id]);
+    return NextResponse.json({ ok: true });
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { error } = await supabase
+      .from("saved_job_searches")
+      .delete()
+      .eq("id", params.id);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ ok: true });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
 }

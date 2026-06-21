@@ -399,7 +399,7 @@ export async function updateJob(
     const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
     const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
     values.push(id);
-    const sql = `UPDATE jobs SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
+    const sql = `UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
     const result = await queryOne<JobRow>(sql, values);
     if (!result) throw new Error("Update failed");
     return result;
@@ -613,7 +613,7 @@ export async function updateJobBySourceUrl(sourceUrl: string, updates: Record<st
     const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
     values.push(sourceUrl);
     await execute(
-      `UPDATE jobs SET ${setClause}, updated_at = NOW() WHERE source_url = $${keys.length + 1}`,
+      `UPDATE jobs SET ${setClause} WHERE source_url = $${keys.length + 1}`,
       values
     );
     return;

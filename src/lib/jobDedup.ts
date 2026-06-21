@@ -10,7 +10,6 @@ import {
   updateJobsLastSeenAtByUrls,
   findJobsForSignatureDedupe,
   findJobsBySourceUrlWithId,
-  updateJobBySourceUrl,
   findPotentialDuplicateJobs as findPotentialDuplicateJobsRepo,
   listAllJobsForFuzzyDedupe,
 } from "@/server/repositories/jobsRepository";
@@ -28,9 +27,9 @@ export function jobDuplicateSignature(row: DedupeCandidate): string | null {
   const title = normalizeForMatch(row.title);
   const company = normalizeForMatch(row.company);
   const postedAt = normalizeDateForMatch(row.posted_at);
-  const applicants = row.applicants_count;
+  const applicants = toFiniteNumber(row.applicants_count);
 
-  if (!title || !company || !postedAt || applicants === null || applicants === undefined || !Number.isFinite(applicants)) {
+  if (!title || !company || !postedAt || applicants === null) {
     return null;
   }
 
@@ -88,36 +87,50 @@ export async function enrichExistingJobsBySourceUrl<T extends { source_url?: str
 
   for (const row of rowsWithUrl) {
     if (!row.source_url || !existingUrls.has(row.source_url)) continue;
-
-    const updates: Record<string, unknown> = { last_seen_at: new Date().toISOString() };
-    for (const [key, value] of Object.entries(row)) {
-      if (key === "id" || key === "created_at") continue;
-      if (value !== null && value !== undefined && value !== "") updates[key] = value;
-    }
-
-    await updateJobBySourceUrl(row.source_url, updates);
-    updated++;
     const id = existingByUrl.get(row.source_url) as string | undefined;
     if (id) syncedRows.push({ ...row, id });
+  }
+
+  if (existingUrls.size > 0) {
+    await updateJobsLastSeenAtByUrls(Array.from(existingUrls));
+    updated = existingUrls.size;
   }
 
   if (syncedRows.length > 0) await syncCompanyDirectoryFromJobs(syncedRows);
   return updated;
 }
 
-function normalizeForMatch(s: string | null | undefined): string {
-  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function normalizeForMatch(s: unknown): string {
+  const str = typeof s === "string" ? s : String(s ?? "");
+  return str.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
-function normalizeDateForMatch(s: string | null | undefined): string {
-  const t = s?.trim();
+function normalizeDateForMatch(s: unknown): string {
+  if (s instanceof Date) {
+    return isNaN(s.getTime()) ? "" : s.toISOString().slice(0, 10);
+  }
+  if (typeof s === "number") {
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  }
+  const t = typeof s === "string" ? s.trim() : String(s ?? "").trim();
   if (!t) return "";
   if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
   const parsed = new Date(t);
   return isNaN(parsed.getTime()) ? t : parsed.toISOString().slice(0, 10);
 }
 
-function matchKey(title: string, company?: string | null, location?: string | null): string {
+function toFiniteNumber(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const n = parseInt(v.replace(/[^\d]/g, ""), 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function matchKey(title: unknown, company?: unknown, location?: unknown): string {
   return `${normalizeForMatch(title)}|${normalizeForMatch(company)}|${normalizeForMatch(location)}`;
 }
 

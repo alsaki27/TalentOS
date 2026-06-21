@@ -17,9 +17,10 @@ import {
   markExportFailed,
   ApplicationResumeExportRow,
 } from "@/server/repositories/applicationResumeExportsRepository";
-import { renderResumeDocx } from "@/lib/falood/docxExport";
-import { renderResumePdf } from "@/lib/falood/pdfExport";
 import { ResumeDocument } from "@/lib/falood/types";
+
+// Cloudflare Workers: PDF/DOCX export disabled — @react-pdf/renderer and docx are Node.js-only
+// and exceed the free tier bundle size limit. Re-enable by externalizing to a Node.js microservice.
 
 export interface ExportOptions {
   onePage?: boolean;
@@ -84,14 +85,24 @@ export async function runExportSafetyChecks(
   }
 
   // Check for high-risk suggestions (from the application)
-  const { data: suggestions } = await supabase
-    .from("application_resume_suggestions")
-    .select("id, suggestion_type, truth_status, status, proposed_text")
-    .eq("application_id", applicationId)
-    .eq("status", "accepted")
-    .eq("truth_status", "fabrication_risk");
+  let riskySuggestions: any[] = [];
+  if (isNeon()) {
+    const suggestions = await query(
+      "SELECT id, suggestion_type, truth_status, status, proposed_text FROM application_resume_suggestions WHERE application_id = $1 AND status = $2 AND truth_status = $3",
+      [applicationId, "accepted", "fabrication_risk"]
+    );
+    riskySuggestions = suggestions ?? [];
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: suggestions } = await supabase
+      .from("application_resume_suggestions")
+      .select("id, suggestion_type, truth_status, status, proposed_text")
+      .eq("application_id", applicationId)
+      .eq("status", "accepted")
+      .eq("truth_status", "fabrication_risk");
+    riskySuggestions = (suggestions ?? []) as any[];
+  }
 
-  const riskySuggestions = (suggestions ?? []) as any[];
   if (riskySuggestions.length > 0) {
     warnings.push(
       `${riskySuggestions.length} accepted suggestion(s) have fabrication risk and were not applied to the draft. Review before sending to client.`
@@ -101,7 +112,8 @@ export async function runExportSafetyChecks(
   return { passed: errors.length === 0, warnings, errors };
 }
 
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 // ───────────────────────────────────────────────────────────────
 // File name builder
@@ -224,10 +236,8 @@ async function exportResume(
   // 3. Generate file
   let buffer: Buffer;
   try {
-    if (exportType === "docx") {
-      buffer = await renderResumeDocx(content);
-    } else if (exportType === "pdf") {
-      buffer = await renderResumePdf(content);
+    if (exportType === "docx" || exportType === "pdf") {
+      throw new Error(`${exportType.toUpperCase()} export is temporarily disabled on this deployment. Use Markdown export instead.`);
     } else if (exportType === "markdown" || exportType === "text") {
       buffer = Buffer.from(renderResumeAsMarkdownText(content), "utf-8");
     } else {
@@ -239,12 +249,18 @@ async function exportResume(
   }
 
   // 4. Update record with file size
-  const { error: updateError } = await supabase
-    .from("application_resume_exports")
-    .update({ file_size_bytes: buffer.length })
-    .eq("id", exportRecord.id);
-
-  if (updateError) console.error("Failed to update export file size:", updateError.message);
+  if (isNeon()) {
+    await execute(
+      "UPDATE application_resume_exports SET file_size_bytes = $1 WHERE id = $2",
+      [buffer.length, exportRecord.id]
+    );
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    await supabase
+      .from("application_resume_exports")
+      .update({ file_size_bytes: buffer.length })
+      .eq("id", exportRecord.id);
+  }
 
   const contentTypeMap: Record<string, string> = {
     docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

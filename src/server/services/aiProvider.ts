@@ -7,6 +7,7 @@
 import { AiProvider } from "@/lib/ai/provider";
 import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
 import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
+import { getGoogleProvider } from "@/lib/ai/googleProvider";
 import {
   listEnabledAiKeys,
   getAiKeyWithDecryptedKey,
@@ -19,10 +20,10 @@ import {
 // Re-declare to avoid circular import with src/lib/ai/index.ts
 interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia";
+  name: "anthropic" | "nvidia" | "google";
 }
 
-const TEST_PROMPT = "Say ' TalentOS test OK' and nothing else.";
+const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 
 /**
  * Build an AI provider from a DB-managed key.
@@ -103,6 +104,59 @@ export function buildProviderFromDbKey(
         },
       };
     }
+    case "google": {
+      const GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+      const DEFAULT_MODEL = "gemini-2.5-flash-lite";
+      return {
+        async send({ system, messages }) {
+          const model = process.env.GOOGLE_MODEL || DEFAULT_MODEL;
+          const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
+
+          const geminiMessages = messages.map((m) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: m.content.map((b) => {
+              if (b.type === "text") return { text: b.text };
+              if (b.type === "tool_use") return { text: `[Tool use: ${b.name}]` };
+              return { text: `[Tool result: ${(b as { content: string }).content}]` };
+            }),
+          }));
+
+          const body: Record<string, any> = {
+            contents: geminiMessages,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 64,
+            },
+          };
+
+          if (system) {
+            body.systemInstruction = {
+              parts: [{ text: system }],
+            };
+          }
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey,
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!res.ok) {
+            const body = await res.text();
+            throw new Error(`Google API error (${res.status}): ${body}`);
+          }
+
+          const data = await res.json();
+          const candidate = data.candidates?.[0];
+          const text = candidate?.content?.parts?.map((p: any) => p.text ?? "").join("\n") ?? "";
+          const stopReason = candidate?.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn";
+          return { content: [{ type: "text", text }], stopReason };
+        },
+      };
+    }
     case "openai":
     case "google":
     case "groq":
@@ -173,6 +227,9 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
   const nvidia = getNvidiaProvider();
   if (nvidia) return { provider: nvidia, name: "nvidia" };
 
+  const google = getGoogleProvider();
+  if (google) return { provider: google, name: "google" };
+
   // Fallback to DB-managed keys
   const dbKeys = await listEnabledAiKeys();
   for (const key of dbKeys) {
@@ -180,7 +237,7 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
     if (!keyRow) continue;
     const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key);
     if (provider) {
-      return { provider, name: keyRow.provider as "anthropic" | "nvidia" };
+      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" };
     }
   }
 

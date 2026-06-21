@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeCompanyName } from "@/lib/companyDirectory";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
@@ -27,6 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     );
     error = data ? null : { message: 'Not found' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase.from("company_people").select("*, companies(id, name)").eq("id", params.id).single();
     data = res.data;
     error = res.error;
@@ -62,6 +62,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
     error = data ? null : { message: 'Update failed' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase.from("company_people").update(updates).eq("id", params.id).select().single();
     data = res.data;
     error = res.error;
@@ -81,6 +82,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     const res = await execute('DELETE FROM company_people WHERE id = $1', [params.id]);
     error = res.rowCount === 0 ? { message: 'Not found' } : null;
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase.from("company_people").delete().eq("id", params.id);
     error = res.error;
   }

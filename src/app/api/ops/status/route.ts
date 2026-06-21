@@ -10,7 +10,7 @@ import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,8 @@ export async function GET() {
   let resumesCount: number;
   let recentRuns: any[];
   let sources: any[];
+
+  const activeProvider = await getActiveProviderAsync();
 
   if (isNeon()) {
     const pingStart = Date.now();
@@ -101,8 +103,8 @@ export async function GET() {
     recentImportRuns: recentRuns,
     importSources: sources,
     aiAssistant: {
-      configured: Boolean(getActiveProvider()),
-      provider: getActiveProvider()?.name ?? null,
+      configured: Boolean(activeProvider),
+      provider: activeProvider?.name ?? null,
     },
   });
 }

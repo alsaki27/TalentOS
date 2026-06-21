@@ -2,7 +2,7 @@
 // Extract text from PDF/DOCX, then parse structured fields via AI.
 // Dependencies: pdf-parse, mammoth (install via npm i pdf-parse mammoth)
 
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import type { AiMessage } from "@/lib/ai/provider";
 
@@ -112,7 +112,7 @@ Rules:
  * Parse structured fields from raw resume text using AI.
  */
 export async function parseResumeFields(rawText: string): Promise<ParsedResume> {
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
     // No AI available — return raw text with empty structure
     return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };

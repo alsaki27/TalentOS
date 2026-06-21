@@ -1,16 +1,15 @@
 // src/lib/resumeStorage.ts
-// Pluggable resume storage backend: Supabase Storage (default, unchanged behavior) or
-// SharePoint (RESUME_STORAGE_PROVIDER=sharepoint, see src/lib/integrations/sharepoint.ts).
-// Same provider-selection pattern as src/lib/ai/index.ts's getActiveProvider() — pick
-// one explicit backend, fail clearly if the selected one isn't configured, never guess.
+// Pluggable resume storage backend: SharePoint (default) or R2 bucket
+// (RESUME_STORAGE_PROVIDER=sharepoint, see src/lib/integrations/sharepoint.ts).
 
-import { supabase } from "@/lib/supabase";
 import { uploadToSharePoint } from "@/lib/integrations/sharepoint";
+import { uploadFile } from "@/server/storage/storageApi";
 
-export type ResumeStorageProvider = "supabase" | "sharepoint";
+export type ResumeStorageProvider = "r2" | "sharepoint";
 
 export function activeResumeStorageProvider(): ResumeStorageProvider {
-  return (process.env.RESUME_STORAGE_PROVIDER || "").toLowerCase() === "sharepoint" ? "sharepoint" : "supabase";
+  const p = (process.env.RESUME_STORAGE_PROVIDER || "").toLowerCase();
+  return p === "r2" ? "r2" : "sharepoint";
 }
 
 export async function uploadResumeFile(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
@@ -18,8 +17,6 @@ export async function uploadResumeFile(path: string, buffer: Uint8Array, content
     return uploadToSharePoint(path, buffer, contentType);
   }
 
-  const { error } = await supabase.storage.from("resumes").upload(path, buffer, { contentType, upsert: true });
-  if (error) throw new Error(error.message);
-  const { data } = supabase.storage.from("resumes").getPublicUrl(path);
-  return { url: data.publicUrl };
+  const { url } = await uploadFile(path, buffer, contentType);
+  return { url };
 }

@@ -27,7 +27,9 @@ function encodeBase64url(buffer: BufferSource): string {
 }
 
 function decodeBase64url(str: string): Uint8Array {
-  const padded = str + "==".slice(0, (3 - (str.length % 3)) % 3);
+  // Base64url padding: length must be divisible by 4
+  const padding = (4 - (str.length % 4)) % 4;
+  const padded = str + "=".repeat(padding);
   const base64 = padded.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);

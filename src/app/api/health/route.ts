@@ -1,65 +1,46 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { NextRequest, NextResponse } from "next/server";
+import { testConnection } from "@/server/db/neon";
+import { isNeon } from "@/server/db";
 
-export const dynamic = "force-dynamic";
+export async function GET(req: NextRequest) {
+  const checks: Record<string, any> = {};
+  const start = Date.now();
 
-const requiredEnv = [
-  "SUPABASE_URL",
-  "SUPABASE_SERVICE_ROLE_KEY",
-  "SUPABASE_ANON_KEY",
-  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-];
-
-const requiredTables = ["profiles", "candidates", "jobs", "applications", "resumes", "audit_logs"];
-
-function present(name: string) {
-  const value = process.env[name];
-  return Boolean(value && !value.includes("your-") && !value.includes("placeholder"));
-}
-
-export async function GET() {
-  const env = Object.fromEntries(requiredEnv.map((name) => [name, present(name)]));
-  const missingEnv = requiredEnv.filter((name) => !env[name]);
-  const hasSupabase = present("SUPABASE_URL") && present("SUPABASE_SERVICE_ROLE_KEY");
-
-  const tableStatus: Record<string, boolean> = {};
-  let database = {
-    connected: false,
-    latencyMs: null as number | null,
-    error: hasSupabase ? null as string | null : "Supabase URL or service-role key is not configured.",
+  // Check DB_PROVIDER
+  checks.config = {
+    db_provider: process.env.DB_PROVIDER ?? "not set",
+    is_neon: isNeon(),
+    has_database_url: !!process.env.DATABASE_URL,
   };
 
-  if (hasSupabase) {
-    const client = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
-      auth: { persistSession: false, autoRefreshToken: false },
-      global: { fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }) },
-    });
-
-    const started = Date.now();
-    const { error } = await client.from("profiles").select("user_id", { head: true, count: "exact" });
-    database = {
-      connected: !error,
-      latencyMs: Date.now() - started,
-      error: error ? "Database check failed." : null,
-    };
-
-    if (!error) {
-      await Promise.all(
-        requiredTables.map(async (table) => {
-          const { error: tableError } = await client.from(table).select("*", { head: true, count: "exact" });
-          tableStatus[table] = !tableError;
-        }),
-      );
+  // Check DB connectivity
+  if (isNeon()) {
+    try {
+      const dbResult = await testConnection();
+      checks.database = dbResult;
+    } catch (e: any) {
+      checks.database = { ok: false, error: e.message || String(e) };
     }
+  } else {
+    checks.database = { ok: false, error: "DB_PROVIDER is not neon" };
   }
 
-  const tablesOk = requiredTables.every((table) => tableStatus[table]);
-  return NextResponse.json({
-    status: database.connected && missingEnv.length === 0 && tablesOk ? "ok" : "degraded",
-    app: "TalentOS",
-    env,
-    missingEnv,
-    database,
-    tables: tableStatus,
-  });
+  // Check auth config
+  checks.auth = {
+    has_jwt_secret: !!process.env.JWT_SECRET,
+  };
+
+  const duration = Date.now() - start;
+
+  const overall = checks.database?.ok ?? false;
+  const status = overall ? 200 : 503;
+
+  return NextResponse.json(
+    {
+      status: overall ? "ok" : "error",
+      duration_ms: duration,
+      checks,
+    },
+    { status }
+  );
 }

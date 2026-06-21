@@ -4,8 +4,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 import { logActivity } from "@/lib/activity";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 
 export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -14,11 +15,38 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("application_resume_versions")
-    .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, target_jobs(job_id, jobs(title, company))")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: false });
+  let data: any;
+  let error: any;
+
+  if (isNeon()) {
+    const rows = await query(
+      `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
+      [candidateId]
+    );
+    data = (rows ?? []).map((row: any) => {
+      const { target_job_job_id, job_title, job_company, ...rest } = row;
+      return {
+        ...rest,
+        target_jobs: {
+          job_id: target_job_job_id,
+          jobs: {
+            title: job_title,
+            company: job_company,
+          },
+        },
+      };
+    });
+    error = null;
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("application_resume_versions")
+      .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, target_jobs(job_id, jobs(title, company))")
+      .eq("candidate_id", candidateId)
+      .order("created_at", { ascending: false });
+    data = res.data;
+    error = res.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -51,11 +79,25 @@ export async function POST(req: NextRequest) {
 
   if (baseResumeId) {
     // Base resume path: copy content from base_resume
-    const { data: baseResume, error: baseError } = await supabase
-      .from("base_resumes")
-      .select("content, candidate_id")
-      .eq("id", baseResumeId)
-      .single();
+    let baseResume: any;
+    let baseError: any;
+
+    if (isNeon()) {
+      baseResume = await queryOne(
+        `SELECT content, candidate_id FROM base_resumes WHERE id = $1`,
+        [baseResumeId]
+      );
+      baseError = baseResume ? null : { message: "Base resume not found" };
+    } else {
+      const { supabase } = await import("@/lib/supabase");
+      const res = await supabase
+        .from("base_resumes")
+        .select("content, candidate_id")
+        .eq("id", baseResumeId)
+        .single();
+      baseResume = res.data;
+      baseError = res.error;
+    }
 
     if (baseError || !baseResume) {
       return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
@@ -100,7 +142,7 @@ export async function POST(req: NextRequest) {
           {
             id: `tailored-markdown-${Date.now()}`,
             title: "Tailored Markdown Draft",
-            bullets: generatedText.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => ({
+            bullets: generatedText.split(/\r?\n/).filter((line: string) => line.trim()).map((line: string, index: number) => ({
               id: `tailored-line-${index}`,
               text: line,
               riskLevel: "low",
@@ -116,11 +158,25 @@ export async function POST(req: NextRequest) {
   insertData.source_resume_id = baseResumeId ?? null;
   insertData.content = resolvedContent;
 
-  const { data, error } = await supabase
-    .from("application_resume_versions")
-    .insert(insertData)
-    .select()
-    .single();
+  let data: any;
+  let error: any;
+
+  if (isNeon()) {
+    data = await queryOne(
+      `INSERT INTO application_resume_versions (target_job_id, status, source_type, created_by, candidate_id, base_resume_id, content, title, version_label, generated_text, source_resume_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [targetJobId, "draft", sourceType, context!.profile.user_id, insertData.candidate_id, insertData.base_resume_id, resolvedContent, title || null, versionLabel || null, generatedText || null, baseResumeId ?? null]
+    );
+    error = data ? null : { message: "Insert failed" };
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("application_resume_versions")
+      .insert(insertData)
+      .select()
+      .single();
+    data = res.data;
+    error = res.error;
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

@@ -5,7 +5,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -70,14 +69,14 @@ export async function GET(req: NextRequest) {
     let panelWithProfiles: any[] = [];
     if (scheduleIds.length > 0) {
       const panels = await query(
-        "SELECT * FROM interview_panel_members WHERE schedule_id = ANY($1)",
+        "SELECT * FROM interview_panel_members WHERE schedule_id::text = ANY($1)",
         [scheduleIds]
       );
       const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
       let profiles: any[] = [];
       if (interviewerIds.length > 0) {
         profiles = await query(
-          "SELECT user_id, display_name, email FROM profiles WHERE user_id = ANY($1)",
+          "SELECT user_id, display_name, email FROM profiles WHERE user_id::text = ANY($1)",
           [interviewerIds]
         );
       }
@@ -101,73 +100,74 @@ export async function GET(req: NextRequest) {
     }));
 
     return NextResponse.json({ items, total, page, pageSize });
-  }
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    let dbQuery = supabase
+      .from("interview_schedules")
+      .select(`
+        *,
+        applications!inner(
+          candidate_id,
+          job_id,
+          candidates(id, name, email),
+          jobs(id, title, company)
+        )
+      `, { count: "exact" });
 
-  let dbQuery = supabase
-    .from("interview_schedules")
-    .select(`
-      *,
-      applications!inner(
-        candidate_id,
-        job_id,
-        candidates(id, name, email),
-        jobs(id, title, company)
-      )
-    `, { count: "exact" });
-
-  if (status) dbQuery = dbQuery.eq("status", status);
-  if (candidateId) dbQuery = dbQuery.eq("applications.candidate_id", candidateId);
-  if (jobId) dbQuery = dbQuery.eq("applications.job_id", jobId);
-  if (dateFrom) dbQuery = dbQuery.gte("scheduled_at", dateFrom);
-  if (dateTo) dbQuery = dbQuery.lte("scheduled_at", dateTo + "T23:59:59");
-  if (search) {
-    dbQuery = dbQuery.ilike("round_name", `%${search}%`);
-  }
-
-  const from = (page - 1) * pageSize;
-  const { data: schedules, error: dataErr, count } = await dbQuery
-    .order("scheduled_at", { ascending: true })
-    .range(from, from + pageSize - 1);
-
-  if (dataErr) return NextResponse.json({ error: dataErr.message }, { status: 500 });
-
-  // Fetch panel members for each schedule
-  const scheduleIds = (schedules ?? []).map((s: any) => s.id as string);
-  let panelWithProfiles: any[] = [];
-  if (scheduleIds.length > 0) {
-    const { data: panels } = await supabase
-      .from("interview_panel_members")
-      .select("*")
-      .in("schedule_id", scheduleIds);
-    const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
-    let profiles: any[] = [];
-    if (interviewerIds.length > 0) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("user_id, display_name, email")
-        .in("user_id", interviewerIds);
-      profiles = profs ?? [];
+    if (status) dbQuery = dbQuery.eq("status", status);
+    if (candidateId) dbQuery = dbQuery.eq("applications.candidate_id", candidateId);
+    if (jobId) dbQuery = dbQuery.eq("applications.job_id", jobId);
+    if (dateFrom) dbQuery = dbQuery.gte("scheduled_at", dateFrom);
+    if (dateTo) dbQuery = dbQuery.lte("scheduled_at", dateTo + "T23:59:59");
+    if (search) {
+      dbQuery = dbQuery.ilike("round_name", `%${search}%`);
     }
-    const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
-    panelWithProfiles = (panels ?? []).map((pm: any) => ({
-      ...pm,
-      profile: profileById.get(pm.interviewer_id as string) ?? null,
+
+    const from = (page - 1) * pageSize;
+    const { data: schedules, error: dataErr, count } = await dbQuery
+      .order("scheduled_at", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (dataErr) return NextResponse.json({ error: dataErr.message }, { status: 500 });
+
+    // Fetch panel members for each schedule
+    const scheduleIds = (schedules ?? []).map((s: any) => s.id as string);
+    let panelWithProfiles: any[] = [];
+    if (scheduleIds.length > 0) {
+      const { data: panels } = await supabase
+        .from("interview_panel_members")
+        .select("*")
+        .in("schedule_id", scheduleIds);
+      const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
+      let profiles: any[] = [];
+      if (interviewerIds.length > 0) {
+        const { data: profs } = await supabase
+          .from("profiles")
+          .select("user_id, display_name, email")
+          .in("user_id", interviewerIds);
+        profiles = profs ?? [];
+      }
+      const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
+      panelWithProfiles = (panels ?? []).map((pm: any) => ({
+        ...pm,
+        profile: profileById.get(pm.interviewer_id as string) ?? null,
+      }));
+    }
+
+    const panelBySchedule = new Map<string, any[]>();
+    for (const pm of panelWithProfiles) {
+      const list = panelBySchedule.get(pm.schedule_id as string) ?? [];
+      list.push(pm);
+      panelBySchedule.set(pm.schedule_id as string, list);
+    }
+
+    const items = (schedules ?? []).map((schedule: any) => ({
+      ...schedule,
+      panel: panelBySchedule.get(schedule.id) ?? [],
     }));
+
+    return NextResponse.json({ items, total: count ?? 0, page, pageSize });
   }
-
-  const panelBySchedule = new Map<string, any[]>();
-  for (const pm of panelWithProfiles) {
-    const list = panelBySchedule.get(pm.schedule_id as string) ?? [];
-    list.push(pm);
-    panelBySchedule.set(pm.schedule_id as string, list);
-  }
-
-  const items = (schedules ?? []).map((schedule: any) => ({
-    ...schedule,
-    panel: panelBySchedule.get(schedule.id) ?? [],
-  }));
-
-  return NextResponse.json({ items, total: count ?? 0, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -233,59 +233,59 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(schedule, { status: 201 });
-  }
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: schedule, error: scheduleErr } = await supabase
+      .from("interview_schedules")
+      .insert({
+        application_id: body.applicationId,
+        round_number: body.roundNumber ?? 1,
+        round_name: body.roundName,
+        scheduled_at: body.scheduledAt,
+        duration_minutes: body.durationMinutes ?? 60,
+        location: body.location ?? null,
+        meeting_link: body.meetingLink ?? null,
+        status: "scheduled",
+        created_by: context.profile.user_id,
+      })
+      .select()
+      .single();
 
-  const { data: schedule, error: scheduleErr } = await supabase
-    .from("interview_schedules")
-    .insert({
-      application_id: body.applicationId,
-      round_number: body.roundNumber ?? 1,
-      round_name: body.roundName,
-      scheduled_at: body.scheduledAt,
-      duration_minutes: body.durationMinutes ?? 60,
-      location: body.location ?? null,
-      meeting_link: body.meetingLink ?? null,
-      status: "scheduled",
-      created_by: context.profile.user_id,
-    })
-    .select()
-    .single();
-
-  if (scheduleErr || !schedule) {
-    return NextResponse.json({ error: scheduleErr?.message || "Insert failed" }, { status: 500 });
-  }
-
-  // Insert panel members
-  const panel = Array.isArray(body.panel) ? body.panel : [];
-  if (panel.length > 0) {
-    const { error: panelErr } = await supabase.from("interview_panel_members").insert(
-      panel.map((p: any) => ({
-        schedule_id: schedule.id,
-        interviewer_id: p.interviewerId,
-        role: p.role ?? "interviewer",
-        status: "pending",
-      }))
-    );
-    if (panelErr) {
-      // Best-effort; don't fail the whole request
-      console.error("Panel insert error:", panelErr.message);
+    if (scheduleErr || !schedule) {
+      return NextResponse.json({ error: scheduleErr?.message || "Insert failed" }, { status: 500 });
     }
+
+    // Insert panel members
+    const panel = Array.isArray(body.panel) ? body.panel : [];
+    if (panel.length > 0) {
+      const { error: panelErr } = await supabase.from("interview_panel_members").insert(
+        panel.map((p: any) => ({
+          schedule_id: schedule.id,
+          interviewer_id: p.interviewerId,
+          role: p.role ?? "interviewer",
+          status: "pending",
+        }))
+      );
+      if (panelErr) {
+        console.error("Panel insert error:", panelErr.message);
+      }
+    }
+
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email || undefined,
+      type: "create",
+      description: `Scheduled interview: ${body.roundName}`,
+      entityType: "interview",
+      entityId: schedule.id,
+      entityName: body.roundName,
+      metadata: {
+        application_id: body.applicationId,
+        round_name: body.roundName,
+        scheduled_at: body.scheduledAt,
+      },
+    });
+
+    return NextResponse.json(schedule, { status: 201 });
   }
-
-  await logActivity({
-    userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email || undefined,
-    type: "create",
-    description: `Scheduled interview: ${body.roundName}`,
-    entityType: "interview",
-    entityId: schedule.id,
-    entityName: body.roundName,
-    metadata: {
-      application_id: body.applicationId,
-      round_name: body.roundName,
-      scheduled_at: body.scheduledAt,
-    },
-  });
-
-  return NextResponse.json(schedule, { status: 201 });
 }

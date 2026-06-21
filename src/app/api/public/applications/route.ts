@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { createApplicationEvent } from "@/server/repositories/applicationsRepository";
@@ -76,6 +75,7 @@ export async function GET(req: NextRequest) {
     const data = await query<any>(dataSql, values);
     return NextResponse.json({ data: data ?? [], total, page, pageSize });
   } else {
+    const { supabase } = await import("@/lib/supabase");
     let query = supabase
       .from("applications")
       .select("*, candidates(id, name, email), jobs(id, title, company, location)", { count: "planned" })
@@ -128,7 +128,6 @@ export async function POST(req: NextRequest) {
   };
 
   if (isNeon()) {
-    // Check for duplicate candidate+job combination
     if (row.candidate_id && row.job_id) {
       const existing = await queryOne<{ id: string }>(
         `SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 LIMIT 1`,
@@ -160,6 +159,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase.from("applications").insert(row).select().single();
     if (error) {
       if (error.code === "23505") return NextResponse.json({ error: "Candidate already has an application for this job." }, { status: 409 });

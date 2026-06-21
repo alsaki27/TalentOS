@@ -81,9 +81,9 @@ export default function ApplicationQueuePage() {
     return params;
   }
 
-  async function load(pageNum: number, size: number = pageSize) {
+  async function load(pageNum: number, size: number = pageSize, clearFeedback: boolean = true) {
     setLoading(true);
-    setFeedback(null);
+    if (clearFeedback) setFeedback(null);
     try {
       const [queueRes, usersRes] = await Promise.all([
         fetch(`/api/application-queue?${buildParams(pageNum, size)}`, { cache: "no-store" }),
@@ -115,6 +115,17 @@ export default function ApplicationQueuePage() {
   // Any filter/search/view change re-queries from page 1.
   useEffect(() => { load(1, pageSize); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".dropdown-menu") && !target.closest("button")?.textContent?.includes("Falood")) {
+        setFaloodOpen(null);
+      }
+    }
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, []);
+
   const userById = new Map(users.map((user) => [user.user_id, user]));
   const ownerName = (item: QueueItem) => {
     const user = item.assigned_to_user_id ? userById.get(item.assigned_to_user_id) : null;
@@ -140,6 +151,70 @@ export default function ApplicationQueuePage() {
 
   const selectedItems = items.filter((item) => selected.has(item.id));
 
+    const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
+  const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
+
+  async function openFaloodDropdown(item: QueueItem) {
+    if (!item.candidates) return;
+    setFaloodOpen(item.id);
+    if (!faloodResumes[item.candidates.id]) {
+      try {
+        const res = await fetch(`/api/base-resumes?candidateId=${item.candidates.id}`, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          setFaloodResumes((prev) => ({ ...prev, [item.candidates!.id]: data ?? [] }));
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  async function buildBaseResumeAndOpen(item: QueueItem) {
+    if (!item.candidates) return;
+    setActionId(`${item.id}:build_base`);
+    try {
+      const res = await fetch("/api/base-resumes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: item.candidates.id,
+          name: "Base Resume",
+          targetIndustry: item.jobs?.job_category || "",
+          targetRoles: item.jobs?.title ? [item.jobs.title] : [],
+          startingSource: "blank",
+        }),
+      });
+      setActionId("");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: data.error || "Could not build base resume." });
+        return;
+      }
+      const data = await res.json();
+      setFaloodResumes((prev) => ({
+        ...prev,
+        [item.candidates!.id]: [...(prev[item.candidates!.id] ?? []), data],
+      }));
+      await setStatus(item.id, "in_progress");
+      window.open(`/falood/studio/base/${data.id}`, "_blank");
+      closeFaloodDropdown();
+    } catch (err: any) {
+      setActionId("");
+      setFeedback({ kind: "error", text: err.message || "Network error while building base resume." });
+    }
+  }
+
+  function closeFaloodDropdown() {
+    setFaloodOpen(null);
+  }
+
+  async function markInProgressAndOpen(item: QueueItem, baseResumeId: string) {
+    await setStatus(item.id, "in_progress");
+    window.open(`/falood/studio/base/${baseResumeId}`, "_blank");
+    closeFaloodDropdown();
+  }
+
   function dueClass(date: string | null) {
     if (!date) return "";
     if (date < today) return "overdue";
@@ -162,101 +237,139 @@ export default function ApplicationQueuePage() {
   async function setStatus(id: string, status: string) {
     setActionId(`${id}:${status}`);
     setFeedback(null);
-    const res = await fetch(`/api/applications/${id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        status,
-        completed_at: status === "applied" ? new Date().toISOString() : null,
-        event_note: status === "applied" ? "Application submitted from queue." : null,
-      }),
-    });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not update ticket." });
-      return;
+    try {
+      const res = await fetch(`/api/applications/${id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status,
+          completed_at: status === "applied" ? new Date().toISOString() : null,
+          event_note: status === "applied" ? "Application submitted from queue." : null,
+        }),
+      });
+      setActionId("");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: data.error || "Could not update ticket." });
+        return;
+      }
+      setFeedback({ kind: "success", text: status === "applied" ? "Application marked applied." : "Ticket updated." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setActionId("");
+      setFeedback({ kind: "error", text: err.message || "Network error while updating ticket." });
     }
-    setFeedback({ kind: "success", text: status === "applied" ? "Application marked applied." : "Ticket updated." });
-    load(page, pageSize);
   }
 
   async function uploadProof(item: QueueItem, file: File | null) {
     if (!file) return;
     setActionId(`${item.id}:proof`);
     setFeedback(null);
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: formData });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not upload proof." });
-      return;
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: formData });
+      setActionId("");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: data.error || "Could not upload proof." });
+        return;
+      }
+      setFeedback({ kind: "success", text: "Proof uploaded." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setActionId("");
+      setFeedback({ kind: "error", text: err.message || "Network error while uploading proof." });
     }
-    setFeedback({ kind: "success", text: "Proof uploaded." });
-    load(page, pageSize);
   }
 
   async function requestReview(item: QueueItem) {
     setActionId(`${item.id}:review`);
     setFeedback(null);
-    const res = await fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        review_status: "pending",
-        review_note: item.review_note ?? "Ready for manager review.",
-        event_note: "Application ticket sent for manager review.",
-      }),
-    });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not request review." });
-      return;
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          review_status: "pending",
+          review_note: item.review_note ?? "Ready for manager review.",
+          event_note: "Application ticket sent for manager review.",
+        }),
+      });
+      setActionId("");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: data.error || "Could not request review." });
+        return;
+      }
+      setFeedback({ kind: "success", text: "Sent for manager review." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setActionId("");
+      setFeedback({ kind: "error", text: err.message || "Network error while requesting review." });
     }
-    setFeedback({ kind: "success", text: "Sent for manager review." });
-    load(page, pageSize);
   }
 
   async function bulkStatus(status: string) {
-    await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        status,
-        completed_at: status === "applied" ? new Date().toISOString() : null,
-        event_note: status === "applied" ? "Bulk marked applied from queue." : "Bulk status update from queue.",
-      }),
-    })));
-    load(page, pageSize);
+    setFeedback(null);
+    try {
+      await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status,
+          completed_at: status === "applied" ? new Date().toISOString() : null,
+          event_note: status === "applied" ? "Bulk marked applied from queue." : "Bulk status update from queue.",
+        }),
+      })));
+      setFeedback({ kind: "success", text: "Bulk update complete." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error during bulk update." });
+    }
   }
 
   async function bulkReassign() {
     if (!bulkOwnerId) return;
-    const owner = users.find((user) => user.user_id === bulkOwnerId);
-    await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        assigned_to_user_id: bulkOwnerId,
-        assigned_to: owner?.display_name || owner?.email || null,
-        event_note: "Bulk reassigned from queue.",
-      }),
-    })));
-    setBulkOwnerId("");
-    load(page, pageSize);
+    setFeedback(null);
+    try {
+      const owner = users.find((user) => user.user_id === bulkOwnerId);
+      await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assigned_to_user_id: bulkOwnerId,
+          assigned_to: owner?.display_name || owner?.email || null,
+          event_note: "Bulk reassigned from queue.",
+        }),
+      })));
+      setBulkOwnerId("");
+      setFeedback({ kind: "success", text: "Bulk reassignment complete." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error during bulk reassignment." });
+    }
   }
 
   async function removeTicket(item: QueueItem) {
     if (!confirm(`Remove this assignment${item.candidates ? ` for ${item.candidates.name}` : ""}?`)) return;
-    await fetch(`/api/applications/${item.id}`, { method: "DELETE", cache: "no-store" });
-    load(page, pageSize);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE", cache: "no-store" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: data.error || "Could not remove ticket." });
+        return;
+      }
+      setFeedback({ kind: "success", text: "Ticket removed." });
+      load(page, pageSize, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error while removing ticket." });
+    }
   }
 
   return (
@@ -427,10 +540,53 @@ export default function ApplicationQueuePage() {
                   )}
                 </td>
                 <td>
-                  <div className="action-group">
-                  <button className="btn-compact" onClick={() => setStatus(item.id, "in_progress")} disabled={actionId === `${item.id}:in_progress`}>
-                    {actionId === `${item.id}:in_progress` ? "Starting..." : "Start"}
-                  </button>
+                  <div className="action-group" style={{ position: "relative" }}>
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <button
+                      className="btn-compact"
+                      onClick={() => faloodOpen === item.id ? closeFaloodDropdown() : openFaloodDropdown(item)}
+                      disabled={!item.candidates || actionId === `${item.id}:in_progress` || actionId === `${item.id}:build_base`}
+                      title={!item.candidates ? "No candidate linked" : undefined}
+                    >
+                      {actionId === `${item.id}:build_base` ? "Building..." : actionId === `${item.id}:in_progress` ? "Starting..." : "Falood Studio ▾"}
+                    </button>
+                    {faloodOpen === item.id && item.candidates && (
+                      <div className="dropdown-menu" style={{ position: "absolute", top: "100%", left: 0, zIndex: 50, minWidth: 220, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 0", marginTop: 4, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
+                        <div style={{ padding: "4px 12px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+                          Base resumes for {item.candidates.name}
+                        </div>
+                        {(faloodResumes[item.candidates.id] ?? []).length === 0 ? (
+                          <button
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", fontSize: 13, background: "none", border: "none", color: "var(--accent)", cursor: "pointer" }}
+                            onClick={() => buildBaseResumeAndOpen(item)}
+                            disabled={actionId === `${item.id}:build_base`}
+                          >
+                            {actionId === `${item.id}:build_base` ? "Building..." : "Build base resume"}
+                          </button>
+                        ) : (
+                          (faloodResumes[item.candidates.id] ?? []).map((br: any) => (
+                            <button
+                              key={br.id}
+                              className="dropdown-item"
+                              style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", fontSize: 13, background: "none", border: "none", color: "var(--text)", cursor: "pointer" }}
+                              onClick={() => markInProgressAndOpen(item, br.id)}
+                            >
+                              {br.name || "Untitled"}
+                              {br.target_industry ? <span className="muted" style={{ fontSize: 11, marginLeft: 6 }}>({br.target_industry})</span> : null}
+                            </button>
+                          ))
+                        )}
+                        <div style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}>
+                          <button
+                            style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", fontSize: 13, background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}
+                            onClick={() => { setStatus(item.id, "in_progress"); closeFaloodDropdown(); }}
+                          >
+                            Mark in progress only
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                   <button className="btn-compact" onClick={() => requestReview(item)} disabled={actionId === `${item.id}:review`}>
                     {actionId === `${item.id}:review` ? "Sending..." : "Review"}
                   </button>

@@ -6,7 +6,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -50,6 +49,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const { supabase } = await import("@/lib/supabase");
   const columns = compact
     ? "id, name, resume_url, resume_filename"
     : "id, name, email, phone, status, target_tier, resume_filename, avatar_url, created_at";
@@ -120,6 +120,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const { supabase } = await import("@/lib/supabase");
   const { data, error } = await supabase
     .from("candidates")
     .insert({

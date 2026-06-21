@@ -8,7 +8,8 @@
 
 import { NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne } from "@/server/db/neon";
 import { autoFitOnePage } from "@/lib/falood/autoFit";
 import { ResumeDocument } from "@/lib/falood/types";
 
@@ -16,13 +17,27 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
-  const { data, error } = await supabase
-    .from("application_resume_versions")
-    .select("content")
-    .eq("id", params.id)
-    .single();
+  let data: any;
+  let error: any;
 
-  if (error || !data) return NextResponse.json({ error: "Application resume version not found" }, { status: 404 });
+  if (isNeon()) {
+    data = await queryOne(
+      `SELECT content FROM application_resume_versions WHERE id = $1`,
+      [params.id]
+    );
+    error = data ? null : { message: "Application resume version not found" };
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("application_resume_versions")
+      .select("content")
+      .eq("id", params.id)
+      .single();
+    data = res.data;
+    error = res.error;
+  }
+
+  if (error || !data) return NextResponse.json({ error: error?.message || "Application resume version not found" }, { status: 404 });
 
   try {
     const result = await autoFitOnePage(data.content as ResumeDocument);

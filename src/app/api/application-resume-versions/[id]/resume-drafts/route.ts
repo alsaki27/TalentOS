@@ -5,37 +5,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne } from "@/server/db/neon";
 import { listResumeVersionsByApplication } from "@/server/repositories/applicationResumeVersionsRepository";
 import { buildResumeDraftFromAcceptedSuggestions } from "@/server/services/resumeDraftBuilderService";
 
 export const dynamic = "force-dynamic";
 
 async function findApplicationId(resumeVersionId: string): Promise<string | null> {
-  const { data: appResume } = await supabase
-    .from("application_resume_versions")
-    .select("candidate_id, target_job_id")
-    .eq("id", resumeVersionId)
-    .single();
-  if (!appResume) return null;
+  if (isNeon()) {
+    const appResume = await queryOne(
+      `SELECT candidate_id, target_job_id FROM application_resume_versions WHERE id = $1`,
+      [resumeVersionId]
+    );
+    if (!appResume) return null;
 
-  const { data: targetJob } = await supabase
-    .from("target_jobs")
-    .select("job_id")
-    .eq("id", appResume.target_job_id)
-    .single();
-  if (!targetJob?.job_id) return null;
+    const targetJob = await queryOne(
+      `SELECT job_id FROM target_jobs WHERE id = $1`,
+      [appResume.target_job_id]
+    );
+    if (!targetJob?.job_id) return null;
 
-  const { data: application } = await supabase
-    .from("applications")
-    .select("id")
-    .eq("candidate_id", appResume.candidate_id)
-    .eq("job_id", targetJob.job_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    const application = await queryOne(
+      `SELECT id FROM applications WHERE candidate_id = $1 AND job_id = $2 ORDER BY applied_at DESC LIMIT 1`,
+      [appResume.candidate_id, targetJob.job_id]
+    );
+    return application?.id ?? null;
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: appResume } = await supabase
+      .from("application_resume_versions")
+      .select("candidate_id, target_job_id")
+      .eq("id", resumeVersionId)
+      .single();
+    if (!appResume) return null;
 
-  return application?.id ?? null;
+    const { data: targetJob } = await supabase
+      .from("target_jobs")
+      .select("job_id")
+      .eq("id", appResume.target_job_id)
+      .single();
+    if (!targetJob?.job_id) return null;
+
+    const { data: application } = await supabase
+      .from("applications")
+      .select("id")
+      .eq("candidate_id", appResume.candidate_id)
+      .eq("job_id", targetJob.job_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    return application?.id ?? null;
+  }
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -47,18 +69,39 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ drafts: [], applicationId: null });
   }
 
-  const { data: app } = await supabase
-    .from("applications")
-    .select("candidate_id, job_id")
-    .eq("id", applicationId)
-    .single();
+  let app: any;
+  let targetJob: any;
 
-  const { data: targetJob } = await supabase
-    .from("target_jobs")
-    .select("id")
-    .eq("candidate_id", app.candidate_id)
-    .eq("job_id", app.job_id)
-    .maybeSingle();
+  if (isNeon()) {
+    app = await queryOne(
+      `SELECT candidate_id, job_id FROM applications WHERE id = $1`,
+      [applicationId]
+    );
+    if (app) {
+      targetJob = await queryOne(
+        `SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2`,
+        [app.candidate_id, app.job_id]
+      );
+    }
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const appRes = await supabase
+      .from("applications")
+      .select("candidate_id, job_id")
+      .eq("id", applicationId)
+      .single();
+    app = appRes.data;
+
+    if (app) {
+      const tjRes = await supabase
+        .from("target_jobs")
+        .select("id")
+        .eq("candidate_id", app.candidate_id)
+        .eq("job_id", app.job_id)
+        .maybeSingle();
+      targetJob = tjRes.data;
+    }
+  }
 
   const drafts = targetJob?.id
     ? await listResumeVersionsByApplication(app.candidate_id, targetJob.id)

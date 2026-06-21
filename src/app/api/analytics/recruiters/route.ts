@@ -34,15 +34,15 @@ export async function GET(req: NextRequest) {
     }
     candidates = await query(candSql, candParams);
 
-    let appSql = 'SELECT created_by, status, job_id, created_at FROM applications WHERE 1=1';
+    let appSql = 'SELECT created_by, status, job_id, applied_at FROM applications WHERE 1=1';
     const appParams: any[] = [];
     if (dateFrom) {
       appParams.push(dateFrom);
-      appSql += ` AND created_at >= $${appParams.length}`;
+      appSql += ` AND applied_at >= $${appParams.length}`;
     }
     if (dateTo) {
       appParams.push(dateTo);
-      appSql += ` AND created_at <= $${appParams.length}`;
+      appSql += ` AND applied_at <= $${appParams.length}`;
     }
     applications = await query(appSql, appParams);
 
@@ -50,11 +50,11 @@ export async function GET(req: NextRequest) {
     const intParams: any[] = [];
     if (dateFrom) {
       intParams.push(dateFrom);
-      intSql += ` AND created_at >= $${intParams.length}`;
+      intSql += ` AND scheduled_at >= $${intParams.length}`;
     }
     if (dateTo) {
       intParams.push(dateTo);
-      intSql += ` AND created_at <= $${intParams.length}`;
+      intSql += ` AND scheduled_at <= $${intParams.length}`;
     }
     interviews = await query(intSql, intParams);
   } else {
@@ -92,7 +92,7 @@ export async function GET(req: NextRequest) {
   if (isNeon()) {
     if (userIds.size > 0) {
       profiles = await query(
-        'SELECT user_id, display_name FROM profiles WHERE user_id = ANY($1)',
+        'SELECT user_id, display_name FROM profiles WHERE user_id::text = ANY($1)',
         [Array.from(userIds)]
       );
     } else {
@@ -118,7 +118,7 @@ export async function GET(req: NextRequest) {
   let jobs: any[];
   if (isNeon()) {
     if (jobIds.length > 0) {
-      jobs = await query('SELECT id, created_at FROM jobs WHERE id = ANY($1)', [jobIds]);
+      jobs = await query('SELECT id, created_at FROM jobs WHERE id::text = ANY($1)', [jobIds]);
     } else {
       jobs = [];
     }

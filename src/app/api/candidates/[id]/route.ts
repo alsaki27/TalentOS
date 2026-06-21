@@ -7,7 +7,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
 import { deleteStorageFile } from "@/lib/storage";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
@@ -35,6 +34,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  const { supabase } = await import("@/lib/supabase");
   const { data: candidate, error: candErr } = await supabase
     .from("candidates")
     .select("*")
@@ -119,6 +119,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
+  const { supabase } = await import("@/lib/supabase");
   const { data, error } = await supabase
     .from("candidates")
     .update(updates)
@@ -192,6 +193,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     }
   }
 
+  const { supabase } = await import("@/lib/supabase");
   const [{ data: candidate }, { data: resumes }] = await Promise.all([
     supabase.from("candidates").select("resume_url, avatar_url, name").eq("id", params.id).single(),
     supabase.from("resumes").select("file_url").eq("candidate_id", params.id),

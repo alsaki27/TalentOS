@@ -7,12 +7,32 @@
 // deliberately not auto-applied, matching "never silently delete important content."
 
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
-import { countResumePages } from "@/lib/falood/pdfExport";
+// countResumePages disabled — pdfExport removed for Cloudflare Workers bundle size
+// Use a simple text-length heuristic instead.
+
+function estimatePageCount(content: ResumeDocument): number {
+  let totalChars = 0;
+  if (content.header?.fullName) totalChars += content.header.fullName.length;
+  if (content.summary?.text) totalChars += content.summary.text.length;
+  for (const s of content.skills) totalChars += s.skills.join(", ").length;
+  for (const exp of content.experience) {
+    totalChars += exp.bullets.reduce((sum, b) => sum + b.text.length, 0);
+    totalChars += exp.title.length + exp.company.length;
+  }
+  for (const edu of content.education) {
+    totalChars += edu.degree.length + edu.school.length;
+  }
+  // Rough estimate: ~3000 chars per page
+  return Math.max(1, Math.ceil(totalChars / 3000));
+}
 
 const FLOORS = {
   sectionSpacing: 4,
   bulletSpacing: 1,
-  margin: 0.4,
+  marginTop: 0.4,
+  marginRight: 0.4,
+  marginBottom: 0.4,
+  marginLeft: 0.4,
   fontSize: 9.5,
   lineHeight: 1.0,
 };
@@ -21,30 +41,30 @@ type FormattingStep = { label: string; apply: (f: ResumeFormatting) => ResumeFor
 
 const STEPS: FormattingStep[] = [
   {
-    label: "Reduced section spacing",
-    apply: (f) => ({ ...f, sectionSpacing: Math.max(FLOORS.sectionSpacing, Math.round(f.sectionSpacing * 0.85)) }),
+    label: "Reduce section spacing",
+    apply: (f) => ({ ...f, sectionSpacing: Math.max(FLOORS.sectionSpacing, f.sectionSpacing - 2) }),
   },
   {
-    label: "Reduced bullet spacing",
-    apply: (f) => ({ ...f, bulletSpacing: Math.max(FLOORS.bulletSpacing, Math.round(f.bulletSpacing * 0.85)) }),
+    label: "Reduce bullet spacing",
+    apply: (f) => ({ ...f, bulletSpacing: Math.max(FLOORS.bulletSpacing, f.bulletSpacing - 1) }),
   },
   {
-    label: "Reduced margins",
+    label: "Reduce margins",
     apply: (f) => ({
       ...f,
-      marginTop: Math.max(FLOORS.margin, Math.round((f.marginTop - 0.08) * 100) / 100),
-      marginRight: Math.max(FLOORS.margin, Math.round((f.marginRight - 0.08) * 100) / 100),
-      marginBottom: Math.max(FLOORS.margin, Math.round((f.marginBottom - 0.08) * 100) / 100),
-      marginLeft: Math.max(FLOORS.margin, Math.round((f.marginLeft - 0.08) * 100) / 100),
+      marginTop: Math.max(FLOORS.marginTop, f.marginTop - 0.2),
+      marginRight: Math.max(FLOORS.marginRight, f.marginRight - 0.2),
+      marginBottom: Math.max(FLOORS.marginBottom, f.marginBottom - 0.2),
+      marginLeft: Math.max(FLOORS.marginLeft, f.marginLeft - 0.2),
     }),
   },
   {
-    label: "Reduced font size",
-    apply: (f) => ({ ...f, fontSize: Math.max(FLOORS.fontSize, Math.round((f.fontSize - 0.5) * 10) / 10) }),
+    label: "Reduce font size",
+    apply: (f) => ({ ...f, fontSize: Math.max(FLOORS.fontSize, f.fontSize - 0.5) }),
   },
   {
-    label: "Reduced line height (compact mode)",
-    apply: (f) => ({ ...f, lineHeight: Math.max(FLOORS.lineHeight, Math.round((f.lineHeight - 0.05) * 100) / 100) }),
+    label: "Reduce line height",
+    apply: (f) => ({ ...f, lineHeight: Math.max(FLOORS.lineHeight, f.lineHeight - 0.1) }),
   },
 ];
 
@@ -59,7 +79,7 @@ const MAX_PASSES = 6; // each pass retries all steps — a single 15% trim often
 
 export async function autoFitOnePage(content: ResumeDocument): Promise<AutoFitResult> {
   let current = content;
-  let pages = await countResumePages(current);
+  let pages = estimatePageCount(current);
   const actionsApplied: string[] = [];
 
   if (pages <= 1) return { content: current, pages, actionsApplied, fitsOnePage: true };
@@ -70,7 +90,7 @@ export async function autoFitOnePage(content: ResumeDocument): Promise<AutoFitRe
       const nextFormatting = step.apply(current.formatting);
       if (JSON.stringify(nextFormatting) === JSON.stringify(current.formatting)) continue; // already at floor
       const candidate = { ...current, formatting: nextFormatting };
-      const candidatePages = await countResumePages(candidate);
+      const candidatePages = estimatePageCount(candidate);
       if (candidatePages <= pages) {
         current = candidate;
         pages = candidatePages;

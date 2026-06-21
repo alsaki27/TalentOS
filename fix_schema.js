@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const { neon } = require("@neondatabase/serverless");
-const url = "postgresql://neondb_owner:npg_Gj1bqgAwf0mE@ep-withered-leaf-at0ubn6s-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require";
+const url = process.env.DATABASE_URL;
+if (!url) throw new Error("Set DATABASE_URL in the environment before running this script.");
 const sql = neon(url, { fetchOptions: { cache: "no-store" } });
 
 async function fix() {

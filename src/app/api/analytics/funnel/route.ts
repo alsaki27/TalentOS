@@ -3,7 +3,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -15,18 +16,24 @@ export async function GET(req: NextRequest) {
   const dateFrom = url.searchParams.get("dateFrom") || null;
   const dateTo = url.searchParams.get("dateTo") || null;
 
-  // TODO: Neon equivalent needed for RPC get_funnel_counts
-  const { data: rows, error } = await supabase.rpc("get_funnel_counts", {
-    date_from: dateFrom,
-    date_to: dateTo,
-  });
+  let rows: any[] = [];
+  if (isNeon()) {
+    rows = await query<any>(`SELECT * FROM get_funnel_counts($1, $2)`, [dateFrom, dateTo]);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase.rpc("get_funnel_counts", {
+      date_from: dateFrom,
+      date_to: dateTo,
+    });
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    rows = data ?? [];
   }
 
   const stageMap = new Map<string, number>();
-  for (const row of rows ?? []) {
+  for (const row of rows) {
     stageMap.set(row.stage, Number(row.count));
   }
 

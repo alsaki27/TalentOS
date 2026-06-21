@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
 import { supabase } from "@/lib/supabase";
@@ -21,10 +21,10 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
     return NextResponse.json(
-      { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY (see README)." },
+      { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY (see README)." },
       { status: 503 },
     );
   }
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
     let messagesToday = 0;
     if (isNeon()) {
       const countRow = await queryOne<{ count: string }>(
-        "SELECT COUNT(*) as count FROM chat_messages WHERE role = $1 AND created_at >= $2 AND conversation_id = ANY($3)",
+        "SELECT COUNT(*) as count FROM chat_messages WHERE role = $1 AND created_at >= $2 AND conversation_id::text = ANY($3)",
         ["user", sinceMidnight.toISOString(), conversationIds]
       );
       messagesToday = parseInt(countRow?.count ?? "0", 10);

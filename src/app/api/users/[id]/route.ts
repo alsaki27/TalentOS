@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser, type UserRole } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { queryOne } from "@/server/db/neon";
 
 const roles: UserRole[] = ["admin", "manager", "application_engineer", "recruiter"];
 
@@ -21,13 +22,23 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     updates.role = body.role;
   }
 
-  const { data, error } = await supabase
-    .from("profiles")
-    .update(updates)
-    .eq("user_id", params.id)
-    .select("user_id, email, display_name, role, is_active")
-    .single();
+  if (isNeon()) {
+    const entries = Object.entries(updates);
+    const setClauses = entries.map(([key], i) => `${key} = $${i + 1}`);
+    const sqlParams = entries.map(([, val]) => val);
+    sqlParams.push(params.id);
+    const data = await queryOne<any>(`UPDATE profiles SET ${setClauses.join(", ")} WHERE user_id = $${sqlParams.length} RETURNING user_id, email, display_name, role, is_active`, sqlParams);
+    return NextResponse.json(data);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase
+      .from("profiles")
+      .update(updates)
+      .eq("user_id", params.id)
+      .select("user_id, email, display_name, role, is_active")
+      .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json(data);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(data);
+  }
 }

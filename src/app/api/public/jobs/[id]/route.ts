@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
 import { updateJob, deleteJob } from "@/server/repositories/jobsRepository";
@@ -40,6 +39,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(data);
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase
       .from("jobs")
       .select("*, applications(id, status, applied_at, candidates(id, name, email))")
@@ -60,8 +60,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if ("job_category" in body) {
     updates.category_status = "done";
   } else if (body.title || body.description_text || body.notes || body.job_function || body.industries || body.company_description) {
-    // Core text changed without an explicit category — the existing category may no
-    // longer be accurate, so re-queue for the AI pass instead of guessing inline.
     updates.category_status = "pending";
     updates.job_category = null;
     updates.ai_suggested_category = null;
@@ -76,6 +74,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase.from("jobs").update(updates).eq("id", params.id).select().single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     await syncCompanyDirectoryFromJobs([data]);
@@ -95,6 +94,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { error } = await supabase.from("jobs").delete().eq("id", params.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });

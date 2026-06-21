@@ -3,7 +3,8 @@
 // and update candidates.resume_url + resume_filename.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { deleteStorageFile } from "@/lib/storage";
 import { uploadResumeFile } from "@/lib/resumeStorage";
 
@@ -15,11 +16,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "no file provided" }, { status: 400 });
   }
 
-  const { data: existing } = await supabase
-    .from("candidates")
-    .select("resume_url")
-    .eq("id", params.id)
-    .single();
+  const { supabase } = await import("@/lib/supabase");
+
+  let existing;
+  if (isNeon()) {
+    existing = await queryOne<{ resume_url: string | null }>(
+      'SELECT resume_url FROM candidates WHERE id = $1',
+      [params.id]
+    );
+  } else {
+    const { data } = await supabase
+      .from("candidates")
+      .select("resume_url")
+      .eq("id", params.id)
+      .single();
+    existing = data;
+  }
 
   const ext = file.name.split(".").pop();
   const path = `candidates/${params.id}/${Date.now()}.${ext}`;
@@ -32,14 +44,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: err.message ?? "Upload failed" }, { status: 500 });
   }
 
-  const { data, error } = await supabase
-    .from("candidates")
-    .update({ resume_url: uploaded.url, resume_filename: file.name })
-    .eq("id", params.id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  let data;
+  if (isNeon()) {
+    data = await queryOne<Record<string, any>>(
+      'UPDATE candidates SET resume_url = $1, resume_filename = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+      [uploaded.url, file.name, params.id]
+    );
+  } else {
+    const { data: d, error } = await supabase
+      .from("candidates")
+      .update({ resume_url: uploaded.url, resume_filename: file.name })
+      .eq("id", params.id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    data = d;
+  }
 
   await deleteStorageFile(existing?.resume_url);
 

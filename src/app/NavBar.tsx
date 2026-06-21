@@ -138,6 +138,6 @@ export default function NavBar() {
         <button onClick={logout} className="text-xs">Sign out</button>
       </div>
     </nav>
-    {showModal && <QuickApplicationModal onClose={() => setShowModal(false)} />}
+    {showModal && <QuickApplicationModal userRole={me?.profile.role ?? ""} onClose={() => setShowModal(false)} />}
   </>);
 }

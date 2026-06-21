@@ -108,7 +108,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
       const values = Object.values(updates) as (string | number | boolean | object | Date | null)[];
       values.push(params.id);
-      const sql = `UPDATE jobs SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
+      const sql = `UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
       const data = await queryOne<Record<string, any>>(sql, values);
       if (!data) throw new Error("Update failed");
       await syncCompanyDirectoryFromJobs([data]);

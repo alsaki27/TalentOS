@@ -1,14 +1,11 @@
 // src/app/api/integrations/crawler/stream/route.ts
-// GET -> Server-Sent Events stream of live crawler activity (heartbeat changes + newly
-// ingested jobs), for the /ops "live" panel. This is this app's equivalent of the team's
-// Socket.IO push, built on Supabase Realtime (already included in @supabase/supabase-js,
-// no new dependency) instead — the browser only ever talks to this app's own API, never
-// Supabase directly, consistent with every other route in this app. The subscription
-// itself runs server-side with the service-role client and is forwarded to the browser.
+// GET -> Server-Sent Events stream of live crawler activity.
+// Uses polling instead of Supabase Realtime (WebSockets don't work on Cloudflare Workers).
 
 import { NextRequest } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -18,44 +15,65 @@ export async function GET(req: NextRequest) {
 
   const encoder = new TextEncoder();
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-  let channel: ReturnType<typeof supabase.channel> | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
 
-  const stream = new ReadableStream({
+  const createStream = () => new ReadableStream({
     start(controller) {
       function send(event: string, data: unknown) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       }
 
-      channel = supabase
-        .channel(`crawler-live-${Date.now()}`)
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "job_crawler_status" },
-          (payload: any) => send("crawler_status", payload.new ?? payload.old),
-        )
-        .on(
-          "postgres_changes",
-          { event: "INSERT", schema: "public", table: "jobs", filter: "source=eq.crawler" },
-          (payload: any) => send("job_inserted", payload.new),
-        )
-        .subscribe();
+      let lastStatus: any = null;
+      let lastJobCount = 0;
+
+      async function poll() {
+        try {
+          if (isNeon()) {
+            // Poll crawler status
+            const statusRows = await query(`SELECT * FROM job_crawler_status ORDER BY updated_at DESC LIMIT 1`, []);
+            const currentStatus = statusRows[0] ?? null;
+            if (currentStatus && JSON.stringify(currentStatus) !== JSON.stringify(lastStatus)) {
+              lastStatus = currentStatus;
+              send("crawler_status", currentStatus);
+            }
+
+            // Poll for new crawler jobs
+            const newJobs = await query(`SELECT * FROM jobs WHERE source = 'crawler' ORDER BY created_at DESC LIMIT 10`, []);
+            if (newJobs.length > lastJobCount) {
+              for (const job of newJobs.slice(0, newJobs.length - lastJobCount)) {
+                send("job_inserted", job);
+              }
+              lastJobCount = newJobs.length;
+            }
+          }
+        } catch (e) {
+          // Silently skip poll errors to keep stream alive
+        }
+      }
+
+      // Initial poll
+      poll();
+
+      // Poll every 3 seconds
+      pollTimer = setInterval(poll, 3000);
 
       send("ready", { connectedAt: new Date().toISOString() });
 
-      // SSE connections idle out behind some proxies without periodic traffic.
+      // SSE keepalive
       heartbeatTimer = setInterval(() => {
         controller.enqueue(encoder.encode(`: keep-alive\n\n`));
       }, 25_000);
     },
     cancel() {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
-      if (channel) supabase.removeChannel(channel);
+      if (pollTimer) clearInterval(pollTimer);
     },
   });
 
+  const stream = createStream();
   req.signal.addEventListener("abort", () => {
     if (heartbeatTimer) clearInterval(heartbeatTimer);
-    if (channel) supabase.removeChannel(channel);
+    if (pollTimer) clearInterval(pollTimer);
   });
 
   return new Response(stream, {

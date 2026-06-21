@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
 import { findApplicationById, updateApplication, deleteApplication, createApplicationEvent } from "@/server/repositories/applicationsRepository";
@@ -38,6 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
     return NextResponse.json(data);
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase
       .from("applications")
       .select("*, candidates(id, name, email), jobs(id, title, company, location)")
@@ -103,6 +103,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase.from("applications").update(updates).eq("id", params.id).select().single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -131,6 +132,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { error } = await supabase.from("applications").delete().eq("id", params.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });

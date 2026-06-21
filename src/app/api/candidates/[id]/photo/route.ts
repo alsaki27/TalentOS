@@ -3,8 +3,10 @@
 // bucket under an avatars/ prefix, and update candidates.avatar_url.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { deleteStorageFile } from "@/lib/storage";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
+import { deleteStorageFile } from "@/server/storage/storageApi";
+import { uploadFile, getPublicUrl } from "@/server/storage/storageApi";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const formData = await req.formData();
@@ -14,34 +16,45 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "no file provided" }, { status: 400 });
   }
 
-  const { data: existing } = await supabase
-    .from("candidates")
-    .select("avatar_url")
-    .eq("id", params.id)
-    .single();
+  let existing;
+  if (isNeon()) {
+    existing = await queryOne<{ avatar_url: string | null }>(
+      'SELECT avatar_url FROM candidates WHERE id = $1',
+      [params.id]
+    );
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data } = await supabase
+      .from("candidates")
+      .select("avatar_url")
+      .eq("id", params.id)
+      .single();
+    existing = data;
+  }
 
   const ext = file.name.split(".").pop();
   const path = `avatars/${params.id}/${Date.now()}.${ext}`;
   const buffer = new Uint8Array(await file.arrayBuffer());
 
-  const { error: uploadErr } = await supabase.storage
-    .from("resumes")
-    .upload(path, buffer, { contentType: file.type, upsert: true });
+  const { url: publicUrl } = await uploadFile(path, buffer, file.type || "application/octet-stream");
 
-  if (uploadErr) {
-    return NextResponse.json({ error: uploadErr.message }, { status: 500 });
+  let data;
+  if (isNeon()) {
+    data = await queryOne<Record<string, any>>(
+      'UPDATE candidates SET avatar_url = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [publicUrl, params.id]
+    );
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: d, error } = await supabase
+      .from("candidates")
+      .update({ avatar_url: publicUrl })
+      .eq("id", params.id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    data = d;
   }
-
-  const { data: urlData } = supabase.storage.from("resumes").getPublicUrl(path);
-
-  const { data, error } = await supabase
-    .from("candidates")
-    .update({ avatar_url: urlData.publicUrl })
-    .eq("id", params.id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   await deleteStorageFile(existing?.avatar_url);
 

@@ -18,6 +18,9 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { applyMapping } from "@/lib/normalizer";
+// parseJson is not imported here to avoid pulling papaparse into the client bundle;
+// we parse JSON inline below.
 
 import DropZone from "@/components/DropZone";
 import ImportStepIndicator from "@/components/ImportStepIndicator";
@@ -67,6 +70,7 @@ interface ImportResult {
 }
 
 const STEPS = ["Source", "Upload", "Mapping", "Review"];
+const BATCH_SIZE = 50;
 
 const SOURCE_CARDS: {
   id: SourceType;
@@ -116,6 +120,14 @@ function uiMappingToApi(uiMapping: Record<string, string>): FieldMapping {
     if (field && field !== "ignore") api[field as SchemaField] = header;
   }
   return api;
+}
+
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
 }
 
 /* ─────────── Page ─────────── */
@@ -198,13 +210,35 @@ export default function ImportPage() {
     setLoading(true);
     setError("");
     try {
+      // Parse full file locally to get the actual row count
+      let actualRowCount = 0;
+      const trimmed = fileContent.trim();
+      if (trimmed.startsWith("[")) {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) actualRowCount = parsed.length;
+      }
+
+      // Send only a sample (first 10 rows) for analysis to avoid server payload limits
+      let contentToSend = fileContent;
+      if (trimmed.startsWith("[")) {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed) && parsed.length > 10) {
+          const sample = parsed.slice(0, 10);
+          contentToSend = JSON.stringify(sample);
+        }
+      }
+
       const res = await fetch("/api/import/normalize/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: fileName, content: fileContent }),
+        body: JSON.stringify({ filename: fileName, content: contentToSend }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Could not analyze file.");
+      // Override rowCount with the actual count from the local file
+      if (actualRowCount > 0) {
+        data.rowCount = actualRowCount;
+      }
       setAnalyzeResponse(data);
       setUiMapping(apiMappingToUi(data.mapping ?? {}));
       setStep(3);
@@ -244,7 +278,7 @@ export default function ImportPage() {
     return Object.entries(uiMapping).some(([, f]) => f === "title");
   }
 
-  /* ── Step 4: Commit ── */
+  /* ── Step 4: Commit (client-side batching) ── */
   async function commitFile() {
     if (!fileName || !fileContent || !analyzeResponse) {
       setError("Missing file data.");
@@ -262,24 +296,72 @@ export default function ImportPage() {
 
     setLoading(true);
     setError("");
-    setProgress(30);
+    setProgress(5);
+
     try {
-      const res = await fetch("/api/import/normalize/commit", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: fileName,
-          content: fileContent,
-          mapping: apiMapping,
-          sourceLabel,
-          profileLabel: saveProfile ? profileLabel.trim() : undefined,
-        }),
+      // Parse and map locally to avoid sending 12MB payload to server
+      const rawData = JSON.parse(fileContent);
+      const arr = Array.isArray(rawData) ? rawData : [rawData];
+      const parsedRows: Record<string, string>[] = arr.map((row: any) => {
+        const obj: Record<string, string> = {};
+        for (const key of Object.keys(row ?? {})) {
+          const v = row[key];
+          obj[key] = v === null || v === undefined
+            ? ""
+            : typeof v === "object"
+              ? JSON.stringify(v)
+              : String(v);
+        }
+        return obj;
       });
-      setProgress(70);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import failed.");
-      setResult({ imported: data.imported ?? 0, skipped: data.skipped ?? 0 });
+      setProgress(10);
+
+      const cleaned = applyMapping(parsedRows, apiMapping);
+      if (cleaned.length === 0) {
+        setResult({ imported: 0, skipped: parsedRows.length });
+        setProgress(100);
+        setLoading(false);
+        return;
+      }
+      setProgress(15);
+
+      const rowsToSend = cleaned.map((row) => ({
+        ...row,
+        source: sourceLabel?.trim() || "normalized_import",
+      }));
+      const batches = chunkArray(rowsToSend, BATCH_SIZE);
+      let totalImported = 0;
+      let totalSkipped = 0;
+
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        const batchProgress = 15 + Math.round(((i + 1) / batches.length) * 80);
+        setProgress(batchProgress);
+
+        const res = await fetch("/api/import/normalize/commit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rows: batch,
+            sourceLabel,
+          }),
+        });
+
+        let data: any = null;
+        try {
+          data = await res.json();
+        } catch (parseErr) {
+          throw new Error(`Batch ${i + 1}: server returned invalid response (status ${res.status}).`);
+        }
+        if (!res.ok) {
+          throw new Error(data?.error || `Batch ${i + 1} failed (status ${res.status}).`);
+        }
+        totalImported += data?.imported ?? 0;
+        totalSkipped += data?.skipped ?? 0;
+      }
+
       setProgress(100);
+      setResult({ imported: totalImported, skipped: totalSkipped });
     } catch (err: any) {
       setError(err.message || "Import failed.");
     } finally {

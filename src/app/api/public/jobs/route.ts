@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { filterNewJobs } from "@/lib/jobDedup";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { createJob } from "@/server/repositories/jobsRepository";
@@ -44,7 +43,7 @@ export async function GET(req: NextRequest) {
       values.push(source);
     }
     if (category) {
-      conditions.push(`(job_category = $${idx++} OR category_tags @> jsonb_build_array($${idx++}))`);
+      conditions.push(`(job_category = $${idx++} OR $${idx++} = ANY(category_tags))`);
       values.push(category, category);
     }
     if (active === "true" || active === "active") {
@@ -65,6 +64,7 @@ export async function GET(req: NextRequest) {
     const data = await query<any>(dataSql, values);
     return NextResponse.json({ data: data ?? [], total, page, pageSize });
   } else {
+    const { supabase } = await import("@/lib/supabase");
     let query = supabase
       .from("jobs")
       .select("id, company_id, title, company, location, source, role_tier, salary_range, source_url, is_active, employment_type, applicants_count, company_website, posted_at, external_job_id, apply_url, job_category, category_tags, category_relevance_score, category_status, salary_min, salary_max, salary_currency, salary_period, work_authorization, last_seen_at, created_at", { count: "planned" })
@@ -93,8 +93,6 @@ export async function POST(req: NextRequest) {
     ...pickFields(body, JOB_FIELDS),
     source: body.source ?? "public_api",
     is_active: body.is_active ?? true,
-    // job_category left unset when the caller doesn't supply one — category_status
-    // defaults to 'pending' and the AI categorization pass fills it in afterward.
     ...("job_category" in body ? { category_status: "done" } : {}),
   };
 
@@ -112,6 +110,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase.from("jobs").insert(row).select().single();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     await syncCompanyDirectoryFromJobs([data]);

@@ -3,7 +3,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -14,52 +15,71 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
 
-  // Fetch candidates with last message info via a Supabase RPC or raw query.
-  // Since we can't easily do a lateral join in standard Supabase JS, we fetch candidates
-  // and then enrich with their latest message and unread count in two queries.
+  let candidates: any[] = [];
+  if (isNeon()) {
+    let sql = `SELECT id, name, email, avatar_url FROM candidates`;
+    const sqlParams: any[] = [];
+    if (search) {
+      sql += ` WHERE name ILIKE $1 OR email ILIKE $2`;
+      sqlParams.push(`%${search}%`, `%${search}%`);
+    }
+    sql += ` ORDER BY created_at DESC LIMIT 500`;
+    candidates = await query<any>(sql, sqlParams);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    let query = supabase
+      .from("candidates")
+      .select("id, name, email, avatar_url")
+      .order("created_at", { ascending: false })
+      .limit(500);
 
-  let query = supabase
-    .from("candidates")
-    .select("id, name, email, avatar_url")
-    .order("created_at", { ascending: false })
-    .limit(500);
+    if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
 
-  if (search) query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+    const { data, error } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    candidates = data ?? [];
+  }
 
-  const { data: candidates, error: candErr } = await query;
-  if (candErr) return NextResponse.json({ error: candErr.message }, { status: 500 });
-
-  const candidateIds = (candidates ?? []).map((c: any) => c.id as string);
+  const candidateIds = candidates.map((c: any) => c.id as string);
   if (candidateIds.length === 0) return NextResponse.json({ threads: [] });
 
-  // Fetch latest message per candidate
-  const { data: lastMessages } = await supabase
-    .from("candidate_messages")
-    .select("candidate_id, body, created_at")
-    .in("candidate_id", candidateIds)
-    .order("created_at", { ascending: false });
-
-  // Fetch unread counts (inbound messages without read_at)
-  const { data: unreadRows } = await supabase
-    .from("candidate_messages")
-    .select("candidate_id")
-    .in("candidate_id", candidateIds)
-    .eq("direction", "inbound")
-    .is("read_at", null);
+  let lastMessages: any[] = [];
+  let unreadRows: any[] = [];
+  if (isNeon()) {
+    lastMessages = await query<any>(`SELECT candidate_id, body, created_at FROM candidate_messages WHERE candidate_id::text = ANY($1) ORDER BY created_at DESC`, [candidateIds]);
+    unreadRows = await query<any>(`SELECT candidate_id FROM candidate_messages WHERE candidate_id::text = ANY($1) AND direction = 'inbound' AND read_at IS NULL`, [candidateIds]);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const [{ data: lastMessagesData }, { data: unreadRowsData }] = await Promise.all([
+      supabase
+        .from("candidate_messages")
+        .select("candidate_id, body, created_at")
+        .in("candidate_id", candidateIds)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("candidate_messages")
+        .select("candidate_id")
+        .in("candidate_id", candidateIds)
+        .eq("direction", "inbound")
+        .is("read_at", null),
+    ]);
+    lastMessages = lastMessagesData ?? [];
+    unreadRows = unreadRowsData ?? [];
+  }
 
   const lastMessageMap: Record<string, { body: string; created_at: string }> = {};
-  for (const msg of lastMessages ?? []) {
+  for (const msg of lastMessages) {
     if (!lastMessageMap[msg.candidate_id]) {
       lastMessageMap[msg.candidate_id] = { body: msg.body, created_at: msg.created_at };
     }
   }
 
   const unreadMap: Record<string, number> = {};
-  for (const row of unreadRows ?? []) {
+  for (const row of unreadRows) {
     unreadMap[row.candidate_id] = (unreadMap[row.candidate_id] || 0) + 1;
   }
 
-  const threads = (candidates ?? []).map((c: any) => ({
+  const threads = candidates.map((c: any) => ({
     id: c.id,
     name: c.name,
     email: c.email ?? null,

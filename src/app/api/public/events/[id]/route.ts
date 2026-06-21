@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
@@ -15,6 +14,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     data = await queryOne('SELECT * FROM integration_events WHERE id = $1', [params.id]);
     error = data ? null : { message: 'Not found' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase.from("integration_events").select("*").eq("id", params.id).single();
     data = res.data;
     error = res.error;
@@ -47,6 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
     error = data ? null : { message: 'Update failed' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("integration_events")
       .update({

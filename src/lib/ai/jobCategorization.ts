@@ -17,7 +17,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { updateJob } from "@/server/repositories/jobsRepository";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 export interface PendingJob {
@@ -123,9 +123,9 @@ async function markFailed(jobId: string, message: string, model?: string) {
 }
 
 export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; status: string }> {
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
-    await markFailed(job.id, "No AI provider configured (set ANTHROPIC_API_KEY or NVIDIA_API_KEY).");
+    await markFailed(job.id, "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY).");
     return { ok: false, status: "failed" };
   }
 
@@ -182,7 +182,7 @@ export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; 
 export async function processPendingCategorization(
   opts: { limit?: number; triggeredBy?: string } = {}
 ): Promise<{ processed: number; failed: number; remainingPending: number }> {
-  const limit = opts.limit ?? 5;
+  const limit = Math.min(opts.limit ?? 5, 5);
 
   let runRow: { id: string } | null = null;
   if (isNeon()) {
@@ -204,7 +204,7 @@ export async function processPendingCategorization(
   if (isNeon()) {
     try {
       pending = await query<PendingJob>(
-        "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' ORDER BY created_at ASC LIMIT $1",
+        "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' OR category_status IS NULL ORDER BY created_at ASC LIMIT $1",
         [limit]
       );
     } catch (err: any) {
@@ -214,7 +214,7 @@ export async function processPendingCategorization(
     const { data, error } = await supabase
       .from("jobs")
       .select("id, title, description_text, job_function, industries, company_description, salary_range")
-      .eq("category_status", "pending")
+      .or('category_status.eq.pending,category_status.is.null')
       .order("created_at", { ascending: true })
       .limit(limit);
     pending = data ?? [];
@@ -255,14 +255,14 @@ export async function processPendingCategorization(
   let remainingCount = 0;
   if (isNeon()) {
     const row = await queryOne<{ count: number }>(
-      "SELECT COUNT(*)::int as count FROM jobs WHERE category_status = 'pending'"
+      "SELECT COUNT(*)::int as count FROM jobs WHERE category_status = 'pending' OR category_status IS NULL"
     );
     remainingCount = row?.count ?? 0;
   } else {
     const { count } = await supabase
       .from("jobs")
       .select("id", { count: "exact", head: true })
-      .eq("category_status", "pending");
+      .or('category_status.eq.pending,category_status.is.null');
     remainingCount = count ?? 0;
   }
 

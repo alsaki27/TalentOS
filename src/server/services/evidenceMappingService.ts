@@ -5,7 +5,7 @@
 // NEVER invents experience. If evidence is not found, marks missing.
 
 import { supabase } from "@/lib/supabase";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import {
   ApplicationKeywordRow,
@@ -333,7 +333,7 @@ export async function aiMapEvidence(
   keyword: ApplicationKeywordRow,
   candidateId: string
 ): Promise<EvidenceMappingResult | null> {
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) return null;
 
   const source = await gatherCandidateEvidenceSources(candidateId);

@@ -7,7 +7,6 @@ import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import {
@@ -115,6 +114,7 @@ export async function POST(req: NextRequest) {
         );
       }
     } else {
+      const { supabase } = await import("@/lib/supabase");
       await supabase.from("application_events").insert((data ?? []).map((application: any) => ({
         application_id: application.id,
         from_status: null,
@@ -139,6 +139,7 @@ export async function POST(req: NextRequest) {
           );
         }
       } else {
+        const { supabase } = await import("@/lib/supabase");
         await supabase.from("audit_logs").insert(data.map((application: any) => ({
           actor_user_id: currentUser.profile.user_id,
           actor_email: currentUser.profile.email,

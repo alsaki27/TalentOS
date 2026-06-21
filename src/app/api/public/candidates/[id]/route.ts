@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
@@ -26,6 +25,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const [{ data: candidate, error }, { data: applications, error: appError }] = await Promise.all([
       supabase.from("candidates").select("*").eq("id", params.id).single(),
       supabase
@@ -64,6 +64,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase
       .from("candidates")
       .update(updates)
@@ -88,6 +89,7 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
       return NextResponse.json({ error: err.message }, { status: 500 });
     }
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const { error } = await supabase.from("candidates").delete().eq("id", params.id);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ ok: true });

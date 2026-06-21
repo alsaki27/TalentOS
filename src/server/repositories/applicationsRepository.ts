@@ -14,6 +14,7 @@ export interface ApplicationRow {
   id: string;
   candidate_id: string;
   job_id: string | null;
+  app_number: number | null;
   status: string;
   resume_url: string | null;
   resume_filename: string | null;
@@ -61,6 +62,7 @@ export interface ApplicationEventRow {
 export interface CreateApplicationInput {
   candidate_id: string;
   job_id?: string | null;
+  app_number?: number | null;
   status?: string;
   resume_url?: string | null;
   resume_filename?: string | null;
@@ -173,14 +175,51 @@ export async function findApplicationById(id: string): Promise<ApplicationRow | 
 }
 
 /**
+ * Generate a unique 5-digit application number (10000-99999).
+ * Uses an atomic sequence on Neon; falls back to random collision-resistant on Supabase.
+ */
+async function generateAppNumbers(count: number): Promise<number[]> {
+  if (isNeon()) {
+    // Use a PostgreSQL sequence atomically
+    const results = await queryOne<{ numbers: number[] }>(
+      `SELECT ARRAY(SELECT nextval('applications_app_number_seq') FROM generate_series(1, $1)) AS numbers`,
+      [count]
+    );
+    return results?.numbers ?? [];
+  }
+
+  // Supabase fallback: random with collision retry
+  const numbers: number[] = [];
+  for (let i = 0; i < count; i++) {
+    let attempts = 0;
+    let num: number;
+    let exists = true;
+    do {
+      num = Math.floor(Math.random() * 90000) + 10000; // 10000-99999
+      const { data } = await supabase
+        .from("applications")
+        .select("id")
+        .eq("app_number", num)
+        .limit(1);
+      exists = (data?.length ?? 0) > 0;
+      attempts++;
+    } while (exists && attempts < 10);
+    numbers.push(num);
+  }
+  return numbers;
+}
+
+/**
  * Create one or more applications.
  */
 export async function createApplications(
   inputs: CreateApplicationInput[]
 ): Promise<ApplicationRow[]> {
-  const rows = inputs.map((input) => ({
+  const appNumbers = await generateAppNumbers(inputs.length);
+  const rows = inputs.map((input, i) => ({
     candidate_id: input.candidate_id,
     job_id: input.job_id ?? null,
+    app_number: input.app_number ?? appNumbers[i] ?? null,
     status: input.status ?? "applied",
     resume_url: input.resume_url ?? null,
     resume_filename: input.resume_filename ?? null,
@@ -242,7 +281,6 @@ export async function updateApplication(
     if (Object.keys(updates).length === 0) {
       throw new Error("No fields to update");
     }
-    updates.updated_at = new Date().toISOString();
 
     const keys = Object.keys(updates);
     const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -261,7 +299,6 @@ export async function updateApplication(
   if (Object.keys(updates).length === 0) {
     throw new Error("No fields to update");
   }
-  updates.updated_at = new Date().toISOString();
 
   const { data, error } = await supabase
     .from("applications")
@@ -298,7 +335,7 @@ export async function findExistingCandidateIdsForJob(
 ): Promise<Set<string>> {
   if (isNeon()) {
     const rows = await query<{ candidate_id: string }>(
-      "SELECT candidate_id FROM applications WHERE job_id = $1 AND candidate_id = ANY($2)",
+      "SELECT candidate_id FROM applications WHERE job_id::text = $1 AND candidate_id::text = ANY($2)",
       [jobId, candidateIds]
     );
     return new Set(rows.map((r) => r.candidate_id));
@@ -344,7 +381,7 @@ export async function listApplications(
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2 OR j.title ILIKE $2)
-      ORDER BY a.created_at DESC
+      ORDER BY a.applied_at DESC
       OFFSET $3 LIMIT $4
     `;
     const items = await query<ApplicationRow>(dataSql, [
@@ -429,13 +466,13 @@ export async function listApplicationQueue(
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.status = ANY($1)
-        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5))
+        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
         AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
         AND ($8 = '' OR a.status = $8)
-        AND ($9 = '' OR a.assigned_to_user_id = $9 OR a.assigned_to = $9)
+        AND ($9 = '' OR a.assigned_to_user_id::text = $9 OR a.assigned_to = $9)
         AND ($10 = '' OR a.priority = $10)
         AND ($11 = '' OR a.review_status = $11)
-        AND ($12 <> 'mine' OR $13 IS NULL OR a.assigned_to_user_id = $13)
+        AND ($12 <> 'mine' OR $13::text IS NULL OR a.assigned_to_user_id::text = $13::text)
         AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
         AND ($12 <> 'review' OR a.review_status = 'pending')
       ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
@@ -466,13 +503,13 @@ export async function listApplicationQueue(
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.status = ANY($1)
-        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5))
+        AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
         AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
         AND ($8 = '' OR a.status = $8)
-        AND ($9 = '' OR a.assigned_to_user_id = $9 OR a.assigned_to = $9)
+        AND ($9 = '' OR a.assigned_to_user_id::text = $9 OR a.assigned_to = $9)
         AND ($10 = '' OR a.priority = $10)
         AND ($11 = '' OR a.review_status = $11)
-        AND ($12 <> 'mine' OR $13 IS NULL OR a.assigned_to_user_id = $13)
+        AND ($12 <> 'mine' OR $13::text IS NULL OR a.assigned_to_user_id::text = $13::text)
         AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
         AND ($12 <> 'review' OR a.review_status = 'pending')
     `;
@@ -593,7 +630,7 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
 
     const baseWhere = `
       status = ANY($1)
-      AND ($2 <> 'application_engineer' OR assigned_to_user_id IS NOT DISTINCT FROM $3 OR ($4 IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $4) OR ($5 IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $5))
+      AND ($2 <> 'application_engineer' OR assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $5::text))
     `;
 
     const baseParams = [
@@ -610,11 +647,11 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
         baseParams
       ),
       queryOne<{ total: number }>(
-        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id = $6`,
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id::text = $6::text`,
         [...baseParams, params.userId ?? ""]
       ),
       queryOne<{ total: number }>(
-        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $6`,
+        `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $6::date`,
         [...baseParams, today]
       ),
       queryOne<{ total: number }>(
@@ -846,7 +883,7 @@ export async function listOverdueApplications(since: string, limit = 20): Promis
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.status = ANY($1)
-        AND a.assignment_due_at <= $2
+        AND a.assignment_due_at <= $2::date
         AND a.assignment_due_at IS NOT NULL
       ORDER BY a.assignment_due_at ASC
       LIMIT $3

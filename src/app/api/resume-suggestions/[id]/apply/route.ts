@@ -4,8 +4,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 import { logActivity } from "@/lib/activity";
+import { isNeon } from "@/server/db";
+import { queryOne, execute } from "@/server/db/neon";
 
 function findAndReplaceInContent(
   content: any,
@@ -61,11 +62,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "decision must be accept, reject, or customize" }, { status: 400 });
   }
 
-  const { data: suggestion, error: suggestionError } = await supabase
-    .from("resume_suggestions")
-    .select("*")
-    .eq("id", params.id)
-    .single();
+  let suggestion: any;
+  let suggestionError: any;
+
+  if (isNeon()) {
+    suggestion = await queryOne(
+      `SELECT * FROM resume_suggestions WHERE id = $1`,
+      [params.id]
+    );
+    suggestionError = suggestion ? null : { message: "Suggestion not found" };
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("resume_suggestions")
+      .select("*")
+      .eq("id", params.id)
+      .single();
+    suggestion = res.data;
+    suggestionError = res.error;
+  }
 
   if (suggestionError || !suggestion) {
     return NextResponse.json({ error: "Suggestion not found" }, { status: 404 });
@@ -74,10 +89,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const now = new Date().toISOString();
 
   if (decision === "reject") {
-    const { error } = await supabase
-      .from("resume_suggestions")
-      .update({ status: "rejected", resolved_at: now })
-      .eq("id", params.id);
+    let error: any;
+
+    if (isNeon()) {
+      const res = await execute(
+        `UPDATE resume_suggestions SET status = $1, resolved_at = $2 WHERE id = $3`,
+        ["rejected", now, params.id]
+      );
+      error = res.rowCount === 0 ? { message: "Update failed" } : null;
+    } else {
+      const { supabase } = await import("@/lib/supabase");
+      const res = await supabase
+        .from("resume_suggestions")
+        .update({ status: "rejected", resolved_at: now })
+        .eq("id", params.id);
+      error = res.error;
+    }
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -94,11 +121,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // For accept or customize, we need to apply to the resume content
-  const { data: appResume, error: appResumeError } = await supabase
-    .from("application_resume_versions")
-    .select("content")
-    .eq("id", suggestion.application_resume_id)
-    .single();
+  let appResume: any;
+  let appResumeError: any;
+
+  if (isNeon()) {
+    appResume = await queryOne(
+      `SELECT content FROM application_resume_versions WHERE id = $1`,
+      [suggestion.application_resume_id]
+    );
+    appResumeError = appResume ? null : { message: "Application resume version not found" };
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("application_resume_versions")
+      .select("content")
+      .eq("id", suggestion.application_resume_id)
+      .single();
+    appResume = res.data;
+    appResumeError = res.error;
+  }
 
   if (appResumeError || !appResume) {
     return NextResponse.json({ error: "Application resume version not found" }, { status: 404 });
@@ -129,10 +170,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // Update the application resume content
-  const { error: updateResumeError } = await supabase
-    .from("application_resume_versions")
-    .update({ content: updatedContent, updated_at: now })
-    .eq("id", suggestion.application_resume_id);
+  let updateResumeError: any;
+
+  if (isNeon()) {
+    const res = await execute(
+      `UPDATE application_resume_versions SET content = $1, updated_at = $2 WHERE id = $3`,
+      [updatedContent, now, suggestion.application_resume_id]
+    );
+    updateResumeError = res.rowCount === 0 ? { message: "Update failed" } : null;
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("application_resume_versions")
+      .update({ content: updatedContent, updated_at: now })
+      .eq("id", suggestion.application_resume_id);
+    updateResumeError = res.error;
+  }
 
   if (updateResumeError) return NextResponse.json({ error: updateResumeError.message }, { status: 500 });
 
@@ -145,10 +198,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     suggestionUpdates.user_instruction = customText;
   }
 
-  const { error: updateSuggestionError } = await supabase
-    .from("resume_suggestions")
-    .update(suggestionUpdates)
-    .eq("id", params.id);
+  let updateSuggestionError: any;
+
+  if (isNeon()) {
+    const keys = Object.keys(suggestionUpdates);
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+    const values = [...keys.map((k) => suggestionUpdates[k]), params.id] as (string | number | boolean | object | Date | null)[];
+    const res = await execute(
+      `UPDATE resume_suggestions SET ${setClause} WHERE id = $${keys.length + 1}`,
+      values
+    );
+    updateSuggestionError = res.rowCount === 0 ? { message: "Update failed" } : null;
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("resume_suggestions")
+      .update(suggestionUpdates)
+      .eq("id", params.id);
+    updateSuggestionError = res.error;
+  }
 
   if (updateSuggestionError) return NextResponse.json({ error: updateSuggestionError.message }, { status: 500 });
 

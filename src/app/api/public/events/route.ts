@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendTeamsNotification, type TalentOsNotification } from "@/lib/integrations/teams";
 import { pageParams, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -57,6 +56,7 @@ export async function GET(req: NextRequest) {
     count = parseInt(countRow?.count ?? '0', 10);
     error = null;
   } else {
+    const { supabase } = await import("@/lib/supabase");
     let dbQuery = supabase.from("integration_events").select("*", { count: "planned" }).order("created_at", { ascending: false });
     if (source) dbQuery = dbQuery.eq("source", source);
     if (eventType) dbQuery = dbQuery.eq("event_type", eventType);
@@ -101,6 +101,7 @@ export async function POST(req: NextRequest) {
     );
     insertError = event ? null : { message: 'Insert failed' };
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("integration_events")
       .insert({
@@ -130,6 +131,7 @@ export async function POST(req: NextRequest) {
           [teams.sent ? "sent" : "received", teams.skipped ? teams.reason : null, event.id]
         );
       } else {
+        const { supabase } = await import("@/lib/supabase");
         await supabase
           .from("integration_events")
           .update({ delivery_status: teams.sent ? "sent" : "received", delivery_error: teams.skipped ? teams.reason : null })
@@ -143,6 +145,7 @@ export async function POST(req: NextRequest) {
           ["failed", err.message || "Teams delivery failed", event.id]
         );
       } else {
+        const { supabase } = await import("@/lib/supabase");
         await supabase
           .from("integration_events")
           .update({ delivery_status: "failed", delivery_error: err.message || "Teams delivery failed" })

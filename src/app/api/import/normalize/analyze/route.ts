@@ -6,7 +6,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { analyzeFile } from "@/lib/normalizer";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 function normalizeHeader(h: string): string {
   return h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -19,6 +20,12 @@ function headerOverlapScore(a: string[], b: string[]): number {
   let overlap = 0;
   left.forEach((h) => { if (right.has(h)) overlap++; });
   return overlap / Math.max(left.size, right.size);
+}
+
+interface ImportProfile {
+  id: string;
+  label: string;
+  column_map: Record<string, string>;
 }
 
 export async function POST(req: NextRequest) {
@@ -40,20 +47,30 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err.message ?? "failed to parse file" }, { status: 400 });
   }
 
-  const { data: profiles } = await supabase
-    .from("import_profiles")
-    .select("id, label, column_map")
-    .order("created_at", { ascending: false });
+  let profiles: ImportProfile[] = [];
+  if (isNeon()) {
+    profiles = await query<ImportProfile>(
+      'SELECT id, label, column_map FROM import_profiles ORDER BY created_at DESC'
+    );
+  } else {
+    // Fallback for Supabase (legacy)
+    const { supabase } = await import("@/lib/supabase");
+    const { data } = await supabase
+      .from("import_profiles")
+      .select("id, label, column_map")
+      .order("created_at", { ascending: false });
+    profiles = (data ?? []) as ImportProfile[];
+  }
 
-  const matchingProfiles = (profiles ?? [])
-    .map((profile: any) => ({
+  const matchingProfiles = profiles
+    .map((profile) => ({
       id: profile.id,
       label: profile.label,
       column_map: profile.column_map,
       score: headerOverlapScore(result.rawHeaders, Object.values(profile.column_map ?? {}) as string[]),
     }))
-    .filter((profile: any) => profile.score >= 0.7)
-    .sort((a: any, b: any) => b.score - a.score);
+    .filter((profile) => profile.score >= 0.7)
+    .sort((a, b) => b.score - a.score);
 
   return NextResponse.json({
     headersDetected: result.headersDetected,

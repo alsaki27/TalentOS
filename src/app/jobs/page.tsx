@@ -697,25 +697,38 @@ function ImportFileModal({ onClose, onImported }: { onClose: () => void; onImpor
     setError("");
     setAnalysis(null);
     setResult(null);
-    const res = await fetch("/api/import/normalize/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, content: text }),
-    });
-    setWorking(false);
-    const data = await res.json();
-    if (!res.ok) { setError(data.error || "Could not analyze file."); return; }
-    setAnalysis(data);
-    setMapping(data.mapping ?? {});
+    try {
+      const res = await fetch("/api/import/normalize/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, content: text }),
+      });
+      setWorking(false);
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Could not analyze file."); return; }
+      setAnalysis(data);
+      setMapping(data.mapping ?? {});
+    } catch (err: any) {
+      setWorking(false);
+      setError(err.message || "Network error while analyzing file.");
+    }
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
     setFileName(file.name);
-    setContent(text);
-    analyze(file.name, text);
+    setContent("");
+    setAnalysis(null);
+    setResult(null);
+    setError("");
+    try {
+      const text = await file.text();
+      setContent(text);
+      analyze(file.name, text);
+    } catch (err: any) {
+      setError(err.message || "Could not read file.");
+    }
   }
 
   function fieldForHeader(header: string): SchemaField | "" {
@@ -746,21 +759,26 @@ function ImportFileModal({ onClose, onImported }: { onClose: () => void; onImpor
 
     setWorking(true);
     setError("");
-    const res = await fetch("/api/import/normalize/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: fileName,
-        content,
-        mapping,
-        sourceLabel,
-        profileLabel: saveProfile ? profileLabel : undefined,
-      }),
-    });
-    setWorking(false);
-    const data = await res.json();
-    if (!res.ok) { setError(data.error || "Import failed."); return; }
-    setResult(data);
+    try {
+      const res = await fetch("/api/import/normalize/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: fileName,
+          content,
+          mapping,
+          sourceLabel,
+          profileLabel: saveProfile ? profileLabel : undefined,
+        }),
+      });
+      setWorking(false);
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Import failed."); return; }
+      setResult(data);
+    } catch (err: any) {
+      setWorking(false);
+      setError(err.message || "Network error during import.");
+    }
   }
 
   return (

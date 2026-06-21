@@ -4,7 +4,7 @@
 // Never writes directly to tables — delegates to repository.
 
 import { supabase } from "@/lib/supabase";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import {
   upsertApplicationKeywords,
@@ -163,13 +163,13 @@ function extractKeywordsFromParsed(
 async function analyzeJDWithAI(
   rawText: string
 ): Promise<JdAnalysisResult & { error?: string }> {
-  const active = getActiveProvider();
+  const active = await getActiveProviderAsync();
   if (!active) {
     return {
       requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],
       domainKeywords: [], softSkills: [], atsKeywords: [], visaSignals: [], redFlags: [],
       title: null, company: null, location: null,
-      error: "No AI provider configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY.",
+      error: "No AI provider configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY.",
     };
   }
 

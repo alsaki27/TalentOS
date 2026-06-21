@@ -3,7 +3,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -15,15 +16,27 @@ export async function GET(req: NextRequest) {
   const dateFrom = url.searchParams.get("dateFrom") || null;
   const dateTo = url.searchParams.get("dateTo") || null;
 
-  let query = supabase
-    .from("candidates")
-    .select("gender, ethnicity, country");
-  if (dateFrom) query = query.gte("created_at", dateFrom);
-  if (dateTo) query = query.lte("created_at", dateTo);
-  const { data: candidates, error } = await query;
+  let candidates: any[] = [];
+  if (isNeon()) {
+    const whereClauses: string[] = [];
+    const params: (string | null)[] = [];
+    if (dateFrom) { whereClauses.push(`created_at >= $${params.length + 1}`); params.push(dateFrom); }
+    if (dateTo) { whereClauses.push(`created_at <= $${params.length + 1}`); params.push(dateTo); }
+    const where = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+    candidates = await query<any>(`SELECT gender, ethnicity, country FROM candidates ${where}`, params);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    let query = supabase
+      .from("candidates")
+      .select("gender, ethnicity, country");
+    if (dateFrom) query = query.gte("created_at", dateFrom);
+    if (dateTo) query = query.lte("created_at", dateTo);
+    const { data, error } = await query;
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+    candidates = data ?? [];
   }
 
   const genderCounts: Record<string, number> = {};
@@ -33,7 +46,7 @@ export async function GET(req: NextRequest) {
   let ethnicityTotal = 0;
   let geographyTotal = 0;
 
-  for (const c of candidates ?? []) {
+  for (const c of candidates) {
     if (c.gender) {
       genderCounts[c.gender] = (genderCounts[c.gender] || 0) + 1;
       genderTotal++;

@@ -117,21 +117,37 @@ export default function OpsPage() {
     if (res.ok) setCategorization(await res.json());
   }
 
-  async function processCategorization() {
+  async function processCategorization(batchLimit?: number) {
     setProcessingCategorization(true);
     setCategorizationError("");
-    const res = await fetch("/api/ops/categorize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "process" }),
-    });
-    setProcessingCategorization(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setCategorizationError(data.error || "Could not process pending jobs.");
-      return;
+    const target = batchLimit ?? 20;
+    const perBatch = 5;
+    let totalProcessed = 0;
+    let totalFailed = 0;
+    const loops = Math.ceil(target / perBatch);
+    for (let i = 0; i < loops; i++) {
+      const res = await fetch("/api/ops/categorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "process", limit: perBatch }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCategorizationError(data.error || "Could not process pending jobs.");
+        break;
+      }
+      const data = await res.json();
+      totalProcessed += data.processed ?? 0;
+      totalFailed += data.failed ?? 0;
+      if (data.remainingPending === 0) break;
     }
+    setProcessingCategorization(false);
     await loadCategorization();
+    setCategorizationError(
+      totalProcessed > 0 || totalFailed > 0
+        ? `Processed ${totalProcessed} jobs (${totalFailed} failed). Remaining: ${categorization?.pendingCount ?? 0}`
+        : ""
+    );
   }
 
   async function requeueAllCategorization() {
@@ -409,10 +425,17 @@ export default function OpsPage() {
           <button onClick={requeueAllCategorization}>Re-run on all categorized jobs</button>
           <button
             className="btn-primary"
-            onClick={processCategorization}
+            onClick={() => processCategorization(100)}
             disabled={processingCategorization || !categorization || categorization.pendingCount === 0}
           >
-            {processingCategorization ? "Processing..." : `Process pending now (${categorization?.pendingCount ?? 0})`}
+            {processingCategorization ? "Processing..." : `Process 100 (${categorization?.pendingCount ?? 0})`}
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => processCategorization()}
+            disabled={processingCategorization || !categorization || categorization.pendingCount === 0}
+          >
+            {processingCategorization ? "Processing..." : `Process 20 (${categorization?.pendingCount ?? 0})`}
           </button>
         </div>
       </div>

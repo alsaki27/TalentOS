@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 
@@ -44,6 +43,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       [params.id]
     );
   } else {
+    const { supabase } = await import("@/lib/supabase");
     const jobRes = await supabase
       .from("jobs")
       .select("id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries")

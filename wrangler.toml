@@ -4,7 +4,7 @@
 # No Hyperdrive, no Durable Objects, no paid bindings.
 name = "skarion-talent-os"
 main = ".worker-next/index.mjs"
-compatibility_date = "2026-07-07"
+compatibility_date = "2025-06-20"
 # nodejs_compat enables some Node.js APIs on the free tier (e.g., Buffer)
 compatibility_flags = ["nodejs_compat"]
 

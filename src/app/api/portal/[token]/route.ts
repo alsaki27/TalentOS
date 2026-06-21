@@ -6,7 +6,8 @@
 // data are never exposed here.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -26,13 +27,27 @@ function rate(count: number, total: number): number {
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
-  const { data: candidate, error: candErr } = await supabase
-    .from("candidates")
-    .select("id, name, portal_token_expires_at, portal_token_revoked_at")
-    .eq("portal_token", params.token)
-    .single();
+  let candidate: any;
+  let candError: any;
 
-  if (candErr || !candidate) {
+  if (isNeon()) {
+    candidate = await queryOne(
+      `SELECT id, name, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1`,
+      [params.token]
+    );
+    candError = candidate ? null : { message: "Portal link not found." };
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("candidates")
+      .select("id, name, portal_token_expires_at, portal_token_revoked_at")
+      .eq("portal_token", params.token)
+      .single();
+    candidate = res.data;
+    candError = res.error;
+  }
+
+  if (candError || !candidate) {
     return NextResponse.json({ error: "Portal link not found." }, { status: 404 });
   }
   if (
@@ -42,25 +57,56 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
   }
 
-  const { data: applications, error: appErr } = await supabase
-    .from("applications")
-    .select("id, status, applied_at, jobs(id, title, company, location)")
-    .eq("candidate_id", candidate.id)
-    .order("applied_at", { ascending: false });
+  let applications: any[];
+  let appErr: any;
+
+  if (isNeon()) {
+    applications = await query(
+      `SELECT a.id, a.status, a.applied_at, jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location) as jobs FROM applications a LEFT JOIN jobs j ON a.job_id = j.id WHERE a.candidate_id = $1 ORDER BY a.applied_at DESC`,
+      [candidate.id]
+    );
+    appErr = null;
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const res = await supabase
+      .from("applications")
+      .select("id, status, applied_at, jobs(id, title, company, location)")
+      .eq("candidate_id", candidate.id)
+      .order("applied_at", { ascending: false });
+    applications = res.data ?? [];
+    appErr = res.error;
+  }
 
   if (appErr) return NextResponse.json({ error: appErr.message }, { status: 500 });
 
   const submitted = (applications ?? []).filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
   const appIds = submitted.map((a: any) => a.id as string);
 
-  const { data: comments, error: commentsErr } = appIds.length
-    ? await supabase
+  let comments: any[];
+  let commentsErr: any;
+
+  if (appIds.length > 0) {
+    if (isNeon()) {
+      comments = await query(
+        `SELECT id, application_id, body, parent_comment_id, created_at FROM application_comments WHERE application_id::text = ANY($1) AND visible_to_candidate = true ORDER BY created_at DESC`,
+        [appIds]
+      );
+      commentsErr = null;
+    } else {
+      const { supabase } = await import("@/lib/supabase");
+      const res = await supabase
         .from("application_comments")
         .select("id, application_id, body, parent_comment_id, created_at")
         .in("application_id", appIds)
         .eq("visible_to_candidate", true)
-        .order("created_at", { ascending: false })
-    : { data: [], error: null };
+        .order("created_at", { ascending: false });
+      comments = res.data ?? [];
+      commentsErr = res.error;
+    }
+  } else {
+    comments = [];
+    commentsErr = null;
+  }
 
   if (commentsErr) return NextResponse.json({ error: commentsErr.message }, { status: 500 });
 

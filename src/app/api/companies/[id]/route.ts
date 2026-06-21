@@ -45,11 +45,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     let comments: any[] = [];
     if (applicationIds.length > 0) {
       events = await query(
-        "SELECT id, application_id, from_status, to_status, note, created_at FROM application_events WHERE application_id = ANY($1) ORDER BY created_at DESC LIMIT 200",
+        "SELECT id, application_id, from_status, to_status, note, created_at FROM application_events WHERE application_id::text = ANY($1) ORDER BY created_at DESC LIMIT 200",
         [applicationIds]
       );
       comments = await query(
-        "SELECT id, application_id, commenter_name, body, visible_to_candidate, created_at FROM application_comments WHERE application_id = ANY($1) ORDER BY created_at DESC LIMIT 200",
+        "SELECT id, application_id, commenter_name, body, visible_to_candidate, created_at FROM application_comments WHERE application_id::text = ANY($1) ORDER BY created_at DESC LIMIT 200",
         [applicationIds]
       );
     }

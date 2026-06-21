@@ -10,17 +10,22 @@
 
 import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
 import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
+import { getGoogleProvider, getGoogleFallbackProvider } from "@/lib/ai/googleProvider";
 import { AiProvider } from "@/lib/ai/provider";
 import { getActiveProviderWithFallback } from "@/server/services/aiProvider";
 
 export interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia";
+  name: "anthropic" | "nvidia" | "google";
 }
 
 export function getActiveProvider(): ActiveProvider | null {
   const preferred = process.env.AI_PROVIDER;
 
+  if (preferred === "google") {
+    const provider = getGoogleProvider();
+    if (provider) return { provider, name: "google" };
+  }
   if (preferred === "nvidia") {
     const provider = getNvidiaProvider();
     if (provider) return { provider, name: "nvidia" };
@@ -30,11 +35,15 @@ export function getActiveProvider(): ActiveProvider | null {
     if (provider) return { provider, name: "anthropic" };
   }
 
+  // Default priority: Anthropic > NVIDIA > Google
   const anthropic = getAnthropicProvider();
   if (anthropic) return { provider: anthropic, name: "anthropic" };
 
   const nvidia = getNvidiaProvider();
   if (nvidia) return { provider: nvidia, name: "nvidia" };
+
+  const google = getGoogleProvider();
+  if (google) return { provider: google, name: "google" };
 
   return null;
 }

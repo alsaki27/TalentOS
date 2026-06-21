@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
@@ -53,7 +52,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     let profiles: any[] = [];
     if (interviewerIds.length > 0) {
       profiles = await query(
-        "SELECT user_id, display_name, email, role FROM profiles WHERE user_id = ANY($1)",
+        "SELECT user_id, display_name, email, role FROM profiles WHERE user_id::text = ANY($1)",
         [interviewerIds]
       );
     }
@@ -69,62 +68,63 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
       panel: panelWithProfiles,
       scorecards: scorecards ?? [],
     });
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data: interview, error: interviewErr } = await supabase
+      .from("interview_schedules")
+      .select(`
+        *,
+        applications!inner(
+          candidate_id,
+          job_id,
+          candidates(id, name, email, phone, resume_url, resume_filename),
+          jobs(id, title, company, location)
+        )
+      `)
+      .eq("id", params.id)
+      .single();
+
+    if (interviewErr || !interview) {
+      return NextResponse.json({ error: interviewErr?.message || "Not found" }, { status: 404 });
+    }
+
+    // Panel members with profile info
+    const { data: panel } = await supabase
+      .from("interview_panel_members")
+      .select("*")
+      .eq("schedule_id", params.id)
+      .order("created_at", { ascending: true });
+
+    // Scorecards
+    const { data: scorecards } = await supabase
+      .from("interview_scorecards")
+      .select("*")
+      .eq("schedule_id", params.id)
+      .order("submitted_at", { ascending: true });
+
+    // Fetch profiles for panel members
+    const interviewerIds = (panel ?? []).map((p: any) => p.interviewer_id).filter(Boolean);
+    let profiles: any[] = [];
+    if (interviewerIds.length > 0) {
+      const { data: profs } = await supabase
+        .from("profiles")
+        .select("user_id, display_name, email, role")
+        .in("user_id", interviewerIds);
+      profiles = profs ?? [];
+    }
+
+    const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
+    const panelWithProfiles = (panel ?? []).map((p: any) => ({
+      ...p,
+      profile: profileById.get(p.interviewer_id as string) ?? null,
+    }));
+
+    return NextResponse.json({
+      ...interview,
+      panel: panelWithProfiles,
+      scorecards: scorecards ?? [],
+    });
   }
-
-  const { data: interview, error: interviewErr } = await supabase
-    .from("interview_schedules")
-    .select(`
-      *,
-      applications!inner(
-        candidate_id,
-        job_id,
-        candidates(id, name, email, phone, resume_url, resume_filename),
-        jobs(id, title, company, location)
-      )
-    `)
-    .eq("id", params.id)
-    .single();
-
-  if (interviewErr || !interview) {
-    return NextResponse.json({ error: interviewErr?.message || "Not found" }, { status: 404 });
-  }
-
-  // Panel members with profile info
-  const { data: panel } = await supabase
-    .from("interview_panel_members")
-    .select("*")
-    .eq("schedule_id", params.id)
-    .order("created_at", { ascending: true });
-
-  // Scorecards
-  const { data: scorecards } = await supabase
-    .from("interview_scorecards")
-    .select("*")
-    .eq("schedule_id", params.id)
-    .order("submitted_at", { ascending: true });
-
-  // Fetch profiles for panel members
-  const interviewerIds = (panel ?? []).map((p: any) => p.interviewer_id).filter(Boolean);
-  let profiles: any[] = [];
-  if (interviewerIds.length > 0) {
-    const { data: profs } = await supabase
-      .from("profiles")
-      .select("user_id, display_name, email, role")
-      .in("user_id", interviewerIds);
-    profiles = profs ?? [];
-  }
-
-  const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
-  const panelWithProfiles = (panel ?? []).map((p: any) => ({
-    ...p,
-    profile: profileById.get(p.interviewer_id as string) ?? null,
-  }));
-
-  return NextResponse.json({
-    ...interview,
-    panel: panelWithProfiles,
-    scorecards: scorecards ?? [],
-  });
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -170,28 +170,29 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     });
 
     return NextResponse.json(data);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase
+      .from("interview_schedules")
+      .update(updates)
+      .eq("id", params.id)
+      .select()
+      .single();
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email || undefined,
+      type: "update",
+      description: `Updated interview ${params.id}`,
+      entityType: "interview",
+      entityId: params.id,
+      metadata: { fields: Object.keys(updates) },
+    });
+
+    return NextResponse.json(data);
   }
-
-  const { data, error } = await supabase
-    .from("interview_schedules")
-    .update(updates)
-    .eq("id", params.id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  await logActivity({
-    userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email || undefined,
-    type: "update",
-    description: `Updated interview ${params.id}`,
-    entityType: "interview",
-    entityId: params.id,
-    metadata: { fields: Object.keys(updates) },
-  });
-
-  return NextResponse.json(data);
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -211,19 +212,20 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     });
 
     return NextResponse.json({ ok: true });
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { error } = await supabase.from("interview_schedules").delete().eq("id", params.id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await logActivity({
+      userId: context.profile.user_id,
+      actorName: context.profile.display_name || context.profile.email || undefined,
+      type: "delete",
+      description: `Deleted interview ${params.id}`,
+      entityType: "interview",
+      entityId: params.id,
+    });
+
+    return NextResponse.json({ ok: true });
   }
-
-  const { error } = await supabase.from("interview_schedules").delete().eq("id", params.id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  await logActivity({
-    userId: context.profile.user_id,
-    actorName: context.profile.display_name || context.profile.email || undefined,
-    type: "delete",
-    description: `Deleted interview ${params.id}`,
-    entityType: "interview",
-    entityId: params.id,
-  });
-
-  return NextResponse.json({ ok: true });
 }

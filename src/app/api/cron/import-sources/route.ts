@@ -5,7 +5,8 @@
 // secret instead. src/middleware.ts has a matching bypass for this exact path.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { isNeon } from "@/server/db";
+import { query } from "@/server/db/neon";
 import { runAndRecord } from "@/lib/importSourceRunner";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +22,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: sources, error } = await supabase
-    .from("import_sources")
-    .select("*")
-    .eq("is_active", true);
+  let sources: any[] = [];
+  if (isNeon()) {
+    sources = await query<any>(`SELECT * FROM import_sources WHERE is_active = true`);
+  } else {
+    const { supabase } = await import("@/lib/supabase");
+    const { data, error } = await supabase
+      .from("import_sources")
+      .select("*")
+      .eq("is_active", true);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    sources = data ?? [];
+  }
 
   const results = [];
-  for (const source of sources ?? []) {
+  for (const source of sources) {
     const result = await runAndRecord(source);
     results.push({ id: source.id, label: source.label, ...result });
   }

@@ -31,7 +31,7 @@ export async function GET() {
 
   if (isNeon()) {
     const pendingRes = await queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM jobs WHERE category_status = $1',
+      'SELECT COUNT(*) as count FROM jobs WHERE category_status = $1 OR category_status IS NULL',
       ['pending']
     );
     pendingCount = parseInt(pendingRes?.count ?? '0', 10);
@@ -52,7 +52,7 @@ export async function GET() {
     );
   } else {
     const [{ count: pendingCountRes }, needsReviewRes, recentRunsRes, categoriesRes] = await Promise.all([
-      supabase.from("jobs").select("id", { count: "exact", head: true }).eq("category_status", "pending"),
+      supabase.from("jobs").select("id", { count: "exact", head: true }).or('category_status.eq.pending,category_status.is.null'),
       supabase.from("jobs").select("id, title, company, ai_suggested_category, category_relevance_score")
         .eq("category_status", "needs_review").order("categorized_at", { ascending: false }).limit(50),
       supabase.from("categorization_runs").select("*").order("started_at", { ascending: false }).limit(10),
@@ -81,14 +81,19 @@ export async function POST(req: NextRequest) {
   const action = body.action ?? "process";
 
   if (action === "process") {
-    const result = await processPendingCategorization({ limit: 20, triggeredBy: "manual" });
-    return NextResponse.json(result);
+    try {
+      const result = await processPendingCategorization({ limit: body.limit, triggeredBy: "manual" });
+      return NextResponse.json(result);
+    } catch (err: any) {
+      console.error("Categorization process error:", err);
+      return NextResponse.json({ error: err.message ?? "Unknown categorization error" }, { status: 500 });
+    }
   }
 
   if (action === "requeue_all") {
     if (isNeon()) {
       const res = await execute(
-        "UPDATE jobs SET category_status = $1, job_category = NULL, ai_suggested_category = NULL WHERE category_status = ANY($2)",
+        "UPDATE jobs SET category_status = $1, job_category = NULL, ai_suggested_category = NULL WHERE category_status = ANY($2) OR category_status IS NULL",
         ["pending", ["done", "needs_review"]]
       );
       return NextResponse.json({ requeued: res.rowCount });
@@ -96,7 +101,7 @@ export async function POST(req: NextRequest) {
       const { error, count } = await supabase
         .from("jobs")
         .update({ category_status: "pending", job_category: null, ai_suggested_category: null }, { count: "exact" })
-        .in("category_status", ["done", "needs_review"]);
+        .or('category_status.in.("done","needs_review"),category_status.is.null');
       if (error) return NextResponse.json({ error: error.message }, { status: 500 });
       return NextResponse.json({ requeued: count ?? 0 });
     }

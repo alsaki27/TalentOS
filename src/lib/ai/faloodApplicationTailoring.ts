@@ -18,7 +18,7 @@ import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
 import { findTargetJobById } from "@/server/repositories/targetJobsRepository";
-import { getActiveProvider } from "@/lib/ai";
+import { getActiveProviderAsync } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { FaloodCommandResult } from "@/lib/falood/types";
 
@@ -62,7 +62,7 @@ async function gatherContext(applicationResumeId: string): Promise<TailoringCont
   const approvals = keywordIds.length
     ? isNeon()
       ? await query<{ keyword_id: string; decision: string }>(
-          "SELECT keyword_id, decision FROM keyword_approvals WHERE keyword_id = ANY($1)",
+          "SELECT keyword_id, decision FROM keyword_approvals WHERE keyword_id::text = ANY($1)",
           [keywordIds]
         )
       : await supabase
@@ -103,8 +103,8 @@ function buildSuggestPrompt(ctx: TailoringContext): string {
 }
 
 export async function generateResumeSuggestions(applicationResumeId: string): Promise<{ created: number } | { error: string }> {
-  const active = getActiveProvider();
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY or NVIDIA_API_KEY)." };
+  const active = await getActiveProviderAsync();
+  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const ctx = await gatherContext(applicationResumeId);
   if (!ctx) return { error: "Application resume version not found." };
@@ -181,8 +181,8 @@ export async function runApplicationTailoringCommand(opts: {
     };
   }
 
-  const active = getActiveProvider();
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY or NVIDIA_API_KEY)." };
+  const active = await getActiveProviderAsync();
+  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const ctx = await gatherContext(opts.applicationResumeId);
   if (!ctx) return { error: "Application resume version not found." };
