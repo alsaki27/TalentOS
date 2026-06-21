@@ -46,20 +46,29 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   let data;
-  if (isNeon()) {
-    data = await queryOne<Record<string, any>>(
-      'UPDATE candidates SET resume_url = $1, resume_filename = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
-      [uploaded.url, file.name, params.id]
-    );
-  } else {
-    const { data: d, error } = await supabase
-      .from("candidates")
-      .update({ resume_url: uploaded.url, resume_filename: file.name })
-      .eq("id", params.id)
-      .select()
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    data = d;
+  try {
+    if (isNeon()) {
+      data = await queryOne<Record<string, any>>(
+        'UPDATE candidates SET resume_url = $1, resume_filename = $2, updated_at = NOW() WHERE id = $3 RETURNING *',
+        [uploaded.url, file.name, params.id]
+      );
+    } else {
+      const { data: d, error } = await supabase
+        .from("candidates")
+        .update({ resume_url: uploaded.url, resume_filename: file.name })
+        .eq("id", params.id)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      data = d;
+    }
+  } catch (err: any) {
+    // The upload already succeeded - if we don't record it, the file becomes an
+    // orphan nobody can find via the UI. Best-effort delete it back out rather
+    // than leaving storage and the DB out of sync silently.
+    await deleteResumeFile(uploaded.url).catch(() => {});
+    console.error("Resume upload DB update failed, rolled back uploaded file:", err);
+    return NextResponse.json({ error: err.message ?? "Failed to save resume reference" }, { status: 500 });
   }
 
   try {
