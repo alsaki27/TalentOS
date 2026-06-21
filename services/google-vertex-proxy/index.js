@@ -31,7 +31,17 @@ const auth = new GoogleAuth({
 
 async function getAccessToken() {
   const client = await auth.getClient();
-  const token = await client.getAccessToken();
+  const tokenResponse = await client.getAccessToken();
+
+  const token =
+    typeof tokenResponse === "string"
+      ? tokenResponse
+      : tokenResponse?.token;
+
+  if (!token || typeof token !== "string") {
+    throw new Error("ADC returned no access token");
+  }
+
   return token;
 }
 
@@ -48,20 +58,25 @@ function roughTokenEstimate(text) {
 }
 
 function buildVertexBody(body, model) {
-  const { system, messages, temperature = 0.2, maxOutputTokens = 1500, responseMimeType = "application/json" } = body;
+  const { system, messages, temperature = 0.2, maxOutputTokens = 1500, responseMimeType } = body;
 
   const contents = messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     parts: [{ text: typeof m.content === "string" ? m.content : m.content.map((c) => c.text || "").join("\n") }],
   }));
 
+  const generationConfig = {
+    temperature,
+    maxOutputTokens,
+  };
+
+  if (responseMimeType) {
+    generationConfig.responseMimeType = responseMimeType;
+  }
+
   const vertexBody = {
     contents,
-    generationConfig: {
-      temperature,
-      maxOutputTokens,
-      responseMimeType,
-    },
+    generationConfig,
   };
 
   if (system) {
@@ -125,16 +140,36 @@ app.post("/generate", async (req, res) => {
 
   // 5. Handle Vertex errors
   if (!vertexRes.ok) {
-    const errorText = await vertexRes.text().catch(() => "");
-    logError("Vertex AI returned error", { status: vertexRes.status, model });
+    const safeErrorText = await vertexRes.text().catch(() => "");
+    logError("Vertex AI returned error", {
+      status: vertexRes.status,
+      model,
+      // Sanitize: strip any token-like strings, limit to 1000 chars
+      details: safeErrorText
+        .replace(/[A-Za-z0-9_-]{20,}/g, "[REDACTED]")
+        .slice(0, 1000),
+    });
 
     if (vertexRes.status === 429) {
-      return res.status(429).json({ ok: false, error: "Rate limit or quota exceeded." });
+      return res.status(429).json({
+        ok: false,
+        error: "Rate limit or quota exceeded.",
+      });
     }
     if (vertexRes.status >= 500) {
-      return res.status(502).json({ ok: false, error: "Vertex AI failed." });
+      return res.status(502).json({
+        ok: false,
+        error: "Vertex AI failed.",
+        status: vertexRes.status,
+        details: safeErrorText.slice(0, 1000),
+      });
     }
-    return res.status(502).json({ ok: false, error: `Vertex AI error (${vertexRes.status}).` });
+    return res.status(502).json({
+      ok: false,
+      error: "Vertex AI error",
+      status: vertexRes.status,
+      details: safeErrorText.slice(0, 1000),
+    });
   }
 
   // 6. Parse response
