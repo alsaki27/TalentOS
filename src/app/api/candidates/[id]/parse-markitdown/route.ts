@@ -26,7 +26,11 @@ async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
     const text = await extractText(buffer, "application/pdf");
     const trimmed = text.replace(/\s+/g, " ").trim();
     return trimmed.length > 50 ? trimmed : null;
-  } catch {
+  } catch (err: any) {
+    // Logged (not returned to the client - may reflect internals) so a real
+    // extraction failure in the Workers runtime is distinguishable in Cloudflare's
+    // logs from "this PDF genuinely has no extractable text" (e.g. a scan).
+    console.error("PDF text extraction failed:", err?.message ?? err);
     return null;
   }
 }
