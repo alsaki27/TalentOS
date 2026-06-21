@@ -74,11 +74,17 @@ export default function BaseResumeStudioPage() {
   const [error, setError] = useState("");
   const [exporting, setExporting] = useState<"pdf" | "docx" | null>(null);
 
+  const [showJsonEditor, setShowJsonEditor] = useState(false);
+  const [jsonText, setJsonText] = useState("");
+  const [jsonError, setJsonError] = useState<string | null>(null);
+  const [savingJson, setSavingJson] = useState(false);
+
   async function load() {
     if (!baseResumeId) return;
     const res = await fetch(`/api/base-resumes/${baseResumeId}`);
     const data = await res.json();
     setBaseResume(data);
+    setJsonText(JSON.stringify(data.content, null, 2));
     if (data?.candidate_id) {
       const [candRes, evRes] = await Promise.all([
         fetch(`/api/candidates/${data.candidate_id}`),
@@ -90,6 +96,27 @@ export default function BaseResumeStudioPage() {
   }
 
   useEffect(() => { load(); }, [baseResumeId]);
+
+  async function saveJsonEditor() {
+    if (!baseResumeId || jsonError) return;
+    try {
+      const newContent = JSON.parse(jsonText) as ResumeDocument;
+      setSavingJson(true);
+      const res = await fetch(`/api/base-resumes/${baseResumeId}/apply-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newContent }),
+      });
+      if (res.ok) {
+        setBaseResume(await res.json());
+        setJsonError(null);
+      }
+      setSavingJson(false);
+    } catch (err: any) {
+      setJsonError(err.message ?? "Invalid JSON");
+      setSavingJson(false);
+    }
+  }
 
   async function sendCommand(commandOrMessage: string, isCommand: boolean) {
     if (!baseResumeId || sending) return;
@@ -155,13 +182,20 @@ export default function BaseResumeStudioPage() {
 
   const content = pendingAction?.newContent ?? baseResume.content;
 
+  // Live preview from JSON editor
+  const liveContent = (() => {
+    if (!showJsonEditor) return content;
+    try {
+      return JSON.parse(jsonText) as ResumeDocument;
+    } catch {
+      return content;
+    }
+  })();
+
   async function downloadBaseResume(format: "pdf" | "docx") {
     setExporting(format);
     try {
-      // Base resumes aren't linked to an application, so there's no
-      // application_resume_exports row to write - this is download-only, no R2
-      // history, unlike the application-level export in the other studio page.
-      await exportAndDownloadResume(content, format);
+      await exportAndDownloadResume(liveContent, format);
     } catch (err: any) {
       setError(err?.message || `${format.toUpperCase()} export failed.`);
     } finally {
@@ -169,12 +203,27 @@ export default function BaseResumeStudioPage() {
     }
   }
 
+  // Keyboard shortcut: Ctrl+S saves JSON editor when it's open
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s" && showJsonEditor) {
+        e.preventDefault();
+        saveJsonEditor();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showJsonEditor, jsonText, jsonError]);
+
   return (
     <>
       <div className="page-header">
         <h1>{baseResume.name}</h1>
         <div style={{ display: "flex", gap: 10 }}>
           <Link className="btn" href={`/candidates/${baseResume.candidate_id}`}>Back to candidate</Link>
+          <button className="btn" onClick={() => setShowJsonEditor((v) => !v)}>
+            {showJsonEditor ? "Hide JSON Editor" : "Show JSON Editor"}
+          </button>
           <Link className="btn" href={`/falood/cli-editor?type=base&id=${baseResume.id}`}>CLI Editor</Link>
           <span className="badge">{baseResume.status}</span>
           <button className="btn" onClick={() => downloadBaseResume("pdf")} disabled={exporting === "pdf"}>
@@ -206,49 +255,99 @@ export default function BaseResumeStudioPage() {
           )}
         </div>
 
-        {/* Draft */}
+        {/* Draft / JSON Editor */}
         <div className="card">
-          <h3 style={{ fontSize: 14, marginTop: 0 }}>
-            Base resume draft {pendingAction && <span className="badge" style={{ marginLeft: 8 }}>Proposed — not saved yet</span>}
-          </h3>
-          <h2 style={{ margin: "8px 0 0" }}>{content.header.fullName}</h2>
-          <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-            {[content.header.location, content.header.phone, content.header.email, content.header.linkedin, content.header.portfolio].filter(Boolean).join(" | ")}
-          </p>
-          {content.summary?.text && <p style={{ fontSize: 13 }}>{content.summary.text}</p>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <h3 style={{ fontSize: 14, margin: 0 }}>
+              {showJsonEditor ? "JSON Editor" : "Base resume draft"}
+              {pendingAction && <span className="badge" style={{ marginLeft: 8 }}>Proposed — not saved yet</span>}
+            </h3>
+            {showJsonEditor && (
+              <div style={{ display: "flex", gap: 8 }}>
+                {jsonError && <span style={{ color: "var(--danger)", fontSize: 12 }}>● {jsonError}</span>}
+                <button className="btn-primary" onClick={saveJsonEditor} disabled={savingJson || !!jsonError}>
+                  {savingJson ? "Saving…" : "Save Changes"}
+                </button>
+              </div>
+            )}
+          </div>
 
-          {content.skills.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, marginBottom: 4 }}>Technical Skills</h4>
-              {content.skills.map((s) => (
-                <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}><strong>{s.title}:</strong> {s.skills.join(", ")}</p>
-              ))}
-            </>
+          {showJsonEditor && (
+            <div style={{ marginBottom: 12 }}>
+              <textarea
+                value={jsonText}
+                onChange={(e) => {
+                  setJsonText(e.target.value);
+                  try {
+                    JSON.parse(e.target.value);
+                    setJsonError(null);
+                  } catch (err: any) {
+                    setJsonError(err.message ?? "Invalid JSON");
+                  }
+                }}
+                spellCheck={false}
+                style={{
+                  width: "100%",
+                  minHeight: 300,
+                  fontFamily: "monospace",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  padding: 10,
+                  border: jsonError ? "1px solid var(--danger)" : "1px solid var(--border)",
+                  borderRadius: 6,
+                  background: "var(--bg)",
+                  color: "var(--ink)",
+                  resize: "vertical",
+                }}
+              />
+              <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                Edit the JSON directly. The preview below updates live. Ctrl+S to save.
+              </p>
+            </div>
           )}
 
-          {content.experience.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Professional Experience</h4>
-              {content.experience.map((exp) => (
-                <div key={exp.id} style={{ marginBottom: 8 }}>
-                  <p style={{ fontSize: 13, margin: 0 }}><strong>{exp.title}</strong> — {exp.company} {exp.location ? `(${exp.location})` : ""}</p>
-                  <p className="muted" style={{ fontSize: 11, margin: 0 }}>{exp.startDate} – {exp.endDate ?? "Present"}</p>
-                  <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
-                    {exp.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </>
-          )}
+          {/* Live Preview */}
+          <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--bg)" }}>
+            <h4 style={{ fontSize: 12, margin: "0 0 8px", color: "var(--muted)" }}>Live Preview</h4>
+            <h2 style={{ margin: "8px 0 0" }}>{liveContent.header.fullName}</h2>
+            <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
+              {[liveContent.header.location, liveContent.header.phone, liveContent.header.email, liveContent.header.linkedin, liveContent.header.portfolio].filter(Boolean).join(" | ")}
+            </p>
+            {liveContent.summary?.text && <p style={{ fontSize: 13 }}>{liveContent.summary.text}</p>}
 
-          {content.education.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Education</h4>
-              {content.education.map((edu) => (
-                <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>{edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}</p>
-              ))}
-            </>
-          )}
+            {liveContent.skills.length > 0 && (
+              <>
+                <h4 style={{ fontSize: 13, marginBottom: 4 }}>Technical Skills</h4>
+                {liveContent.skills.map((s) => (
+                  <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}><strong>{s.title}:</strong> {s.skills.join(", ")}</p>
+                ))}
+              </>
+            )}
+
+            {liveContent.experience.length > 0 && (
+              <>
+                <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Professional Experience</h4>
+                {liveContent.experience.map((exp) => (
+                  <div key={exp.id} style={{ marginBottom: 8 }}>
+                    <p style={{ fontSize: 13, margin: 0 }}><strong>{exp.title}</strong> — {exp.company} {exp.location ? `(${exp.location})` : ""}</p>
+                    <p className="muted" style={{ fontSize: 11, margin: 0 }}>{exp.startDate} – {exp.endDate ?? "Present"}</p>
+                    <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
+                      {exp.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
+                    </ul>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {liveContent.education.length > 0 && (
+              <>
+                <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Education</h4>
+                {liveContent.education.map((edu) => (
+                  <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>{edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}</p>
+                ))}
+              </>
+            )}
+          </div>
 
           {pendingAction && (
             <div style={{ marginTop: 12, display: "flex", gap: 8 }}>

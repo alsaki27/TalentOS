@@ -128,6 +128,9 @@ export default function CandidateProfilePage() {
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
+  const [showParseModal, setShowParseModal] = useState(false);
+  const [parseModalText, setParseModalText] = useState("");
+  const [parseModalResumeId, setParseModalResumeId] = useState("");
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
   const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; markdown: string } | null>(null);
 
@@ -176,33 +179,126 @@ export default function CandidateProfilePage() {
         body: JSON.stringify({ resume_id: resumeId }),
       });
       const data = await res.json();
+
+      // If the API needs manual text input (PDF extraction failed)
+      if (data.needsManualText) {
+        setParseModalResumeId(resumeId);
+        setParseModalText("");
+        setShowParseModal(true);
+        return;
+      }
+
       if (!res.ok) {
         alert(data.error || "Failed to parse resume");
         return;
       }
+
       setMarkitdownResult(data);
       // After successful parse, create a base resume
-      const createRes = await fetch("/api/base-resumes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          candidateId: candidate.id,
-          name: `${candidate.name} — Base Resume`,
-          startingSource: "uploaded_resume",
-        }),
-      });
-      if (createRes.ok) {
-        const baseResume = await createRes.json();
-        // Reload to show the new base resume
-        loadBaseResumes();
-        // Optionally redirect to the studio
-        // router.push(`/falood/studio/base/${baseResume.id}`);
-      }
+      await createBaseResumeFromParsed(data.parsed);
     } catch (err: any) {
-      alert(err.message || "Failed to parse with markitdown");
+      alert(err.message || "Failed to parse resume");
     } finally {
       setParsingMarkitdown(false);
     }
+  }
+
+  async function submitManualParse() {
+    if (!candidate || !parseModalText.trim() || !parseModalResumeId) return;
+    setParsingMarkitdown(true);
+    try {
+      const res = await fetch(`/api/candidates/${candidate.id}/parse-markitdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_id: parseModalResumeId, resume_text: parseModalText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to parse resume text");
+        return;
+      }
+      setMarkitdownResult(data);
+      setShowParseModal(false);
+      await createBaseResumeFromParsed(data.parsed);
+    } catch (err: any) {
+      alert(err.message || "Failed to parse resume text");
+    } finally {
+      setParsingMarkitdown(false);
+    }
+  }
+
+  async function createBaseResumeFromParsed(parsed: any) {
+    if (!candidate) return;
+    const createRes = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: candidate.id,
+        name: `${candidate.name} — Base Resume`,
+        startingSource: "uploaded_resume",
+      }),
+    });
+    if (createRes.ok) {
+      const baseResume = await createRes.json();
+      // Apply the parsed content to the new base resume
+      await fetch(`/api/base-resumes/${baseResume.id}/apply-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newContent: buildResumeDocumentFromParsed(parsed) }),
+      });
+      loadBaseResumes();
+    }
+  }
+
+  function buildResumeDocumentFromParsed(parsed: any) {
+    return {
+      header: {
+        fullName: parsed.name ?? candidate?.name ?? "",
+        email: parsed.email ?? undefined,
+        phone: parsed.phone ?? undefined,
+        linkedin: parsed.linkedin_url ?? undefined,
+        github: parsed.github_url ?? undefined,
+        portfolio: parsed.portfolio_url ?? undefined,
+        location: parsed.location ?? undefined,
+      },
+      summary: parsed.summary ? { id: "summary-1", text: parsed.summary } : undefined,
+      skills: (parsed.skills ?? []).map((s: string, i: number) => ({
+        id: `skill-${i}`,
+        title: s,
+        skills: [s],
+      })),
+      experience: (parsed.experience ?? []).map((exp: any, i: number) => ({
+        id: `exp-${i}`,
+        title: exp.title ?? "",
+        company: exp.company ?? "",
+        location: exp.location ?? undefined,
+        startDate: exp.startDate ?? "",
+        endDate: exp.endDate ?? undefined,
+        bullets: (exp.bullets ?? []).map((b: string, j: number) => ({
+          id: `bullet-${i}-${j}`,
+          text: b,
+        })),
+      })),
+      education: (parsed.education ?? []).map((edu: any, i: number) => ({
+        id: `edu-${i}`,
+        degree: edu.degree ?? "",
+        school: edu.school ?? "",
+        graduationDate: edu.graduationDate ?? undefined,
+      })),
+      formatting: {
+        styleId: "skarion_compact_professional",
+        pageFormat: "letter",
+        fontFamily: "Calibri",
+        fontSize: 10.5,
+        marginTop: 0.5,
+        marginRight: 0.5,
+        marginBottom: 0.5,
+        marginLeft: 0.5,
+        sectionSpacing: 8,
+        bulletSpacing: 2,
+        lineHeight: 1.15,
+      },
+    };
   }
 
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -797,6 +893,15 @@ export default function CandidateProfilePage() {
           onCreated={() => { setShowCreateBaseResume(false); loadBaseResumes(); }}
         />
       )}
+      {showParseModal && (
+        <ParseResumeModal
+          onClose={() => setShowParseModal(false)}
+          onSubmit={submitManualParse}
+          text={parseModalText}
+          setText={setParseModalText}
+          loading={parsingMarkitdown}
+        />
+      )}
       {tailorContext && (
         <TailorResumeModal
           candidateId={candidate.id}
@@ -1308,6 +1413,42 @@ function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated 
           <button onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={saving}>
             {saving ? "Creating…" : "Create base resume"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ParseResumeModal({ onClose, onSubmit, text, setText, loading }: {
+  onClose: () => void;
+  onSubmit: () => void;
+  text: string;
+  setText: (t: string) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
+        <h2>Build base resume with AI</h2>
+        <p className="muted" style={{ fontSize: 13, marginTop: -6, marginBottom: 12 }}>
+          We couldn't automatically read your PDF. Please paste your resume text below and the AI will structure it into a professional base resume.
+        </p>
+        <div className="field-group">
+          <label>Resume text</label>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Paste your full resume text here..."
+            rows={12}
+            style={{ resize: "vertical", fontFamily: "inherit" }}
+          />
+        </div>
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={onSubmit} disabled={loading || !text.trim()}>
+            {loading ? "Building…" : "Build with AI"}
           </button>
         </div>
       </div>

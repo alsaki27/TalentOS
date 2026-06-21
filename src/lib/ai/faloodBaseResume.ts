@@ -46,6 +46,7 @@ interface BaseResumeContext {
   candidate: { id: string; name: string | null; email: string | null; phone: string | null; work_authorization: string | null; linkedin_url: string | null; github_url: string | null; portfolio_url: string | null };
   evidence: Array<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>;
   originalParsedResume: Record<string, unknown> | null;
+  originalResumeFile: { filename: string; file_url: string } | null;
 }
 
 async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | null> {
@@ -75,19 +76,19 @@ async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | 
           .eq("candidate_id", baseResume.candidate_id)
           .then((r: { data: any[] | null }) => r.data ?? []),
     isNeon()
-      ? queryOne<{ parsed_json: Record<string, unknown> }>(
-          "SELECT parsed_json FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
+      ? queryOne<{ parsed_json: Record<string, unknown>; filename: string; file_url: string }>(
+          "SELECT parsed_json, filename, file_url FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
           [baseResume.candidate_id]
         )
       : supabase
           .from("resumes")
-          .select("parsed_json")
+          .select("parsed_json, filename, file_url")
           .eq("candidate_id", baseResume.candidate_id)
           .eq("is_original_upload", true)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle()
-          .then((r: { data: { parsed_json: Record<string, unknown> } | null }) => r.data ?? null),
+          .then((r: { data: { parsed_json: Record<string, unknown>; filename: string; file_url: string } | null }) => r.data ?? null),
   ]);
 
   if (!candidate) return null;
@@ -97,6 +98,7 @@ async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | 
     candidate,
     evidence: evidence ?? [],
     originalParsedResume: (originalResume?.parsed_json as Record<string, unknown>) ?? null,
+    originalResumeFile: originalResume ? { filename: originalResume.filename, file_url: originalResume.file_url } : null,
   };
 }
 
@@ -104,6 +106,12 @@ function buildPrompt(ctx: BaseResumeContext, command: string | undefined, userMe
   const instruction = command
     ? `Command: ${command}`
     : `User instruction: ${userMessage}`;
+
+  const resumeSection = ctx.originalParsedResume
+    ? `Original uploaded resume (parsed): ${JSON.stringify(ctx.originalParsedResume)}`
+    : ctx.originalResumeFile
+      ? `An original resume was uploaded (${ctx.originalResumeFile.filename}) but has not been parsed yet. If the user is asking to build from their resume, you can only work with the information provided in the prompt — you cannot access the file directly. Ask the user to paste their resume text if they want you to parse it.`
+      : "No original resume has been uploaded for this candidate yet.";
 
   return [
     "You are Falood, a controlled resume-preparation assistant for Skarion's candidate placement workflow.",
@@ -114,7 +122,7 @@ function buildPrompt(ctx: BaseResumeContext, command: string | undefined, userMe
     "",
     `Candidate: ${ctx.candidate.name}, target industry: ${ctx.baseResume.target_industry ?? "unspecified"}, target roles: ${(ctx.baseResume.target_roles ?? []).join(", ") || "unspecified"}.`,
     `Candidate contact: email=${ctx.candidate.email ?? "?"} phone=${ctx.candidate.phone ?? "?"} linkedin=${ctx.candidate.linkedin_url ?? "?"} github=${ctx.candidate.github_url ?? "?"} portfolio=${ctx.candidate.portfolio_url ?? "?"} work_authorization=${ctx.candidate.work_authorization ?? "?"}.`,
-    ctx.originalParsedResume ? `Original uploaded resume (parsed): ${JSON.stringify(ctx.originalParsedResume)}` : "No original resume has been uploaded/parsed for this candidate yet.",
+    resumeSection,
     `Evidence bank (${ctx.evidence.length} entries): ${JSON.stringify(ctx.evidence)}`,
     `Current base resume draft (ResumeDocument JSON): ${JSON.stringify(ctx.baseResume.content)}`,
     "",
