@@ -1,0 +1,55 @@
+name: Deploy TalentOS (Cloudflare)
+
+# Replaces the previous deploy process, which was an undocumented local
+# `wrangler deploy` run from a developer's machine - the actual deployed
+# code had drifted 8 commits + ~150 files ahead of what was in GitHub
+# until this workflow's introduction. From here on, every deploy goes
+# through this pipeline, off a real commit, with real CI gates.
+#
+# `wrangler deploy` does NOT wipe a Worker's existing secrets - only a
+# named `wrangler secret put` changes that one secret. This workflow only
+# explicitly (re)sets DATABASE_URL, since that's the one secret with a
+# previously-undocumented, non-obvious correct format (direct endpoint,
+# no -pooler, no channel_binding - see
+# docs/CLOUDFLARE_DIAGNOSTIC_AND_PDF_STRATEGY.md for why). Every other
+# secret already set on the live Worker (JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET,
+# CRON_SECRET, SUPABASE_*, AI provider keys, etc.) is left untouched by
+# this workflow - add an explicit `secret put` step here if one of those
+# ever needs to be rotated through CI instead of by hand.
+
+# Manual trigger only for now (workflow_dispatch) - this deploys directly to
+# the live, actively-used production Worker. Switch to a push trigger once
+# this pipeline itself has been run and verified at least once; until then,
+# pushing workflow/code changes should not silently redeploy production.
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+
+      - name: Build for Cloudflare (OpenNext)
+        run: npm run cf:build
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Set DATABASE_URL secret (corrected non-pooler format)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: secret put DATABASE_URL --value "${{ secrets.TALENTOS_DATABASE_URL }}"
