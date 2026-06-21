@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
-import { parseResumeFields } from "@/lib/resumeParsing";
+import { parseResumeFromMarkdown } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -57,7 +57,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // 4. Parse structured data from markdown using AI
-  const parsed = await parseResumeFields(mdResult.markdown!);
+  // Calling parseResumeFromMarkdown directly, not parseResumeFields(text, markdown) -
+  // the latter only uses its markdown-optimized path when markdown is passed as the
+  // *second* argument; passing it as the only (first/rawText) argument here would
+  // silently skip the markdown-specific prompt entirely and defeat the actual point
+  // of this route (cleaner markdown -> better extraction, fewer tokens).
+  const parsed = await parseResumeFromMarkdown(mdResult.markdown!);
 
   // 5. Save parsed_json to the resume record
   if (isNeon()) {

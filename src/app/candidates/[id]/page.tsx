@@ -205,14 +205,22 @@ export default function CandidateProfilePage() {
     }
   }
 
+  const [uploadError, setUploadError] = useState<string | null>(null);
   async function handleResumeUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setUploadError(null);
     const formData = new FormData();
     formData.append("file", file);
     const res = await fetch(`/api/candidates/${id}/resume`, { method: "POST", body: formData });
-    const data: Resume = res.ok ? await res.json() : null;
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ error: "Upload failed" }));
+      setUploadError(errorData.error || `Upload failed (${res.status})`);
+      setUploading(false);
+      return;
+    }
+    const data: Resume = await res.json();
     setUploading(false);
     load();
     if (data?.parsed_json) {
@@ -455,6 +463,11 @@ export default function CandidateProfilePage() {
               )}
               <input type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
               {uploading && <p className="muted">Uploading…</p>}
+              {uploadError && (
+                <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 6 }}>
+                  ⚠ {uploadError}
+                </p>
+              )}
 
               {primaryResume && (
                 <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
