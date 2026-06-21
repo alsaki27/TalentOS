@@ -10,10 +10,15 @@
 // for history/re-download is a separate, best-effort step (see uploadResumeExport)
 // that the caller can fire in the background without blocking the download.
 
-import { pdf } from "@react-pdf/renderer";
-import { Packer } from "docx";
-import { SkarionResumePdf } from "@/lib/falood/skarionPdfDocument";
-import { buildResumeDocxDocument } from "@/lib/falood/docxExport";
+// @react-pdf/renderer and docx are loaded via dynamic import() inside each
+// function below, not as static top-level imports here. A static import got
+// pulled into the *server* Worker script bundle despite "use client" (confirmed
+// via a real deploy attempt: wrangler's own size-limit error listed
+// node_modules/@react-pdf/pdfkit/lib/pdfkit.browser.js, 900 KiB, as one of the 5
+// largest dependencies "included in your script" - pushing the Worker over
+// Cloudflare's 3 MiB free-plan script size limit). A true dynamic import() inside
+// a function body, not a static `import ... from`, is what actually keeps a
+// module out of the eagerly-bundled graph.
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 
 const DEFAULT_FORMATTING: ResumeFormatting = {
@@ -50,10 +55,18 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
 }
 
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
+  const [{ pdf }, { SkarionResumePdf }] = await Promise.all([
+    import("@react-pdf/renderer"),
+    import("@/lib/falood/skarionPdfDocument"),
+  ]);
   return pdf(<SkarionResumePdf content={content} />).toBlob();
 }
 
 export async function generateResumeDocxBlob(content: ResumeDocument): Promise<Blob> {
+  const [{ Packer }, { buildResumeDocxDocument }] = await Promise.all([
+    import("docx"),
+    import("@/lib/falood/docxExport"),
+  ]);
   const doc = buildResumeDocxDocument(content);
   return Packer.toBlob(doc);
 }

@@ -3,7 +3,7 @@
 // 1. Select candidate
 // 2. Paste JD and auto-analyze
 // 3. Review job (handle duplicates)
-// 4. Create application
+// 4. Create application → optional Falood AI build
 //
 // Uses existing API routes only. No direct Supabase calls.
 
@@ -11,6 +11,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 /* ─────────── types ─────────── */
 
@@ -18,6 +19,19 @@ interface Candidate {
   id: string;
   name: string;
   email: string | null;
+}
+
+interface BaseResume {
+  id: string;
+  name: string;
+  status: string;
+}
+
+interface UploadedResume {
+  id: string;
+  label: string;
+  filename: string;
+  is_original_upload: boolean;
 }
 
 interface JdAnalysis {
@@ -67,13 +81,6 @@ interface Props {
 
 const STEP_LABELS = ["Candidate", "Paste JD", "Review Job", "Create Application"];
 
-const SOURCE_TYPES = [
-  { value: "base_resume", label: "Base Resume" },
-  { value: "original_resume", label: "Original Resume" },
-  { value: "blank", label: "Blank" },
-  { value: "manual", label: "Manual" },
-];
-
 const STATUS_OPTIONS = [
   { value: "stacked", label: "Stacked" },
   { value: "assigned", label: "Assigned" },
@@ -82,7 +89,9 @@ const STATUS_OPTIONS = [
 ];
 
 export default function QuickApplicationModal({ onClose, userRole = "" }: Props) {
+  const router = useRouter();
   const canCreateJob = ["admin", "manager", "recruiter"].includes(userRole);
+
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -92,6 +101,11 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
   const [candidateSearch, setCandidateSearch] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
+
+  // Candidate assets (base resumes + uploaded resumes)
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<BaseResume[]>([]);
+  const [candidateResumes, setCandidateResumes] = useState<UploadedResume[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
 
   // Step 2: JD
   const [rawText, setRawText] = useState("");
@@ -108,12 +122,15 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
 
   // Step 4: Application
   const [sourceType, setSourceType] = useState("base_resume");
+  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
   const [status, setStatus] = useState("stacked");
   const [notes, setNotes] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
   const [createdApp, setCreatedApp] = useState<ApplicationResult | null>(null);
   const [appError, setAppError] = useState("");
+  const [faloodLoading, setFaloodLoading] = useState(false);
+  const [faloodError, setFaloodError] = useState("");
 
   /* ── fetch candidates ── */
   const fetchCandidates = useCallback(async () => {
@@ -133,6 +150,31 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
   useEffect(() => {
     fetchCandidates();
   }, [fetchCandidates]);
+
+  /* ── fetch candidate assets when selected ── */
+  async function fetchCandidateAssets(candidateId: string) {
+    setAssetsLoading(true);
+    const [baseRes, resumeRes] = await Promise.all([
+      fetch(`/api/base-resumes?candidateId=${candidateId}`),
+      fetch(`/api/candidates/${candidateId}`),
+    ]);
+    const baseData = baseRes.ok ? await baseRes.json() : [];
+    setCandidateBaseResumes(baseData);
+    setSelectedBaseResumeId(baseData[0]?.id ?? "");
+
+    const candidateData = resumeRes.ok ? await resumeRes.json() : null;
+    const resumes = candidateData?.resumes ?? [];
+    setCandidateResumes(resumes);
+    setAssetsLoading(false);
+  }
+
+  function handleSelectCandidate(c: Candidate) {
+    setSelectedCandidate(c);
+    setCandidateBaseResumes([]);
+    setCandidateResumes([]);
+    setSelectedBaseResumeId("");
+    fetchCandidateAssets(c.id);
+  }
 
   /* ── step 1 confirm ── */
   function goToStep2() {
@@ -265,7 +307,6 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     if (selectedJob) {
       body.job_id = selectedJob.id;
     } else {
-      // ad-hoc only: send raw text and parsed analysis as adhoc data
       body.adhoc_job_raw_text = rawText.trim();
       body.adhoc_job_data = analysis;
     }
@@ -301,7 +342,89 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     setStep(4);
   }
 
-  /* ── render helpers ── */
+  /* ── build with Falood AI ── */
+  async function buildWithFalood() {
+    if (!createdApp || !selectedCandidate) return;
+    setFaloodLoading(true);
+    setFaloodError("");
+
+    const jobId = selectedJob?.id ?? createdApp.job_id;
+    if (!jobId) {
+      setFaloodError("Cannot build with Falood AI for an ad-hoc application without a masterlist job.");
+      setFaloodLoading(false);
+      return;
+    }
+
+    const res = await fetch("/api/quick-application/falood-setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: selectedCandidate.id,
+        jobId,
+        applicationId: createdApp.id,
+        baseResumeId: sourceType === "base_resume" && selectedBaseResumeId ? selectedBaseResumeId : null,
+        sourceType: sourceType === "base_resume" && selectedBaseResumeId ? "base_resume" : "blank",
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setFaloodLoading(false);
+
+    if (!res.ok) {
+      setFaloodError(data.error || "Failed to set up Falood AI.");
+      return;
+    }
+
+    // Close modal and redirect to Falood studio
+    onClose();
+    router.push(`/falood/studio/application/${data.versionId}`);
+  }
+
+  /* ── create blank base resume inline ── */
+  async function createBlankBaseResume() {
+    if (!selectedCandidate) return;
+    setLoading(true);
+    const res = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: selectedCandidate.id,
+        name: `${selectedCandidate.name} — Base Resume`,
+        startingSource: "blank",
+      }),
+    });
+    setLoading(false);
+    if (res.ok) {
+      const newBase = await res.json();
+      setCandidateBaseResumes((prev) => [newBase, ...prev]);
+      setSelectedBaseResumeId(newBase.id);
+      setSourceType("base_resume");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setAppError(data.error || "Failed to create blank base resume.");
+    }
+  }
+
+  /* ── helpers ── */
+  const hasBaseResumes = candidateBaseResumes.length > 0;
+  const hasOriginalResume = candidateResumes.some((r) => r.is_original_upload);
+
+  const availableSourceTypes = [
+    { value: "base_resume", label: "Base Resume", enabled: hasBaseResumes },
+    { value: "original_resume", label: "Original Resume", enabled: hasOriginalResume },
+    { value: "blank", label: "Blank Canvas", enabled: true },
+    { value: "manual", label: "Manual", enabled: true },
+  ];
+
+  // Auto-switch source type if current one becomes unavailable
+  useEffect(() => {
+    const current = availableSourceTypes.find((s) => s.value === sourceType);
+    if (current && !current.enabled) {
+      const fallback = availableSourceTypes.find((s) => s.enabled);
+      if (fallback) setSourceType(fallback.value);
+    }
+  }, [hasBaseResumes, hasOriginalResume]);
+
   function stepClass(s: number) {
     return s === step ? "badge" : s < step ? "muted" : "muted";
   }
@@ -350,7 +473,7 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                 {candidates.map((c) => (
                   <div
                     key={c.id}
-                    onClick={() => setSelectedCandidate(c)}
+                    onClick={() => handleSelectCandidate(c)}
                     style={{
                       padding: "8px 10px",
                       borderRadius: 6,
@@ -367,6 +490,12 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
             {selectedCandidate && (
               <p style={{ marginTop: 10, fontSize: 13 }}>
                 Selected: <strong>{selectedCandidate.name}</strong>
+                {assetsLoading && <span className="muted" style={{ marginLeft: 8 }}>(loading assets…)</span>}
+                {!assetsLoading && (
+                  <span className="muted" style={{ marginLeft: 8 }}>
+                    · {candidateBaseResumes.length} base resume(s) · {candidateResumes.length} uploaded file(s)
+                  </span>
+                )}
               </p>
             )}
             <div className="modal-actions">
@@ -428,9 +557,6 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                     ))}
                   </div>
                 )}
-                <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-                  Editing extracted fields will come in a future update.
-                </p>
               </div>
             )}
             <div className="modal-actions">
@@ -552,21 +678,33 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                 <p><strong>Candidate:</strong> {selectedCandidate?.name}</p>
                 <p><strong>Job:</strong> {selectedJob?.title ?? "Ad-hoc application"}</p>
                 <p><strong>Status:</strong> {createdApp.status}</p>
+                <p><strong>Source:</strong> {sourceType.replaceAll("_", " ")}</p>
+                {faloodError && <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{faloodError}</p>}
                 <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                   {selectedCandidate && (
-                    <Link href={`/candidates/${selectedCandidate.id}`}>
+                    <Link href={`/candidates/${selectedCandidate.id}`} onClick={onClose}>
                       <button className="btn-primary">View Candidate</button>
                     </Link>
                   )}
                   {selectedJob && (
-                    <Link href={`/jobs/${selectedJob.id}`}>
+                    <Link href={`/jobs/${selectedJob.id}`} onClick={onClose}>
                       <button>View Job</button>
                     </Link>
                   )}
-                  <Link href="/application-queue">
+                  <Link href="/application-queue" onClick={onClose}>
                     <button>Go to Queue</button>
                   </Link>
+                  {selectedJob && (
+                    <button className="btn-primary" onClick={buildWithFalood} disabled={faloodLoading} style={{ background: "var(--accent)", color: "white" }}>
+                      {faloodLoading ? "Setting up Falood…" : "🤖 Build with Falood AI"}
+                    </button>
+                  )}
                 </div>
+                {!selectedJob && (
+                  <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                    Ad-hoc applications cannot be built with Falood AI until linked to a masterlist job. Open the candidate profile and create a job link first.
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -584,14 +722,55 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                     )}
                   </p>
                 </div>
+
+                {/* Resume Source */}
                 <div className="field-group">
                   <label>Resume Source</label>
-                  <select value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
-                    {SOURCE_TYPES.map((s) => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
+                  <select
+                    value={sourceType}
+                    onChange={(e) => setSourceType(e.target.value)}
+                  >
+                    {availableSourceTypes.map((s) => (
+                      <option key={s.value} value={s.value} disabled={!s.enabled}>
+                        {s.label}{!s.enabled ? " (not available)" : ""}
+                      </option>
                     ))}
                   </select>
+
+                  {/* No base resume warning */}
+                  {sourceType === "base_resume" && !hasBaseResumes && (
+                    <div className="card" style={{ marginTop: 10, borderColor: "var(--warning)", background: "#fff8e1" }}>
+                      <p style={{ fontSize: 13, margin: "0 0 8px" }}>
+                        <strong>⚠ No base resume found</strong>
+                      </p>
+                      <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>
+                        You need a base resume to build a tailored application with Falood AI. Choose one of the options below:
+                      </p>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="btn-primary" onClick={createBlankBaseResume} disabled={loading}>
+                          {loading ? "Creating…" : "Create blank canvas → open Falood"}
+                        </button>
+                        <Link href={`/candidates/${selectedCandidate?.id}`} onClick={onClose}>
+                          <button>Upload resume first</button>
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Base resume selector */}
+                  {sourceType === "base_resume" && hasBaseResumes && (
+                    <select
+                      value={selectedBaseResumeId}
+                      onChange={(e) => setSelectedBaseResumeId(e.target.value)}
+                      style={{ marginTop: 8 }}
+                    >
+                      {candidateBaseResumes.map((br) => (
+                        <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
+
                 <div className="field-group">
                   <label>Application Status</label>
                   <select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -646,14 +825,6 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                   </button>
                 </div>
               </>
-            )}
-            {!createdApp && (
-              <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-                Or skip creating a masterlist job and create an ad-hoc application.
-                <button className="btn-danger" onClick={() => { setSelectedJob(null); createApplication(); }} disabled={loading} style={{ marginLeft: 8 }}>
-                  Create ad-hoc only
-                </button>
-              </p>
             )}
           </>
         )}

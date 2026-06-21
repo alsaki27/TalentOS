@@ -220,7 +220,37 @@ export function TailorResumeModal({
                     <option key={resume.id} value={resume.id}>{resume.name} ({resume.status})</option>
                   ))}
                 </select>
-                {baseResumes.length === 0 && <p className="muted" style={{ fontSize: 12 }}>Create a base resume first.</p>}
+                {baseResumes.length === 0 && (
+                  <div style={{ marginTop: 8 }}>
+                    <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                      No base resumes found. You need one to tailor a resume.
+                    </p>
+                    <button
+                      onClick={async () => {
+                        setLoading(true);
+                        const res = await fetch("/api/base-resumes", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            candidateId,
+                            name: `${candidate?.name ?? "Candidate"} — Base Resume`,
+                            startingSource: "blank",
+                          }),
+                        });
+                        setLoading(false);
+                        if (res.ok) {
+                          const newBase = await res.json();
+                          setBaseResumes((prev) => [newBase, ...prev]);
+                          setBaseResumeId(newBase.id);
+                        }
+                      }}
+                      disabled={loading}
+                      style={{ fontSize: 12 }}
+                    >
+                      {loading ? "Creating…" : "+ Create blank base resume"}
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="field-group">
                 <label>Target job</label>

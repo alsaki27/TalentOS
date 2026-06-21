@@ -462,8 +462,12 @@ export default function CandidateProfilePage() {
                     onClick={() => parseWithMarkitdown(primaryResume.id)}
                     disabled={parsingMarkitdown}
                     className="btn-primary"
+                    title="Requires markitdown service to be deployed"
                   >
                     {parsingMarkitdown ? "Parsing…" : "Parse with markitdown & Create Base Resume"}
+                  </button>
+                  <button onClick={() => setShowCreateBaseResume(true)}>
+                    + Create blank base resume
                   </button>
                 </div>
               )}
@@ -587,7 +591,20 @@ export default function CandidateProfilePage() {
           {baseResumesLoading ? (
             <p className="muted">Loading…</p>
           ) : baseResumes.length === 0 ? (
-            <div className="empty">No base resumes yet.</div>
+            <div className="card" style={{ borderStyle: "dashed", borderColor: "var(--warning)" }}>
+              <p style={{ fontSize: 14, margin: "0 0 8px" }}><strong>No base resumes yet</strong></p>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+                You need a base resume to build tailored applications with Falood AI. Choose how to start:
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn-primary" onClick={() => setShowCreateBaseResume(true)}>
+                  + Create blank base resume
+                </button>
+                <Link href={`/candidates/${candidate.id}`} onClick={() => setActiveTab("Overview")}>
+                  <button>Upload resume first</button>
+                </Link>
+              </div>
+            </div>
           ) : (
             <table className="table">
               <thead>
@@ -757,6 +774,14 @@ export default function CandidateProfilePage() {
           candidateId={candidate.id}
           onClose={() => setShowAddEvidence(false)}
           onAdded={() => { setShowAddEvidence(false); loadEvidence(); }}
+        />
+      )}
+      {showCreateBaseResume && (
+        <CreateBaseResumeModal
+          candidateId={candidate.id}
+          candidateName={candidate.name}
+          onClose={() => setShowCreateBaseResume(false)}
+          onCreated={() => { setShowCreateBaseResume(false); loadBaseResumes(); }}
         />
       )}
       {tailorContext && (
@@ -1200,6 +1225,76 @@ function AddEvidenceModal({ candidateId, onClose, onAdded }: { candidateId: stri
           <button onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={saving}>
             {saving ? "Adding…" : "Add evidence"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated }: { candidateId: string; candidateName: string; onClose: () => void; onCreated: () => void }) {
+  const [name, setName] = useState(`${candidateName} — Base Resume`);
+  const [targetIndustry, setTargetIndustry] = useState("");
+  const [targetRoles, setTargetRoles] = useState("");
+  const [startingSource, setStartingSource] = useState<"blank" | "uploaded_resume">("blank");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit() {
+    if (!name.trim()) { setError("Name is required."); return; }
+    setSaving(true);
+    setError("");
+    const res = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId,
+        name: name.trim(),
+        targetIndustry: targetIndustry.trim() || undefined,
+        targetRoles: targetRoles ? targetRoles.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        startingSource,
+      }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error || "Failed to create base resume.");
+      return;
+    }
+    onCreated();
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Create base resume</h2>
+        <p className="muted" style={{ marginTop: -6, marginBottom: 12 }}>
+          A reusable starting point for tailoring applications with Falood AI.
+        </p>
+        <div className="field-group">
+          <label>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. John Doe — Base Resume" />
+        </div>
+        <div className="field-group">
+          <label>Target industry</label>
+          <input value={targetIndustry} onChange={(e) => setTargetIndustry(e.target.value)} placeholder="e.g. Telecom, SaaS" />
+        </div>
+        <div className="field-group">
+          <label>Target roles (comma-separated)</label>
+          <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Network Engineer" />
+        </div>
+        <div className="field-group">
+          <label>Starting source</label>
+          <select value={startingSource} onChange={(e) => setStartingSource(e.target.value as "blank" | "uploaded_resume")}>
+            <option value="blank">Blank canvas (build with Falood AI)</option>
+            <option value="uploaded_resume">Seed from uploaded resume (if available)</option>
+          </select>
+        </div>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>
+            {saving ? "Creating…" : "Create base resume"}
           </button>
         </div>
       </div>

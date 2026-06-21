@@ -10,7 +10,11 @@ export async function convertPdfToMarkdown(buffer: Uint8Array, filename: string)
   const serviceUrl = process.env.MARKITDOWN_SERVICE_URL || "http://localhost:8000";
 
   const formData = new FormData();
-  const blob = new Blob([buffer], { type: "application/pdf" });
+  // The extra `new Uint8Array(buffer)` copy guarantees a plain ArrayBuffer-backed
+  // view (not the generic ArrayBufferLike/SharedArrayBuffer-compatible type some
+  // @types/node versions infer for Uint8Array), which is what BlobPart actually
+  // requires - same fix as src/lib/integrations/sharepoint.ts.
+  const blob = new Blob([new Uint8Array(buffer)], { type: "application/pdf" });
   formData.append("file", blob, filename);
 
   try {
