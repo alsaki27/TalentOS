@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import ResumeDiffViewer from "./ResumeDiffViewer";
 import type { ResumeDocument } from "@/lib/falood/types";
 
 export type SectionPath =
