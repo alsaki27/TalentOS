@@ -4,6 +4,9 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { exportAndDownloadResume } from "@/lib/falood/clientExport";
+import A4Preview from "@/components/resume/A4Preview";
+import SectionSidebar from "@/components/resume/SectionSidebar";
+import KeywordPanel from "@/components/resume/KeywordPanel";
 
 /* ──────────── interfaces ──────────── */
 
@@ -233,7 +236,11 @@ export default function ApplicationResumeStudioPage() {
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
   /* right pane tabs */
-  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat" | "packet">("suggestions");
+  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat" | "packet" | "keywords">("keywords");
+
+  /* Grammarly-style UI state */
+  const [activePreviewSection, setActivePreviewSection] = useState<string | null>(null);
+  const [aiActionLoading, setAiActionLoading] = useState<string | null>(null);
 
   /* packet state */
   const [packet, setPacket] = useState<PacketData | null>(null);
@@ -459,6 +466,56 @@ export default function ApplicationResumeStudioPage() {
     }
     return { approved, rejected, pending, warnings };
   }, [targetJob, keywordApprovals]);
+
+  /* ──────────── keyword map for Grammarly-style UI ──────────── */
+
+  const keywordMap = useMemo(() => {
+    if (!targetJob || !content) return {};
+    const map: Record<string, string[]> = {};
+    const text = JSON.stringify(content).toLowerCase();
+
+    for (const k of targetJob.keywords) {
+      const sections: string[] = [];
+      const kw = k.keyword.toLowerCase();
+
+      if (content.summary?.text?.toLowerCase().includes(kw)) sections.push("summary");
+      if (content.skills.some((g) => g.skills.some((s) => s.toLowerCase().includes(kw)))) sections.push("skills");
+      if (content.experience.some((exp) =>
+        exp.title.toLowerCase().includes(kw) ||
+        exp.company.toLowerCase().includes(kw) ||
+        exp.bullets.some((b) => b.text.toLowerCase().includes(kw))
+      )) sections.push("experience");
+      if (content.education.some((edu) =>
+        edu.degree.toLowerCase().includes(kw) ||
+        edu.school.toLowerCase().includes(kw)
+      )) sections.push("education");
+      if ((content.certifications ?? []).some((c) => c.name.toLowerCase().includes(kw))) sections.push("certifications");
+      if ((content.projects ?? []).some((p) =>
+        p.title.toLowerCase().includes(kw) ||
+        p.bullets.some((b) => b.text.toLowerCase().includes(kw))
+      )) sections.push("projects");
+
+      if (sections.length > 0) {
+        map[k.keyword] = sections;
+      }
+    }
+    return map;
+  }, [targetJob, content]);
+
+  const suggestionsBySection = useMemo(() => {
+    const map: Record<string, { id: string; text: string; type: string; status: string }[]> = {};
+    for (const s of suggestions) {
+      const key = s.target_section;
+      if (!map[key]) map[key] = [];
+      map[key].push({
+        id: s.id,
+        text: s.proposed_text.slice(0, 80) + (s.proposed_text.length > 80 ? "…" : ""),
+        type: s.suggestion_type.replace("_", " "),
+        status: s.status,
+      });
+    }
+    return map;
+  }, [suggestions]);
 
   /* ──────────── editing helpers ──────────── */
 
@@ -935,6 +992,110 @@ export default function ApplicationResumeStudioPage() {
     setLog((prev) => [...prev, { role: "assistant", text: "Applied to the draft. Remember to save!" }]);
   }
 
+  async function handleAISectionAction(section: string, action: string, prompt?: string) {
+    if (!applicationResumeId) return;
+    setAiActionLoading(`${section}:${action}`);
+    setLog((prev) => [...prev, { role: "user", text: `[AI] ${action} for ${section}${prompt ? `: ${prompt}` : ""}` }]);
+
+    try {
+      const res = await fetch("/api/falood/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "application_resume_tailoring",
+          applicationResumeId,
+          candidateId: appResume?.candidate_id,
+          conversationId,
+          message: `For the ${section} section: ${prompt ?? action}`,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLog((prev) => [...prev, { role: "warning", text: `AI action failed: ${data.error ?? "unknown error"}` }]);
+      } else {
+        setConversationId(data.conversationId);
+        setLog((prev) => [...prev, { role: "assistant", text: data.message }]);
+        if (data.action?.type === "update_resume_document" && data.action.newContent) {
+          setPendingAction(data.action);
+        }
+      }
+    } catch (e: any) {
+      setLog((prev) => [...prev, { role: "warning", text: `AI action error: ${e.message}` }]);
+    } finally {
+      setAiActionLoading(null);
+    }
+  }
+
+  function handleSectionUpdate(section: string, value: any) {
+    if (!draftContent) return;
+    const next = { ...draftContent };
+    switch (section) {
+      case "header":
+        next.header = { ...value };
+        break;
+      case "summary":
+        next.summary = value.text ? { id: draftContent.summary?.id ?? uid(), text: value.text } : undefined;
+        break;
+      case "skills":
+        next.skills = value.skills ?? value;
+        break;
+      case "experience":
+        next.experience = value.experience ?? value;
+        break;
+      case "education":
+        next.education = value.education ?? value;
+        break;
+      case "certifications":
+        next.certifications = value.certifications ?? value;
+        break;
+      case "projects":
+        next.projects = value.projects ?? value;
+        break;
+    }
+    setDraftContent(next);
+  }
+
+  async function handleApproveKeyword(keywordId: string) {
+    if (!candidateId) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordId, candidateId, decision: "approved" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to approve keyword", e);
+    }
+  }
+
+  async function handleRejectKeyword(keywordId: string) {
+    if (!candidateId) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordId, candidateId, decision: "rejected" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to reject keyword", e);
+    }
+  }
+
+  function handleKeywordClick(keyword: string) {
+    const sections = keywordMap[keyword];
+    if (sections && sections.length > 0) {
+      setActivePreviewSection(sections[0]);
+    }
+  }
   /* ──────────── render guards ──────────── */
 
   if (loading) {
@@ -1060,78 +1221,29 @@ export default function ApplicationResumeStudioPage() {
         className="studio-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "260px 1fr 340px",
+          gridTemplateColumns: "320px 1fr 380px",
+          gridTemplateRows: "calc(100vh - 140px)",
           gap: 16,
           alignItems: "start",
         }}
       >
-        {/* ═══════ LEFT PANE: Job + Keywords ═══════ */}
-        <div className="left-pane card" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Target Job</h3>
-            <p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>{targetJob?.title}</p>
-            <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>
-              {targetJob?.company} {targetJob?.location ? `· ${targetJob.location}` : ""}
-            </p>
-            {appResume.fit_score !== null && appResume.fit_score !== undefined && (
-              <p style={{ fontSize: 12, margin: "6px 0 0" }}>
-                Fit score: <strong>{appResume.fit_score}%</strong>
-              </p>
-            )}
-            {appResume.recommendation && (
-              <span className="badge" style={{ marginTop: 6, display: "inline-block" }}>
-                {appResume.recommendation}
-              </span>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Approved keywords</h4>
-            {keywordGroups.approved.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>None approved yet.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.approved.map((k) => renderKeywordBadge(k))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Rejected keywords</h4>
-            {keywordGroups.rejected.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>None rejected.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.rejected.map((k) => renderKeywordBadge(k, true))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Pending keywords</h4>
-            {keywordGroups.pending.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>No pending keywords.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.pending.map((k) => renderKeywordBadge(k))}
-              </div>
-            )}
-          </div>
-
-          {keywordGroups.warnings.length > 0 && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-              <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--danger)" }}>⚠ Evidence warnings</h4>
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.warnings.map((k) => renderKeywordBadge(k))}
-              </div>
-            </div>
-          )}
+        {/* ═══════ LEFT PANE: Section Sidebar ═══════ */}
+        <div className="left-pane card" style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflow: "hidden" }}>
+          <SectionSidebar
+            content={content}
+            activeSection={activePreviewSection}
+            onSectionClick={(section) => setActivePreviewSection(section)}
+            onUpdateContent={handleSectionUpdate}
+            onAISectionAction={handleAISectionAction}
+            keywordMap={keywordMap}
+            suggestionsBySection={suggestionsBySection}
+          />
         </div>
 
-        {/* ═══════ CENTER PANE: Resume Editor ═══════ */}
-        <div className="center-pane card" style={{ position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <h3 style={{ fontSize: 14, margin: 0 }}>Resume Editor</h3>
+        {/* ═══════ CENTER PANE: A4 Preview ═══════ */}
+        <div className="center-pane card" style={{ position: "relative", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
+            <h3 style={{ fontSize: 14, margin: 0 }}>Resume Preview</h3>
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn" onClick={saveDraft}>Save Draft</button>
               <button className="btn" onClick={submitForReview} disabled={appResume.status === "in_review" || appResume.status === "approved"}>
@@ -1148,372 +1260,26 @@ export default function ApplicationResumeStudioPage() {
               </button>
             </div>
           </div>
-
-          {/* Page break indicator */}
-          <div
-            style={{
-              position: "absolute",
-              left: 16,
-              right: 16,
-              top: 52 + 1050, // approximate 1-page mark in px
-              borderTop: "2px dashed var(--border)",
-              pointerEvents: "none",
-            }}
-            title="Approximate 1-page boundary"
-          />
-
-          {/* HEADER */}
-          <div style={{ marginBottom: 16 }}>
-            {editingSection === "header" ? (
-              <div className="field-group">
-                <input value={editTemp.fullName ?? ""} onChange={(e) => setEditTemp({ ...editTemp, fullName: e.target.value })} placeholder="Full name" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                  <input value={editTemp.location ?? ""} onChange={(e) => setEditTemp({ ...editTemp, location: e.target.value })} placeholder="Location" />
-                  <input value={editTemp.phone ?? ""} onChange={(e) => setEditTemp({ ...editTemp, phone: e.target.value })} placeholder="Phone" />
-                  <input value={editTemp.email ?? ""} onChange={(e) => setEditTemp({ ...editTemp, email: e.target.value })} placeholder="Email" />
-                  <input value={editTemp.linkedin ?? ""} onChange={(e) => setEditTemp({ ...editTemp, linkedin: e.target.value })} placeholder="LinkedIn" />
-                  <input value={editTemp.github ?? ""} onChange={(e) => setEditTemp({ ...editTemp, github: e.target.value })} placeholder="GitHub" />
-                  <input value={editTemp.portfolio ?? ""} onChange={(e) => setEditTemp({ ...editTemp, portfolio: e.target.value })} placeholder="Portfolio" />
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("header")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("header", content.header)} style={{ cursor: "pointer" }}>
-                <h2 style={{ margin: "0 0 4px" }}>{content.header.fullName}</h2>
-                <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-                  {[content.header.location, content.header.phone, content.header.email, content.header.linkedin, content.header.portfolio].filter(Boolean).join(" · ")}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* SUMMARY */}
-          <div style={{ marginBottom: 16 }}>
-            {editingSection === "summary" ? (
-              <div className="field-group">
-                <textarea
-                  rows={4}
-                  value={editTemp.text ?? ""}
-                  onChange={(e) => setEditTemp({ text: e.target.value })}
-                  placeholder="Professional summary…"
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("summary")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("summary", { text: content.summary?.text ?? "" })} style={{ cursor: "pointer" }}>
-                <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>{content.summary?.text ?? <span className="muted">No summary — click to add</span>}</p>
-              </div>
-            )}
-          </div>
-
-          {/* SKILLS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Technical Skills</h4>
-            {editingSection === "skills" ? (
-              <div>
-                {(editTemp.skills ?? []).map((s: any, idx: number) => (
-                  <div key={s.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <input
-                      value={s.title}
-                      onChange={(e) => {
-                        const next = [...(editTemp.skills ?? [])];
-                        next[idx] = { ...s, title: e.target.value };
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                      placeholder="Category title"
-                      style={{ marginBottom: 6 }}
-                    />
-                    <input
-                      value={s.skills.join(", ")}
-                      onChange={(e) => {
-                        const next = [...(editTemp.skills ?? [])];
-                        next[idx] = { ...s, skills: e.target.value.split(",").map((x: string) => x.trim()).filter(Boolean) };
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                      placeholder="Comma-separated skills"
-                    />
-                    <button
-                      className="btn-danger btn-compact"
-                      style={{ marginTop: 6 }}
-                      onClick={() => {
-                        const next = (editTemp.skills ?? []).filter((_: any, i: number) => i !== idx);
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                    >
-                      Remove category
-                    </button>
-                  </div>
-                ))}
-                <button
-                  className="btn btn-compact"
-                  onClick={() =>
-                    setEditTemp({
-                      ...editTemp,
-                      skills: [...(editTemp.skills ?? []), { id: uid(), title: "", skills: [] }],
-                    })
-                  }
-                >
-                  + Add category
-                </button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("skills")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("skills", { skills: content.skills })} style={{ cursor: "pointer" }}>
-                {content.skills.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No skills — click to add</p>
-                ) : (
-                  content.skills.map((s) => (
-                    <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      <strong>{s.title}:</strong> {s.skills.join(", ")}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* EXPERIENCE */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Professional Experience</h4>
-            {editingSection === "experience" ? (
-              <div>
-                {(editTemp.experience ?? []).map((exp: any, idx: number) => (
-                  <div key={exp.id} style={{ marginBottom: 10, padding: 10, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                      <input value={exp.title} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, title: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Title" />
-                      <input value={exp.company} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, company: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Company" />
-                      <input value={exp.location ?? ""} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, location: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Location" />
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input value={exp.startDate} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, startDate: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Start" />
-                        <input value={exp.endDate ?? ""} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, endDate: e.target.value || undefined }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="End (or blank)" />
-                      </div>
-                    </div>
-                    <div style={{ marginBottom: 6 }}>
-                      {(exp.bullets ?? []).map((b: any, bIdx: number) => (
-                        <div key={b.id} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                          <input
-                            style={{ flex: 1 }}
-                            value={b.text}
-                            onChange={(e) => {
-                              const next = [...(editTemp.experience ?? [])];
-                              const bullets = [...(exp.bullets ?? [])];
-                              bullets[bIdx] = { ...b, text: e.target.value };
-                              next[idx] = { ...exp, bullets };
-                              setEditTemp({ ...editTemp, experience: next });
-                            }}
-                            placeholder="Bullet point"
-                          />
-                          <button
-                            className="btn-danger btn-compact"
-                            onClick={() => {
-                              const next = [...(editTemp.experience ?? [])];
-                              const bullets = (exp.bullets ?? []).filter((_: any, i: number) => i !== bIdx);
-                              next[idx] = { ...exp, bullets };
-                              setEditTemp({ ...editTemp, experience: next });
-                            }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        className="btn btn-compact"
-                        onClick={() => {
-                          const next = [...(editTemp.experience ?? [])];
-                          const bullets = [...(exp.bullets ?? []), { id: uid(), text: "" }];
-                          next[idx] = { ...exp, bullets };
-                          setEditTemp({ ...editTemp, experience: next });
-                        }}
-                      >
-                        + Bullet
-                      </button>
-                    </div>
-                    <button
-                      className="btn-danger btn-compact"
-                      onClick={() => {
-                        const next = (editTemp.experience ?? []).filter((_: any, i: number) => i !== idx);
-                        setEditTemp({ ...editTemp, experience: next });
-                      }}
-                    >
-                      Remove entry
-                    </button>
-                  </div>
-                ))}
-                <button
-                  className="btn btn-compact"
-                  onClick={() =>
-                    setEditTemp({
-                      ...editTemp,
-                      experience: [
-                        ...(editTemp.experience ?? []),
-                        { id: uid(), title: "", company: "", startDate: "", bullets: [] },
-                      ],
-                    })
-                  }
-                >
-                  + Add experience
-                </button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("experience")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("experience", { experience: content.experience })} style={{ cursor: "pointer" }}>
-                {content.experience.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No experience — click to add</p>
-                ) : (
-                  content.experience.map((exp) => (
-                    <div key={exp.id} style={{ marginBottom: 10 }}>
-                      <p style={{ fontSize: 13, margin: 0, fontWeight: 600 }}>
-                        {exp.title} — {exp.company} {exp.location ? `(${exp.location})` : ""}
-                      </p>
-                      <p className="muted" style={{ fontSize: 11, margin: "2px 0 4px" }}>
-                        {exp.startDate} – {exp.endDate ?? "Present"}
-                      </p>
-                      <ul style={{ fontSize: 12, margin: 0, paddingLeft: 16 }}>
-                        {exp.bullets.map((b) => (
-                          <li key={b.id}>{b.text}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* PROJECTS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Projects</h4>
-            {editingSection === "projects" ? (
-              <div>
-                {(editTemp.projects ?? []).map((proj: any, idx: number) => (
-                  <div key={proj.id} style={{ marginBottom: 10, padding: 10, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <input value={proj.title} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; next[idx] = { ...proj, title: e.target.value }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Project title" style={{ marginBottom: 6 }} />
-                    <input value={proj.description ?? ""} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; next[idx] = { ...proj, description: e.target.value }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Description (optional)" />
-                    <div style={{ marginTop: 6 }}>
-                      {(proj.bullets ?? []).map((b: any, bIdx: number) => (
-                        <div key={b.id} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                          <input style={{ flex: 1 }} value={b.text} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; const bullets = [...(proj.bullets ?? [])]; bullets[bIdx] = { ...b, text: e.target.value }; next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Bullet point" />
-                          <button className="btn-danger btn-compact" onClick={() => { const next = [...(editTemp.projects ?? [])]; const bullets = (proj.bullets ?? []).filter((_: any, i: number) => i !== bIdx); next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }}>×</button>
-                        </div>
-                      ))}
-                      <button className="btn btn-compact" onClick={() => { const next = [...(editTemp.projects ?? [])]; const bullets = [...(proj.bullets ?? []), { id: uid(), text: "" }]; next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }}>+ Bullet</button>
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.projects ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, projects: next }); }}>Remove project</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, projects: [...(editTemp.projects ?? []), { id: uid(), title: "", bullets: [] }] })}>+ Add project</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("projects")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("projects", { projects: content.projects ?? [] })} style={{ cursor: "pointer" }}>
-                {(content.projects ?? []).length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No projects — click to add</p>
-                ) : (
-                  (content.projects ?? []).map((proj) => (
-                    <div key={proj.id} style={{ marginBottom: 8 }}>
-                      <p style={{ fontSize: 13, margin: 0, fontWeight: 600 }}>{proj.title}</p>
-                      {proj.description && <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>{proj.description}</p>}
-                      <ul style={{ fontSize: 12, margin: "4px 0 0", paddingLeft: 16 }}>
-                        {proj.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
-                      </ul>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* EDUCATION */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Education</h4>
-            {editingSection === "education" ? (
-              <div>
-                {(editTemp.education ?? []).map((edu: any, idx: number) => (
-                  <div key={edu.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <input value={edu.degree} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, degree: e.target.value }; setEditTemp({ ...editTemp, education: next }); }} placeholder="Degree" />
-                      <input value={edu.school} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, school: e.target.value }; setEditTemp({ ...editTemp, education: next }); }} placeholder="School" />
-                      <input value={edu.graduationDate ?? ""} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, graduationDate: e.target.value || undefined }; setEditTemp({ ...editTemp, education: next }); }} placeholder="Graduation date" />
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.education ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, education: next }); }}>Remove</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, education: [...(editTemp.education ?? []), { id: uid(), degree: "", school: "" }] })}>+ Add education</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("education")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("education", { education: content.education })} style={{ cursor: "pointer" }}>
-                {content.education.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No education — click to add</p>
-                ) : (
-                  content.education.map((edu) => (
-                    <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      {edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* CERTIFICATIONS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Certifications</h4>
-            {editingSection === "certifications" ? (
-              <div>
-                {(editTemp.certifications ?? []).map((cert: any, idx: number) => (
-                  <div key={cert.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <input value={cert.name} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, name: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Certification name" />
-                      <input value={cert.issuer ?? ""} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, issuer: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Issuer" />
-                      <input value={cert.date ?? ""} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, date: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Date" />
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.certifications ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, certifications: next }); }}>Remove</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, certifications: [...(editTemp.certifications ?? []), { id: uid(), name: "" }] })}>+ Add certification</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("certifications")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("certifications", { certifications: content.certifications ?? [] })} style={{ cursor: "pointer" }}>
-                {(content.certifications ?? []).length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No certifications — click to add</p>
-                ) : (
-                  (content.certifications ?? []).map((cert) => (
-                    <p key={cert.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      {cert.name} {cert.issuer ? `— ${cert.issuer}` : ""} {cert.date ? `(${cert.date})` : ""}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <A4Preview
+              content={content}
+              highlights={targetJob?.keywords.map((k) => ({
+                keyword: k.keyword,
+                color: k.evidence === "strong" ? "#bbf7d0" : k.evidence === "weak" ? "#fef08a" : k.evidence === "missing" ? "#fecaca" : "#e2e8f0",
+              })) ?? []}
+              activeSection={activePreviewSection}
+              onSectionClick={(section) => setActivePreviewSection(section)}
+              pageBreakY={1050}
+            />
           </div>
         </div>
 
-        {/* ═══════ RIGHT PANE: Falood ═══════ */}
-        <div className="right-pane card" style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        {/* ═══════ RIGHT PANE: Tabs ═══════ */}
+        <div className="right-pane card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", paddingBottom: 8, flexShrink: 0 }}>
+            <button className={rightTab === "keywords" ? "btn-primary" : "btn"} onClick={() => setRightTab("keywords")} style={{ flex: 1 }}>
+              Keywords
+            </button>
             <button className={rightTab === "suggestions" ? "btn-primary" : "btn"} onClick={() => setRightTab("suggestions")} style={{ flex: 1 }}>
               Suggestions
             </button>
@@ -1531,7 +1297,18 @@ export default function ApplicationResumeStudioPage() {
             </button>
           </div>
 
-          {rightTab === "suggestions" ? (
+          {rightTab === "keywords" ? (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <KeywordPanel
+                keywords={targetJob?.keywords ?? []}
+                keywordApprovals={keywordApprovals}
+                onApproveKeyword={handleApproveKeyword}
+                onRejectKeyword={handleRejectKeyword}
+                onKeywordClick={handleKeywordClick}
+                keywordMap={keywordMap}
+              />
+            </div>
+          ) : rightTab === "suggestions" ? (
             <div style={{ flex: 1, overflowY: "auto" }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
                 <button
@@ -2166,7 +1943,7 @@ export default function ApplicationResumeStudioPage() {
       <style>{`
         @media (max-width: 1024px) {
           .mobile-tab-job .studio-grid .left-pane { display: flex !important; }
-          .mobile-tab-editor .studio-grid .center-pane { display: block !important; }
+          .mobile-tab-editor .studio-grid .center-pane { display: flex !important; }
           .mobile-tab-falood .studio-grid .right-pane { display: flex !important; }
         }
       `}</style>
