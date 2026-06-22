@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data ?? []);
 }
 
-const JD_ANALYSIS_PROMPT = `Analyze the job description below and extract structured information. Return ONLY raw JSON matching this exact schema (no markdown):
+const JD_ANALYSIS_PROMPT = `Analyze the job description below and extract structured information. Return ONLY raw JSON matching this exact schema (no markdown). Extract ONLY what is explicitly stated in the text - do not invent skills, tools, requirements, or company details that aren't there; use null or an empty array for anything not actually present.
 
 {
   "title": string | null,

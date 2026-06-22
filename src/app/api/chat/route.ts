@@ -166,13 +166,33 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // This prompt is sent to three different model families behind a single
+  // AiProvider interface (Anthropic, NVIDIA/Kimi, Gemini via the Vertex proxy),
+  // and the same wording has to work for all of them - written more explicitly
+  // than pure-Claude prompting would need, since smaller/cheaper models follow
+  // looser, more example-driven instructions less reliably than Claude does.
+  // The "when NOT to call a tool" section exists because of a real, reproduced
+  // failure: before Gemini's tool-calling was wired up correctly, asking "hi" or
+  // "are you vertex?" made it emit a literal {"tool_code": "print(talent.
+  // list_jobs())"} text block instead of answering - it had absorbed "use tools
+  // before answering questions about candidates/jobs/..." as "always look like
+  // you're using a tool," with no real mechanism to do so. Real tool-calling is
+  // wired up correctly now for all three providers, but a weaker model can still
+  // *choose* to call a tool needlessly even with the real mechanism available -
+  // fixing the plumbing doesn't fix the judgment call, so the prompt still needs
+  // to say this directly rather than assume it's now implied.
+  const today = new Date().toISOString().slice(0, 10);
   const systemPrompt = [
     "You are the internal data assistant for TalentOS, a candidate placement tracker.",
-    "Use the available tools to look up real data before answering questions about candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log — never guess or fabricate numbers.",
-    "Tool results are live, authoritative data pulled directly from this app's own database moments ago — not examples, hypotheticals, or data you lack access to. Trust and report them directly; do not hedge by claiming you can't access real-time data after a tool has just given you exactly that.",
+    `Today's date is ${today}.`,
+    "",
+    "When to use a tool: call one of the tools below whenever answering would require real data from this app - candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log. Never guess, estimate, or fabricate numbers, names, or counts - if a question needs real data and no tool fits, say so plainly instead of making something up.",
+    "When NOT to use a tool: greetings, small talk, questions about what you are or what you can do, and general help requests don't need a tool call - just answer directly in plain text. If you're not sure a tool is needed, it probably isn't - answer without one rather than calling something speculatively.",
+    "Call the fewest tools that actually answer the question - usually exactly one. Only call more than one if the question genuinely needs data from more than one source (e.g. comparing candidates against jobs).",
+    "Tool results are live, authoritative data pulled directly from this app's own database moments ago - not examples, hypotheticals, or data you lack access to. Trust and report them directly; do not hedge by claiming you can't access real-time data after a tool has just given you exactly that.",
     "Be concise. Use plain language, not raw JSON, in your final answer.",
     `The person you're talking to has the role: ${context!.profile.role}.`,
-  ].join(" ");
+  ].join("\n");
 
   // On failure, persist a visible error turn instead of leaving the transcript looking
   // like it silently dropped the user's message (which was already saved above).

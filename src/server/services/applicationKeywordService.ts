@@ -175,6 +175,7 @@ async function analyzeJDWithAI(
 
   const prompt = [
     "Analyze this job description and extract structured keywords. Return ONLY a JSON object with no markdown fences, no extra text.",
+    "Extract ONLY what is explicitly stated in the text below - do not invent skills, tools, or requirements that aren't there. If a field has nothing to extract, return an empty array (or null for title/company/location) rather than guessing.",
     "The JSON must have these exact keys:",
     "requiredSkills: array of strings",
     "preferredSkills: array of strings",
