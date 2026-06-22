@@ -6,6 +6,7 @@
 import { supabase } from "@/lib/supabase";
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import {
   upsertApplicationKeywords,
   normalizeKeyword,
@@ -25,6 +26,7 @@ export interface JdAnalysisResult {
   domainKeywords: string[];
   softSkills: string[];
   atsKeywords: string[];
+  criticalAtsPhrases: string[];
   visaSignals: string[];
   redFlags: string[];
   title: string | null;
@@ -153,6 +155,26 @@ function extractKeywordsFromParsed(
   add(parsed.visaSignals as unknown[], "visa", "high", "Visa/work authorization signal from JD");
   add(parsed.redFlags as unknown[], "red_flag", "critical", "Red flag detected in JD");
 
+  // jdAnalyzer.ts's criticalAtsPhrases identifies which of the keywords above are
+  // actually most likely to gate an ATS screen for this specific job - bump those
+  // to "critical" importance so they surface first wherever keywords are sorted/
+  // filtered by importance, instead of being just another "high" item in a list of
+  // 30+. Without this, the new field exists in the AI's output but never changes
+  // any actual behavior downstream.
+  const criticalPhrases = new Set(
+    ((parsed as any).criticalAtsPhrases as unknown[] | undefined ?? [])
+      .filter((p): p is string => typeof p === "string")
+      .map((p) => p.trim().toLowerCase())
+  );
+  if (criticalPhrases.size > 0) {
+    for (const kw of result) {
+      if (criticalPhrases.has(kw.keyword.toLowerCase()) && kw.importance !== "critical") {
+        kw.importance = "critical";
+        kw.aiReason = `${kw.aiReason ?? ""} — flagged as a likely ATS gatekeeper for this role`.trim();
+      }
+    }
+  }
+
   return result;
 }
 
@@ -167,15 +189,18 @@ async function analyzeJDWithAI(
   if (!active) {
     return {
       requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],
-      domainKeywords: [], softSkills: [], atsKeywords: [], visaSignals: [], redFlags: [],
+      domainKeywords: [], softSkills: [], atsKeywords: [], criticalAtsPhrases: [], visaSignals: [], redFlags: [],
       title: null, company: null, location: null,
       error: "No AI provider configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY.",
     };
   }
 
   const prompt = [
-    "Analyze this job description and extract structured keywords. Return ONLY a JSON object with no markdown fences, no extra text.",
+    MISSION_CONTEXT,
+    "",
+    "Analyze this job description and extract structured keywords for resume tailoring. Return ONLY a JSON object with no markdown fences, no extra text.",
     "Extract ONLY what is explicitly stated in the text below - do not invent skills, tools, or requirements that aren't there. If a field has nothing to extract, return an empty array (or null for title/company/location) rather than guessing.",
+    "Use the JD's own exact wording, not paraphrases - ATS keyword matching is largely literal string matching, so \"AWS\" extracted as \"cloud computing\" defeats the point.",
     "The JSON must have these exact keys:",
     "requiredSkills: array of strings",
     "preferredSkills: array of strings",
@@ -184,6 +209,7 @@ async function analyzeJDWithAI(
     "domainKeywords: array of strings",
     "softSkills: array of strings",
     "atsKeywords: array of strings",
+    "criticalAtsPhrases: array of strings - of everything above, the 5-10 exact phrases most likely to gate an ATS screen for this specific role (the core hard requirement plus the most JD-specific required skills), ordered highest-impact first",
     "visaSignals: array of strings",
     "redFlags: array of strings (e.g., 'unrealistic requirements', 'vague description', 'suspicious salary')",
     "title: string or null",
@@ -196,7 +222,7 @@ async function analyzeJDWithAI(
 
   try {
     const response = await active.provider.send({
-      system: "You are a precise job-description keyword extractor. Respond with raw JSON only.",
+      system: "You are a precise job-description keyword extractor whose accuracy directly determines whether a tailored resume passes ATS screening. Respond with raw JSON only.",
       messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
       tools: [],
     });
@@ -211,6 +237,7 @@ async function analyzeJDWithAI(
       domainKeywords: coerceArray(parsed.domainKeywords),
       softSkills: coerceArray(parsed.softSkills),
       atsKeywords: coerceArray(parsed.atsKeywords),
+      criticalAtsPhrases: coerceArray(parsed.criticalAtsPhrases),
       visaSignals: coerceArray(parsed.visaSignals),
       redFlags: coerceArray(parsed.redFlags),
       title: typeof parsed.title === "string" ? parsed.title : null,
@@ -220,7 +247,7 @@ async function analyzeJDWithAI(
   } catch (err: any) {
     return {
       requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],
-      domainKeywords: [], softSkills: [], atsKeywords: [], visaSignals: [], redFlags: [],
+      domainKeywords: [], softSkills: [], atsKeywords: [], criticalAtsPhrases: [], visaSignals: [], redFlags: [],
       title: null, company: null, location: null,
       error: err.message ?? "AI JD analysis failed",
     };

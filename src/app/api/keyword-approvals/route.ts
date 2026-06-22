@@ -1,6 +1,10 @@
 // src/app/api/keyword-approvals/route.ts
 // GET  -> list by candidateId query param, join with job_keywords(*)
-// POST -> upsert keyword approval (delete existing for same keyword_id+candidate_id, then insert new)
+// POST -> upsert keyword approval (delete existing for same keyword_id+candidate_id, then insert new).
+//         Accepts either a single keywordId or a keywordIds array - batch mode exists
+//         because approving JD keywords one at a time was a real, measured bottleneck
+//         to the "volume applications, minimum human interaction" goal: a 30-50
+//         keyword JD meant 30-50 individual clicks before tailoring could even start.
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
@@ -37,27 +41,17 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
-  if (response) return response;
-
-  const body = await req.json();
-  const keywordId = body.keywordId as string | undefined;
-  const candidateId = body.candidateId as string | undefined;
-  const decision = body.decision as string | undefined;
-  const baseResumeId = body.baseResumeId as string | undefined;
-  const evidenceStatus = body.evidenceStatus as string | undefined;
-  const evidenceIds = body.evidenceIds as string[] | undefined;
-  const notes = body.notes as string | undefined;
-
-  if (!keywordId || !candidateId || !decision) {
-    return NextResponse.json({ error: "keywordId, candidateId, and decision are required" }, { status: 400 });
-  }
-
-  const validDecisions = ["approved", "rejected", "needs_review", "cover_letter_only", "already_present"];
-  if (!validDecisions.includes(decision)) {
-    return NextResponse.json({ error: `decision must be one of: ${validDecisions.join(", ")}` }, { status: 400 });
-  }
+async function upsertOne(opts: {
+  keywordId: string;
+  candidateId: string;
+  decision: string;
+  baseResumeId?: string;
+  evidenceStatus?: string;
+  evidenceIds?: string[];
+  notes?: string;
+  decidedBy: string;
+}) {
+  const { keywordId, candidateId, decision, baseResumeId, evidenceStatus, evidenceIds, notes, decidedBy } = opts;
 
   if (isNeon()) {
     await execute(`DELETE FROM keyword_approvals WHERE keyword_id = $1 AND candidate_id = $2`, [keywordId, candidateId]);
@@ -69,21 +63,10 @@ export async function POST(req: NextRequest) {
       evidenceStatus ?? null,
       evidenceIds ?? null,
       notes ?? null,
-      context!.profile.user_id,
+      decidedBy,
       new Date().toISOString(),
     ]);
-
-    await logActivity({
-      userId: context!.profile.user_id,
-      actorName: context!.profile.display_name || context!.profile.email || undefined,
-      type: "create",
-      description: `Recorded keyword approval (${decision}) for candidate ${candidateId}`,
-      entityType: "keyword_approval",
-      entityId: data.id,
-      metadata: { keyword_id: keywordId, candidate_id: candidateId, decision },
-    });
-
-    return NextResponse.json(data, { status: 201 });
+    return data;
   } else {
     const { supabase } = await import("@/lib/supabase");
     await supabase
@@ -102,24 +85,74 @@ export async function POST(req: NextRequest) {
         evidence_status: evidenceStatus ?? null,
         evidence_ids: evidenceIds ?? null,
         notes: notes ?? null,
-        decided_by: context!.profile.user_id,
+        decided_by: decidedBy,
         decided_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) throw new Error(error.message);
+    return data;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
+  if (response) return response;
+
+  const body = await req.json();
+  const keywordId = body.keywordId as string | undefined;
+  const keywordIds = Array.isArray(body.keywordIds) ? (body.keywordIds as string[]).filter((id) => typeof id === "string" && id) : null;
+  const candidateId = body.candidateId as string | undefined;
+  const decision = body.decision as string | undefined;
+  const baseResumeId = body.baseResumeId as string | undefined;
+  const evidenceStatus = body.evidenceStatus as string | undefined;
+  const evidenceIds = body.evidenceIds as string[] | undefined;
+  const notes = body.notes as string | undefined;
+
+  if ((!keywordId && !keywordIds?.length) || !candidateId || !decision) {
+    return NextResponse.json({ error: "keywordId (or keywordIds array), candidateId, and decision are required" }, { status: 400 });
+  }
+
+  const validDecisions = ["approved", "rejected", "needs_review", "cover_letter_only", "already_present"];
+  if (!validDecisions.includes(decision)) {
+    return NextResponse.json({ error: `decision must be one of: ${validDecisions.join(", ")}` }, { status: 400 });
+  }
+
+  const targetIds = keywordIds ?? [keywordId as string];
+
+  try {
+    const results = await Promise.all(
+      targetIds.map((id) =>
+        upsertOne({
+          keywordId: id,
+          candidateId,
+          decision,
+          baseResumeId,
+          evidenceStatus,
+          evidenceIds,
+          notes,
+          decidedBy: context!.profile.user_id,
+        })
+      )
+    );
 
     await logActivity({
       userId: context!.profile.user_id,
       actorName: context!.profile.display_name || context!.profile.email || undefined,
       type: "create",
-      description: `Recorded keyword approval (${decision}) for candidate ${candidateId}`,
+      description: targetIds.length > 1
+        ? `Recorded ${decision} for ${targetIds.length} keywords for candidate ${candidateId}`
+        : `Recorded keyword approval (${decision}) for candidate ${candidateId}`,
       entityType: "keyword_approval",
-      entityId: data.id,
-      metadata: { keyword_id: keywordId, candidate_id: candidateId, decision },
+      entityId: results[0]?.id ?? candidateId,
+      metadata: { keyword_ids: targetIds, candidate_id: candidateId, decision },
     });
 
-    return NextResponse.json(data, { status: 201 });
+    // Batch callers (keywordIds) get the array back; single-keyword callers keep
+    // the original single-object response shape so existing call sites don't break.
+    return NextResponse.json(keywordIds ? results : results[0], { status: 201 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? "Failed to record keyword approval" }, { status: 500 });
   }
 }

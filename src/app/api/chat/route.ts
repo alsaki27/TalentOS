@@ -9,6 +9,7 @@ import { requireCurrentUser } from "@/lib/auth";
 import { getProviderForCategory } from "@/lib/ai";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
@@ -184,6 +185,7 @@ export async function POST(req: NextRequest) {
   const today = new Date().toISOString().slice(0, 10);
   const systemPrompt = [
     "You are the internal data assistant for TalentOS, a candidate placement tracker.",
+    MISSION_CONTEXT,
     `Today's date is ${today}.`,
     "",
     "When to use a tool: call one of the tools below whenever answering would require real data from this app - candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log. Never guess, estimate, or fabricate numbers, names, or counts - if a question needs real data and no tool fits, say so plainly instead of making something up.",

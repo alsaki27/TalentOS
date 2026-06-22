@@ -14,6 +14,7 @@
 
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import {
   findResumeVersionById,
   updateApplicationResumeVersion,
@@ -161,7 +162,9 @@ export async function generateResumeSuggestions(
 
 function buildSystemPrompt(): string {
   return [
-    "You are a precise resume editor. You suggest improvements to help a candidate's resume better match a job description.",
+    MISSION_CONTEXT,
+    "",
+    "You are a precise resume editor. You suggest improvements to help a candidate's resume better match a job description. Note: truth_status on your output is recalculated server-side against the evidence bank after you respond, not taken as your own self-report - so there's no benefit to being optimistic about a suggestion's safety, the system checks it independently either way. Focus your effort on suggestion quality, not on guessing what status it'll be assigned.",
     "",
     "RULES (never violate):",
     "1. NEVER invent experience, skills, or qualifications the candidate does not have.",

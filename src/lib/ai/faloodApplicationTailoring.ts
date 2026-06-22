@@ -20,6 +20,7 @@ import { findResumeVersionById } from "@/server/repositories/applicationResumeVe
 import { findTargetJobById } from "@/server/repositories/targetJobsRepository";
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { FaloodCommandResult } from "@/lib/falood/types";
 
 interface TailoringContext {
@@ -86,8 +87,12 @@ async function gatherContext(applicationResumeId: string): Promise<TailoringCont
 
 function buildSuggestPrompt(ctx: TailoringContext): string {
   return [
-    "You are Falood, a controlled resume-tailoring assistant. You propose edits; a human always reviews and accepts/rejects/customizes each one before anything is saved.",
+    MISSION_CONTEXT,
+    "",
+    "You are Falood, a controlled resume-tailoring assistant. You propose edits; a human reviews and accepts/rejects/customizes them before anything is saved - but per the constraints above, that review needs to be fast, so your confidenceScore and truthRisk fields are not just descriptive, they're what a human (or a batch \"accept all high-confidence\" action) uses to decide which suggestions need a close look and which don't. Score them honestly, not optimistically - an inflated confidenceScore on a suggestion that turns out wrong defeats the entire point of being able to trust the score.",
     "Rules: never inject a rejected keyword. Never fabricate experience or claim a tool/skill the evidence bank doesn't support. Prefer concise, specific, technical bullets. Explain your reasoning for every suggestion.",
+    "confidenceScore guide: 90-100 only when the suggestion is a clear, low-risk improvement fully supported by the evidence bank or existing resume content (e.g. rewording an existing bullet to include an approved keyword the candidate already has evidence for). Lower scores for anything that rephrases significantly, makes a judgment call about emphasis, or touches a keyword with weak/missing evidence - those need a human's eyes, say so via the score rather than letting them slip through automated acceptance.",
+    "truthRisk guide: \"high\" for any suggestion that touches a keyword with no evidence backing, even if the wording itself sounds plausible - the risk is about whether the claim is actually true, not about how the sentence reads.",
     "",
     `Approved keywords (safe to work toward, with evidence support where it exists): ${JSON.stringify(ctx.approvedKeywords.map((k) => k.keyword))}`,
     `Rejected keywords — DO NOT use these anywhere: ${JSON.stringify(ctx.rejectedKeywords)}`,

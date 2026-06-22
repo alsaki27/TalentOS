@@ -19,8 +19,10 @@ interface KeywordPanelProps {
   }[];
   onApproveKeyword: (keywordId: string) => void;
   onRejectKeyword: (keywordId: string) => void;
+  onBulkApprove?: (keywordIds: string[]) => void;
   onKeywordClick: (keyword: string) => void;
   keywordMap?: Record<string, string[]>; // keyword -> sections where it appears
+  loading?: boolean; // true while keywords are still being generated
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -56,8 +58,10 @@ export default function KeywordPanel({
   keywordApprovals,
   onApproveKeyword,
   onRejectKeyword,
+  onBulkApprove,
   onKeywordClick,
   keywordMap = {},
+  loading = false,
 }: KeywordPanelProps) {
   const [filter, setFilter] = useState<"all" | "approved" | "rejected" | "pending" | "missing" | "weak" | "strong">("all");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -102,6 +106,25 @@ export default function KeywordPanel({
     return "pending";
   }
 
+  // Keywords safe to approve in bulk: pending and not evidence-missing. Approving
+  // a missing-evidence keyword without a second look is exactly the gap that
+  // produces an unexpected truth_warning later in suggestion generation - bulk
+  // mode deliberately excludes those so "approve all" can't silently wave through
+  // a claim with no evidence behind it.
+  const bulkApprovableIds = keywords
+    .filter((k) => getKeywordStatus(k) === "pending" && k.evidence !== "missing")
+    .map((k) => k.id);
+
+  function handleApproveClick(k: typeof keywords[0]) {
+    if (k.evidence === "missing") {
+      const ok = window.confirm(
+        `"${k.keyword}" has no supporting evidence in this candidate's resume or evidence bank. Approving it anyway may cause a truth-warning suggestion later instead of an applied edit. Approve anyway?`
+      );
+      if (!ok) return;
+    }
+    onApproveKeyword(k.id);
+  }
+
   function getKeywordEvidenceColor(k: typeof keywords[0]) {
     if (k.evidence === "strong") return "#15803d";
     if (k.evidence === "weak") return "#a16207";
@@ -126,10 +149,24 @@ export default function KeywordPanel({
   return (
     <div className="keyword-panel">
       <div className="keyword-panel-header">
-        <h3 style={{ fontSize: 13, margin: 0, fontWeight: 700 }}>JD Keywords</h3>
-        <p className="muted" style={{ fontSize: 11, margin: "4px 0 0" }}>
-          {stats.approved} approved · {stats.rejected} rejected · {stats.missing} missing
-        </p>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div>
+            <h3 style={{ fontSize: 13, margin: 0, fontWeight: 700 }}>JD Keywords</h3>
+            <p className="muted" style={{ fontSize: 11, margin: "4px 0 0" }}>
+              {stats.approved} approved · {stats.rejected} rejected · {stats.missing} missing
+            </p>
+          </div>
+          {onBulkApprove && bulkApprovableIds.length > 0 && (
+            <button
+              className="keyword-btn keyword-btn-approve"
+              style={{ whiteSpace: "nowrap" }}
+              onClick={() => onBulkApprove(bulkApprovableIds)}
+              title="Approve every pending keyword that has supporting evidence (strong or weak) - missing-evidence keywords are excluded from bulk approval and need a one-by-one look"
+            >
+              ✓ Approve all evidenced ({bulkApprovableIds.length})
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Stats strip */}
@@ -187,7 +224,15 @@ export default function KeywordPanel({
 
       {/* Keyword list */}
       <div className="keyword-list">
-        {filtered.length === 0 ? (
+        {loading ? (
+          <p className="muted" style={{ fontSize: 12, textAlign: "center", padding: 20 }}>
+            Extracting keywords from the job description…
+          </p>
+        ) : keywords.length === 0 ? (
+          <p className="muted" style={{ fontSize: 12, textAlign: "center", padding: 20 }}>
+            No keywords generated yet for this application's job description.
+          </p>
+        ) : filtered.length === 0 ? (
           <p className="muted" style={{ fontSize: 12, textAlign: "center", padding: 20 }}>
             No keywords match this filter.
           </p>
@@ -240,7 +285,7 @@ export default function KeywordPanel({
                 <div className="keyword-actions">
                   {status === "pending" && (
                     <>
-                      <button className="keyword-btn keyword-btn-approve" onClick={() => onApproveKeyword(k.id)}>
+                      <button className="keyword-btn keyword-btn-approve" onClick={() => handleApproveClick(k)}>
                         ✓ Approve
                       </button>
                       <button className="keyword-btn keyword-btn-reject" onClick={() => onRejectKeyword(k.id)}>

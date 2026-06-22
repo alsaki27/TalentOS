@@ -217,6 +217,7 @@ export default function ApplicationResumeStudioPage() {
   const [draftPreview, setDraftPreview] = useState<ResumeDraft | null>(null);
   const [draftBuildResult, setDraftBuildResult] = useState<{ applied: number; skipped: number; warnings: string[] } | null>(null);
   const [generatingSuggestions, setGeneratingSuggestions] = useState(false);
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [exports, setExports] = useState<ResumeExport[]>([]);
   const [exportingResume, setExportingResume] = useState(false);
   const [exportOptions, setExportOptions] = useState({ atsFriendly: true, onePage: false, includeProjects: true, includeSummary: true });
@@ -752,6 +753,52 @@ export default function ApplicationResumeStudioPage() {
     }
   }
 
+  // Accepts and applies every pending, truth_status="verified" suggestion in one
+  // action instead of clicking "Accept & Apply" once per suggestion - the other
+  // top blocker (alongside bulk keyword approval) found in the volume-application
+  // audit. truth_status is computed server-side against the evidence bank, not
+  // self-reported by the model, so "verified" is a real safety gate here, not
+  // just an AI confidence claim - fabrication_risk/unverified suggestions are
+  // deliberately excluded and still need individual review.
+  //
+  // The accept step is batched into one PATCH call (the endpoint already
+  // supports an updates array). The apply step runs sequentially, not in
+  // parallel, because each apply reads-then-writes the same resume content -
+  // applying multiple suggestions concurrently risks one overwriting another's
+  // change instead of both landing.
+  async function handleBulkAcceptAndApply() {
+    if (!applicationResumeId) return;
+    const eligible = suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified");
+    if (eligible.length === 0) return;
+
+    setBulkApplying(true);
+    try {
+      await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates: eligible.map((s) => ({ id: s.id, status: "accepted" })) }),
+      });
+
+      for (const s of eligible) {
+        await fetch(`/api/applications/${s.application_id}/resume-suggestions/${s.id}/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resume_version_id: applicationResumeId }),
+        });
+      }
+
+      await refreshSuggestions();
+      const arRes = await fetch(`/api/application-resume-versions/${applicationResumeId}`);
+      if (arRes.ok) {
+        const ar = await arRes.json();
+        setAppResume(ar);
+        setDraftContent(JSON.parse(JSON.stringify(ar.content)));
+      }
+    } finally {
+      setBulkApplying(false);
+    }
+  }
+
   async function applySuggestionToResume(suggestionId: string) {
     if (!applicationResumeId) return;
     const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`, {
@@ -1077,6 +1124,30 @@ export default function ApplicationResumeStudioPage() {
     }
   }
 
+  // One request approving every evidence-backed pending keyword at once, instead
+  // of N individual clicks - this was the single biggest friction point found in
+  // the volume-application audit: a 30-50 keyword JD meant 30-50 clicks before
+  // suggestion generation could even start. The backend (/api/keyword-approvals)
+  // does the approvals in one batched call; KeywordPanel only offers this for
+  // keywords that already have supporting evidence, so it can't be used to
+  // silently wave through an unsupported claim.
+  async function handleBulkApproveKeywords(keywordIds: string[]) {
+    if (!candidateId || keywordIds.length === 0) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordIds, candidateId, decision: "approved" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to bulk-approve keywords", e);
+    }
+  }
+
   async function handleRejectKeyword(keywordId: string) {
     if (!candidateId) return;
     try {
@@ -1308,6 +1379,7 @@ export default function ApplicationResumeStudioPage() {
                 keywordApprovals={keywordApprovals}
                 onApproveKeyword={handleApproveKeyword}
                 onRejectKeyword={handleRejectKeyword}
+                onBulkApprove={handleBulkApproveKeywords}
                 onKeywordClick={handleKeywordClick}
                 keywordMap={keywordMap}
               />
@@ -1327,6 +1399,20 @@ export default function ApplicationResumeStudioPage() {
                   Refresh
                 </button>
               </div>
+
+              {suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified").length > 0 && (
+                <button
+                  className="btn-primary btn-compact"
+                  style={{ width: "100%", marginBottom: 10 }}
+                  onClick={handleBulkAcceptAndApply}
+                  disabled={bulkApplying}
+                  title="Accepts and applies every pending suggestion the system has already verified against the evidence bank. Fabrication-risk and unverified suggestions are left for individual review."
+                >
+                  {bulkApplying
+                    ? "Applying…"
+                    : `✓ Accept & Apply all verified (${suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified").length})`}
+                </button>
+              )}
 
               {suggestions.length === 0 ? (
                 <p className="muted" style={{ fontSize: 12 }}>

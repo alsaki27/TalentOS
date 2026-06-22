@@ -18,6 +18,7 @@ import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { emptyResumeDocument, FaloodCommandResult, ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 
 const PROMPTING_RULES = [
@@ -114,7 +115,9 @@ function buildPrompt(ctx: BaseResumeContext, command: string | undefined, userMe
       : "No original resume has been uploaded for this candidate yet.";
 
   return [
-    "You are Falood, a controlled resume-preparation assistant for Skarion's candidate placement workflow.",
+    MISSION_CONTEXT,
+    "",
+    "You are Falood, a controlled resume-preparation assistant for Skarion's candidate placement workflow. This base resume is the foundation every future tailored application for this candidate will build from - get the baseline right (real, evidence-backed, well-organized) and every downstream tailoring step benefits; get it wrong and every application built on it inherits the same problem.",
     "You suggest. A human always approves before anything is saved. Follow these rules strictly:",
     PROMPTING_RULES,
     "",

@@ -5,6 +5,7 @@
 
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { findJobById } from "@/server/repositories/jobsRepository";
@@ -248,7 +249,9 @@ interface PromptData {
 
 function buildCoverLetterSystemPrompt(): string {
   return [
-    "You are a precise cover letter writer. You write short, natural, professional cover letters.",
+    MISSION_CONTEXT,
+    "",
+    "You are a precise cover letter writer. You write short, natural, professional cover letters - this one is fully human-facing text a recruiter reads directly, not data that gets filtered through any other system, so directly write something a real person would not flag as AI-generated boilerplate or pad with empty enthusiasm just to fill space.",
     "",
     "SAFETY RULES (never violate):",
     "1. Do NOT invent experience, degree, certification, employer, project, visa status, or years of experience.",
@@ -332,7 +335,9 @@ function buildCoverLetterPrompt(data: PromptData): string {
 
 function buildRecruiterMessageSystemPrompt(): string {
   return [
-    "You are a concise recruiter outreach writer. You write short, professional messages for LinkedIn or email.",
+    MISSION_CONTEXT,
+    "",
+    "You are a concise recruiter outreach writer. You write short, professional messages for LinkedIn or email - this is the candidate's one shot at a direct, human impression with whoever's hiring, so it needs to read as a real, specific message about this candidate and this role, not a template.",
     "",
     "SAFETY RULES (never violate):",
     "1. Do NOT invent experience, degree, certification, employer, project, visa status, or years of experience.",
