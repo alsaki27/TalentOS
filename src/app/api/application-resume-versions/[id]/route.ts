@@ -34,6 +34,38 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+
+  // application_resume_versions has no application_id column of its own - the
+  // Falood studio page (and anywhere else navigating here purely by version id,
+  // with no applicationId ever passed via the URL) needs one to drive the
+  // packet-building feature (build packet / cover letter / recruiter message /
+  // approve / mark sent), and was reading data.application_id, which has never
+  // existed on this table - confirmed against the live schema, so that feature
+  // has been silently non-functional whenever reached this way. Resolving it via
+  // application_packets, which is the actual source of truth for this link -
+  // checking both resume_version_id (used by /api/quick-application/falood-setup)
+  // and final_resume_version_id (used by the older /api/application-packets
+  // route, via TailorResumeModal.tsx) since different features created the link
+  // through different columns.
+  if (data) {
+    const packet = isNeon()
+      ? await queryOne<{ application_id: string }>(
+          `SELECT application_id FROM application_packets WHERE resume_version_id = $1 OR final_resume_version_id = $1 LIMIT 1`,
+          [params.id]
+        )
+      : await (async () => {
+          const { supabase } = await import("@/lib/supabase");
+          const res = await supabase
+            .from("application_packets")
+            .select("application_id")
+            .or(`resume_version_id.eq.${params.id},final_resume_version_id.eq.${params.id}`)
+            .limit(1)
+            .maybeSingle();
+          return res.data;
+        })();
+    data.application_id = packet?.application_id ?? null;
+  }
+
   return NextResponse.json(data);
 }
 

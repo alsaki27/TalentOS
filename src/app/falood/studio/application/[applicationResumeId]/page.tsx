@@ -286,17 +286,17 @@ export default function ApplicationResumeStudioPage() {
         const draftData = await draftRes.json();
         setDrafts(draftData.drafts ?? []);
       }
-      // Load exports
-      const exportRes = await fetch(`/api/application-resume-versions/${applicationResumeId}`);
-      if (exportRes.ok) {
-        const exportData = await exportRes.json();
-        const appId = exportData.application_id;
-        if (appId) {
-          const historyRes = await fetch(`/api/applications/${appId}/resume-exports`);
-          if (historyRes.ok) {
-            const historyData = await historyRes.json();
-            setExports(historyData.exports ?? []);
-          }
+      // Load exports - reusing the application_id already resolved into `ar`
+      // above (the GET route enriches it via application_packets, since
+      // application_resume_versions has no application_id column of its own) -
+      // no need for a second fetch of the same endpoint just to read the same
+      // field again.
+      const exportAppId = (ar as any).application_id;
+      if (exportAppId) {
+        const historyRes = await fetch(`/api/applications/${exportAppId}/resume-exports`);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setExports(historyData.exports ?? []);
         }
       }
     } catch (e: any) {

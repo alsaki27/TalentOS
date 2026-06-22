@@ -73,15 +73,20 @@ export async function execute(
 ): Promise<{ rowCount: number }> {
   try {
     const sql = getSql();
-    const result = (await sql.query(queryText, params)) as any;
-    // Handle both array results (SELECT / RETURNING) and command results (DML without RETURNING)
-    if (Array.isArray(result)) {
-      return { rowCount: result.length };
-    }
-    if (result && typeof result.rowCount === "number") {
-      return { rowCount: result.rowCount };
-    }
-    return { rowCount: 0 };
+    // `fullResults: true` is required to get a real rowCount back at all - the
+    // driver's default mode (used by query()/queryOne() below) just returns the
+    // bare rows array, and for DML *without* RETURNING that array is always `[]`
+    // regardless of how many rows were actually affected (confirmed empirically
+    // against the live database: a DELETE that removed exactly 1 row returned
+    // `[]` in default mode, and `{ rowCount: 1, ... }` with fullResults: true).
+    // A prior version of this function checked `result.rowCount` as a fallback
+    // for non-array results, but never requested fullResults in the first place -
+    // sql.query() in default mode never returns an object with that property, so
+    // that branch was dead code and rowCount was always silently 0 for any
+    // DELETE/UPDATE without RETURNING (e.g. application-packets DELETE
+    // incorrectly reporting "Not found" on every successful delete).
+    const result = await sql.query(queryText, params, { fullResults: true });
+    return { rowCount: typeof result.rowCount === "number" ? result.rowCount : 0 };
   } catch (e: any) {
     console.error("[DB] Execute failed:", queryText.slice(0, 200));
     console.error("[DB] Error:", e.message || e);
