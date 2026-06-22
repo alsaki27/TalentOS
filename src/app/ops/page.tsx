@@ -26,12 +26,26 @@ interface ImportSource {
   last_result: { imported?: number; skipped?: number; error?: string } | null;
 }
 
+interface AiCategoryStatus {
+  configured: boolean;
+  provider: string | null;
+  source: "override" | "default_chain";
+}
+
 interface OpsStatus {
   supabase: { healthy: boolean; latencyMs: number; error: string | null };
   counts: { candidates: number; jobs: number; applications: number; resumes: number };
   recentImportRuns: ImportRun[];
   importSources: ImportSource[];
-  aiAssistant: { configured: boolean; provider: string | null };
+  aiAssistant: {
+    default: AiCategoryStatus;
+    categories: {
+      resume_studio: AiCategoryStatus;
+      chat_assistant: AiCategoryStatus;
+      parsing_extraction: AiCategoryStatus;
+      content_generation: AiCategoryStatus;
+    };
+  };
 }
 
 interface BackupFile {
@@ -259,7 +273,7 @@ export default function OpsPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12, marginBottom: 24 }}>
         <StatusCard
           label="Supabase"
           value={status.supabase.healthy ? "Healthy" : "Down"}
@@ -270,9 +284,29 @@ export default function OpsPage() {
         <StatCard label="Jobs" value={status.counts.jobs} />
         <StatCard label="Applications" value={status.counts.applications} />
         <StatusCard
-          label="AI assistant"
-          value={status.aiAssistant.configured ? `${status.aiAssistant.provider}` : "Not configured"}
-          tone={status.aiAssistant.configured ? "ok" : "danger"}
+          label="AI (default)"
+          value={status.aiAssistant.default.configured ? `${status.aiAssistant.default.provider}` : "Not configured"}
+          tone={status.aiAssistant.default.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (resume)"
+          value={status.aiAssistant.categories.resume_studio.configured ? `${status.aiAssistant.categories.resume_studio.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.resume_studio.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (chat)"
+          value={status.aiAssistant.categories.chat_assistant.configured ? `${status.aiAssistant.categories.chat_assistant.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.chat_assistant.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (parsing)"
+          value={status.aiAssistant.categories.parsing_extraction.configured ? `${status.aiAssistant.categories.parsing_extraction.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.parsing_extraction.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (content)"
+          value={status.aiAssistant.categories.content_generation.configured ? `${status.aiAssistant.categories.content_generation.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.content_generation.configured ? "ok" : "danger"}
         />
       </div>
 
@@ -397,7 +431,7 @@ export default function OpsPage() {
 
       <div className="page-header" style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>AI daily digest</h2>
-        <button onClick={generateDigest} disabled={generatingDigest || !status.aiAssistant.configured}>
+        <button onClick={generateDigest} disabled={generatingDigest || !status.aiAssistant.categories.content_generation.configured}>
           {generatingDigest ? "Generating..." : "Generate now"}
         </button>
       </div>

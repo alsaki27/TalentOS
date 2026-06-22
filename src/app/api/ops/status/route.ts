@@ -4,6 +4,10 @@
 // session's pain (an hour-long Supabase outage plus a wiped jobs table went
 // undetected until someone happened to check manually) — give that an obvious place
 // to surface next time instead.
+//
+// Phase 3 addition: per-category AI provider status, showing which provider is
+// active for each task category and whether it's an explicit override or just
+// inheriting the global default chain.
 
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
@@ -13,6 +17,14 @@ import { query, queryOne } from "@/server/db/neon";
 import { getProviderForCategory } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
+
+const CATEGORIES = [
+  "resume_studio",
+  "chat_assistant",
+  "parsing_extraction",
+  "content_generation",
+  "default",
+] as const;
 
 export async function GET() {
   const { response } = await requireCurrentUser(["admin"]);
@@ -27,7 +39,34 @@ export async function GET() {
   let recentRuns: any[];
   let sources: any[];
 
-  const activeProvider = await getProviderForCategory("default");
+  // Per-category AI provider status
+  const categoryStatuses: Record<string, { configured: boolean; provider: string | null; source: string }> = {};
+  let overrideCategories: Set<string> = new Set();
+
+  if (isNeon()) {
+    const rows = await query<{ category: string }>(
+      `SELECT category FROM ai_task_category_config WHERE provider IS NOT NULL OR ai_key_id IS NOT NULL`,
+      []
+    );
+    for (const r of rows) overrideCategories.add(r.category);
+  } else {
+    const { data } = await supabase
+      .from("ai_task_category_config")
+      .select("category")
+      .or("provider.not.is.null,ai_key_id.not.is.null");
+    for (const r of data ?? []) overrideCategories.add(r.category);
+  }
+
+  for (const cat of CATEGORIES) {
+    const provider = await getProviderForCategory(cat);
+    categoryStatuses[cat] = {
+      configured: Boolean(provider),
+      provider: provider?.name ?? null,
+      source: overrideCategories.has(cat) ? "override" : "default_chain",
+    };
+  }
+
+  const activeProvider = categoryStatuses["default"];
 
   if (isNeon()) {
     const pingStart = Date.now();
@@ -103,8 +142,17 @@ export async function GET() {
     recentImportRuns: recentRuns,
     importSources: sources,
     aiAssistant: {
-      configured: Boolean(activeProvider),
-      provider: activeProvider?.name ?? null,
+      default: {
+        configured: activeProvider.configured,
+        provider: activeProvider.provider,
+        source: activeProvider.source,
+      },
+      categories: {
+        resume_studio: categoryStatuses["resume_studio"],
+        chat_assistant: categoryStatuses["chat_assistant"],
+        parsing_extraction: categoryStatuses["parsing_extraction"],
+        content_generation: categoryStatuses["content_generation"],
+      },
     },
   });
 }
