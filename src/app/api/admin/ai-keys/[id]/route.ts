@@ -33,12 +33,14 @@ export async function PATCH(
 
   const updates: {
     label?: string;
+    model?: string | null;
     priority?: number;
     is_enabled?: boolean;
     apiKey?: string;
   } = {};
 
   if (body.label !== undefined) updates.label = body.label;
+  if (body.model !== undefined) updates.model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
   if (body.priority !== undefined) updates.priority = body.priority;
   if (body.is_enabled !== undefined) updates.is_enabled = body.is_enabled;
   if (body.apiKey !== undefined) {

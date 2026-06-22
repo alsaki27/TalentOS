@@ -12,6 +12,7 @@ export type AiProvider =
   | "anthropic"
   | "nvidia"
   | "openai"
+  | "glm"
   | "google"
   | "google_vertex_proxy"
   | "groq"
@@ -27,6 +28,10 @@ export interface AiApiKeyRow {
   label: string;
   encrypted_key: string;
   key_fingerprint: string;
+  // Per-key model override. Null means the provider's env-var default / built-in
+  // fallback (existing behavior, unchanged) - this exists so the admin UI can
+  // offer a model dropdown per key rather than one hardcoded default per provider.
+  model: string | null;
   priority: number;
   is_enabled: boolean;
   status: AiKeyStatus;
@@ -46,6 +51,7 @@ export interface AiApiKeyMetadata {
   provider: AiProvider;
   label: string;
   key_fingerprint: string;
+  model: string | null;
   priority: number;
   is_enabled: boolean;
   status: AiKeyStatus;
@@ -63,6 +69,7 @@ export interface CreateAiKeyInput {
   provider: AiProvider;
   label: string;
   apiKey: string;
+  model?: string | null;
   priority?: number;
   isEnabled?: boolean;
   createdBy?: string;
@@ -70,6 +77,7 @@ export interface CreateAiKeyInput {
 
 export interface UpdateAiKeyInput {
   label?: string;
+  model?: string | null;
   priority?: number;
   is_enabled?: boolean;
   apiKey?: string;
@@ -81,6 +89,7 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
     provider: row.provider,
     label: row.label,
     key_fingerprint: row.key_fingerprint,
+    model: row.model ?? null,
     priority: row.priority,
     is_enabled: row.is_enabled,
     status: row.status,
@@ -176,8 +185,8 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
 
   if (isNeon()) {
     const rows = await query<AiApiKeyRow>(
-      `INSERT INTO ai_api_keys (provider, label, encrypted_key, key_fingerprint, priority, is_enabled, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [input.provider, input.label, encrypted, fingerprint, input.priority ?? 100, input.isEnabled ?? true, "unknown", input.createdBy ?? null]
+      `INSERT INTO ai_api_keys (provider, label, encrypted_key, key_fingerprint, model, priority, is_enabled, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [input.provider, input.label, encrypted, fingerprint, input.model ?? null, input.priority ?? 100, input.isEnabled ?? true, "unknown", input.createdBy ?? null]
     );
     return toMetadata(rows[0]);
   } else {
@@ -188,6 +197,7 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
         label: input.label,
         encrypted_key: encrypted,
         key_fingerprint: fingerprint,
+        model: input.model ?? null,
         priority: input.priority ?? 100,
         is_enabled: input.isEnabled ?? true,
         status: "unknown",
@@ -211,6 +221,10 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
     if (input.label !== undefined) {
       fields.push(`label = $${idx++}`);
       values.push(input.label);
+    }
+    if (input.model !== undefined) {
+      fields.push(`model = $${idx++}`);
+      values.push(input.model);
     }
     if (input.priority !== undefined) {
       fields.push(`priority = $${idx++}`);
@@ -238,6 +252,7 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
   } else {
     const updates: Record<string, unknown> = {};
     if (input.label !== undefined) updates.label = input.label;
+    if (input.model !== undefined) updates.model = input.model;
     if (input.priority !== undefined) updates.priority = input.priority;
     if (input.is_enabled !== undefined) updates.is_enabled = input.is_enabled;
     if (input.apiKey !== undefined) {

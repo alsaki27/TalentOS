@@ -9,6 +9,7 @@ import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
 import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
 import { getGoogleProvider } from "@/lib/ai/googleProvider";
 import { getGoogleVertexProxyProvider, callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
+import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
 import {
   listEnabledAiKeys,
   getAiKeyWithDecryptedKey,
@@ -21,7 +22,7 @@ import {
 // Re-declare to avoid circular import with src/lib/ai/index.ts
 interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy";
+  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm";
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
@@ -29,10 +30,14 @@ const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 /**
  * Build an AI provider from a DB-managed key.
  * Returns null if the provider adapter is not implemented for this provider type.
+ * `model` is the per-key override from ai_api_keys.model (set via the admin AI Key
+ * Manager UI) - undefined/null falls back to that provider's env var / built-in
+ * default, same as the env-based providers in src/lib/ai/*Provider.ts.
  */
 export function buildProviderFromDbKey(
   provider: DbAiProvider,
-  apiKey: string
+  apiKey: string,
+  model?: string | null
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -49,7 +54,7 @@ export function buildProviderFromDbKey(
           return callVertexProxy({
             proxyUrl,
             proxySecret: apiKey,
-            model: process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
+            model: model || process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
             system,
             messages,
             tools,
@@ -73,7 +78,7 @@ export function buildProviderFromDbKey(
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+              model: model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
               max_tokens: MAX_TOKENS,
               system,
               messages: messages.map((m) => ({
@@ -106,7 +111,7 @@ export function buildProviderFromDbKey(
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: process.env.NVIDIA_MODEL || DEFAULT_MODEL,
+              model: model || process.env.NVIDIA_MODEL || DEFAULT_MODEL,
               messages: [{ role: "system", content: system }, ...messages.map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n") }))],
               max_tokens: 128,
               temperature: 0.4,
@@ -132,8 +137,8 @@ export function buildProviderFromDbKey(
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
         async send({ system, messages }) {
-          const model = process.env.GOOGLE_MODEL || DEFAULT_MODEL;
-          const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
+          const resolvedModel = model || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
+          const url = `${GOOGLE_API_BASE}/${resolvedModel}:generateContent`;
 
           const geminiMessages = messages.map((m) => ({
             role: m.role === "assistant" ? "model" : "user",
@@ -180,9 +185,25 @@ export function buildProviderFromDbKey(
         },
       };
     }
-    case "openai":
-    case "google":
-    case "google_vertex_proxy":
+    case "openai": {
+      // "openai" was previously listed here returning null - selectable in the
+      // admin AI Key Manager UI but silently non-functional, since this function
+      // never actually built a real provider for it.
+      return createOpenAiCompatibleProvider({
+        apiUrl: "https://api.openai.com/v1/chat/completions",
+        apiKey,
+        model: model || process.env.OPENAI_MODEL || "gpt-4o",
+        errorLabel: "OpenAI API",
+      });
+    }
+    case "glm": {
+      return createOpenAiCompatibleProvider({
+        apiUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        apiKey,
+        model: model || process.env.GLM_MODEL || "glm-4-plus",
+        errorLabel: "GLM API",
+      });
+    }
     case "groq":
     case "openrouter":
     case "deepseek":
@@ -208,7 +229,7 @@ export async function testAiKey(id: string): Promise<{
     return { success: false, error: "Key not found", latencyMs: Date.now() - start };
   }
 
-  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key);
+  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
   if (!provider) {
     const err = `Provider adapter for "${keyRow.provider}" is not implemented yet.`;
     await recordAiKeyFailure(id, err);
@@ -262,9 +283,9 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
   for (const key of dbKeys) {
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
     if (provider) {
-      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" };
+      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" };
     }
   }
 

@@ -10,6 +10,7 @@ interface AiKey {
   provider: string;
   label: string;
   key_fingerprint: string;
+  model: string | null;
   priority: number;
   is_enabled: boolean;
   status: string;
@@ -27,12 +28,29 @@ const PROVIDERS = [
   "anthropic",
   "nvidia",
   "openai",
+  "glm",
   "google",
+  "google_vertex_proxy",
   "groq",
   "openrouter",
   "deepseek",
   "local",
 ];
+
+// Curated, non-exhaustive starting points so there's a useful dropdown instead of
+// a blank text box - not a claim that this is the full current lineup for any
+// provider (model availability changes faster than this file does). "Custom..."
+// always lets you type the exact model ID you actually want, so this list can
+// never block a real choice, only save typing for common ones.
+const MODEL_OPTIONS: Record<string, string[]> = {
+  anthropic: ["claude-sonnet-4-6", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
+  nvidia: ["moonshotai/kimi-k2.6", "meta/llama-3.1-405b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"],
+  openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4-turbo", "o1", "o3-mini"],
+  glm: ["glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4"],
+  google: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+  google_vertex_proxy: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+};
+const CUSTOM_MODEL_VALUE = "__custom__";
 
 export default function AiKeyManager() {
   const [keys, setKeys] = useState<AiKey[]>([]);
@@ -45,6 +63,8 @@ export default function AiKeyManager() {
   const [addProvider, setAddProvider] = useState("anthropic");
   const [addLabel, setAddLabel] = useState("");
   const [addApiKey, setAddApiKey] = useState("");
+  const [addModel, setAddModel] = useState("");
+  const [addCustomModel, setAddCustomModel] = useState("");
   const [addPriority, setAddPriority] = useState(100);
   const [addEnabled, setAddEnabled] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -52,6 +72,8 @@ export default function AiKeyManager() {
 
   // Edit form state
   const [editLabel, setEditLabel] = useState("");
+  const [editModel, setEditModel] = useState("");
+  const [editCustomModel, setEditCustomModel] = useState("");
   const [editPriority, setEditPriority] = useState(100);
   const [editEnabled, setEditEnabled] = useState(true);
   const [editReplaceKey, setEditReplaceKey] = useState(false);
@@ -84,6 +106,7 @@ export default function AiKeyManager() {
   async function addKey() {
     setAdding(true);
     setAddError("");
+    const resolvedModel = addModel === CUSTOM_MODEL_VALUE ? addCustomModel.trim() : addModel;
     const res = await fetch("/api/admin/ai-keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -91,6 +114,7 @@ export default function AiKeyManager() {
         provider: addProvider,
         label: addLabel,
         apiKey: addApiKey,
+        model: resolvedModel || null,
         priority: addPriority,
         isEnabled: addEnabled,
       }),
@@ -104,6 +128,8 @@ export default function AiKeyManager() {
     setShowAdd(false);
     setAddLabel("");
     setAddApiKey("");
+    setAddModel("");
+    setAddCustomModel("");
     setAddPriority(100);
     setAddEnabled(true);
     await load();
@@ -112,8 +138,10 @@ export default function AiKeyManager() {
   async function updateKey(id: string) {
     setEditing(true);
     setEditError("");
+    const resolvedModel = editModel === CUSTOM_MODEL_VALUE ? editCustomModel.trim() : editModel;
     const body: any = {
       label: editLabel,
+      model: resolvedModel || null,
       priority: editPriority,
       is_enabled: editEnabled,
     };
@@ -164,6 +192,17 @@ export default function AiKeyManager() {
   function startEdit(key: AiKey) {
     setEditingId(key.id);
     setEditLabel(key.label);
+    const knownModels = MODEL_OPTIONS[key.provider] ?? [];
+    if (key.model && knownModels.includes(key.model)) {
+      setEditModel(key.model);
+      setEditCustomModel("");
+    } else if (key.model) {
+      setEditModel(CUSTOM_MODEL_VALUE);
+      setEditCustomModel(key.model);
+    } else {
+      setEditModel("");
+      setEditCustomModel("");
+    }
     setEditPriority(key.priority);
     setEditEnabled(key.is_enabled);
     setEditReplaceKey(false);
@@ -241,6 +280,24 @@ export default function AiKeyManager() {
                 placeholder="sk-... or nvapi-..."
               />
             </div>
+            <div className="field-group" style={{ marginBottom: 0, minWidth: 160 }}>
+              <label>Model</label>
+              <select value={addModel} onChange={(e) => setAddModel(e.target.value)}>
+                <option value="">(provider default)</option>
+                {(MODEL_OPTIONS[addProvider] ?? []).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                <option value={CUSTOM_MODEL_VALUE}>Custom...</option>
+              </select>
+              {addModel === CUSTOM_MODEL_VALUE && (
+                <input
+                  value={addCustomModel}
+                  onChange={(e) => setAddCustomModel(e.target.value)}
+                  placeholder="exact model id"
+                  style={{ marginTop: 4 }}
+                />
+              )}
+            </div>
             <div className="field-group" style={{ marginBottom: 0, minWidth: 90 }}>
               <label>Priority</label>
               <input
@@ -280,6 +337,7 @@ export default function AiKeyManager() {
             <tr>
               <th>Provider</th>
               <th>Label</th>
+              <th>Model</th>
               <th>Fingerprint</th>
               <th>Priority</th>
               <th>Enabled</th>
@@ -299,6 +357,23 @@ export default function AiKeyManager() {
                     </td>
                     <td>
                       <input value={editLabel} onChange={(e) => setEditLabel(e.target.value)} style={{ width: 140 }} />
+                    </td>
+                    <td>
+                      <select value={editModel} onChange={(e) => setEditModel(e.target.value)} style={{ width: 140 }}>
+                        <option value="">(provider default)</option>
+                        {(MODEL_OPTIONS[key.provider] ?? []).map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                        <option value={CUSTOM_MODEL_VALUE}>Custom...</option>
+                      </select>
+                      {editModel === CUSTOM_MODEL_VALUE && (
+                        <input
+                          value={editCustomModel}
+                          onChange={(e) => setEditCustomModel(e.target.value)}
+                          placeholder="exact model id"
+                          style={{ marginTop: 4, width: 140 }}
+                        />
+                      )}
                     </td>
                     <td>
                       <div>
@@ -357,6 +432,7 @@ export default function AiKeyManager() {
                   <>
                     <td><span className="badge">{key.provider}</span></td>
                     <td>{key.label}</td>
+                    <td className="muted">{key.model || "(default)"}</td>
                     <td className="muted">{key.key_fingerprint}</td>
                     <td>{key.priority}</td>
                     <td>{key.is_enabled ? "Yes" : "No"}</td>

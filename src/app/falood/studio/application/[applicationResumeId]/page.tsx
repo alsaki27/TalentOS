@@ -469,6 +469,12 @@ export default function ApplicationResumeStudioPage() {
 
   /* ──────────── keyword map for Grammarly-style UI ──────────── */
 
+  // Moved above keywordMap - it's referenced inside that useMemo (and in its
+  // dependency array) but was declared further down the file, after this hook,
+  // which is a real "used before declaration" error for a block-scoped const,
+  // not just a style nit.
+  const content = draftContent ?? appResume?.content;
+
   const keywordMap = useMemo(() => {
     if (!targetJob || !content) return {};
     const map: Record<string, string[]> = {};
@@ -518,8 +524,6 @@ export default function ApplicationResumeStudioPage() {
   }, [suggestions]);
 
   /* ──────────── editing helpers ──────────── */
-
-  const content = draftContent ?? appResume?.content;
 
   function startEdit(section: string, initial: any) {
     setEditingSection(section);
