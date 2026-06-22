@@ -1,5 +1,58 @@
 # Plan: multi-provider routing + Grammarly-style resume editing
 
+## Status (updated by Claude after Phase 1 + a first pass of Phase 4)
+
+- **Phase 1: DONE, pushed** (commit `c5d74b8`). OpenAI + GLM providers exist and
+  work (including the previously-dead DB-managed-key branches), per-key model
+  dropdown is in the admin UI, `ai_api_keys.model` column exists live.
+- **Phase 4, first pass: DONE, pushed** (commit `f866390`, Kimi's work, verified
+  by Claude). `A4Preview.tsx`, `SectionSidebar.tsx`, `KeywordPanel.tsx` exist
+  and are wired into the application-tailoring studio page. Two real bugs found
+  while verifying (stray syntax typos + a `content`-used-before-declaration
+  ordering bug in the same page file) were fixed before push - see commit
+  `c5d74b8`'s message for exact detail if useful context.
+- **Not started**: Phase 2 (per-category provider routing), Phase 3 (system
+  health visibility), and the rest of Phase 4 (extending the same inline
+  accept/reject pattern to **base resume** editing - so far it only exists on
+  the **application-tailoring** studio page).
+
+## Before starting: fix your build verification
+
+You reported `npm`/`npx` not being in PATH when you tried to verify your own
+build for the Grammarly UI commit, and pushed without confirming typecheck/
+lint/build actually passed (Claude ran them after the fact - they did pass,
+but don't rely on someone else to catch this going forward). Find and fix
+whatever is wrong with your shell's PATH/Node setup before continuing - every
+phase below ends with "verify before reporting back," and that's not
+meaningful if the verification commands aren't actually runnable.
+
+## Mandatory verification checklist - run this after every phase, before saying it's done
+
+1. `npm run typecheck` - must show zero errors.
+2. `npm run lint` - must show zero errors (pre-existing warnings in unrelated
+   files are fine, don't fix those as part of this work).
+3. A real build, not just typecheck: `npm run cf:build` (set `DATABASE_URL` to
+   the real connection string first, in env - the build fails without it for
+   reasons unrelated to this work, already diagnosed earlier this session).
+4. Bundle-size check: `npx wrangler deploy --dry-run --outdir /tmp/wrangler-check`
+   and read the `gzip:` figure from `Total Upload: ... / gzip: ...`. This app
+   is on Cloudflare's free-plan 3072 KiB hard limit and was sitting around
+   ~2900 KiB after Phase 1 - if your change pushes it close to or over 3000,
+   stop and figure out why before pushing, don't assume it's fine.
+5. If you touched anything that reads/writes the database (new columns, new
+   queries), check the *actual live schema* with psql or an equivalent before
+   trusting a column/table name exists - this exact mistake (assuming a column
+   name instead of checking) caused multiple real bugs earlier this session
+   (`application_resume_versions` has no `application_id` column,
+   `application_packets` was missing 10 columns two different routes assumed
+   existed, etc.). `grep`-ing for where the table was created and reading that
+   migration is not enough by itself if a migration could have been added
+   later - query the live table directly.
+6. If you genuinely cannot run one of the above (like the npm/npx PATH issue),
+   say so explicitly when reporting back - "I could not verify X because Y" is
+   useful information. Silently skipping verification and reporting success
+   anyway is the one thing not to do.
+
 Written for Kimi to implement. Each phase is independently shippable and should be
 its own commit (or small set of commits) — don't combine phases. Validate with
 `npm run typecheck && npm run lint` and a real `npm run cf:build` + bundle-size
@@ -193,6 +246,18 @@ purely additive, nothing breaks if a category is never configured.
 **Goal:** "editing the resume like I am on grammarly, with assistance from the
 resume" — read this as: suggestions shown inline, in context, with per-suggestion
 accept/reject, not a separate list or an all-or-nothing full-document replace.
+
+**Status: first pass done for the application-tailoring studio page**
+(`src/app/falood/studio/application/[applicationResumeId]/page.tsx` +
+`A4Preview.tsx`/`SectionSidebar.tsx`/`KeywordPanel.tsx`). **Remaining: the base
+resume studio page** (`src/app/falood/studio/base/[baseResumeId]/page.tsx`)
+still has the old three-pane CLI-only layout - same goal, same components
+where they genuinely apply (A4Preview should be directly reusable; KeywordPanel
+is JD-keyword-specific and doesn't apply to base resumes, which aren't tied to
+a target job; SectionSidebar's AI-action plumbing needs to call
+`mode: "base_resume_creation"` instead of `application_resume_tailoring`).
+Read what's already built before starting - don't reinvent the pattern that's
+already proven to work one page over.
 
 Read `src/components/ResumeDiffViewer.tsx` and
 `src/server/services/resumeSuggestionService.ts` in full before starting - both
