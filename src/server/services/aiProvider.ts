@@ -8,7 +8,7 @@ import { AiProvider } from "@/lib/ai/provider";
 import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
 import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
 import { getGoogleProvider } from "@/lib/ai/googleProvider";
-import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
+import { getGoogleVertexProxyProvider, callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import {
   listEnabledAiKeys,
   getAiKeyWithDecryptedKey,
@@ -38,37 +38,22 @@ export function buildProviderFromDbKey(
     case "google_vertex_proxy": {
       const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
       if (!proxyUrl) return null;
+      // Delegates to the same conversion logic as the env-based provider
+      // (src/lib/ai/googleVertexProxyProvider.ts) instead of duplicating it -
+      // this case used to flatten messages to plain text and never sent `tools`
+      // at all, which (a) never let Gemini use real function-calling and
+      // (b) is now broken outright regardless, since the proxy was changed to
+      // return a `parts` array instead of a flattened `text` field.
       return {
-        async send({ system, messages }) {
-          const res = await fetch(`${proxyUrl}/generate`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-proxy-secret": apiKey,
-            },
-            body: JSON.stringify({
-              system,
-              messages: messages.map((m) => ({
-                role: m.role,
-                content: m.content.map((b) => {
-                  if (b.type === "text") return b.text;
-                  if (b.type === "tool_use") return `[Tool use: ${b.name}]`;
-                  return `[Tool result: ${(b as { content: string }).content}]`;
-                }).join("\n"),
-              })),
-              model: process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
-              temperature: 0.2,
-              maxOutputTokens: 256,
-              responseMimeType: "application/json",
-            }),
+        send({ system, messages, tools }) {
+          return callVertexProxy({
+            proxyUrl,
+            proxySecret: apiKey,
+            model: process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
+            system,
+            messages,
+            tools,
           });
-          if (!res.ok) {
-            const body = await res.text().catch(() => "");
-            throw new Error(`Google Vertex Proxy error (${res.status}): ${body}`);
-          }
-          const data = await res.json();
-          const text = data.text ?? "";
-          return { content: [{ type: "text", text }], stopReason: "end_turn" };
         },
       };
     }

@@ -58,23 +58,26 @@ function roughTokenEstimate(text) {
 }
 
 function buildVertexBody(body, model) {
-  const { system, messages, temperature = 0.2, maxOutputTokens = 1500, responseMimeType } = body;
-
-  const contents = messages.map((m) => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: typeof m.content === "string" ? m.content : m.content.map((c) => c.text || "").join("\n") }],
-  }));
+  const { system, contents, tools, temperature = 0.2, maxOutputTokens = 1500, responseMimeType } = body;
 
   const generationConfig = {
     temperature,
     maxOutputTokens,
   };
 
-  if (responseMimeType) {
+  // responseMimeType: "application/json" and function-calling (tools) are
+  // mutually exclusive in the Vertex/Gemini API - requesting both makes Vertex
+  // reject the call. Tool-calling turns structure their own output via the
+  // function-call protocol, so only set this when no tools are offered.
+  if (responseMimeType && (!tools || tools.length === 0)) {
     generationConfig.responseMimeType = responseMimeType;
   }
 
   const vertexBody = {
+    // `contents` arrives already in Vertex's native shape - this proxy is a
+    // thin auth-bridging pass-through, not a place to know the caller's own
+    // message format. The caller (googleVertexProxyProvider.ts) does that
+    // conversion, since it's the side that actually knows both shapes.
     contents,
     generationConfig,
   };
@@ -83,6 +86,10 @@ function buildVertexBody(body, model) {
     vertexBody.systemInstruction = {
       parts: [{ text: system }],
     };
+  }
+
+  if (tools && tools.length > 0) {
+    vertexBody.tools = tools;
   }
 
   return vertexBody;
@@ -104,9 +111,9 @@ app.post("/generate", async (req, res) => {
   }
 
   // 2. Validate request body
-  const { messages, model: requestedModel } = req.body;
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
-    return res.status(400).json({ ok: false, error: "Bad request. 'messages' array is required." });
+  const { contents, model: requestedModel } = req.body;
+  if (!contents || !Array.isArray(contents) || contents.length === 0) {
+    return res.status(400).json({ ok: false, error: "Bad request. 'contents' array is required." });
   }
 
   const model = requestedModel || MODEL;
@@ -187,7 +194,12 @@ app.post("/generate", async (req, res) => {
     return res.status(502).json({ ok: false, error: "Vertex AI returned no content." });
   }
 
-  const text = candidate.content?.parts?.map((p) => p.text ?? "").join("\n") ?? "";
+  // Returning the raw parts array (not flattened to a single text string) -
+  // a function-call turn's parts contain { functionCall: { name, args } }
+  // instead of { text }, and the caller needs to tell those apart to drive
+  // its own tool-calling loop. Flattening here would silently drop that.
+  const parts = candidate.content?.parts ?? [];
+  const textForTokenEstimate = parts.map((p) => p.text ?? "").join("\n");
   const usage = data.usageMetadata || {};
   const latencyMs = Date.now() - start;
 
@@ -204,11 +216,12 @@ app.post("/generate", async (req, res) => {
     ok: true,
     provider: "google_vertex_proxy",
     model,
-    text,
+    parts,
+    finishReason: candidate.finishReason,
     usage: {
       inputTokens: usage.promptTokenCount ?? roughTokenEstimate(JSON.stringify(vertexBody)),
-      outputTokens: usage.candidatesTokenCount ?? roughTokenEstimate(text),
-      totalTokens: usage.totalTokenCount ?? (roughTokenEstimate(JSON.stringify(vertexBody)) + roughTokenEstimate(text)),
+      outputTokens: usage.candidatesTokenCount ?? roughTokenEstimate(textForTokenEstimate),
+      totalTokens: usage.totalTokenCount ?? (roughTokenEstimate(JSON.stringify(vertexBody)) + roughTokenEstimate(textForTokenEstimate)),
     },
   });
 });
