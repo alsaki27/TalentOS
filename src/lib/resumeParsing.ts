@@ -2,7 +2,7 @@
 // Extract text from PDF/DOCX, then parse structured fields via AI.
 // Dependencies: mammoth (DOCX). PDF extraction is hand-rolled - see extractText.
 
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import type { AiMessage } from "@/lib/ai/provider";
 
@@ -254,7 +254,7 @@ CRITICAL RULES:
 
 // New: Parse from markdown (better quality, fewer tokens)
 export async function parseResumeFromMarkdown(markdown: string): Promise<ParsedResume> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
   }
@@ -304,7 +304,7 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
     return parseResumeFromMarkdown(markdown);
   }
   // Otherwise fall back to the existing raw text parser
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     // No AI available — return raw text with empty structure
     return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };

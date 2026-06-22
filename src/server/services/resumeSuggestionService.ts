@@ -12,7 +12,7 @@
 //   6. Run deterministic truth-check on each candidate
 //   7. Persist suggestions to repository
 
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import {
   findResumeVersionById,
@@ -87,7 +87,7 @@ export async function generateResumeSuggestions(
   const context = await buildResumeContext(app.candidate_id);
 
   // 4. Call AI
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("resume_studio");
   if (!active) {
     return {
       suggestions: [],

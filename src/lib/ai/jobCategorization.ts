@@ -17,7 +17,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { updateJob } from "@/server/repositories/jobsRepository";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 export interface PendingJob {
@@ -123,7 +123,7 @@ async function markFailed(jobId: string, message: string, model?: string) {
 }
 
 export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; status: string }> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     await markFailed(job.id, "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY).");
     return { ok: false, status: "failed" };

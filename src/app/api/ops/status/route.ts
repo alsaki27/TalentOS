@@ -10,7 +10,7 @@ import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ export async function GET() {
   let recentRuns: any[];
   let sources: any[];
 
-  const activeProvider = await getActiveProviderAsync();
+  const activeProvider = await getProviderForCategory("default");
 
   if (isNeon()) {
     const pingStart = Date.now();

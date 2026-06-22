@@ -8,7 +8,7 @@ import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { parseResumeFromMarkdown, extractText } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 // Real PDF text extraction via resumeParsing.ts's extractText - see that file for
@@ -31,7 +31,7 @@ async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
 }
 
 async function parseResumeWithAI(resumeText: string) {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   if (!active) return { error: "No AI provider configured." };
 
   const prompt = [

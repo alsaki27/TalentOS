@@ -3,7 +3,7 @@
 // NEVER invents experience, degree, certification, employer, project, or visa status.
 // NEVER uses rejected keywords. NEVER claims missing-evidence keywords.
 
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
@@ -58,7 +58,7 @@ export async function generateCoverLetterDraft(
     }
   }
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("content_generation");
   if (!active) return errorCoverLetter("No AI provider configured");
 
   const warnings: string[] = [];
@@ -136,7 +136,7 @@ export async function generateRecruiterMessageDraft(
     }
   }
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("content_generation");
   if (!active) return errorRecruiterMessage("No AI provider configured");
 
   const warnings: string[] = [];
@@ -203,7 +203,7 @@ export async function generatePacketSummary(applicationId: string): Promise<stri
 
   const context = app.candidate_id ? await buildResumeContext(app.candidate_id) : null;
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("content_generation");
   if (!active) return "No AI provider configured";
 
   const prompt = buildSummaryPrompt({

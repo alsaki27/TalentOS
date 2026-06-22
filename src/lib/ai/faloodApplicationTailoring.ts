@@ -18,7 +18,7 @@ import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
 import { findTargetJobById } from "@/server/repositories/targetJobsRepository";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { FaloodCommandResult } from "@/lib/falood/types";
 
@@ -103,7 +103,7 @@ function buildSuggestPrompt(ctx: TailoringContext): string {
 }
 
 export async function generateResumeSuggestions(applicationResumeId: string): Promise<{ created: number } | { error: string }> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("resume_studio");
   if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const ctx = await gatherContext(applicationResumeId);
@@ -181,7 +181,7 @@ export async function runApplicationTailoringCommand(opts: {
     };
   }
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("resume_studio");
   if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const ctx = await gatherContext(opts.applicationResumeId);

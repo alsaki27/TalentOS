@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { CardSkeleton } from "../Skeleton";
 import CrawlerStatusLive from "./CrawlerStatusLive";
 import AiKeyManager from "./components/ai-key-manager";
+import AiTaskRouting from "./components/ai-task-routing";
 
 interface ImportRun {
   id: string;
@@ -392,6 +393,7 @@ export default function OpsPage() {
       </div>
 
       <AiKeyManager />
+      <AiTaskRouting />
 
       <div className="page-header" style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>AI daily digest</h2>

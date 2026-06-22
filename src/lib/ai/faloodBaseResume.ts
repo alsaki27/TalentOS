@@ -16,7 +16,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import { emptyResumeDocument, FaloodCommandResult, ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 
@@ -153,7 +153,7 @@ export async function runBaseResumeCommand(opts: {
   command?: string;
   message?: string;
 }): Promise<FaloodCommandResult | { error: string }> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("resume_studio");
   if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const ctx = await gatherContext(opts.baseResumeId);

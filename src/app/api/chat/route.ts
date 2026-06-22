@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
 import { supabase } from "@/lib/supabase";
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("chat_assistant");
   if (!active) {
     return NextResponse.json(
       { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY (see README)." },

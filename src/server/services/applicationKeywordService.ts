@@ -4,7 +4,7 @@
 // Never writes directly to tables — delegates to repository.
 
 import { supabase } from "@/lib/supabase";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 import {
   upsertApplicationKeywords,
@@ -163,7 +163,7 @@ function extractKeywordsFromParsed(
 async function analyzeJDWithAI(
   rawText: string
 ): Promise<JdAnalysisResult & { error?: string }> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     return {
       requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],

@@ -9,7 +9,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, execute } from "@/server/db/neon";
 import { listTargetJobsByCandidate, createTargetJob } from "@/server/repositories/targetJobsRepository";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 export async function GET(req: NextRequest) {
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "candidateId and rawDescription are required" }, { status: 400 });
   }
 
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("parsing_extraction");
   let parsedDescription: any = null;
   let fitScore: number | null = null;
   let recommendation: string | null = null;

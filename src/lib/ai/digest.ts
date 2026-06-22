@@ -9,7 +9,7 @@
 import { supabase } from "@/lib/supabase";
 import { countJobsSince } from "@/server/repositories/jobsRepository";
 import { listOverdueApplications, listApplicationsSince, countApplicationsByStatus } from "@/server/repositories/applicationsRepository";
-import { getActiveProviderAsync } from "@/lib/ai";
+import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
 
 async function gatherSnapshot() {
@@ -38,7 +38,7 @@ async function gatherSnapshot() {
 }
 
 export async function generateDailyDigest(): Promise<{ content: string; provider: string } | { error: string }> {
-  const active = await getActiveProviderAsync();
+  const active = await getProviderForCategory("content_generation");
   if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
 
   const snapshot = await gatherSnapshot();
