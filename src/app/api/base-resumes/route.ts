@@ -141,9 +141,13 @@ export async function POST(req: NextRequest) {
             id: `exp-${i}`,
             title: exp.title ?? "",
             company: exp.company ?? "",
-            startDate: exp.start_date ?? "",
-            endDate: exp.end_date ?? undefined,
-            bullets: exp.description ? [{ id: `exp-${i}-b0`, text: exp.description }] : [],
+            location: exp.location ?? undefined,
+            startDate: exp.startDate ?? exp.start_date ?? "",
+            endDate: exp.endDate ?? exp.end_date ?? undefined,
+            bullets: Array.isArray(exp.bullets) ? exp.bullets.map((b: string, j: number) => ({
+              id: `exp-${i}-b${j}`,
+              text: b,
+            })) : (exp.description ? [{ id: `exp-${i}-b0`, text: exp.description }] : []),
           }));
         }
         if (Array.isArray(parsed.education)) {
@@ -151,7 +155,13 @@ export async function POST(req: NextRequest) {
             id: `edu-${i}`,
             degree: edu.degree ?? "",
             school: edu.school ?? "",
-            graduationDate: edu.graduation_year ?? undefined,
+            graduationDate: edu.graduationDate ?? edu.graduation_year ?? undefined,
+          }));
+        }
+        if (Array.isArray(parsed.certifications) && parsed.certifications.length) {
+          content.certifications = parsed.certifications.map((cert: string, i: number) => ({
+            id: `cert-${i}`,
+            name: cert,
           }));
         }
       }

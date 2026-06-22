@@ -68,16 +68,18 @@ export async function GET(req: NextRequest) {
     const scheduleIds = (schedules ?? []).map((s: any) => s.id as string);
     let panelWithProfiles: any[] = [];
     if (scheduleIds.length > 0) {
+      const schedPlaceholders = scheduleIds.map((_, i) => `$${i + 1}`).join(", ");
       const panels = await query(
-        "SELECT * FROM interview_panel_members WHERE schedule_id::text = ANY($1)",
-        [scheduleIds]
+        `SELECT * FROM interview_panel_members WHERE schedule_id::text IN (${schedPlaceholders})`,
+        scheduleIds
       );
       const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
       let profiles: any[] = [];
       if (interviewerIds.length > 0) {
+        const profPlaceholders = interviewerIds.map((_, i) => `$${i + 1}`).join(", ");
         profiles = await query(
-          "SELECT user_id, display_name, email FROM profiles WHERE user_id::text = ANY($1)",
-          [interviewerIds]
+          `SELECT user_id, display_name, email FROM profiles WHERE user_id::text IN (${profPlaceholders})`,
+          interviewerIds
         );
       }
       const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));

@@ -118,15 +118,16 @@ export interface ParsedResume {
   experience: Array<{
     company: string;
     title: string;
-    start_date?: string;
-    end_date?: string;
-    description?: string;
+    location?: string;
+    startDate?: string;
+    endDate?: string;
+    bullets: string[];
   }>;
   education: Array<{
     school: string;
     degree: string;
     field?: string;
-    graduation_year?: string;
+    graduationDate?: string;
   }>;
   certifications: string[];
   raw_text: string;
@@ -162,7 +163,9 @@ export async function extractText(buffer: Uint8Array, mimeType: string): Promise
   }
 }
 
-const PARSE_PROMPT = `You are a resume parser. Extract structured information from the resume text below and return ONLY a JSON object matching this exact schema (no markdown, no commentary, just raw JSON):
+const PARSE_PROMPT = `You are an expert resume parser. Your job is to extract EVERY SINGLE piece of structured information from the resume text below. Be thorough and exhaustive. Do not skip sections. Do not summarize — extract full details.
+
+Return ONLY a JSON object matching this exact schema (no markdown, no commentary, just raw JSON):
 
 {
   "name": string | null,
@@ -178,9 +181,10 @@ const PARSE_PROMPT = `You are a resume parser. Extract structured information fr
     {
       "company": string,
       "title": string,
-      "start_date": string | null,
-      "end_date": string | null,
-      "description": string | null
+      "location": string | null,
+      "startDate": string | null,
+      "endDate": string | null,
+      "bullets": string[]
     }
   ],
   "education": [
@@ -188,22 +192,25 @@ const PARSE_PROMPT = `You are a resume parser. Extract structured information fr
       "school": string,
       "degree": string,
       "field": string | null,
-      "graduation_year": string | null
+      "graduationDate": string | null
     }
   ],
   "certifications": string[]
 }
 
-Rules:
-- If a field is missing or unclear, use null (for strings) or empty array (for arrays).
-- Dates: prefer ISO format (YYYY-MM) or just year (YYYY). Use null if unparseable.
-- Skills: include both hard skills and soft skills, but be specific (e.g., "React" not "frontend").
-- Experience: include every job entry you can find, even internships.
-- Education: include every degree.
+CRITICAL RULES:
+- EXTRACT EVERYTHING. Do not skip any section, job, skill, degree, or certification.
+- For skills: list EVERY skill you can find. Be specific (e.g., "React" not "frontend").
+- For experience: create an entry for EVERY job. Extract ALL bullet points for each job — do not summarize, do not truncate.
+- For education: include EVERY degree, diploma, or certification program.
+- For certifications: include every certification mentioned anywhere in the resume.
+- Dates: prefer 'Month Year' or just 'Year'. Use null if unparseable.
+- Current jobs: set endDate to null.
+- If a field is truly missing, use null for strings and [] for arrays.
 - Do NOT hallucinate information not present in the text.
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
 
-const MARKDOWN_PARSE_PROMPT = `You are a resume parser. The input is a resume converted to clean Markdown. Extract structured information and return ONLY a JSON object matching this exact schema (no markdown, no commentary, just raw JSON):
+const MARKDOWN_PARSE_PROMPT = `You are an expert resume parser. The input is a resume converted to clean Markdown. Extract structured information and return ONLY a JSON object matching this exact schema (no markdown, no commentary, just raw JSON):
 
 {
   "name": string | null,
@@ -219,9 +226,10 @@ const MARKDOWN_PARSE_PROMPT = `You are a resume parser. The input is a resume co
     {
       "company": string,
       "title": string,
-      "start_date": string | null,
-      "end_date": string | null,
-      "description": string | null
+      "location": string | null,
+      "startDate": string | null,
+      "endDate": string | null,
+      "bullets": string[]
     }
   ],
   "education": [
@@ -229,17 +237,18 @@ const MARKDOWN_PARSE_PROMPT = `You are a resume parser. The input is a resume co
       "school": string,
       "degree": string,
       "field": string | null,
-      "graduation_year": string | null
+      "graduationDate": string | null
     }
   ],
   "certifications": string[]
 }
 
-Rules:
+CRITICAL RULES:
 - Markdown headers (##) usually indicate sections. Experience entries often have dates in them.
-- Bullet points (- or *) are individual job responsibilities or achievements.
-- Skills may be in a dedicated section or scattered. Collect them all.
-- Dates: prefer ISO format (YYYY-MM) or just year (YYYY). Use null if unparseable.
+- Bullet points (- or *) are individual job responsibilities or achievements. Extract ALL of them.
+- Skills may be in a dedicated section or scattered. Collect them ALL.
+- Dates: prefer 'Month Year' or just 'Year'. Use null if unparseable.
+- Current jobs: set endDate to null.
 - Do NOT hallucinate information not present in the markdown.
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
 
@@ -365,19 +374,20 @@ export function parsedResumeToEvidence(parsed: ParsedResume): Array<{
     rows.push({
       source_type: "uploaded_resume",
       title: `Education: ${edu.degree}${edu.field ? `, ${edu.field}` : ""}`,
-      description: `${edu.school}${edu.graduation_year ? ` — Graduated ${edu.graduation_year}` : ""}`,
+      description: `${edu.school}${edu.graduationDate ? ` — Graduated ${edu.graduationDate}` : ""}`,
       related_skills: [],
       confidence_score: 0.8,
     });
   }
 
   for (const exp of parsed.experience) {
+    const description = exp.bullets?.join("\n") ?? "";
     rows.push({
       source_type: "uploaded_resume",
       title: `${exp.title} at ${exp.company}`,
-      description: `${exp.start_date ?? "?"} – ${exp.end_date ?? "Present"}${exp.description ? `\n${exp.description}` : ""}`,
+      description: `${exp.startDate ?? "?"} – ${exp.endDate ?? "Present"}${description ? `\n${description}` : ""}`,
       related_skills: parsed.skills.filter((s) =>
-        exp.description?.toLowerCase().includes(s.toLowerCase())
+        description.toLowerCase().includes(s.toLowerCase())
       ),
       confidence_score: 0.75,
     });

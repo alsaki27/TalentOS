@@ -132,7 +132,7 @@ export default function CandidateProfilePage() {
   const [parseModalText, setParseModalText] = useState("");
   const [parseModalResumeId, setParseModalResumeId] = useState("");
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
-  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; markdown: string } | null>(null);
+  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
 
   async function load() {
     if (!id) return;
@@ -272,9 +272,9 @@ export default function CandidateProfilePage() {
         title: exp.title ?? "",
         company: exp.company ?? "",
         location: exp.location ?? undefined,
-        startDate: exp.startDate ?? "",
-        endDate: exp.endDate ?? undefined,
-        bullets: (exp.bullets ?? []).map((b: string, j: number) => ({
+        startDate: exp.startDate ?? exp.start_date ?? "",
+        endDate: exp.endDate ?? exp.end_date ?? undefined,
+        bullets: (exp.bullets ?? (exp.description ? [exp.description] : [])).map((b: string, j: number) => ({
           id: `bullet-${i}-${j}`,
           text: b,
         })),
@@ -283,7 +283,11 @@ export default function CandidateProfilePage() {
         id: `edu-${i}`,
         degree: edu.degree ?? "",
         school: edu.school ?? "",
-        graduationDate: edu.graduationDate ?? undefined,
+        graduationDate: edu.graduationDate ?? edu.graduation_year ?? undefined,
+      })),
+      certifications: (parsed.certifications ?? []).map((cert: string, i: number) => ({
+        id: `cert-${i}`,
+        name: cert,
       })),
       formatting: {
         styleId: "skarion_compact_professional",
@@ -583,7 +587,20 @@ export default function CandidateProfilePage() {
 
               {markitdownResult && (
                 <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
-                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed with markitdown</h3>
+                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed Resume</h3>
+                  {markitdownResult.parseStatus && (
+                    <div style={{ fontSize: 12, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: "6px 12px" }}>
+                      <span className={markitdownResult.parseStatus.hasName ? "badge" : "badge-closed"}>Name</span>
+                      <span className={markitdownResult.parseStatus.hasEmail ? "badge" : "badge-closed"}>Email</span>
+                      <span className={markitdownResult.parseStatus.hasPhone ? "badge" : "badge-closed"}>Phone</span>
+                      <span className={markitdownResult.parseStatus.hasSummary ? "badge" : "badge-closed"}>Summary</span>
+                      <span className={markitdownResult.parseStatus.skillsCount > 0 ? "badge" : "badge-closed"}>Skills ({markitdownResult.parseStatus.skillsCount})</span>
+                      <span className={markitdownResult.parseStatus.experienceCount > 0 ? "badge" : "badge-closed"}>Jobs ({markitdownResult.parseStatus.experienceCount})</span>
+                      <span className={markitdownResult.parseStatus.educationCount > 0 ? "badge" : "badge-closed"}>Education ({markitdownResult.parseStatus.educationCount})</span>
+                      <span className={markitdownResult.parseStatus.certificationsCount > 0 ? "badge" : "badge-closed"}>Certs ({markitdownResult.parseStatus.certificationsCount})</span>
+                      <span className={markitdownResult.parseStatus.totalBulletPoints > 0 ? "badge" : "badge-closed"}>Bullets ({markitdownResult.parseStatus.totalBulletPoints})</span>
+                    </div>
+                  )}
                   <p className="muted" style={{ fontSize: 12 }}>Skills: {markitdownResult.parsed.skills?.join(", ") || "—"}</p>
                   <p className="muted" style={{ fontSize: 12 }}>Experience: {markitdownResult.parsed.experience?.length || 0} entries</p>
                   <p className="muted" style={{ fontSize: 12 }}>Education: {markitdownResult.parsed.education?.length || 0} entries</p>

@@ -164,6 +164,31 @@ export default function InterviewDetailPage() {
     load();
   }
 
+  async function advanceToNextRound() {
+    if (!interview) return;
+    setActionLoading("advance");
+    setFeedback(null);
+    const nextRound = (interview.round_number ?? 1) + 1;
+    const res = await fetch(`/api/interviews/${id}`, {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "scheduled",
+        round_number: nextRound,
+        round_name: `Round ${nextRound}`,
+      }),
+    });
+    setActionLoading("");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setFeedback({ kind: "error", text: data.error || "Could not advance to next round." });
+      return;
+    }
+    setFeedback({ kind: "success", text: `Advanced to Round ${nextRound}.` });
+    load();
+  }
+
   async function addPanelMember() {
     if (!addPanelUserId) return;
     setActionLoading("addPanel");
@@ -452,14 +477,17 @@ export default function InterviewDetailPage() {
                   <button
                     className="btn-primary"
                     disabled={actionLoading === "advance"}
-                    onClick={() => updateStatus("scheduled")}
+                    onClick={advanceToNextRound}
                   >
-                    Advance to Next Stage
+                    Advance to Next Round
                   </button>
                   <button
                     className="btn-primary"
-                    disabled={actionLoading === "offer"}
-                    onClick={() => router.push(`/jobs/${job?.id}/offer?candidate=${candidate?.id}`)}
+                    disabled={actionLoading === "offer" || !job?.id || !candidate?.id}
+                    onClick={() => {
+                      if (!job?.id || !candidate?.id) return;
+                      router.push(`/jobs/${job.id}/offer?candidate=${candidate.id}`);
+                    }}
                   >
                     Send Offer
                   </button>

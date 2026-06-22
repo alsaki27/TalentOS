@@ -35,59 +35,123 @@ async function parseResumeWithAI(resumeText: string) {
   if (!active) return { error: "No AI provider configured." };
 
   const prompt = [
-    "You are a resume parsing assistant. Extract structured data from the following resume text and return it as a JSON object.",
+    "You are an expert resume parser. Your job is to extract EVERY SINGLE piece of structured information from the resume text below. Be thorough and exhaustive. Do not skip sections. Do not summarize — extract full details.",
     "",
     "RESUME TEXT:",
     resumeText,
     "",
-    "Return ONLY a JSON object with this exact shape (no markdown fences, no extra text):",
+    "Return ONLY a JSON object with this EXACT shape (no markdown code fences, no explanation, no commentary — ONLY the raw JSON object):",
     JSON.stringify({
-      name: "string",
-      email: "string or null",
-      phone: "string or null",
-      linkedin_url: "string or null",
-      github_url: "string or null",
-      portfolio_url: "string or null",
-      location: "string or null",
-      summary: "string or null",
-      skills: ["array of skill strings"],
+      name: "full name as written on the resume",
+      email: "email address or null",
+      phone: "phone number or null",
+      linkedin_url: "LinkedIn URL or null",
+      github_url: "GitHub URL or null",
+      portfolio_url: "portfolio/website URL or null",
+      location: "city, state, country or null",
+      summary: "full professional summary text or null — extract the complete summary, not a shortened version",
+      skills: ["array of EVERY skill mentioned — technical skills, tools, languages, frameworks, soft skills, methodologies. Be specific and exhaustive."],
       experience: [
         {
-          title: "string",
-          company: "string",
-          location: "string or null",
-          startDate: "string (Month Year)",
-          endDate: "string (Month Year) or null for present",
-          bullets: ["array of bullet point strings"]
+          title: "job title",
+          company: "company name",
+          location: "job location or null",
+          startDate: "Month Year or Year",
+          endDate: "Month Year or null for present/current",
+          bullets: ["array of EVERY bullet point, achievement, responsibility. Do not skip any. Extract the full text of each bullet."]
         }
       ],
       education: [
         {
-          degree: "string",
-          school: "string",
-          graduationDate: "string or null"
+          degree: "degree name (e.g. Bachelor of Science in Computer Science)",
+          school: "university or institution name",
+          graduationDate: "Month Year or Year or null"
         }
-      ]
+      ],
+      certifications: ["array of every certification, license, or credential. Do not skip any."]
     }, null, 2),
     "",
-    "Rules:",
-    "1. Extract every piece of information you can find.",
-    "2. If something is not in the resume, use null or empty array.",
-    "3. For dates, use 'Month Year' format (e.g., 'January 2020').",
-    "4. For current jobs, set endDate to null.",
-    "5. Return ONLY the JSON object, no other text."
+    "CRITICAL RULES:",
+    "1. EXTRACT EVERYTHING. Do not skip any section, job, skill, degree, or certification.",
+    "2. For skills: list EVERY skill you can find. If the resume has a 'Skills' section, extract all of them. If skills are mentioned in job descriptions, include those too.",
+    "3. For experience: create an entry for EVERY job. Extract ALL bullet points for each job — do not summarize, do not truncate. Copy each bullet point verbatim or as close as possible.",
+    "4. For education: include EVERY degree, diploma, or certification program.",
+    "5. For certifications: include every certification mentioned anywhere in the resume.",
+    "6. Dates: use 'Month Year' format (e.g., 'January 2020'). If only year is available, use just the year.",
+    "7. Current jobs: set endDate to null.",
+    "8. If a field is truly missing from the resume, use null for strings and [] for arrays.",
+    "9. DO NOT hallucinate — only extract what is actually in the resume text.",
+    "10. Return ONLY the JSON object, no other text."
   ].join("\n");
 
   const response = await active.provider.send({
-    system: "You are a precise resume parser. Extract all structured data from resume text and return it as clean JSON only.",
+    system: "You are an expert resume parser. Extract ALL structured data from resume text and return it as clean JSON only. Be exhaustive — do not skip any sections, jobs, skills, or bullet points.",
     messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
     tools: [],
   });
 
-  const raw = textOf(response.content);
+  const raw = textOf(response.content) ?? "";
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  const parsed = JSON.parse(stripped);
-  return { parsed };
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(stripped);
+  } catch (err: any) {
+    // Try to extract JSON from within the text if the model wrapped it
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        throw new Error("AI returned invalid JSON: " + err.message);
+      }
+    } else {
+      throw new Error("AI returned invalid JSON: " + err.message);
+    }
+  }
+
+  // Normalize the response to ensure consistent shape
+  const normalized = {
+    name: parsed?.name ?? null,
+    email: parsed?.email ?? null,
+    phone: parsed?.phone ?? null,
+    linkedin_url: parsed?.linkedin_url ?? null,
+    github_url: parsed?.github_url ?? null,
+    portfolio_url: parsed?.portfolio_url ?? null,
+    location: parsed?.location ?? null,
+    summary: parsed?.summary ?? null,
+    skills: Array.isArray(parsed?.skills) ? parsed.skills : [],
+    experience: Array.isArray(parsed?.experience) ? parsed.experience.map((exp: any) => ({
+      title: exp?.title ?? "",
+      company: exp?.company ?? "",
+      location: exp?.location ?? null,
+      startDate: exp?.startDate ?? exp?.start_date ?? null,
+      endDate: exp?.endDate ?? exp?.end_date ?? null,
+      bullets: Array.isArray(exp?.bullets) ? exp.bullets : (exp?.description ? [exp.description] : []),
+    })) : [],
+    education: Array.isArray(parsed?.education) ? parsed.education.map((edu: any) => ({
+      degree: edu?.degree ?? "",
+      school: edu?.school ?? "",
+      field: edu?.field ?? null,
+      graduationDate: edu?.graduationDate ?? edu?.graduation_year ?? null,
+    })) : [],
+    certifications: Array.isArray(parsed?.certifications) ? parsed.certifications : [],
+  };
+
+  // Build a parse status so the user knows what was found
+  const parseStatus = {
+    hasName: !!normalized.name,
+    hasEmail: !!normalized.email,
+    hasPhone: !!normalized.phone,
+    hasSummary: !!normalized.summary,
+    skillsCount: normalized.skills.length,
+    experienceCount: normalized.experience.length,
+    educationCount: normalized.education.length,
+    certificationsCount: normalized.certifications.length,
+    totalBulletPoints: normalized.experience.reduce((sum: number, exp: any) => sum + (exp.bullets?.length ?? 0), 0),
+  };
+
+  return { parsed: normalized, parseStatus };
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -98,7 +162,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // If user provided resume_text directly, skip PDF download and parse that
   if (resumeText && resumeText.trim().length > 50) {
     try {
-      const { parsed } = await parseResumeWithAI(resumeText.trim());
+      const { parsed, parseStatus } = await parseResumeWithAI(resumeText.trim());
       // Save parsed_json to the resume record if resumeId is provided
       if (resumeId) {
         if (isNeon()) {
@@ -108,7 +172,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
         }
       }
-      return NextResponse.json({ parsed, source: "ai_direct" });
+      return NextResponse.json({ parsed, parseStatus, source: "ai_direct" });
     } catch (err: any) {
       return NextResponse.json({ error: err.message ?? "AI parsing failed" }, { status: 500 });
     }
@@ -167,7 +231,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         const { supabase } = await import("@/lib/supabase");
         await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
       }
-      return NextResponse.json({ parsed, markdown: mdResult.markdown, source: "markitdown" });
+      const parseStatus = {
+        hasName: !!parsed.name,
+        hasEmail: !!parsed.email,
+        hasPhone: !!parsed.phone,
+        hasSummary: !!parsed.summary,
+        skillsCount: parsed.skills.length,
+        experienceCount: parsed.experience.length,
+        educationCount: parsed.education.length,
+        certificationsCount: parsed.certifications.length,
+        totalBulletPoints: parsed.experience.reduce((sum: number, exp: any) => sum + (exp.bullets?.length ?? 0), 0),
+      };
+      return NextResponse.json({ parsed, parseStatus, markdown: mdResult.markdown, source: "markitdown" });
     }
   }
 
@@ -175,14 +250,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const extractedText = await extractTextFromPDF(buffer);
   if (extractedText) {
     try {
-      const { parsed } = await parseResumeWithAI(extractedText);
+      const { parsed, parseStatus } = await parseResumeWithAI(extractedText);
       if (isNeon()) {
         await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
       } else {
         const { supabase } = await import("@/lib/supabase");
         await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
       }
-      return NextResponse.json({ parsed, source: "ai_pdf_extraction" });
+      return NextResponse.json({ parsed, parseStatus, source: "ai_pdf_extraction" });
     } catch (err: any) {
       return NextResponse.json({ error: err.message ?? "AI parsing failed" }, { status: 500 });
     }

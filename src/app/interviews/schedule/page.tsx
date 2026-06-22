@@ -66,8 +66,12 @@ export default function ScheduleInterviewPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetch("/api/users", { cache: "no-store" }).then((r) => r.ok && r.json()).then((u) => setUsers(u ?? []));
-    fetch("/api/scorecard-templates", { cache: "no-store" }).then((r) => r.ok && r.json()).then((t) => setTemplates(t ?? []));
+    fetch("/api/users", { cache: "no-store" })
+      .then(async (r) => (r.ok ? await r.json() : []))
+      .then((u) => setUsers(Array.isArray(u) ? u : []));
+    fetch("/api/scorecard-templates", { cache: "no-store" })
+      .then(async (r) => (r.ok ? await r.json() : []))
+      .then((t) => setTemplates(Array.isArray(t) ? t : []));
   }, []);
 
   async function searchApplications() {

@@ -51,9 +51,10 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const interviewerIds = (panel ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
     let profiles: any[] = [];
     if (interviewerIds.length > 0) {
+      const profPlaceholders = interviewerIds.map((_, i) => `$${i + 1}`).join(", ");
       profiles = await query(
-        "SELECT user_id, display_name, email, role FROM profiles WHERE user_id::text = ANY($1)",
-        [interviewerIds]
+        `SELECT user_id, display_name, email, role FROM profiles WHERE user_id::text IN (${profPlaceholders})`,
+        interviewerIds
       );
     }
 

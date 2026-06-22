@@ -287,10 +287,10 @@ export default function ApplicationResumeStudioPage() {
         setDrafts(draftData.drafts ?? []);
       }
       // Load exports
-      const exportRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
+      const exportRes = await fetch(`/api/application-resume-versions/${applicationResumeId}`);
       if (exportRes.ok) {
         const exportData = await exportRes.json();
-        const appId = exportData.applicationId;
+        const appId = exportData.application_id;
         if (appId) {
           const historyRes = await fetch(`/api/applications/${appId}/resume-exports`);
           if (historyRes.ok) {

@@ -73,9 +73,15 @@ export async function execute(
 ): Promise<{ rowCount: number }> {
   try {
     const sql = getSql();
-    const result = (await sql.query(queryText, params)) as any[];
-    // For INSERT/UPDATE/DELETE, the result is an array of the returned rows
-    return { rowCount: result?.length ?? 0 };
+    const result = (await sql.query(queryText, params)) as any;
+    // Handle both array results (SELECT / RETURNING) and command results (DML without RETURNING)
+    if (Array.isArray(result)) {
+      return { rowCount: result.length };
+    }
+    if (result && typeof result.rowCount === "number") {
+      return { rowCount: result.rowCount };
+    }
+    return { rowCount: 0 };
   } catch (e: any) {
     console.error("[DB] Execute failed:", queryText.slice(0, 200));
     console.error("[DB] Error:", e.message || e);
