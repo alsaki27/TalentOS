@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { exportAndDownloadResume } from "@/lib/falood/clientExport";
+import A4Preview from "@/components/resume/A4Preview";
+import InlineDiffEditor, { type SectionResolution } from "@/components/InlineDiffEditor";
 
 interface ResumeDocument {
   header: { fullName: string; location?: string; phone?: string; email?: string; linkedin?: string; github?: string; portfolio?: string };
@@ -16,6 +18,9 @@ interface ResumeDocument {
   skills: { id: string; title: string; skills: string[] }[];
   experience: { id: string; title: string; company: string; location?: string; startDate: string; endDate?: string; bullets: { id: string; text: string }[] }[];
   education: { id: string; degree: string; school: string; graduationDate?: string }[];
+  certifications?: { id: string; name: string; issuer?: string; date?: string }[];
+  projects?: { id: string; title: string; description?: string; bullets: { id: string; text: string }[] }[];
+  formatting?: any;
 }
 
 interface BaseResume {
@@ -53,6 +58,41 @@ interface FaloodAction {
 interface LogEntry {
   role: "user" | "assistant" | "warning";
   text: string;
+}
+
+function mergeContent(original: ResumeDocument, proposed: ResumeDocument, resolutions: SectionResolution[]): ResumeDocument {
+  const result: ResumeDocument = JSON.parse(JSON.stringify(original));
+  for (const r of resolutions) {
+    if (r.status !== "accepted") continue;
+    switch (r.path) {
+      case "header":
+        result.header = proposed.header;
+        break;
+      case "summary":
+        result.summary = proposed.summary;
+        break;
+      default: {
+        const m = r.path.match(/^(\w+)\[(\d+)]$/);
+        if (!m) break;
+        const [, section, idxStr] = m;
+        const idx = parseInt(idxStr, 10);
+        const propArr = (proposed as any)[section] as any[];
+        if (!Array.isArray((result as any)[section])) {
+          (result as any)[section] = [];
+        }
+        const resultArr = (result as any)[section] as any[];
+        if (idx < propArr.length) {
+          if (idx < resultArr.length) {
+            resultArr[idx] = propArr[idx];
+          } else {
+            resultArr.push(propArr[idx]);
+          }
+        }
+        break;
+      }
+    }
+  }
+  return result;
 }
 
 const QUICK_COMMANDS = [
@@ -171,6 +211,23 @@ export default function BaseResumeStudioPage() {
     }
   }
 
+  async function applyResolvedChanges(resolutions: SectionResolution[]) {
+    if (!pendingAction?.newContent || !baseResumeId || !baseResume) return;
+    const merged = mergeContent(baseResume.content, pendingAction.newContent, resolutions);
+    const res = await fetch(`/api/base-resumes/${baseResumeId}/apply-draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ newContent: merged }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      setBaseResume(updated);
+      setJsonText(JSON.stringify(updated.content, null, 2));
+      setPendingAction(null);
+      setLog((prev) => [...prev, { role: "assistant", text: "Applied accepted changes to the draft." }]);
+    }
+  }
+
   async function applyPendingAction() {
     if (!pendingAction?.newContent || !baseResumeId) return;
     const res = await fetch(`/api/base-resumes/${baseResumeId}/apply-draft`, {
@@ -194,6 +251,8 @@ export default function BaseResumeStudioPage() {
     });
     if (res.ok) setBaseResume(await res.json());
   }
+
+  // ... rest of the file
 
   if (!baseResume) return <div className="empty">Loading…</div>;
 
@@ -260,25 +319,32 @@ export default function BaseResumeStudioPage() {
           )}
         </div>
 
-        {/* Draft / JSON Editor */}
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        {/* Draft / A4 Preview / Diff Editor */}
+        <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexShrink: 0 }}>
             <h3 style={{ fontSize: 14, margin: 0 }}>
-              {showJsonEditor ? "JSON Editor" : "Base resume draft"}
-              {pendingAction && <span className="badge" style={{ marginLeft: 8 }}>Proposed — not saved yet</span>}
+              {pendingAction ? "Review AI Changes" : showJsonEditor ? "JSON Editor" : "Resume Preview"}
+              {pendingAction && <span className="badge" style={{ marginLeft: 8 }}>Pending review</span>}
             </h3>
-            {showJsonEditor && (
-              <div style={{ display: "flex", gap: 8 }}>
-                {jsonError && <span style={{ color: "var(--danger)", fontSize: 12 }}>● {jsonError}</span>}
-                <button className="btn-primary" onClick={saveJsonEditor} disabled={savingJson || !!jsonError}>
-                  {savingJson ? "Saving…" : "Save Changes"}
+            <div style={{ display: "flex", gap: 8 }}>
+              {showJsonEditor && (
+                <>
+                  {jsonError && <span style={{ color: "var(--danger)", fontSize: 12 }}>● {jsonError}</span>}
+                  <button className="btn-primary" onClick={saveJsonEditor} disabled={savingJson || !!jsonError}>
+                    {savingJson ? "Saving…" : "Save Changes"}
+                  </button>
+                </>
+              )}
+              {!pendingAction && (
+                <button className="btn" onClick={() => setShowJsonEditor((v) => !v)}>
+                  {showJsonEditor ? "Hide JSON" : "Show JSON"}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
-          {showJsonEditor && (
-            <div style={{ marginBottom: 12 }}>
+          {showJsonEditor && !pendingAction && (
+            <div style={{ marginBottom: 12, flexShrink: 0 }}>
               <textarea
                 value={jsonText}
                 onChange={(e) => {
@@ -293,7 +359,7 @@ export default function BaseResumeStudioPage() {
                 spellCheck={false}
                 style={{
                   width: "100%",
-                  minHeight: 300,
+                  minHeight: 200,
                   fontFamily: "monospace",
                   fontSize: 12,
                   lineHeight: 1.5,
@@ -306,60 +372,29 @@ export default function BaseResumeStudioPage() {
                 }}
               />
               <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                Edit the JSON directly. The preview below updates live. Ctrl+S to save.
+                Edit the JSON directly. Ctrl+S to save. The preview updates live.
               </p>
             </div>
           )}
 
-          {/* Live Preview */}
-          <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--bg)" }}>
-            <h4 style={{ fontSize: 12, margin: "0 0 8px", color: "var(--muted)" }}>Live Preview</h4>
-            <h2 style={{ margin: "8px 0 0" }}>{liveContent.header.fullName}</h2>
-            <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-              {[liveContent.header.location, liveContent.header.phone, liveContent.header.email, liveContent.header.linkedin, liveContent.header.portfolio].filter(Boolean).join(" | ")}
-            </p>
-            {liveContent.summary?.text && <p style={{ fontSize: 13 }}>{liveContent.summary.text}</p>}
-
-            {liveContent.skills.length > 0 && (
-              <>
-                <h4 style={{ fontSize: 13, marginBottom: 4 }}>Technical Skills</h4>
-                {liveContent.skills.map((s) => (
-                  <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}><strong>{s.title}:</strong> {s.skills.join(", ")}</p>
-                ))}
-              </>
-            )}
-
-            {liveContent.experience.length > 0 && (
-              <>
-                <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Professional Experience</h4>
-                {liveContent.experience.map((exp) => (
-                  <div key={exp.id} style={{ marginBottom: 8 }}>
-                    <p style={{ fontSize: 13, margin: 0 }}><strong>{exp.title}</strong> — {exp.company} {exp.location ? `(${exp.location})` : ""}</p>
-                    <p className="muted" style={{ fontSize: 11, margin: 0 }}>{exp.startDate} – {exp.endDate ?? "Present"}</p>
-                    <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
-                      {exp.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
-                    </ul>
-                  </div>
-                ))}
-              </>
-            )}
-
-            {liveContent.education.length > 0 && (
-              <>
-                <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Education</h4>
-                {liveContent.education.map((edu) => (
-                  <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>{edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}</p>
-                ))}
-              </>
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            {pendingAction ? (
+              <div style={{ height: "100%", overflowY: "auto" }}>
+                <InlineDiffEditor
+                  original={baseResume.content as any}
+                  proposed={pendingAction.newContent! as any}
+                  onResolve={(resolutions) => applyResolvedChanges(resolutions)}
+                  onCancel={() => setPendingAction(null)}
+                />
+              </div>
+            ) : (
+              <A4Preview
+                content={liveContent}
+                highlights={[]}
+                pageBreakY={1050}
+              />
             )}
           </div>
-
-          {pendingAction && (
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-              <button className="btn-primary" onClick={applyPendingAction}>Apply this draft</button>
-              <button onClick={() => setPendingAction(null)}>Discard</button>
-            </div>
-          )}
         </div>
 
         {/* Falood CLI */}
