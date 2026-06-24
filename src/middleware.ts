@@ -24,6 +24,22 @@ function isPublicPath(pathname: string) {
   );
 }
 
+function createRequestHeaders(req: NextRequest, pathname: string, search: string, publicRoute: boolean) {
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-skarion-pathname", pathname);
+  requestHeaders.set("x-skarion-search", search);
+  requestHeaders.set("x-skarion-public-route", publicRoute ? "true" : "false");
+  return requestHeaders;
+}
+
+function nextWithRequestHeaders(req: NextRequest, pathname: string, search: string, publicRoute: boolean) {
+  return NextResponse.next({
+    request: {
+      headers: createRequestHeaders(req, pathname, search, publicRoute),
+    },
+  });
+}
+
 async function getVerifiedSession(token: string) {
   const jwtPayload = await verifyJWT(token);
   if (!jwtPayload) return null;
@@ -63,7 +79,8 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
-  if (isPublicPath(pathname)) return NextResponse.next();
+  const publicRoute = isPublicPath(pathname);
+  if (publicRoute) return nextWithRequestHeaders(req, pathname, search, true);
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
 
@@ -81,7 +98,7 @@ export async function middleware(req: NextRequest) {
       return NextResponse.redirect(redirectUrl);
     }
 
-    const res = NextResponse.next();
+    const res = nextWithRequestHeaders(req, pathname, search, false);
     res.headers.set("x-skarion-user-id", session.userId);
     res.headers.set("x-skarion-role", session.role);
     return res;
