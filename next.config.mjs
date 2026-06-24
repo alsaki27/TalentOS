@@ -23,6 +23,7 @@ const nextConfig = {
       "*": [
         "node_modules/@react-pdf/**",
         "node_modules/docx/**",
+        "node_modules/jspdf/**",
         "node_modules/fontkit/**",
         "node_modules/restructure/**",
         "node_modules/unicode-trie/**",
