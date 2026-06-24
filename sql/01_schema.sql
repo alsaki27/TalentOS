@@ -1,0 +1,265 @@
+-- ============================================================
+-- SKARION APP — Candidates + Jobs + Applications
+-- Run in Supabase SQL editor.
+-- ============================================================
+
+create extension if not exists pgcrypto; -- for gen_random_uuid()
+
+-- ----- CANDIDATES -----
+create table if not exists candidates (
+  id                    uuid primary key default gen_random_uuid(),
+  name                  text not null,
+  email                 text,
+  phone                 text,
+  status                text default 'active',        -- active | placed | paused | dropped
+  target_tier           text,                          -- osp | adjacent_1 | adjacent_2 | null
+  notes                 text,
+  resume_url            text,                          -- Supabase Storage path to current resume
+  resume_filename       text,
+  target_roles          text,
+  preferred_locations   text,
+  salary_expectation    text,
+  work_authorization    text,
+  avatar_url            text,
+  portal_token          uuid not null default gen_random_uuid(), -- magic-link token for the read-only candidate portal
+  portal_token_expires_at timestamptz,
+  portal_token_revoked_at timestamptz,
+  created_at            timestamptz default now()
+);
+create unique index if not exists candidates_portal_token_idx on candidates (portal_token);
+create index if not exists candidates_portal_token_expiry_idx on candidates (portal_token_expires_at);
+
+-- ----- JOBS (masterlist) -----
+create table if not exists jobs (
+  id                       uuid primary key default gen_random_uuid(),
+  title                    text not null,
+  company                  text,
+  location                 text,
+  source                   text,                        -- 'manual' | 'csv_import' | 'linkedin' | 'greenhouse' | 'lever' | 'ashby'
+  role_tier                text,                        -- osp | adjacent_1 | adjacent_2 | null
+  salary_range             text,
+  source_url               text,
+  notes                    text,
+  is_active                boolean default true,
+  seniority_level          text,                        -- LinkedIn: seniorityLevel
+  employment_type          text,                        -- LinkedIn: employmentType
+  applicants_count         integer,                     -- LinkedIn: applicantsCount
+  company_employees_count  integer,                     -- LinkedIn: companyEmployeesCount
+  company_website          text,                        -- LinkedIn: companyWebsite
+  posted_at                date,                        -- LinkedIn: postedAt
+  external_job_id          text,                        -- LinkedIn: id
+  tracking_id              text,                        -- LinkedIn: trackingId
+  ref_id                   text,                        -- LinkedIn: refId
+  apply_url                text,                        -- LinkedIn: applyUrl
+  description_html         text,                        -- LinkedIn: descriptionHtml
+  description_text         text,                        -- LinkedIn: descriptionText
+  benefits                 jsonb,                       -- LinkedIn: benefits
+  job_function             text,                        -- LinkedIn: jobFunction
+  industries               text,                        -- LinkedIn: industries
+  input_url                text,                        -- LinkedIn: inputUrl
+  company_linkedin_url     text,                        -- LinkedIn: companyLinkedinUrl
+  company_logo_url         text,                        -- LinkedIn: companyLogo
+  company_address          jsonb,                       -- LinkedIn: companyAddress
+  company_slogan           text,                        -- LinkedIn: companySlogan
+  company_description      text,                        -- LinkedIn: companyDescription
+  job_poster_name          text,                        -- LinkedIn: jobPosterName
+  job_poster_title         text,                        -- LinkedIn: jobPosterTitle
+  job_poster_profile_url   text,                        -- LinkedIn: jobPosterProfileUrl
+  job_poster_photo_url     text,                        -- LinkedIn: jobPosterPhoto
+  raw_source_payload       jsonb,                       -- Original scraper row
+  job_category             text,                        -- Primary heuristic category (OSP, Drafting, GIS, Civil, etc.)
+  category_tags            text[] default '{}',         -- All matched heuristic categories
+  category_relevance_score integer,                     -- 0-100 heuristic score, can be rescored later
+  last_seen_at             timestamptz default now(),   -- bumped each time re-import sees this job again
+  created_at               timestamptz default now()
+);
+
+create index if not exists jobs_company_idx on jobs (company);
+create index if not exists jobs_tier_idx on jobs (role_tier);
+create index if not exists jobs_active_idx on jobs (is_active);
+create index if not exists jobs_external_job_id_idx on jobs (external_job_id);
+create index if not exists jobs_job_category_idx on jobs (job_category);
+create index if not exists jobs_category_tags_idx on jobs using gin (category_tags);
+
+-- ----- PROFILES (internal authenticated users) -----
+create table if not exists profiles (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  email         text,
+  display_name  text not null default '',
+  role          text not null default 'recruiter'
+    check (role in ('admin', 'manager', 'application_engineer', 'recruiter')),
+  is_active     boolean not null default true,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index if not exists profiles_role_idx on profiles (role);
+create index if not exists profiles_active_idx on profiles (is_active);
+
+-- ----- JOB_COMMENTS (internal comments on each job, newest first in UI) -----
+create table if not exists job_comments (
+  id              uuid primary key default gen_random_uuid(),
+  job_id          uuid not null references jobs(id) on delete cascade,
+  commenter_name  text not null,
+  commenter_user_id uuid references profiles(user_id) on delete set null,
+  body            text not null,
+  created_at      timestamptz default now()
+);
+create index if not exists job_comments_job_created_idx on job_comments (job_id, created_at desc);
+create index if not exists job_comments_commenter_user_idx on job_comments (commenter_user_id);
+
+-- ----- RESUMES (variants: multiple resumes/cover letters per candidate) -----
+create table if not exists resumes (
+  id            uuid primary key default gen_random_uuid(),
+  candidate_id  uuid not null references candidates(id) on delete cascade,
+  label         text not null,
+  kind          text default 'resume',      -- resume | cover_letter
+  file_url      text not null,
+  filename      text not null,
+  created_at    timestamptz default now()
+);
+create index if not exists resumes_candidate_idx on resumes (candidate_id);
+
+-- ----- IMPORT_PROFILES (remembered column mappings for the universal import normalizer) -----
+create table if not exists import_profiles (
+  id          uuid primary key default gen_random_uuid(),
+  label       text not null,
+  column_map  jsonb not null,
+  created_at  timestamptz default now()
+);
+
+-- ----- APPLICATIONS (links candidate <-> job) -----
+create table if not exists applications (
+  id            uuid primary key default gen_random_uuid(),
+  candidate_id  uuid not null references candidates(id) on delete cascade,
+  job_id        uuid not null references jobs(id) on delete cascade,
+  status        text default 'applied',       -- applied | replied | interview | rejected | offer | withdrawn
+  resume_url    text,                          -- snapshot of which resume was used for THIS application
+  resume_filename text,
+  resume_id     uuid references resumes(id) on delete set null,
+  follow_up_at  date,
+  next_action   text,
+  assigned_by   text,
+  assigned_to   text,
+  assigned_by_user_id uuid references profiles(user_id) on delete set null,
+  assigned_to_user_id uuid references profiles(user_id) on delete set null,
+  assignment_note text,
+  assignment_due_at date,
+  completed_at  timestamptz,
+  proof_url     text,
+  proof_filename text,
+  proof_uploaded_at timestamptz,
+  proof_uploaded_by_user_id uuid references profiles(user_id) on delete set null,
+  applied_at    timestamptz default now(),
+  notes         text,
+  unique (candidate_id, job_id)                -- prevent duplicate application rows for same pair
+);
+
+create index if not exists applications_candidate_idx on applications (candidate_id);
+create index if not exists applications_job_idx on applications (job_id);
+create index if not exists applications_status_idx on applications (status);
+create index if not exists applications_follow_up_idx on applications (follow_up_at);
+create index if not exists applications_assigned_to_idx on applications (assigned_to);
+create index if not exists applications_assigned_by_user_idx on applications (assigned_by_user_id);
+create index if not exists applications_assigned_to_user_idx on applications (assigned_to_user_id);
+create index if not exists applications_assignment_due_idx on applications (assignment_due_at);
+create index if not exists applications_proof_uploaded_by_idx on applications (proof_uploaded_by_user_id);
+
+-- ----- APPLICATION_EVENTS (status-change timeline) -----
+create table if not exists application_events (
+  id              uuid primary key default gen_random_uuid(),
+  application_id  uuid not null references applications(id) on delete cascade,
+  from_status     text,
+  to_status       text not null,
+  note            text,
+  created_at      timestamptz default now()
+);
+create index if not exists application_events_application_idx on application_events (application_id);
+
+-- ----- APPLICATION_COMMENTS (free-form activity log, "the log is a comment" v1 design) -----
+create table if not exists application_comments (
+  id                    uuid primary key default gen_random_uuid(),
+  application_id        uuid not null references applications(id) on delete cascade,
+  commenter_name        text not null,
+  commenter_user_id     uuid references profiles(user_id) on delete set null,
+  body                  text not null,
+  visible_to_candidate  boolean not null default false,  -- only flagged comments show on the candidate portal
+  created_at            timestamptz default now()
+);
+create index if not exists application_comments_application_created_idx on application_comments (application_id, created_at desc);
+create index if not exists application_comments_commenter_user_idx on application_comments (commenter_user_id);
+
+-- ----- AUDIT_LOGS (internal audit trail) -----
+create table if not exists audit_logs (
+  id             uuid primary key default gen_random_uuid(),
+  actor_user_id  uuid references profiles(user_id) on delete set null,
+  actor_email    text,
+  action         text not null,
+  entity_type    text not null,
+  entity_id      uuid,
+  metadata       jsonb not null default '{}'::jsonb,
+  created_at     timestamptz not null default now()
+);
+create index if not exists audit_logs_actor_idx on audit_logs (actor_user_id, created_at desc);
+create index if not exists audit_logs_entity_idx on audit_logs (entity_type, entity_id, created_at desc);
+
+-- ----- IMPORT_SOURCES (saved, schedulable ATS/career-page board sources) -----
+create table if not exists import_sources (
+  id            uuid primary key default gen_random_uuid(),
+  label         text not null,
+  provider      text not null check (provider in ('greenhouse', 'lever', 'ashby', 'usajobs', 'career_page')),
+  token_or_url  text not null,
+  is_active     boolean not null default true,
+  last_run_at   timestamptz,
+  last_result   jsonb,
+  created_at    timestamptz not null default now()
+);
+create index if not exists import_sources_active_idx on import_sources (is_active);
+
+-- ----- IMPORT_RUNS (history of every scheduled/manual import attempt) -----
+create table if not exists import_runs (
+  id                uuid primary key default gen_random_uuid(),
+  import_source_id  uuid not null references import_sources(id) on delete cascade,
+  imported          integer,
+  skipped           integer,
+  error             text,
+  ran_at            timestamptz not null default now()
+);
+create index if not exists import_runs_source_idx on import_runs (import_source_id, ran_at desc);
+
+-- ----- CHAT_CONVERSATIONS / CHAT_MESSAGES (AI assistant, read-only tool access) -----
+create table if not exists chat_conversations (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid references profiles(user_id) on delete set null,
+  title       text not null default 'New conversation',
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+create index if not exists chat_conversations_user_idx on chat_conversations (user_id, updated_at desc);
+
+create table if not exists chat_messages (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references chat_conversations(id) on delete cascade,
+  role            text not null check (role in ('user', 'assistant', 'tool')),
+  content         text not null,
+  tool_name       text,
+  attachment_url   text,
+  attachment_name  text,
+  attachment_type  text,
+  attachment_text  text,  -- extracted content for text-based files only (.txt/.md/.csv/.json/.log)
+  created_at      timestamptz not null default now()
+);
+create index if not exists chat_messages_conversation_idx on chat_messages (conversation_id, created_at);
+
+-- ----- AI_DIGESTS (single-shot daily summary, no tool-calling) -----
+create table if not exists ai_digests (
+  id            uuid primary key default gen_random_uuid(),
+  content       text not null,
+  provider      text not null,
+  generated_at  timestamptz not null default now()
+);
+create index if not exists ai_digests_generated_idx on ai_digests (generated_at desc);
+
+-- ----- Storage bucket for resumes -----
+-- Run this separately if it errors (bucket may need creating via Supabase dashboard UI instead):
+insert into storage.buckets (id, name, public) values ('resumes', 'resumes', true)
+on conflict (id) do nothing;

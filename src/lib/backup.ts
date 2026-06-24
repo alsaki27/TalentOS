@@ -1,0 +1,88 @@
+// src/lib/backup.ts
+// Snapshot the core tables to JSON. Built after this app lived through an hour-long
+// Supabase outage and a fully wiped `jobs` table mid-session — recovery only worked
+// because a source import file happened to still be on disk. This is the safety net
+// for next time that isn't down to luck.
+
+import { query } from "@/server/db/neon";
+import { uploadFile, downloadFile } from "@/server/storage/storageApi";
+
+const BACKUP_TABLES = ["candidates", "jobs", "applications", "resumes"] as const;
+const RESTORE_TABLES = ["candidates", "jobs", "resumes", "applications"] as const;
+
+export interface BackupSnapshot {
+  takenAt: string;
+  tables: Record<string, unknown[]>;
+  counts: Record<string, number>;
+}
+
+export async function buildBackupSnapshot(): Promise<BackupSnapshot> {
+  const tables: Record<string, unknown[]> = {};
+  const counts: Record<string, number> = {};
+
+  for (const table of BACKUP_TABLES) {
+    const rows = await query(`SELECT * FROM ${table}`, []);
+    tables[table] = rows ?? [];
+    counts[table] = rows?.length ?? 0;
+  }
+
+  return { takenAt: new Date().toISOString(), tables, counts };
+}
+
+export async function storeBackupSnapshot(snapshot: BackupSnapshot): Promise<string> {
+  const path = `backups/${snapshot.takenAt.replace(/[:.]/g, "-")}.json`;
+  await uploadFile(path, new TextEncoder().encode(JSON.stringify(snapshot)), "application/json");
+  return path;
+}
+
+export function parseBackupSnapshot(input: unknown): BackupSnapshot {
+  if (!input || typeof input !== "object") throw new Error("Invalid backup snapshot.");
+  const snapshot = input as Partial<BackupSnapshot>;
+  if (typeof snapshot.takenAt !== "string" || !snapshot.tables || typeof snapshot.tables !== "object") {
+    throw new Error("Invalid backup snapshot.");
+  }
+
+  for (const table of BACKUP_TABLES) {
+    if (!Array.isArray(snapshot.tables[table])) {
+      throw new Error(`Backup snapshot is missing table: ${table}`);
+    }
+  }
+
+  return {
+    takenAt: snapshot.takenAt,
+    tables: snapshot.tables as Record<string, unknown[]>,
+    counts: snapshot.counts ?? {},
+  };
+}
+
+export async function loadStoredBackupSnapshot(path: string): Promise<BackupSnapshot> {
+  const cleanPath = path.startsWith("backups/") ? path : `backups/${path}`;
+  const blob = await downloadFile(cleanPath);
+  const text = await blob.text();
+  return parseBackupSnapshot(JSON.parse(text));
+}
+
+export async function restoreBackupSnapshot(snapshot: BackupSnapshot) {
+  const restored: Record<string, number> = {};
+
+  for (const table of RESTORE_TABLES) {
+    const rows = snapshot.tables[table] ?? [];
+    if (!rows.length) {
+      restored[table] = 0;
+      continue;
+    }
+
+    const cols = Object.keys(rows[0] as Record<string, unknown>);
+    for (const row of rows) {
+      const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+      const values = cols.map((col) => (row as any)[col]);
+      await query(
+        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${cols.map((col) => `${col} = EXCLUDED.${col}`).join(", ")}`,
+        values
+      );
+    }
+    restored[table] = rows.length;
+  }
+
+  return restored;
+}

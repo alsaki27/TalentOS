@@ -1,0 +1,48 @@
+{
+  "name": "skarion-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "setup:check": "node scripts/setup-check.mjs",
+    "seed:admin": "node scripts/seed-admin.mjs",
+    "typecheck": "tsc --noEmit --incremental false",
+    "lint": "next lint",
+    "test": "npm run typecheck",
+    "build": "next build",
+    "start": "next start",
+    "cf:build": "npx cloudflare",
+    "cf:preview": "npx cloudflare && npx wrangler dev",
+    "cf:deploy": "npx cloudflare && npx wrangler deploy",
+    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "@types/pdf-parse": "^1.1.5",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "docx": "^9.7.1",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^1.21.0",
+    "mammoth": "^1.12.0",
+    "next": "^14.2.35",
+    "papaparse": "^5.4.1",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@opennextjs/cloudflare": "^0.2.0",
+    "@types/node": "^20.0.0",
+    "@types/papaparse": "^5.3.14",
+    "@types/react": "^18.3.0",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "^14.2.35",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.0.0"
+  }
+}

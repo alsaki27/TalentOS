@@ -1,0 +1,151 @@
+name: Deploy TalentOS (Cloudflare)
+
+# Replaces the previous deploy process, which was an undocumented local
+# `wrangler deploy` run from a developer's machine - the actual deployed
+# code had drifted 8 commits + ~150 files ahead of what was in GitHub
+# until this workflow's introduction. From here on, every deploy goes
+# through this pipeline, off a real commit, with real CI gates.
+#
+# `wrangler deploy` does NOT wipe a Worker's existing secrets - only a
+# named `wrangler secret put` changes that one secret. This workflow only
+# explicitly (re)sets DATABASE_URL, since that's the one secret with a
+# previously-undocumented, non-obvious correct format (direct endpoint,
+# no -pooler, no channel_binding - see
+# docs/CLOUDFLARE_DIAGNOSTIC_AND_PDF_STRATEGY.md for why). Every other
+# secret already set on the live Worker (JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET,
+# CRON_SECRET, SUPABASE_*, AI provider keys, etc.) is left untouched by
+# this workflow - add an explicit `secret put` step here if one of those
+# ever needs to be rotated through CI instead of by hand.
+
+# Verified working end to end (run #5) - now auto-deploys on every push to
+# this branch, by explicit choice. Anyone pushing here (including
+# concurrent local work outside this pipeline) ships straight to
+# production with no review gate in between.
+on:
+  push:
+    branches: [neon-cloudflare-migration]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+
+      - name: Build for Cloudflare (OpenNext)
+        # Next.js's "Collecting page data" build phase evaluates route
+        # modules in a way that, at least in this CI environment, ends up
+        # calling code that checks for DATABASE_URL - even though that
+        # value is otherwise only needed at runtime, not build time
+        # (confirmed: this exact build succeeds locally with no
+        # DATABASE_URL set at all, so it's environment-specific, not a
+        # universal requirement - but providing the real value here costs
+        # nothing and sidesteps the question of exactly which code path
+        # triggers it).
+        run: npm run cf:build
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+
+      - name: Check Worker bundle size before deploying
+        # Cloudflare's 3 MiB free-plan script-size rejection only surfaced at the
+        # real `wrangler deploy` step, after the build already ran - a slow,
+        # unclear failure mode discovered the hard way (a single library, @react-
+        # pdf/renderer's PDFKit dependency, silently pushed the script over the
+        # limit; the real error wasn't visible until this exact point in CI three
+        # separate times). A dry-run deploy reports the same size without
+        # touching the live Worker, so this fails fast with a clear message
+        # instead of waiting for Cloudflare's own rejection.
+        #
+        # Budget is the real 3072 KiB (3 MiB) free-plan hard limit, not a more
+        # conservative number below it - the app is *already* at ~3052 KiB gzipped
+        # (confirmed at the time this check was added), so there's only ~20 KiB of
+        # real headroom left regardless of what budget this check uses. A tighter
+        # budget would fail CI on every deploy today even though nothing is
+        # actually broken. If you want real headroom back, it has to come from
+        # removing weight from the bundle (the @react-pdf/renderer -> jsPDF swap
+        # bought back ~900 KiB once already) - this check can only warn, not
+        # create margin that doesn't exist.
+        run: |
+          OUTPUT=$(npx wrangler deploy --dry-run --outdir /tmp/wrangler-dryrun 2>&1)
+          echo "$OUTPUT"
+          # Cloudflare's free-plan limit applies to the *gzipped* size, not the raw
+          # upload total - "Total Upload: 17329.79 KiB / gzip: 3052.37 KiB" - the
+          # raw figure is an order of magnitude larger and not the right number to
+          # budget against.
+          SIZE_KIB=$(echo "$OUTPUT" | grep -oP 'gzip: \K[0-9.]+' || echo "0")
+          echo "Worker gzipped upload size: ${SIZE_KIB} KiB"
+          BUDGET_KIB=3072
+          if awk -v s="$SIZE_KIB" -v b="$BUDGET_KIB" 'BEGIN { exit !(s > b) }'; then
+            echo "::error::Worker bundle is ${SIZE_KIB} KiB, over the ${BUDGET_KIB} KiB budget (Cloudflare free-plan hard limit is 3072 KiB / 3 MiB). Deploy would be rejected by Cloudflare - check the output above for the largest dependencies before merging."
+            exit 1
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Run Neon schema fixes (sql/neon_fixes/)
+        # Additive-only, idempotent patches - see sql/neon_fixes/README.md for why
+        # this exists and the rules for what's allowed in this directory. Runs
+        # before the deploy so any new column/sequence the deploy's code depends
+        # on already exists by the time the new Worker version goes live. This
+        # closes the exact gap that broke production earlier: a correct,
+        # idempotent migration was written but never actually executed.
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          for f in sql/neon_fixes/*.sql; do
+            echo "Applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      - name: Set DATABASE_URL secret (corrected non-pooler format)
+        # `wrangler secret put <key>` has no `--value` flag at all (that was
+        # wrong - confirmed via the actual CI failure: "Unknown argument:
+        # value"). The real, documented mechanism is reading the value from
+        # stdin, which is what this does. Calling wrangler directly here
+        # instead of through cloudflare/wrangler-action@v3, since this needs
+        # a shell pipe that the action's `command:` input can't express -
+        # CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID as env vars is wrangler's
+        # own documented way to authenticate without the action wrapper.
+        run: echo "$SECRET_VALUE" | npx wrangler secret put DATABASE_URL
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SECRET_VALUE: ${{ secrets.TALENTOS_DATABASE_URL }}
+
+      - name: Verify live health after deploy
+        # Every prior deploy this pipeline shipped was manually checked with a
+        # one-off curl against /api/health afterward - this just makes that
+        # check part of the pipeline instead of a step a human has to remember.
+        # A few retries since a fresh Worker version can take a moment to
+        # propagate after `wrangler deploy` returns.
+        run: |
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w '\n%{http_code}' "https://skarion-talent-os.skarion-talentos.workers.dev/api/health" || echo "000")
+            CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            if [ "$CODE" = "200" ]; then
+              echo "Health check passed: $BODY"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $CODE - $BODY"
+            sleep 5
+          done
+          echo "::error::Live health check failed after deploy - site is not responding healthy at /api/health"
+          exit 1

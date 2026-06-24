@@ -1,0 +1,30 @@
+#:schema node_modules/wrangler/config-schema.json
+# Cloudflare Workers FREE TIER configuration
+# Limits: 100,000 requests/day, 10ms CPU per request, 128MB memory
+# No Hyperdrive, no Durable Objects, no paid bindings.
+name = "skarion-talent-os"
+main = ".worker-next/index.mjs"
+compatibility_date = "2025-06-20"
+# nodejs_compat enables some Node.js APIs on the free tier (e.g., Buffer)
+compatibility_flags = ["nodejs_compat"]
+
+# Workers + Assets: host static frontend files (free tier)
+assets = { directory = ".worker-next/assets", binding = "ASSETS" }
+
+[observability]
+enabled = true
+
+# Secrets are set via `wrangler secret put`, not here:
+# DATABASE_URL, NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT
+# SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+# AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY
+# ANTHROPIC_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY
+# GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
+#
+# Free tier: all secrets are free to set. Only KV and R2 have quotas.
+
+# Optional (free tier): ISR cache via KV
+# KV limits on free tier: 1,000 reads/day, 1,000 writes/day, 1GB storage
+# [[kv_namespaces]]
+# binding = "NEXT_CACHE_WORKERS_KV"
+# id = "..."
