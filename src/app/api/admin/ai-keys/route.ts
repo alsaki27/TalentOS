@@ -13,7 +13,7 @@ import {
 } from "@/server/repositories/aiKeyRepository";
 
 export async function GET() {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   try {
@@ -25,7 +25,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   if (!isEncryptionAvailable()) {

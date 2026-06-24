@@ -57,7 +57,7 @@ async function snapshotFromRequest(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   try {

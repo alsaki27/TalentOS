@@ -11,7 +11,7 @@ import { supabase } from "@/lib/supabase";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   try {
@@ -40,7 +40,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const { context, response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   let body: any;
