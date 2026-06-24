@@ -46,7 +46,16 @@ export async function createAuthResponse(profile: SessionUser, status = 200) {
 }
 
 export function clearAuthCookies(response: NextResponse) {
-  response.cookies.delete(ACCESS_TOKEN_COOKIE);
-  response.cookies.delete(REFRESH_TOKEN_COOKIE);
+  const secure = process.env.NODE_ENV === "production";
+  const expiredCookieOptions = {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure,
+    path: "/",
+    maxAge: 0,
+  };
+
+  response.cookies.set(ACCESS_TOKEN_COOKIE, "", expiredCookieOptions);
+  response.cookies.set(REFRESH_TOKEN_COOKIE, "", expiredCookieOptions);
   return response;
 }

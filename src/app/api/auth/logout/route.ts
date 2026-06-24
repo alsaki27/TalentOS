@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE } from "@/lib/auth";
+import { clearAuthCookies } from "@/server/auth/session";
 
-export async function POST() {
-  cookies().delete(ACCESS_TOKEN_COOKIE);
-  cookies().delete(REFRESH_TOKEN_COOKIE);
-  return NextResponse.json({ ok: true });
+export function POST() {
+  const response = NextResponse.json({ ok: true });
+  return clearAuthCookies(response);
 }
