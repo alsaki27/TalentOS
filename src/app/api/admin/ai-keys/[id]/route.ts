@@ -16,7 +16,7 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { context, response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const { id } = params;
@@ -81,7 +81,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { context, response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const { id } = params;

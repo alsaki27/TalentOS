@@ -1,14 +1,13 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { OrganizationEntity, ProfileEntity } from "../../entities";
-import { AuthorizationService } from "../../common/auth/authorization.service";
+import { OrganizationEntity } from "../../entities";
 import { OrganizationsController } from "./organizations.controller";
 import { OrganizationsService } from "./organizations.service";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([OrganizationEntity, ProfileEntity])],
+  imports: [TypeOrmModule.forFeature([OrganizationEntity])],
   controllers: [OrganizationsController],
-  providers: [OrganizationsService, AuthorizationService],
+  providers: [OrganizationsService],
   exports: [OrganizationsService],
 })
 export class OrganizationsModule {}

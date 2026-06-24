@@ -21,7 +21,7 @@ import { processPendingCategorization } from "@/lib/ai/jobCategorization";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   let pendingCount: number;
@@ -74,7 +74,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const body = await req.json().catch(() => ({}));

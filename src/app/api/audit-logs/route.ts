@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 50;
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const url = new URL(req.url);

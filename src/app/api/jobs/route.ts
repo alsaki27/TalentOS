@@ -46,14 +46,30 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
-  const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
+  const search = (url.searchParams.get("search") || "").trim();
   const source = url.searchParams.get("source") || "";
   const roleTier = url.searchParams.get("roleTier") || "";
   const active = url.searchParams.get("active") || "";
   const employmentType = url.searchParams.get("employmentType") || "";
   const category = url.searchParams.get("category") || "";
   const workAuthorization = url.searchParams.get("workAuthorization") || "";
+  const dateStart = url.searchParams.get("dateStart") || "";
+  const dateEnd = url.searchParams.get("dateEnd") || "";
   const sort = url.searchParams.get("sort") || "";
+  const candidate = url.searchParams.get("candidate") || "";
+  const assignedBy = url.searchParams.get("assignedBy") || "";
+  const owner = url.searchParams.get("owner") || "";
+  const scoreStr = url.searchParams.get("score") || "";
+  
+  let scoreMin = -1;
+  let scoreMax = 101;
+  if (scoreStr) {
+    const [minStr, maxStr] = scoreStr.split(",");
+    scoreMin = parseInt(minStr, 10);
+    scoreMax = parseInt(maxStr, 10);
+    if (isNaN(scoreMin)) scoreMin = 0;
+    if (isNaN(scoreMax)) scoreMax = 100;
+  }
 
   if (isNeon()) {
     const offset = (page - 1) * pageSize;
@@ -77,8 +93,14 @@ export async function GET(req: NextRequest) {
         AND ($3 = '' OR j.role_tier = $3)
         AND ($4 = '' OR j.is_active = ($4 = 'active'))
         AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category = $6 OR $6 = ANY(j.category_tags))
+        AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
         AND ($7 = '' OR j.work_authorization = $7)
+        AND ($11 = '' OR j.posted_at >= $11::timestamp)
+        AND ($12 = '' OR j.posted_at <= $12::timestamp)
+        AND ($13 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $13))
+        AND ($14 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $14 OR a.assigned_by = $14)))
+        AND ($15 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $15 OR a.assigned_to = $15)))
+        AND ($16 = -1 OR (j.category_relevance_score >= $16::int AND j.category_relevance_score <= $17::int))
       ORDER BY
         CASE WHEN $8 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
         CASE WHEN $8 = 'posted_desc' THEN j.posted_at END DESC NULLS LAST,
@@ -94,16 +116,22 @@ export async function GET(req: NextRequest) {
         AND ($3 = '' OR j.role_tier = $3)
         AND ($4 = '' OR j.is_active = ($4 = 'active'))
         AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category = $6 OR $6 = ANY(j.category_tags))
+        AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
         AND ($7 = '' OR j.work_authorization = $7)
+        AND ($8 = '' OR j.posted_at >= $8::timestamp)
+        AND ($9 = '' OR j.posted_at <= $9::timestamp)
+        AND ($10 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $10))
+        AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
+        AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
+        AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
     `;
 
     try {
       const jobs = await query<Record<string, any>>(dataSql, [
-        searchParam, source, roleTier, active, employmentType, category, workAuthorization, sort, offset, pageSize,
+        searchParam, source, roleTier, active, employmentType, category, workAuthorization, sort, offset, pageSize, dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax
       ]);
       const countRow = await queryOne<{ total: number }>(countSql, [
-        searchParam, source, roleTier, active, employmentType, category, workAuthorization,
+        searchParam, source, roleTier, active, employmentType, category, workAuthorization, dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax
       ]);
 
       const shaped = (jobs ?? []).map((job: any) => ({
@@ -126,7 +154,10 @@ export async function GET(req: NextRequest) {
 
   let dbQuery = supabase.from("jobs").select(LIST_COLUMNS, { count: "planned" });
 
-  if (search) dbQuery = dbQuery.or(`title.ilike.%${search}%,company.ilike.%${search}%,location.ilike.%${search}%`);
+  if (search) {
+    const safeSearch = search.replace(/"/g, '""');
+    dbQuery = dbQuery.or(`title.ilike."%${safeSearch}%",company.ilike."%${safeSearch}%",location.ilike."%${safeSearch}%"`);
+  }
   if (source) dbQuery = dbQuery.eq("source", source);
   if (roleTier) dbQuery = dbQuery.eq("role_tier", roleTier);
   if (active === "active") dbQuery = dbQuery.eq("is_active", true);
@@ -134,6 +165,22 @@ export async function GET(req: NextRequest) {
   if (employmentType) dbQuery = dbQuery.eq("employment_type", employmentType);
   if (category) dbQuery = dbQuery.or(`job_category.eq.${category},category_tags.cs.{"${category}"}`);
   if (workAuthorization) dbQuery = dbQuery.eq("work_authorization", workAuthorization);
+  if (dateStart) dbQuery = dbQuery.gte("posted_at", dateStart);
+  if (dateEnd) dbQuery = dbQuery.lte("posted_at", dateEnd);
+  if (scoreStr) {
+    dbQuery = dbQuery.gte("category_relevance_score", scoreMin).lte("category_relevance_score", scoreMax);
+  }
+
+  if (candidate || assignedBy || owner) {
+    let appQuery = supabase.from("applications").select("job_id");
+    if (candidate) appQuery = appQuery.eq("candidate_id", candidate);
+    if (assignedBy) appQuery = appQuery.or(`assigned_by_user_id.eq.${assignedBy},assigned_by.eq.${assignedBy}`);
+    if (owner) appQuery = appQuery.or(`assigned_to_user_id.eq.${owner},assigned_to.eq.${owner}`);
+    const { data: appRows } = await appQuery;
+    const jobIds = Array.from(new Set(appRows?.map((r: any) => r.job_id).filter(Boolean) ?? []));
+    if (jobIds.length === 0) return NextResponse.json({ jobs: [], total: 0, page, pageSize });
+    dbQuery = dbQuery.in("id", jobIds);
+  }
 
   if (sort === "posted_asc") dbQuery = dbQuery.order("posted_at", { ascending: true, nullsFirst: false });
   else if (sort === "posted_desc") dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });

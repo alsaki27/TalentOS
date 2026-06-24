@@ -1,14 +1,13 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
-import { PlanEntity, SubscriptionEntity, ProfileEntity } from "../../entities";
-import { AuthorizationService } from "../../common/auth/authorization.service";
+import { PlanEntity, SubscriptionEntity } from "../../entities";
 import { BillingController } from "./billing.controller";
 import { BillingService } from "./billing.service";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([PlanEntity, SubscriptionEntity, ProfileEntity])],
+  imports: [TypeOrmModule.forFeature([PlanEntity, SubscriptionEntity])],
   controllers: [BillingController],
-  providers: [BillingService, AuthorizationService],
+  providers: [BillingService],
   exports: [BillingService],
 })
 export class BillingModule {}

@@ -1,5 +1,5 @@
 // src/app/review/page.tsx
-// QC review queue for TalentOS operators — base resumes and application packets.
+// QC Review Queue for reviewers and managers — base resumes and application packets.
 // Packets have no status column of their own; review state is the linked
 // applications.review_status (pending/approved/changes_requested/not_required),
 // the same review gate the rest of the app already uses for applications.
@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../Skeleton";
 
-const REVIEWER_ROLES = ["admin", "manager", "application_engineer"];
+const REVIEWER_ROLES = ["admin", "manager", "reviewer"];
 
 type ReviewTab = "All" | "Base Resumes" | "Application Packets" | "Approved" | "Rejected";
 

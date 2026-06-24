@@ -7,7 +7,9 @@ import {
   ChevronRight,
   Users,
   Zap,
+  Shield,
   Building2,
+  Mail,
   UserPlus,
   Sparkles,
 } from "lucide-react";
@@ -30,7 +32,7 @@ const defaultState: OnboardingState = {
   website: "",
   teamSize: "",
   selectedPlan: "professional",
-  invites: [{ email: "", role: "manager" }],
+  invites: [{ email: "", role: "recruiter" }],
 };
 
 const teamSizeOptions = [
@@ -79,6 +81,7 @@ const plans = [
 const roleOptions = [
   { value: "admin", label: "Admin" },
   { value: "manager", label: "Manager" },
+  { value: "recruiter", label: "Recruiter" },
   { value: "application_engineer", label: "Application Engineer" },
 ];
 
@@ -138,7 +141,7 @@ export default function OnboardingPage() {
   );
 
   const addInvite = () => {
-    update({ invites: [...state.invites, { email: "", role: "manager" }] });
+    update({ invites: [...state.invites, { email: "", role: "recruiter" }] });
   };
 
   const updateInvite = (index: number, patch: Partial<{ email: string; role: string }>) => {
@@ -148,7 +151,7 @@ export default function OnboardingPage() {
 
   const removeInvite = (index: number) => {
     const next = state.invites.filter((_, i) => i !== index);
-    update({ invites: next.length ? next : [{ email: "", role: "manager" }] });
+    update({ invites: next.length ? next : [{ email: "", role: "recruiter" }] });
   };
 
   const sendInvitesAndFinish = () => {

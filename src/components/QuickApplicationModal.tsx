@@ -90,7 +90,7 @@ const STATUS_OPTIONS = [
 
 export default function QuickApplicationModal({ onClose, userRole = "" }: Props) {
   const router = useRouter();
-  const canCreateJob = ["admin", "manager"].includes(userRole);
+  const canCreateJob = ["admin", "manager", "recruiter"].includes(userRole);
 
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);

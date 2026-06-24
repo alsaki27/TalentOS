@@ -98,17 +98,6 @@ interface ApplicationEvent {
   created_at: string;
 }
 
-interface TailoredResumeEntry {
-  id: string;
-  createdAt: string;
-  updatedAt: string;
-  jobDescription: string | null;
-  companyName: string | null;
-  skills: string[];
-  resumeData: any;
-  chatHistory: any;
-}
-
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
@@ -128,7 +117,7 @@ export default function CandidateProfilePage() {
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"Overview" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Applications">("Overview");
+  const [activeTab, setActiveTab] = useState<"Overview" | "Evidence Bank" | "Base Resumes" | "Applications">("Overview");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -138,8 +127,6 @@ export default function CandidateProfilePage() {
   const [baseResumes, setBaseResumes] = useState<BaseResumeSummary[]>([]);
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
-  const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeEntry[]>([]);
-  const [tailoredResumesLoading, setTailoredResumesLoading] = useState(false);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
   const [showParseModal, setShowParseModal] = useState(false);
   const [parseModalText, setParseModalText] = useState("");
@@ -164,10 +151,7 @@ export default function CandidateProfilePage() {
     if (activeTab === "Base Resumes" && id) {
       loadBaseResumes();
     }
-    if (activeTab === "Tailored Resumes" && id) {
-      loadTailoredResumes();
-    }
-  }, [activeTab, id, candidate?.name]);
+  }, [activeTab, id]);
 
   async function loadEvidence() {
     if (!id) return;
@@ -183,46 +167,6 @@ export default function CandidateProfilePage() {
     const res = await fetch(`/api/base-resumes?candidateId=${id}`);
     setBaseResumes(res.ok ? await res.json() : []);
     setBaseResumesLoading(false);
-  }
-
-  async function loadTailoredResumes() {
-    if (!id) return;
-    setTailoredResumesLoading(true);
-    try {
-      const res = await fetch("/api/falood/applications", { cache: "no-store" });
-      const json = await res.json().catch(() => ({}));
-      const rows: TailoredResumeEntry[] = json?.success ? (json.data ?? []) : [];
-
-      const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
-      const candidateName = candidate?.name ? normalize(candidate.name) : "";
-
-      const isForCandidate = (app: TailoredResumeEntry) => {
-        const history = Array.isArray(app.chatHistory)
-          ? app.chatHistory
-          : typeof app.chatHistory === "string"
-            ? (() => {
-                try { return JSON.parse(app.chatHistory); } catch { return []; }
-              })()
-            : [];
-        if (history.some((m: any) => m?.candidateId === id)) return true;
-
-        const fullName = app?.resumeData?.personalInfo?.fullName;
-        if (candidateName && typeof fullName === "string" && normalize(fullName) === candidateName) return true;
-
-        return false;
-      };
-
-      const tailored = rows
-        .filter((a) => (a.jobDescription || "").trim().length > 0)
-        .filter(isForCandidate)
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-      setTailoredResumes(tailored);
-    } catch {
-      setTailoredResumes([]);
-    } finally {
-      setTailoredResumesLoading(false);
-    }
   }
 
   async function parseWithMarkitdown(resumeId: string) {
@@ -508,7 +452,7 @@ export default function CandidateProfilePage() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-        {(["Overview", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Applications"] as const).map((tab) => (
+        {(["Overview", "Evidence Bank", "Base Resumes", "Applications"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -808,59 +752,6 @@ export default function CandidateProfilePage() {
                     <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {activeTab === "Tailored Resumes" && (
-        <div>
-          <div className="page-header">
-            <h2 style={{ fontSize: 16, margin: 0 }}>Tailored resumes ({tailoredResumes.length})</h2>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={() => setTailorContext({})}>+ New tailored resume</button>
-            </div>
-          </div>
-          <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
-            Job-specific resumes created from this candidate&apos;s base resume, editable in the Falood studio.
-          </p>
-
-          {tailoredResumesLoading ? (
-            <p className="muted">Loading…</p>
-          ) : tailoredResumes.length === 0 ? (
-            <div className="empty">
-              No tailored resumes found for this candidate yet. Create one from the Base Resumes tab.
-            </div>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Target job</th>
-                  <th>Company</th>
-                  <th>Updated</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {tailoredResumes.map((t) => {
-                  const jd = (t.jobDescription || "").trim();
-                  const firstLine = jd.split("\n")[0] || "";
-                  const title = firstLine.toLowerCase().startsWith("title:")
-                    ? firstLine.replace(/^title:\s*/i, "").trim()
-                    : "Tailored resume";
-                  const company = t.companyName || "—";
-                  return (
-                    <tr key={t.id}>
-                      <td><strong>{title || "Tailored resume"}</strong></td>
-                      <td className="muted">{company}</td>
-                      <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
-                      <td>
-                        <Link className="row-link" href={`/falood/studio/tailor/${t.id}`}>Open in studio</Link>
-                      </td>
-                    </tr>
-                  );
-                })}
               </tbody>
             </table>
           )}
