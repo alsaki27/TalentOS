@@ -6,6 +6,14 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+interface OpenAiChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+  }>;
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -95,17 +103,27 @@ ${jobDescription || "Not provided yet, infer from chat context."}`;
   }
 
   try {
-    const { default: OpenAI } = await import("openai");
-    const client = new OpenAI({ apiKey });
-
-    const response = await client.chat.completions.create({
-      model,
-      response_format: { type: "json_object" },
-      messages: openaiMessages,
-      temperature: 0.7,
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        response_format: { type: "json_object" },
+        messages: openaiMessages,
+        temperature: 0.7,
+      }),
     });
 
-    const content = response.choices[0]?.message?.content;
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `OpenAI API error (${response.status})`);
+    }
+
+    const data = (await response.json()) as OpenAiChatCompletionResponse;
+    const content = data.choices?.[0]?.message?.content;
     if (!content) {
       return NextResponse.json({ error: "Empty response from AI" }, { status: 500 });
     }
