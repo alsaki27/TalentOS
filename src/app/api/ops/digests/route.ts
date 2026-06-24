@@ -11,7 +11,7 @@ import { query, queryOne } from "@/server/db/neon";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   let data: any[];
@@ -39,7 +39,7 @@ export async function GET() {
 }
 
 export async function POST() {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const result = await generateDailyDigest();

@@ -5,7 +5,7 @@ import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const { context, response } = await requireCurrentUser();
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   let data: any;

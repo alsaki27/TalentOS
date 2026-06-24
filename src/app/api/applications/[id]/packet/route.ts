@@ -12,7 +12,7 @@ import { updatePacket } from "@/server/repositories/applicationPacketsRepository
 
 export const dynamic = "force-dynamic";
 
-const PACKET_VIEWER_ROLES: UserRole[] = [...APPLICATION_WORKER_ROLES];
+const PACKET_VIEWER_ROLES: UserRole[] = [...APPLICATION_WORKER_ROLES, "reviewer"];
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(PACKET_VIEWER_ROLES);

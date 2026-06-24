@@ -9,7 +9,7 @@ import { buildBackupSnapshot } from "@/lib/backup";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { response } = await requireCurrentUser();
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
   const snapshot = await buildBackupSnapshot();

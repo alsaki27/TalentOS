@@ -6,6 +6,7 @@ import Link from "next/link";
 import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
+import { DateRangePicker } from "@/components/DateRangePicker";
 
 interface Applicant {
   application_id: string;
@@ -74,6 +75,12 @@ interface SavedJobSearch {
     category?: string;
     workAuthorization?: string;
     sort?: string;
+    dateStart?: string;
+    dateEnd?: string;
+    candidate?: string;
+    assignedBy?: string;
+    owner?: string;
+    score?: string;
   };
   is_shared: boolean;
 }
@@ -149,6 +156,90 @@ function initials(name: string): string {
 
 const PAGE_SIZE = 50;
 
+function DualRangeSlider({ min, max, value, onChange }: { min: number, max: number, value: [number, number], onChange: (val: [number, number]) => void }) {
+  const [localVal, setLocalVal] = useState<[number, number]>(value);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef<"min" | "max" | null>(null);
+
+  useEffect(() => {
+    setLocalVal(value);
+  }, [value[0], value[1]]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (localVal[0] !== value[0] || localVal[1] !== value[1]) {
+        onChange(localVal);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [localVal[0], localVal[1]]);
+
+  useEffect(() => {
+    function handleMouseMove(e: MouseEvent) {
+      if (!isDragging.current || !trackRef.current) return;
+      const rect = trackRef.current.getBoundingClientRect();
+      const percent = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      const val = Math.round((percent / 100) * (max - min) + min);
+      
+      setLocalVal(prev => {
+        if (isDragging.current === "min") return [Math.min(val, prev[1] - 1), prev[1]];
+        return [prev[0], Math.max(val, prev[0] + 1)];
+      });
+    }
+    function handleMouseUp() {
+      isDragging.current = null;
+    }
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [min, max]);
+
+  const getPercent = (val: number) => Math.round(((val - min) / (max - min)) * 100);
+
+  return (
+    <div ref={trackRef} style={{ position: "relative", width: "140px", height: "24px", marginTop: "14px", marginBottom: "4px", userSelect: "none" }}>
+      <div style={{ position: "absolute", borderRadius: "3px", height: "6px", backgroundColor: "#d1d5db", width: "100%", top: "50%", transform: "translateY(-50%)" }} />
+      <div style={{ position: "absolute", borderRadius: "3px", height: "6px", backgroundColor: "var(--accent, #2a6f4f)", top: "50%", transform: "translateY(-50%)", left: `${getPercent(localVal[0])}%`, width: `${getPercent(localVal[1]) - getPercent(localVal[0])}%` }} />
+      
+      <div 
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", cursor: "pointer", zIndex: 2 }}
+        onMouseDown={(e) => {
+          if (!trackRef.current) return;
+          const rect = trackRef.current.getBoundingClientRect();
+          const percent = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+          const val = Math.round((percent / 100) * (max - min) + min);
+          const distMin = Math.abs(val - localVal[0]);
+          const distMax = Math.abs(val - localVal[1]);
+          if (distMin < distMax || (distMin === distMax && val < localVal[0])) {
+             setLocalVal([val, localVal[1]]);
+             isDragging.current = "min";
+          } else {
+             setLocalVal([localVal[0], val]);
+             isDragging.current = "max";
+          }
+        }}
+      />
+
+      <div 
+        onMouseDown={() => { isDragging.current = "min"; }}
+        style={{ position: "absolute", width: "16px", height: "16px", borderRadius: "50%", backgroundColor: "#fff", border: "2px solid var(--accent, #2a6f4f)", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", top: "50%", transform: "translate(-50%, -50%)", left: `${getPercent(localVal[0])}%`, cursor: "grab", zIndex: 3 }}
+      >
+        <div style={{ position: "absolute", top: "-24px", transform: "translateX(-50%)", backgroundColor: "#374151", color: "white", padding: "2px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600", left: "50%" }}>{localVal[0]}</div>
+      </div>
+
+      <div 
+        onMouseDown={() => { isDragging.current = "max"; }}
+        style={{ position: "absolute", width: "16px", height: "16px", borderRadius: "50%", backgroundColor: "#fff", border: "2px solid var(--accent, #2a6f4f)", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", top: "50%", transform: "translate(-50%, -50%)", left: `${getPercent(localVal[1])}%`, cursor: "grab", zIndex: 4 }}
+      >
+        <div style={{ position: "absolute", top: "-24px", transform: "translateX(-50%)", backgroundColor: "#374151", color: "white", padding: "2px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600", left: "50%" }}>{localVal[1]}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
@@ -167,6 +258,14 @@ export default function JobsPage() {
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [workAuthFilter, setWorkAuthFilter] = useState("");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const [candidateFilter, setCandidateFilter] = useState("");
+  const [assignedByFilter, setAssignedByFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [scoreFilter, setScoreFilter] = useState<[number, number]>([0, 100]);
+  const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
+  const [filterUsers, setFilterUsers] = useState<TeamUser[]>([]);
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
   const [facets, setFacets] = useState<{ sources: string[]; employmentTypes: string[]; categories: string[] }>({ sources: [], employmentTypes: [], categories: [] });
   const [savedSearches, setSavedSearches] = useState<SavedJobSearch[]>([]);
@@ -174,6 +273,8 @@ export default function JobsPage() {
   const [saveSearchLabel, setSaveSearchLabel] = useState("");
   const [savedSearchError, setSavedSearchError] = useState("");
   const [pendingCategorization, setPendingCategorization] = useState(0);
+  const [addingTagForJobId, setAddingTagForJobId] = useState<string | null>(null);
+  const [newTagValue, setNewTagValue] = useState("");
   const categorizingRef = useRef(false);
 
   // Debounce the free-text search box so it doesn't fire a request per keystroke.
@@ -183,8 +284,19 @@ export default function JobsPage() {
   }, [searchInput]);
 
   useEffect(() => {
-    fetch("/api/jobs/facets").then((r) => r.json()).then(setFacets);
+    fetch("/api/jobs/facets")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setFacets(data); })
+      .catch(console.error);
     loadSavedSearches();
+    fetch("/api/candidates?compact=1&pageSize=500")
+      .then((r) => r.json())
+      .then((data) => setFilterCandidates(data.items ?? data))
+      .catch(console.error);
+    fetch("/api/users")
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setFilterUsers)
+      .catch(console.error);
   }, []);
 
   function buildParams(pageNum: number, pageSize: number) {
@@ -198,13 +310,23 @@ export default function JobsPage() {
     if (employmentTypeFilter) params.set("employmentType", employmentTypeFilter);
     if (categoryFilter) params.set("category", categoryFilter);
     if (workAuthFilter) params.set("workAuthorization", workAuthFilter);
+    if (dateStart) params.set("dateStart", dateStart);
+    if (dateEnd) params.set("dateEnd", dateEnd);
     if (postedSort) params.set("sort", postedSort === "asc" ? "posted_asc" : "posted_desc");
+    if (candidateFilter) params.set("candidate", candidateFilter);
+    if (assignedByFilter) params.set("assignedBy", assignedByFilter);
+    if (ownerFilter) params.set("owner", ownerFilter);
+    if (scoreFilter[0] > 0 || scoreFilter[1] < 100) params.set("score", scoreFilter.join(","));
     return params;
   }
 
   async function load(pageNum: number) {
     setLoading(true);
     const res = await fetch(`/api/jobs?${buildParams(pageNum, PAGE_SIZE)}`);
+    if (!res.ok) {
+      setLoading(false);
+      return;
+    }
     const data = await res.json();
     const newTotal = data.total ?? 0;
     const totalPages = Math.max(1, Math.ceil(newTotal / PAGE_SIZE));
@@ -220,7 +342,7 @@ export default function JobsPage() {
   }
 
   // Any filter/search/sort change re-queries the server from page 1.
-  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, postedSort]);
+  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, postedSort, dateStart, dateEnd, candidateFilter, assignedByFilter, ownerFilter, scoreFilter]);
 
   // Drains the pending-categorization queue in small sequential batches, called right
   // after any import/create action and once on page load (in case a backlog already
@@ -238,11 +360,26 @@ export default function JobsPage() {
         const data = await res.json();
         remaining = data.remainingPending ?? 0;
         setPendingCategorization(remaining);
-        if (remaining > 0) await new Promise((r) => setTimeout(r, 400));
+        
+        if (data.updatedJobs && data.updatedJobs.length > 0) {
+          setJobs(prev => {
+            const jobsCopy = [...prev];
+            for (const updatedJob of data.updatedJobs) {
+              const idx = jobsCopy.findIndex(j => j.id === updatedJob.id);
+              if (idx !== -1) {
+                jobsCopy[idx] = { ...jobsCopy[idx], ...updatedJob };
+              }
+            }
+            return jobsCopy;
+          });
+        }
+
+        if (remaining > 0) {
+          await new Promise((r) => setTimeout(r, 400));
+        }
       }
     } finally {
       categorizingRef.current = false;
-      load(page);
     }
   }
 
@@ -252,6 +389,40 @@ export default function JobsPage() {
 
   function togglePostedSort() {
     setPostedSort((prev) => (prev === "desc" ? "asc" : prev === "asc" ? "" : "desc"));
+  }
+
+  async function removeTag(job: Job, tagToRemove: string) {
+    const updatedTags = (job.category_tags || []).filter((t) => t !== tagToRemove);
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, category_tags: updatedTags } : j)));
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function addTag(job: Job) {
+    if (!newTagValue.trim()) {
+      setAddingTagForJobId(null);
+      return;
+    }
+    const updatedTags = [...(job.category_tags || []), newTagValue.trim()];
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, category_tags: updatedTags } : j)));
+    setAddingTagForJobId(null);
+    setNewTagValue("");
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function toggleOne(id: string) {
@@ -286,7 +457,7 @@ export default function JobsPage() {
     load(page);
   }
 
-  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || workAuthFilter || postedSort;
+  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || workAuthFilter || postedSort || dateStart || dateEnd || scoreFilter[0] > 0 || scoreFilter[1] < 100;
 
   function currentSavedFilters() {
     const filters: SavedJobSearch["filters"] = {};
@@ -297,7 +468,10 @@ export default function JobsPage() {
     if (employmentTypeFilter) filters.employmentType = employmentTypeFilter;
     if (categoryFilter) filters.category = categoryFilter;
     if (workAuthFilter) filters.workAuthorization = workAuthFilter;
+    if (dateStart) filters.dateStart = dateStart;
+    if (dateEnd) filters.dateEnd = dateEnd;
     if (postedSort) filters.sort = postedSort === "asc" ? "posted_asc" : "posted_desc";
+    if (scoreFilter[0] > 0 || scoreFilter[1] < 100) filters.score = scoreFilter.join(",");
     return filters;
   }
 
@@ -310,8 +484,11 @@ export default function JobsPage() {
     setEmploymentTypeFilter("");
     setCategoryFilter("");
     setWorkAuthFilter("");
+    setDateStart("");
+    setDateEnd("");
     setPostedSort("");
     setSavedSearchId("");
+    setScoreFilter([0, 100]);
   }
 
   async function loadSavedSearches() {
@@ -330,7 +507,15 @@ export default function JobsPage() {
     setEmploymentTypeFilter(filters.employmentType ?? "");
     setCategoryFilter(filters.category ?? "");
     setWorkAuthFilter(filters.workAuthorization ?? "");
+    setDateStart(filters.dateStart ?? "");
+    setDateEnd(filters.dateEnd ?? "");
     setPostedSort(filters.sort === "posted_asc" ? "asc" : filters.sort === "posted_desc" ? "desc" : "");
+    if (filters.score) {
+      const [min, max] = filters.score.split(",").map(Number);
+      setScoreFilter([min || 0, max || 100]);
+    } else {
+      setScoreFilter([0, 100]);
+    }
     setSavedSearchId(searchPreset.id);
   }
 
@@ -366,6 +551,7 @@ export default function JobsPage() {
 
   async function exportCsv() {
     const res = await fetch(`/api/jobs?${buildParams(1, 100)}`);
+    if (!res.ok) return;
     const data = await res.json();
     const csv = toCsv(data.jobs ?? [], [
       "title", "company", "location", "source", "job_category", "category_relevance_score", "role_tier", "employment_type",
@@ -387,64 +573,132 @@ export default function JobsPage() {
           <button onClick={() => setShowImport(true)}>Import file</button>
           <button onClick={() => setShowImportAts(true)}>Import from ATS</button>
           <Link href="/import" className="btn">Universal Import</Link>
+          <button onClick={exportCsv}>Export CSV</button>
           <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add job</button>
         </div>
       </div>
 
-      <div className="filter-bar">
+      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+        <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", minWidth: "max-content" }}>Search Jobs</h3>
+        <input 
+          style={{ flex: 1, padding: "8px 12px" }} 
+          placeholder="Search title, company, location…" 
+          value={searchInput} 
+          onChange={(e) => setSearchInput(e.target.value)} 
+        />
+      </div>
+
+      <div className="filter-bar" style={{ alignItems: "flex-end" }}>
         {savedSearches.length > 0 && (
-          <select
-            value={savedSearchId}
-            onChange={(e) => {
-              const preset = savedSearches.find((item) => item.id === e.target.value);
-              if (preset) applySavedSearch(preset); else setSavedSearchId("");
-            }}
-          >
-            <option value="">Saved searches</option>
-            {savedSearches.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
-          </select>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Saved Searches</span>
+            <select
+              value={savedSearchId}
+              onChange={(e) => {
+                const preset = savedSearches.find((item) => item.id === e.target.value);
+                if (preset) applySavedSearch(preset); else setSavedSearchId("");
+              }}
+            >
+              <option value="">Select</option>
+              {savedSearches.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            </select>
+          </div>
         )}
-        <input placeholder="Search title, company, location…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
-        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
-          <option value="">All sources</option>
-          {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
-          <option value="">All tiers</option>
-          <option value="osp">OSP</option>
-          <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
-          <option value="adjacent_2">Adjacent 2 (Telecom)</option>
-        </select>
-        <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
-          <option value="">Active + inactive</option>
-          <option value="active">Active only</option>
-          <option value="inactive">Inactive only</option>
-        </select>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Source</span>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+            <option value="">All sources</option>
+            {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Tier</span>
+          <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
+            <option value="">All tiers</option>
+            <option value="osp">OSP</option>
+            <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
+            <option value="adjacent_2">Adjacent 2 (Telecom)</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Status</span>
+          <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+        </div>
         {facets.employmentTypes.length > 0 && (
-          <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
-            <option value="">All employment types</option>
-            {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Employment Type</span>
+            <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
+              <option value="">All employment types</option>
+              {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
         )}
-        {facets.categories.length > 0 && (
-          <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-            <option value="">All categories</option>
-            {facets.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Category/Tag</span>
+          <input
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            placeholder="Search tags..."
+            style={{ minWidth: "120px" }}
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Relevance Score</span>
+          <DualRangeSlider
+            min={0}
+            max={100}
+            value={scoreFilter}
+            onChange={(val) => setScoreFilter(val)}
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Work Authorization</span>
+          <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="no_sponsorship">No sponsorship</option>
+            <option value="sponsorship_available">Sponsorship available</option>
+            <option value="us_citizen_required">US citizen required</option>
           </select>
-        )}
-        <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
-          <option value="">Any work authorization</option>
-          <option value="no_sponsorship">No sponsorship</option>
-          <option value="sponsorship_available">Sponsorship available</option>
-          <option value="us_citizen_required">US citizen required</option>
-        </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Created date</span>
+          <DateRangePicker 
+            dateStart={dateStart} 
+            dateEnd={dateEnd} 
+            onChange={(s, e) => { setDateStart(s); setDateEnd(e); }} 
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Candidates</span>
+          <select value={candidateFilter} onChange={(e) => setCandidateFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterCandidates.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Assigned by</span>
+          <select value={assignedByFilter} onChange={(e) => setAssignedByFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>App owner</span>
+          <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+          </select>
+        </div>
         {filtersActive && (
-          <button onClick={clearFilters}>
+          <button onClick={clearFilters} style={{ marginBottom: "2px" }}>
             Clear filters
           </button>
         )}
-        <button onClick={exportCsv}>Export CSV</button>
-        <span className="muted" style={{ fontSize: 12 }}>{jobs.length} of {total}</span>
+        <span className="muted" style={{ fontSize: 12, marginLeft: "auto", marginBottom: "8px" }}>{jobs.length} of {total}</span>
       </div>
 
       <div className="filter-bar">
@@ -511,23 +765,51 @@ export default function JobsPage() {
                 <td>
                   {job.category_status === "pending" ? (
                     <span className="muted">Categorizing…</span>
-                  ) : job.category_status === "needs_review" ? (
-                    <>
-                      <span className="badge">Needs review</span>
-                      {job.ai_suggested_category && (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Suggested: {job.ai_suggested_category}</div>
-                      )}
-                    </>
                   ) : job.category_status === "failed" ? (
-                    <span className="badge" title="AI categorization failed — check /ops">Failed</span>
-                  ) : job.job_category ? (
-                    <>
-                      <span className="badge">{job.job_category}</span>
-                      {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{job.category_relevance_score}% relevant</div>
+                    <span className="badge" title="AI categorization failed">Failed</span>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                        {(job.category_tags || []).map((tag, idx) => (
+                          <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            {tag}
+                            <button
+                              onClick={() => removeTag(job, tag)}
+                              style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: "10px", cursor: "pointer", opacity: 0.6 }}
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      {addingTagForJobId === job.id ? (
+                        <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+                          <input
+                            autoFocus
+                            value={newTagValue}
+                            onChange={(e) => setNewTagValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") addTag(job);
+                              else if (e.key === "Escape") setAddingTagForJobId(null);
+                            }}
+                            onBlur={() => addTag(job)}
+                            style={{ padding: "2px 4px", fontSize: "11px", width: "80px" }}
+                            placeholder="Type..."
+                          />
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => { setAddingTagForJobId(job.id); setNewTagValue(""); }}
+                          style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: "11px", cursor: "pointer", marginTop: "2px" }}
+                        >
+                          + Add tag
+                        </button>
                       )}
-                    </>
-                  ) : <span className="muted">—</span>}
+                      {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
+                        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Score: {job.category_relevance_score}</div>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
                 <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
@@ -565,9 +847,43 @@ export default function JobsPage() {
       )}
 
       {total > 0 && (
-        <div className="filter-bar" style={{ justifyContent: "flex-end" }}>
+        <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: "8px", marginTop: "24px", marginBottom: "24px" }}>
           <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
-          <span className="muted" style={{ fontSize: 12 }}>Page {page} of {totalPages}</span>
+          
+          {(() => {
+            const pages = [];
+            if (totalPages <= 7) {
+              for (let i = 1; i <= totalPages; i++) pages.push(i);
+            } else {
+              if (page <= 4) {
+                pages.push(1, 2, 3, 4, 5, "...", totalPages);
+              } else if (page >= totalPages - 3) {
+                pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+              } else {
+                pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
+              }
+            }
+            return pages.map((p, idx) => (
+              <button
+                key={idx}
+                className={p === page ? "btn-primary" : ""}
+                onClick={() => typeof p === "number" && p !== page ? load(p) : null}
+                disabled={loading || p === "..."}
+                style={{ 
+                  minWidth: 36, 
+                  textAlign: "center", 
+                  cursor: p === "..." || p === page ? "default" : "pointer", 
+                  padding: "6px 12px",
+                  background: p === "..." ? "transparent" : undefined,
+                  border: p === "..." ? "none" : undefined,
+                  opacity: p === "..." ? 0.7 : undefined,
+                }}
+              >
+                {p}
+              </button>
+            ));
+          })()}
+
           <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
         </div>
       )}

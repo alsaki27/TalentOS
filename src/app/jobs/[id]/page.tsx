@@ -108,6 +108,44 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
   const [tailorContext, setTailorContext] = useState<{ candidateId: string; applicationId?: string } | null>(null);
+  const [addingTag, setAddingTag] = useState(false);
+  const [newTagValue, setNewTagValue] = useState("");
+
+  async function removeTag(tagToRemove: string) {
+    if (!job) return;
+    const updatedTags = (job.category_tags || []).filter((t) => t !== tagToRemove);
+    setJob({ ...job, category_tags: updatedTags });
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function addTag() {
+    if (!job) return;
+    if (!newTagValue.trim()) {
+      setAddingTag(false);
+      return;
+    }
+    const updatedTags = [...(job.category_tags || []), newTagValue.trim()];
+    setJob({ ...job, category_tags: updatedTags });
+    setAddingTag(false);
+    setNewTagValue("");
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
 
   async function load() {
     if (!id) return;
@@ -158,7 +196,46 @@ export default function JobDetailPage() {
             job.job_category ? <span className="badge">{job.job_category}</span> : null
           } />
           <Field label="Category score" value={job.category_relevance_score !== null && job.category_relevance_score !== undefined ? `${job.category_relevance_score}% relevant` : null} />
-          <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
+          <Field label="Category tags" value={
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                {(job.category_tags || []).map((tag, idx) => (
+                  <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                    {tag}
+                    <button
+                      onClick={() => removeTag(tag)}
+                      style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: "10px", cursor: "pointer", opacity: 0.6 }}
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+              {addingTag ? (
+                <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+                  <input
+                    autoFocus
+                    value={newTagValue}
+                    onChange={(e) => setNewTagValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") addTag();
+                      else if (e.key === "Escape") setAddingTag(false);
+                    }}
+                    onBlur={addTag}
+                    style={{ padding: "2px 4px", fontSize: "11px", width: "80px" }}
+                    placeholder="Type..."
+                  />
+                </div>
+              ) : (
+                <button
+                  onClick={() => { setAddingTag(true); setNewTagValue(""); }}
+                  style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: "11px", cursor: "pointer", marginTop: "2px" }}
+                >
+                  + Add tag
+                </button>
+              )}
+            </div>
+          } />
           <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
           <Field label="Salary range" value={
             job.salary_min || job.salary_max

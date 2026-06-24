@@ -143,7 +143,7 @@ export default function InterviewDetailPage() {
 
   const myPanelMember = interview?.panel.find((p) => p.interviewer_id === me?.profile.user_id);
   const myScorecard = interview?.scorecards.find((s) => s.panel_member_id === myPanelMember?.id);
-  const canManage = ["admin", "manager", "application_engineer"].includes(me?.profile.role ?? "");
+  const canManage = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
 
   async function updateStatus(status: string) {
     setActionLoading(status);

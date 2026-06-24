@@ -14,6 +14,9 @@ export async function PATCH(req: NextRequest) {
   const currentPassword = String(body.current_password ?? "");
   const newPassword = String(body.password ?? "");
 
+  if (!currentPassword) {
+    return NextResponse.json({ error: "Current password is required." }, { status: 400 });
+  }
   if (newPassword.length < 8) {
     return NextResponse.json({ error: "New password must be at least 8 characters." }, { status: 400 });
   }
@@ -24,15 +27,13 @@ export async function PATCH(req: NextRequest) {
     [context.user.id]
   );
 
-  if (profile?.password_hash) {
-    if (!currentPassword) {
-      return NextResponse.json({ error: "Current password is required." }, { status: 400 });
-    }
+  if (!profile?.password_hash) {
+    return NextResponse.json({ error: "Account has no password set." }, { status: 400 });
+  }
 
-    const valid = await verifyPassword(currentPassword, profile.password_hash);
-    if (!valid) {
-      return NextResponse.json({ error: "Current password is incorrect." }, { status: 401 });
-    }
+  const valid = await verifyPassword(currentPassword, profile.password_hash);
+  if (!valid) {
+    return NextResponse.json({ error: "Current password is incorrect." }, { status: 401 });
   }
 
   // Hash and update new password

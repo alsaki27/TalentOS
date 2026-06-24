@@ -7,13 +7,12 @@ import {
   AuditLogEntity,
   ProfileEntity,
 } from "../../entities";
-import { AuthorizationService } from "../../common/auth/authorization.service";
 import { ApplicationsController } from "./applications.controller";
 import { ApplicationsService } from "./applications.service";
 
 @Module({
   imports: [TypeOrmModule.forFeature([ApplicationEntity, ApplicationEventEntity, ApplicationCommentEntity, AuditLogEntity, ProfileEntity])],
   controllers: [ApplicationsController],
-  providers: [ApplicationsService, AuthorizationService],
+  providers: [ApplicationsService],
 })
 export class ApplicationsModule {}
