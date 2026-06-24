@@ -1,9 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { Users, FileText, Wand2, CheckCircle } from "lucide-react";
+import { Users, FileText, Wand2, CheckCircle, PenTool } from "lucide-react";
 
 const modules = [
+  {
+    title: "Resume Builder",
+    description:
+      "Create beautiful, ATS-optimized resumes with a live preview editor and 6 professional templates.",
+    href: "/falood/studio/base/new",
+    icon: PenTool,
+  },
   {
     title: "Candidate Profiles",
     description:
@@ -47,7 +54,7 @@ export default function FaloodPage() {
       <div className="page-header">
         <div>
           <h1>Falood AI</h1>
-          <p className="page-kicker">Resume & Application Studio</p>
+          <p className="page-kicker">Resume &amp; Application Studio</p>
         </div>
       </div>
 

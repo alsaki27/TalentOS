@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, type UserRole } from "@/lib/auth";
+import { publicUserProfile, requireCurrentUser, type UserRole } from "@/lib/auth";
 import { hashPassword } from "@/server/auth/crypto";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
-const roles: UserRole[] = ["admin", "manager", "application_engineer", "recruiter"];
+const roles: UserRole[] = ["admin", "manager", "application_engineer"];
 
 export async function GET() {
   const { context, response } = await requireCurrentUser();
@@ -35,7 +35,7 @@ export async function GET() {
     data = res.data ?? [];
   }
 
-  return NextResponse.json(data ?? []);
+  return NextResponse.json((data ?? []).map((profile) => publicUserProfile(profile as any)));
 }
 
 export async function POST(req: NextRequest) {
@@ -56,6 +56,14 @@ export async function POST(req: NextRequest) {
   }
   if (!roles.includes(role)) {
     return NextResponse.json({ error: "Invalid role." }, { status: 400 });
+  }
+
+  const existingProfile = await queryOne<{ user_id: string }>(
+    "SELECT user_id FROM profiles WHERE LOWER(email) = $1",
+    [email]
+  );
+  if (existingProfile) {
+    return NextResponse.json({ error: "A user with this email already exists." }, { status: 409 });
   }
 
   // Generate user_id and hash password
@@ -123,5 +131,5 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  return NextResponse.json(profile, { status: 201 });
+  return NextResponse.json(publicUserProfile(profile as any), { status: 201 });
 }

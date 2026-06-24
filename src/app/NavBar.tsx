@@ -30,9 +30,11 @@ export default function NavBar() {
   const [moreOpen, setMoreOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
-  const canManageSources = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
-  const isAdmin = me?.profile.role === "admin";
-  const canQuickApply = ["admin", "manager", "recruiter", "application_engineer"].includes(me?.profile.role ?? "");
+  const currentRole = me?.profile.role ?? "";
+  const canViewJobs = ["admin", "manager"].includes(currentRole);
+  const canViewCompanies = ["admin", "manager"].includes(currentRole);
+  const canViewTeam = currentRole === "admin";
+  const canQuickApply = ["admin", "manager", "application_engineer"].includes(currentRole);
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") return;
@@ -68,12 +70,12 @@ export default function NavBar() {
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
-    { href: "/import-sources", label: "Import Sources", show: canManageSources },
-    { href: "/audit", label: "Audit Log", show: isAdmin },
-    { href: "/ops", label: "System Health", show: isAdmin },
-    { href: "/team", label: "Team", show: isAdmin },
-    { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
-    { href: "/settings/billing", label: "Billing", show: isAdmin || me?.profile.role === "manager" },
+    { href: "/import-sources", label: "Import Sources", show: true },
+    { href: "/audit", label: "Audit Log", show: true },
+    { href: "/ops", label: "System Health", show: true },
+    { href: "/team", label: "Team", show: canViewTeam },
+    { href: "/settings/webhooks", label: "Webhooks", show: true },
+    { href: "/settings/billing", label: "Billing", show: true },
   ].filter((link) => link.show);
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
@@ -82,8 +84,8 @@ export default function NavBar() {
       <span className="brand font-semibold text-[15px] text-ink tracking-tight">Skarion Tracker</span>
       <div className="navlinks flex items-center gap-5">
         <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
-        <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>
-        <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>
+        {canViewJobs && <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>}
+        {canViewCompanies && <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>}
         <Link href="/interviews" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Interviews</Link>
         <Link href="/falood" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Falood AI</Link>
         <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">

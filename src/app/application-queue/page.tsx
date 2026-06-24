@@ -141,7 +141,7 @@ export default function ApplicationQueuePage() {
     .map((item) => [item.assigned_to_user_id ?? item.assigned_to ?? "", ownerName(item)])).entries())
     .sort((a, b) => a[1].localeCompare(b[1]));
   const today = new Date().toISOString().slice(0, 10);
-  const canManageAssignments = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
+  const canManageAssignments = ["admin", "manager", "application_engineer"].includes(me?.profile.role ?? "");
   const canApplyTicket = (item: QueueItem) => canManageAssignments || !["pending", "changes_requested"].includes(item.review_status);
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
