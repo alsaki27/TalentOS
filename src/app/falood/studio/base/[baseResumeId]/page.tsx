@@ -124,7 +124,7 @@ function convertOldFormatToNew(old: any): any {
         sections: DEFAULT_SECTIONS,
         colors: DEFAULT_COLORS,
         template: 'tech-sidebar',
-        pageFormat: 'letter',
+        pageFormat: 'a4',
         fontSize: 'medium',
         fontFamily: 'Inter'
     };
@@ -405,7 +405,11 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                             </Button>
                         </div>
                         <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" style={{ display: 'none' }} />
-                        <div id="resume-print-area" style={{ flex: 1, overflow: 'auto', background: 'var(--bg-secondary, #f9fafb)' }}>
+                        <div
+                            id="resume-print-area"
+                            data-page-format={state.resumeData.pageFormat}
+                            style={{ flex: 1, overflow: 'auto', background: 'var(--bg-secondary, #f9fafb)' }}
+                        >
                             <ResumePreview />
                         </div>
                     </div>

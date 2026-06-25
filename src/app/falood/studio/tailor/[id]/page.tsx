@@ -228,7 +228,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
                     {/* Resume Preview */}
                     <div className="flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:w-full print:shadow-none print:rounded-none print:block print:overflow-visible" style={{ height: 780 }}>
-                        <div id="resume-print-area" style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}>
+                        <div
+                            id="resume-print-area"
+                            data-page-format={state.resumeData.pageFormat}
+                            style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}
+                        >
                             <ResumePreview />
                         </div>
                     </div>

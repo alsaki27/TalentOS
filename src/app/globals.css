@@ -924,18 +924,26 @@ label {
     position: absolute !important;
     left: 0 !important;
     top: 0 !important;
-    width: 8.5in !important;
-    height: 11in !important;
     overflow: visible !important;
     padding: 0 !important;
     margin: 0 !important;
     background: white !important;
   }
 
+  #resume-print-area[data-page-format="a4"] {
+    width: 210mm !important;
+    min-height: 297mm !important;
+    page: resume-a4;
+  }
+
+  #resume-print-area[data-page-format="letter"] {
+    width: 8.5in !important;
+    min-height: 11in !important;
+    page: resume-letter;
+  }
+
   /* The preview wrapper uses small inline pixel dimensions — override to full page */
   .resume-paper {
-    width: 8.5in !important;
-    height: 11in !important;
     max-width: none !important;
     max-height: none !important;
     overflow: visible !important;
@@ -945,11 +953,24 @@ label {
     padding: 0 !important;
   }
 
-  /* The actual canvas — remove the scale transform, keep its 8.5in x 11in size */
+  #resume-print-area[data-page-format="a4"] .resume-paper,
+  #resume-print-area[data-page-format="a4"] #resume-content,
+  #resume-print-area[data-page-format="a4"] .resume-preview-container {
+    width: 210mm !important;
+    min-height: 297mm !important;
+  }
+
+  #resume-print-area[data-page-format="letter"] .resume-paper,
+  #resume-print-area[data-page-format="letter"] #resume-content,
+  #resume-print-area[data-page-format="letter"] .resume-preview-container {
+    width: 8.5in !important;
+    min-height: 11in !important;
+  }
+
+  /* Keep the resume at its normal layout size; the outer print area applies the scale. */
   #resume-content {
     transform: none !important;
-    width: 8.5in !important;
-    height: 11in !important;
+    height: auto !important;
     overflow: visible !important;
     box-shadow: none !important;
     margin: 0 !important;
@@ -959,12 +980,16 @@ label {
   .resume-preview-container {
     display: block !important;
     padding: 0 !important;
-    width: 8.5in !important;
-    height: 11in !important;
+    height: auto !important;
   }
 
-  @page {
-    size: 8.5in 11in;
+  @page resume-a4 {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  @page resume-letter {
+    size: letter portrait;
     margin: 0;
   }
 }

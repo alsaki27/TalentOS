@@ -292,7 +292,11 @@ const ResumeContent: React.FC = () => {
 
                         <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" style={{ display: 'none' }} />
 
-                        <div style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}>
+                        <div
+                            id="resume-print-area"
+                            data-page-format={state.resumeData.pageFormat}
+                            style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}
+                        >
                             <ResumePreview />
                         </div>
                     </div>

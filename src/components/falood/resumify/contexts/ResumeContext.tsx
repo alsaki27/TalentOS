@@ -56,7 +56,7 @@ const initialResumeData: ResumeData = {
   sections: DEFAULT_SECTIONS,
   colors: DEFAULT_COLORS,
   template: 'tech-sidebar',
-  pageFormat: 'letter',
+  pageFormat: 'a4',
   fontSize: 'medium',
   fontFamily: 'Inter'
 };

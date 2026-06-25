@@ -1344,7 +1344,6 @@ export default function ApplicationResumeStudioPage() {
               })) ?? []}
               activeSection={activePreviewSection}
               onSectionClick={(section) => setActivePreviewSection(section)}
-              pageBreakY={1050}
             />
           </div>
         </div>
