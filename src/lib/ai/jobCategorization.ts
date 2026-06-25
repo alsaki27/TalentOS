@@ -30,15 +30,9 @@ export interface PendingJob {
   salary_range: string | null;
 }
 
-interface ActiveCategory {
-  label: string;
-  description: string | null;
-}
-
 interface AiCategorizationResult {
-  category: string | null;
+  tags: string[];
   confidence: number | null;
-  suggested_new_category: string | null;
   salary_min: number | null;
   salary_max: number | null;
   salary_currency: string | null;
@@ -51,23 +45,7 @@ const VALID_WORK_AUTH = new Set(["us_citizen_required", "no_sponsorship", "spons
 const VALID_SALARY_PERIOD = new Set(["year", "hour", "month"]);
 const BATCH_DELAY_MS = 300;
 
-async function getActiveCategories(): Promise<ActiveCategory[]> {
-  if (isNeon()) {
-    return query<ActiveCategory>(
-      "SELECT label, description FROM job_categories WHERE is_active = true ORDER BY label ASC"
-    );
-  }
-  const { data, error } = await supabase
-    .from("job_categories")
-    .select("label, description")
-    .eq("is_active", true)
-    .order("label", { ascending: true });
-  if (error) throw error;
-  return data ?? [];
-}
-
-function buildPrompt(job: PendingJob, categories: ActiveCategory[]): string {
-  const categoryList = categories.map((c) => `- ${c.label}${c.description ? `: ${c.description}` : ""}`).join("\n");
+function buildPrompt(job: PendingJob): string {
   const jobText = [
     `Title: ${job.title}`,
     job.job_function ? `Job function (source-supplied, often generic): ${job.job_function}` : null,
@@ -78,12 +56,8 @@ function buildPrompt(job: PendingJob, categories: ActiveCategory[]): string {
   ].filter(Boolean).join("\n\n");
 
   return [
-    "Classify this job posting. Pick the SINGLE best-fit category from the list below, based on what the role actually does — not on generic words that appear in most postings (e.g. \"plans\", \"power\", \"electric\", \"coordination\" appear in nearly every engineering job and should NOT drive the category on their own).",
-    "",
-    "Active categories:",
-    categoryList,
-    "",
-    "If the role genuinely does not fit any category above with reasonable confidence, set category to null and suggested_new_category to a short, specific label for what it actually is (e.g. \"Software Engineering\") — never force a wrong category just to pick something.",
+    "Analyze this job posting. Generate a list of MAXIMUM 3-4 highly relevant, precise, and narrow keywords/tags (e.g., \"OSP\", \"Drafting\", \"Fiber Optics\", \"AutoCAD\", \"Outside Plant\") based strictly on the specific hard skills and sub-fields the role actually requires.",
+    "CRITICAL: Do NOT output broad or generic industry tags like \"Mechanical Engineering\", \"Civil Engineering\", \"Software Engineering\", or \"Construction\". Output ONLY precise, granular terms.",
     "",
     "Also extract:",
     "- A structured salary range if one is stated anywhere (often buried at the end of the full description, not in the salary field) — null fields if no number is stated.",
@@ -93,7 +67,7 @@ function buildPrompt(job: PendingJob, categories: ActiveCategory[]): string {
     jobText,
     "",
     "Respond with ONLY this JSON object, no markdown fences, no other text:",
-    '{"category": string|null, "confidence": number (0-100), "suggested_new_category": string|null, "salary_min": number|null, "salary_max": number|null, "salary_currency": string|null, "salary_period": "year"|"hour"|"month"|null, "work_authorization": "us_citizen_required"|"no_sponsorship"|"sponsorship_available"|"unspecified", "work_authorization_evidence": string|null}',
+    '{"tags": string[], "confidence": number (0-100), "salary_min": number|null, "salary_max": number|null, "salary_currency": string|null, "salary_period": "year"|"hour"|"month"|null, "work_authorization": "us_citizen_required"|"no_sponsorship"|"sponsorship_available"|"unspecified", "work_authorization_evidence": string|null}',
   ].join("\n");
 }
 
@@ -101,9 +75,8 @@ function parseAiJson(raw: string): AiCategorizationResult {
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
   const parsed = JSON.parse(stripped);
   return {
-    category: typeof parsed.category === "string" ? parsed.category.trim() : null,
+    tags: Array.isArray(parsed.tags) ? parsed.tags.map((t: any) => String(t).trim()).filter(Boolean) : [],
     confidence: typeof parsed.confidence === "number" ? Math.max(0, Math.min(100, Math.round(parsed.confidence))) : null,
-    suggested_new_category: typeof parsed.suggested_new_category === "string" ? parsed.suggested_new_category.trim() : null,
     salary_min: typeof parsed.salary_min === "number" ? parsed.salary_min : null,
     salary_max: typeof parsed.salary_max === "number" ? parsed.salary_max : null,
     salary_currency: typeof parsed.salary_currency === "string" ? parsed.salary_currency.trim() : null,
@@ -122,28 +95,18 @@ async function markFailed(jobId: string, message: string, model?: string) {
   });
 }
 
-export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; status: string }> {
+export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; status: string; result?: AiCategorizationResult }> {
   const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     await markFailed(job.id, "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY).");
     return { ok: false, status: "failed" };
   }
 
-  let categories: ActiveCategory[];
-  try {
-    categories = await getActiveCategories();
-  } catch (err: any) {
-    await markFailed(job.id, `Failed to load category list: ${err.message ?? err}`, active.name);
-    return { ok: false, status: "failed" };
-  }
-
-  const validLabels = new Set(categories.map((c) => c.label));
-
   let result: AiCategorizationResult;
   try {
     const response = await active.provider.send({
       system: "You are a strict, literal job-posting classifier. Respond with raw JSON only.",
-      messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(job, categories) }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(job) }] }],
       tools: [],
     });
     result = parseAiJson(textOf(response.content));
@@ -152,19 +115,14 @@ export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; 
     return { ok: false, status: "failed" };
   }
 
-  // The model can only choose a category we actually offered it — anything else falls
-  // back to needs_review with its own label as the suggestion, rather than silently
-  // accepting an invented category name into job_category.
-  const matchedCategory = result.category && validLabels.has(result.category) ? result.category : null;
-  const suggestedCategory = matchedCategory ? null : (result.suggested_new_category ?? result.category ?? null);
-  const status = matchedCategory ? "done" : "needs_review";
+  const status = "done";
 
   await updateJob(job.id, {
-    job_category: matchedCategory,
-    category_tags: matchedCategory ? [matchedCategory] : [],
+    job_category: result.tags.length > 0 ? result.tags[0] : null,
+    category_tags: result.tags,
     category_relevance_score: result.confidence,
     category_status: status,
-    ai_suggested_category: suggestedCategory,
+    ai_suggested_category: null,
     category_error: null,
     categorized_at: new Date().toISOString(),
     category_model: active.name,
@@ -176,12 +134,12 @@ export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; 
     work_authorization_evidence: result.work_authorization_evidence,
   });
 
-  return { ok: true, status };
+  return { ok: true, status, result };
 }
 
 export async function processPendingCategorization(
   opts: { limit?: number; triggeredBy?: string } = {}
-): Promise<{ processed: number; failed: number; remainingPending: number }> {
+): Promise<{ processed: number; failed: number; remainingPending: number; updatedJobs?: any[] }> {
   const limit = Math.min(opts.limit ?? 5, 5);
 
   let runRow: { id: string } | null = null;
@@ -204,7 +162,7 @@ export async function processPendingCategorization(
   if (isNeon()) {
     try {
       pending = await query<PendingJob>(
-        "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' OR category_status IS NULL ORDER BY created_at ASC LIMIT $1",
+        "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' OR category_status IS NULL ORDER BY created_at DESC LIMIT $1",
         [limit]
       );
     } catch (err: any) {
@@ -215,7 +173,7 @@ export async function processPendingCategorization(
       .from("jobs")
       .select("id, title, description_text, job_function, industries, company_description, salary_range")
       .or('category_status.eq.pending,category_status.is.null')
-      .order("created_at", { ascending: true })
+      .order("created_at", { ascending: false })
       .limit(limit);
     pending = data ?? [];
     pendingError = error;
@@ -224,14 +182,35 @@ export async function processPendingCategorization(
   let processed = 0;
   let failed = 0;
   let runError: string | null = null;
+  let updatedJobs: any[] = [];
 
   if (pendingError) {
     runError = pendingError.message;
   } else {
     const jobs = pending ?? [];
     for (let i = 0; i < jobs.length; i++) {
-      const { ok } = await categorizeOneJob(jobs[i] as PendingJob);
-      if (ok) processed++; else failed++;
+      const { ok, result, status } = await categorizeOneJob(jobs[i] as PendingJob);
+      if (ok) {
+        processed++;
+        if (result) {
+          updatedJobs.push({
+            id: jobs[i].id,
+            category_tags: result.tags,
+            job_category: result.tags.length > 0 ? result.tags[0] : null,
+            category_relevance_score: result.confidence,
+            category_status: status,
+            salary_min: result.salary_min,
+            salary_max: result.salary_max,
+            salary_currency: result.salary_currency,
+            salary_period: result.salary_period,
+            work_authorization: result.work_authorization,
+            work_authorization_evidence: result.work_authorization_evidence,
+          });
+        }
+      } else {
+        failed++;
+        updatedJobs.push({ id: jobs[i].id, category_status: "failed" });
+      }
       if (i < jobs.length - 1) await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
     }
   }
@@ -266,5 +245,5 @@ export async function processPendingCategorization(
     remainingCount = count ?? 0;
   }
 
-  return { processed, failed, remainingPending: remainingCount };
+  return { processed, failed, remainingPending: remainingCount, updatedJobs };
 }
