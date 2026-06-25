@@ -24,7 +24,7 @@ async function apply() {
   for (const stmt of statements) {
     const fullStmt = stmt + ";";
     try {
-      await sql(fullStmt);
+      await sql.query(fullStmt);
       ok++;
     } catch (e) {
       const msg = (e.message || "").toLowerCase();
@@ -40,11 +40,11 @@ async function apply() {
   
   console.log(`\nResults: OK=${ok}, SKIP=${skip}, ERR=${err}`);
   
-  const result = await sql("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;");
+  const result = await sql.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;");
   console.log("Tables:", result.length);
   result.forEach(r => console.log("  -", r.tablename));
   
-  const idx = await sql("SELECT indexname FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname;");
+  const idx = await sql.query("SELECT indexname FROM pg_indexes WHERE schemaname = 'public' ORDER BY indexname;");
   console.log("Indexes:", idx.length);
 }
 

@@ -9,7 +9,7 @@ async function fix() {
   
   // 1. Create application_packets table (without FK to application_resume_exports for now)
   try {
-    await sql(`
+    await sql.query(`
       CREATE TABLE IF NOT EXISTS application_packets (
         application_id            uuid PRIMARY KEY REFERENCES applications(id) ON DELETE CASCADE,
         resume_version_id         uuid REFERENCES application_resume_versions(id) ON DELETE SET NULL,
@@ -35,13 +35,13 @@ async function fix() {
     "CREATE INDEX IF NOT EXISTS idx_application_packets_created_at ON application_packets (created_at DESC);",
   ];
   for (const idx of packetIndexes) {
-    try { await sql(idx); console.log("OK", idx.substring(0, 60)); }
+    try { await sql.query(idx); console.log("OK", idx.substring(0, 60)); }
     catch (e) { console.error("ERR", e.message?.substring(0, 80)); }
   }
   
   // 3. Add CHECK constraint for application_packets
   try {
-    await sql(`ALTER TABLE application_packets ADD CONSTRAINT IF NOT EXISTS application_packets_status_check CHECK (packet_status IN ('draft', 'review', 'approved', 'sent'));`);
+    await sql.query(`ALTER TABLE application_packets ADD CONSTRAINT IF NOT EXISTS application_packets_status_check CHECK (packet_status IN ('draft', 'review', 'approved', 'sent'));`);
     console.log("OK application_packets status check");
   } catch (e) {
     console.error("ERR status check:", e.message?.substring(0, 80));
@@ -49,7 +49,7 @@ async function fix() {
   
   // 4. Create set_updated_at function
   try {
-    await sql(`
+    await sql.query(`
       CREATE OR REPLACE FUNCTION set_updated_at()
       RETURNS TRIGGER AS $$
       BEGIN
@@ -74,13 +74,13 @@ async function fix() {
     "CREATE TRIGGER IF NOT EXISTS application_packets_updated_at BEFORE UPDATE ON application_packets FOR EACH ROW EXECUTE FUNCTION set_updated_at();",
   ];
   for (const trig of triggers) {
-    try { await sql(trig); console.log("OK trigger:", trig.substring(0, 60)); }
+    try { await sql.query(trig); console.log("OK trigger:", trig.substring(0, 60)); }
     catch (e) { console.error("ERR trigger:", e.message?.substring(0, 80)); }
   }
   
   // 6. Create get_funnel_counts function (for analytics)
   try {
-    await sql(`
+    await sql.query(`
       CREATE OR REPLACE FUNCTION get_funnel_counts(
         date_from timestamptz DEFAULT NULL,
         date_to timestamptz DEFAULT NULL
@@ -134,20 +134,20 @@ async function fix() {
     "ALTER TABLE profiles ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;",
   ];
   for (const col of authColumns) {
-    try { await sql(col); console.log("OK auth column:", col.substring(0, 60)); }
+    try { await sql.query(col); console.log("OK auth column:", col.substring(0, 60)); }
     catch (e) { console.error("ERR auth column:", e.message?.substring(0, 80)); }
   }
   
   // 8. Verify
-  const result = await sql("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;");
+  const result = await sql.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;");
   console.log("\nTables:", result.length);
   const hasPackets = result.some(r => r.tablename === 'application_packets');
   console.log("  application_packets:", hasPackets ? "EXISTS" : "MISSING");
   
-  const funcResult = await sql("SELECT proname FROM pg_proc WHERE proname IN ('set_updated_at', 'get_funnel_counts') ORDER BY proname;");
+  const funcResult = await sql.query("SELECT proname FROM pg_proc WHERE proname IN ('set_updated_at', 'get_funnel_counts') ORDER BY proname;");
   console.log("  Functions:", funcResult.map(r => r.proname).join(", ") || "NONE");
   
-  const colResult = await sql("SELECT column_name FROM information_schema.columns WHERE table_name = 'profiles' AND column_name IN ('password_hash', 'email_verified', 'verification_token', 'reset_token') ORDER BY column_name;");
+  const colResult = await sql.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'profiles' AND column_name IN ('password_hash', 'email_verified', 'verification_token', 'reset_token') ORDER BY column_name;");
   console.log("  Auth columns:", colResult.map(r => r.column_name).join(", ") || "NONE");
 }
 

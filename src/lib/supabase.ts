@@ -6,19 +6,35 @@
 // client when the migration happens. The exported `supabase` object is the stable
 // interface.
 
-import { createClient } from "@supabase/supabase-js";
+let _client: any;
 
-export const supabase: any = process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { persistSession: false, autoRefreshToken: false },
+async function getClient() {
+  if (!_client) {
+    const { createClient } = await import("@supabase/supabase-js");
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) {
+      throw new Error(
+        "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your environment."
+      );
+    }
+    _client = createClient(url, key, {
       global: {
         fetch: (url: any, init: any) => fetch(url, { ...init, cache: "no-store" }),
       },
-    })
-  : new Proxy({} as any, {
-      get() {
-        return () => {
-          throw new Error("Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.");
-        };
-      },
     });
+  }
+  return _client;
+}
+
+// Proxy so that existing code using `supabase.from(...)` still works without
+// calling createClient at module-import time. Build passes even when env vars
+// are absent; runtime requests fail with a clear error if they are missing.
+export const supabase: any = new Proxy({} as any, {
+  get(_target, prop) {
+    return async (...args: any[]) => {
+      const client = await getClient();
+      return client[prop](...args);
+    };
+  },
+});

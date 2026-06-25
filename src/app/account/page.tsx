@@ -26,6 +26,7 @@ export default function AccountPage() {
   const [gmailAccounts, setGmailAccounts] = useState<GmailAccount[]>([]);
   const [gmailLoading, setGmailLoading] = useState(true);
   const [gmailActionId, setGmailActionId] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [saving, setSaving] = useState(false);
@@ -74,7 +75,7 @@ export default function AccountPage() {
     const res = await fetch("/api/auth/password", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ current_password: currentPassword, password }),
     });
     setSaving(false);
 
@@ -84,6 +85,7 @@ export default function AccountPage() {
       return;
     }
 
+    setCurrentPassword("");
     setPassword("");
     setConfirmPassword("");
     setSuccess("Password updated.");
@@ -161,6 +163,15 @@ export default function AccountPage() {
 
       <form className="card" onSubmit={submit}>
         <h2 className="section-title">Change password</h2>
+        <div className="field-group">
+          <label>Current password</label>
+          <input
+            type="password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.target.value)}
+            placeholder="Leave blank if this account only uses Google"
+          />
+        </div>
         <div className="field-group">
           <label>New password</label>
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />

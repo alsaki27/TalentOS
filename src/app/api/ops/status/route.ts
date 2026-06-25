@@ -27,7 +27,7 @@ const CATEGORIES = [
 ] as const;
 
 export async function GET() {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { response } = await requireCurrentUser();
   if (response) return response;
 
   let supabaseLatencyMs: number;

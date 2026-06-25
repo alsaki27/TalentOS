@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { DEFAULT_COLORS, DEFAULT_SECTIONS, type ResumeData } from "@/components/falood/resumify/types/resume";
 
 interface BaseResume {
   id: string;
@@ -41,20 +42,15 @@ export function TailorResumeModal({
   onClose: () => void;
   onSaved?: () => void;
 }) {
+  const router = useRouter();
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
   const [baseResumes, setBaseResumes] = useState<BaseResume[]>([]);
   const [extraJob, setExtraJob] = useState<JobOption | null>(null);
   const [baseResumeId, setBaseResumeId] = useState("");
   const [jobId, setJobId] = useState(initialJobId ?? "");
-  const [applicationId, setApplicationId] = useState(initialApplicationId ?? "");
-  const [title, setTitle] = useState("");
-  const [versionLabel, setVersionLabel] = useState("");
-  const [draft, setDraft] = useState("");
-  const [generatedId, setGeneratedId] = useState("");
-  const [targetJobId, setTargetJobId] = useState("");
+  const [candidateName, setCandidateName] = useState("");
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -70,6 +66,7 @@ export function TailorResumeModal({
       const baseData = baseResumesRes.ok ? await baseResumesRes.json() : [];
       if (cancelled) return;
       setCandidate(candidateData);
+      setCandidateName(candidateData?.name ?? "");
       setBaseResumes(baseData);
       setBaseResumeId(baseData[0]?.id ?? "");
       if (initialApplicationId && candidateData?.applications) {
@@ -106,95 +103,170 @@ export function TailorResumeModal({
     return fromApps;
   }, [candidate, extraJob]);
 
-  useEffect(() => {
-    const app = jobOptions.find((job) => job.id === jobId)?.applicationId;
-    if (app && !applicationId) setApplicationId(app);
-  }, [jobId, jobOptions, applicationId]);
+  function formatJobDescription(job: any) {
+    return [
+      `Title: ${job.title}`,
+      job.company ? `Company: ${job.company}` : null,
+      job.location ? `Location: ${job.location}` : null,
+      job.job_category ? `Category: ${job.job_category}` : null,
+      job.description_text,
+      job.notes ? `Internal notes: ${job.notes}` : null,
+    ].filter(Boolean).join("\n\n");
+  }
 
-  async function generate() {
+  function convertOldFormatToNew(old: any): ResumeData {
+    if (!old || typeof old !== "object") {
+      return {
+        personalInfo: {
+          fullName: "",
+          jobTitle: "",
+          email: "",
+          phone: "",
+          location: "",
+          website: "",
+          linkedin: "",
+          github: "",
+          profileImage: "",
+          birthDate: "",
+        },
+        summary: "",
+        experience: [],
+        education: [],
+        projects: [],
+        skills: { mode: "simple", simple: [], categorized: [] },
+        customSections: [],
+        sections: DEFAULT_SECTIONS,
+        colors: DEFAULT_COLORS,
+        template: "tech-sidebar",
+        pageFormat: "letter",
+        fontSize: "medium",
+        fontFamily: "Inter",
+      };
+    }
+
+    if (old.personalInfo) return old as ResumeData;
+
+    return {
+      personalInfo: {
+        fullName: old.header?.fullName || "",
+        jobTitle: "",
+        email: old.header?.email || "",
+        phone: old.header?.phone || "",
+        location: old.header?.location || "",
+        website: old.header?.website || "",
+        linkedin: old.header?.linkedin || "",
+        github: old.header?.github || "",
+        profileImage: "",
+        birthDate: "",
+      },
+      summary: old.summary?.text || "",
+      experience: Array.isArray(old.experience)
+        ? old.experience.map((e: any) => ({
+            id: e.id || Math.random().toString(),
+            jobTitle: e.title || "",
+            company: e.company || "",
+            location: e.location || "",
+            startDate: e.startDate || "",
+            endDate: e.endDate || "",
+            current: !e.endDate,
+            description: "",
+            bulletPoints: Array.isArray(e.bullets) ? e.bullets.map((b: any) => b.text || b) : [],
+          }))
+        : [],
+      education: Array.isArray(old.education)
+        ? old.education.map((e: any) => ({
+            id: e.id || Math.random().toString(),
+            degree: e.degree || "",
+            institution: e.school || "",
+            location: "",
+            graduationYear: e.graduationDate || "",
+          }))
+        : [],
+      skills: {
+        mode: "categorized",
+        simple: [],
+        categorized: Array.isArray(old.skills)
+          ? old.skills.map((s: any) => ({
+              id: s.id || Math.random().toString(),
+              name: s.title || "",
+              skills: Array.isArray(s.skills) ? s.skills : [],
+            }))
+          : [],
+      },
+      projects: Array.isArray(old.projects)
+        ? old.projects.map((p: any) => ({
+            id: p.id || Math.random().toString(),
+            title: p.title || "",
+            description: "",
+            technologies: [],
+            liveUrl: "",
+            githubUrl: "",
+          }))
+        : [],
+      customSections: [],
+      sections: DEFAULT_SECTIONS,
+      colors: DEFAULT_COLORS,
+      template: "tech-sidebar",
+      pageFormat: "letter",
+      fontSize: "medium",
+      fontFamily: "Inter",
+    };
+  }
+
+  async function startTailoring() {
     if (!baseResumeId || !jobId) {
       setError("Choose a source resume and target job first.");
       return;
     }
     setGenerating(true);
     setError("");
-    const res = await fetch("/api/resume-tailoring/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ candidateId, baseResumeId, jobId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setGenerating(false);
-    if (!res.ok) {
-      setError(data.error || "Could not generate tailored draft.");
-      return;
-    }
-    setDraft(data.draft ?? "");
-    setTitle(data.title ?? "");
-    setVersionLabel(data.versionLabel ?? "");
-    setTargetJobId(data.targetJobId ?? "");
-  }
-
-  async function attachVariant(variantId: string, appId: string) {
-    const body = {
-      applicationId: appId,
-      candidateId,
-      targetJobId,
-      baseResumeId,
-      finalResumeVersionId: variantId,
-    };
-    const createRes = await fetch("/api/application-packets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (createRes.ok) return;
-    if (createRes.status === 409) {
-      const patchRes = await fetch(`/api/application-packets/${appId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ final_resume_version_id: variantId, base_resume_id: baseResumeId, target_job_id: targetJobId }),
-      });
-      if (patchRes.ok) return;
-      const patchData = await patchRes.json().catch(() => ({}));
-      throw new Error(patchData.error || "Could not attach resume variant.");
-    }
-    const data = await createRes.json().catch(() => ({}));
-    throw new Error(data.error || "Could not create application packet.");
-  }
-
-  async function save() {
-    if (!draft.trim()) {
-      setError("Generate or write a draft first.");
-      return;
-    }
-    setSaving(true);
-    setError("");
-    const res = await fetch("/api/application-resume-versions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        baseResumeId,
-        targetJobId,
-        title: title.trim() || "Tailored resume draft",
-        versionLabel: versionLabel.trim() || "Tailored draft",
-        generatedText: draft,
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setSaving(false);
-      setError(data.error || "Could not save resume variant.");
-      return;
-    }
     try {
-      if (applicationId) await attachVariant(data.id, applicationId);
-      setGeneratedId(data.id);
-      onSaved?.();
-    } catch (err: any) {
-      setError(err.message || "Saved variant, but could not attach it.");
+      const [baseRes, jobRes] = await Promise.all([
+        fetch(`/api/base-resumes/${baseResumeId}`, { cache: "no-store" }),
+        fetch(`/api/jobs/${jobId}`, { cache: "no-store" }),
+      ]);
+
+      const base = await baseRes.json().catch(() => ({}));
+      const job = await jobRes.json().catch(() => ({}));
+
+      if (!baseRes.ok) throw new Error(base.error || "Could not load base resume.");
+      if (!jobRes.ok) throw new Error(job.error || "Could not load job details.");
+
+      const resumeData = convertOldFormatToNew(base.content);
+      const resolvedCandidateName = candidateName.trim() || candidate?.name || "";
+      const finalResumeData: ResumeData = {
+        ...resumeData,
+        personalInfo: { ...resumeData.personalInfo, fullName: resolvedCandidateName || resumeData.personalInfo.fullName },
+      };
+
+      const jd = formatJobDescription(job);
+      const createRes = await fetch("/api/falood/applications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jobDescription: jd,
+          companyName: job.company || null,
+          skills: [],
+          resumeData: finalResumeData,
+          chatHistory: [{ id: "meta-candidate", role: "assistant", content: "", candidateId, candidateName: resolvedCandidateName }],
+        }),
+      });
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !created?.success) {
+        throw new Error(created?.error || "Could not start tailoring in Resume Builder.");
+      }
+
+      const newId = created?.data?.id as string | undefined;
+      if (!newId) throw new Error("Could not start tailoring in Resume Builder.");
+
+      onClose();
+      router.push(
+        `/falood/studio/tailor/${encodeURIComponent(newId)}?jobTitle=${encodeURIComponent(job.title || "")}&company=${encodeURIComponent(job.company || "")}`
+      );
+    } catch (e: any) {
+      setError(e?.message || "Could not start tailoring in Resume Builder.");
     } finally {
-      setSaving(false);
+      setGenerating(false);
     }
   }
 
@@ -202,7 +274,7 @@ export function TailorResumeModal({
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980 }}>
         <h2>Tailor resume for job</h2>
-        <p className="muted" style={{ marginTop: -6 }}>Review before sending.</p>
+        <p className="muted" style={{ marginTop: -6 }}>Open the Resume Builder and tailor with AI.</p>
 
         {loading ? (
           <p className="muted">Loading...</p>
@@ -211,7 +283,7 @@ export function TailorResumeModal({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div className="field-group">
                 <label>Candidate</label>
-                <input value={candidate?.name ?? candidateId} disabled />
+                <input value={candidateName} onChange={(e) => setCandidateName(e.target.value)} placeholder={candidate?.name ?? candidateId} />
               </div>
               <div className="field-group">
                 <label>Source resume</label>
@@ -261,56 +333,18 @@ export function TailorResumeModal({
                   ))}
                 </select>
               </div>
-              <div className="field-group">
-                <label>Attach to application packet</label>
-                <select value={applicationId} onChange={(e) => setApplicationId(e.target.value)}>
-                  <option value="">Save only</option>
-                  {candidate?.applications?.map((app) => (
-                    <option key={app.id} value={app.id}>
-                      {app.jobs?.title ?? "Application"} ({app.status})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="field-group">
-                <label>Title</label>
-                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Candidate - Job title" />
-              </div>
-              <div className="field-group">
-                <label>Version label</label>
-                <input value={versionLabel} onChange={(e) => setVersionLabel(e.target.value)} placeholder="Company tailored draft" />
-              </div>
             </div>
 
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
-              <button className="btn-primary" onClick={generate} disabled={generating || !baseResumeId || !jobId}>
-                {generating ? "Generating..." : "Generate tailored draft"}
+              <button className="btn-primary" onClick={startTailoring} disabled={generating || !baseResumeId || !jobId}>
+                {generating ? "Opening..." : "Generate tailored resume"}
               </button>
-              {generatedId && (
-                <Link href={`/falood/studio/application/${generatedId}`} onClick={onClose}>
-                  Open saved variant
-                </Link>
-              )}
-            </div>
-
-            <div className="field-group">
-              <label>Draft markdown</label>
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={18}
-                placeholder="Generated tailored resume draft will appear here."
-                style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-              />
             </div>
 
             {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
 
             <div className="modal-actions">
               <button onClick={onClose}>Close</button>
-              <button className="btn-primary" onClick={save} disabled={saving || !draft.trim() || !targetJobId}>
-                {saving ? "Saving..." : applicationId ? "Save and attach" : "Save as resume variant"}
-              </button>
             </div>
           </>
         )}
