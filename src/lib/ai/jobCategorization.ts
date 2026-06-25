@@ -140,7 +140,7 @@ export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; 
 export async function processPendingCategorization(
   opts: { limit?: number; triggeredBy?: string } = {}
 ): Promise<{ processed: number; failed: number; remainingPending: number; updatedJobs?: any[] }> {
-  const limit = Math.min(opts.limit ?? 5, 5);
+  const limit = Math.min(opts.limit ?? 200, 200);
 
   let runRow: { id: string } | null = null;
   if (isNeon()) {

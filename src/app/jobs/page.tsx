@@ -553,7 +553,30 @@ export default function JobsPage() {
     }
     setSaveSearchLabel("");
     setSavedSearches((current) => [data, ...current]);
-    setSavedSearchId(data.id);
+    clearFilters();
+  }
+
+  async function updateSavedSearch() {
+    setSavedSearchError("");
+    if (!savedSearchId) return;
+    
+    const res = await fetch(`/api/saved-job-searches/${savedSearchId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: currentSavedFilters() }),
+    });
+    
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSavedSearchError(data.error || "Could not update search.");
+      return;
+    }
+    
+    setSavedSearches((current) => 
+      current.map(item => item.id === savedSearchId ? { ...item, filters: currentSavedFilters() } : item)
+    );
+    
+    clearFilters();
   }
 
   async function deleteSavedSearch() {
@@ -562,7 +585,7 @@ export default function JobsPage() {
     if (!preset || !confirm(`Delete saved search "${preset.label}"?`)) return;
     await fetch(`/api/saved-job-searches/${savedSearchId}`, { method: "DELETE" });
     setSavedSearches((current) => current.filter((item) => item.id !== savedSearchId));
-    setSavedSearchId("");
+    clearFilters();
   }
 
   async function exportCsv() {
@@ -612,7 +635,7 @@ export default function JobsPage() {
               value={savedSearchId}
               onChange={(e) => {
                 const preset = savedSearches.find((item) => item.id === e.target.value);
-                if (preset) applySavedSearch(preset); else setSavedSearchId("");
+                if (preset) applySavedSearch(preset); else clearFilters();
               }}
             >
               <option value="">Select</option>
@@ -713,12 +736,18 @@ export default function JobsPage() {
       </div>
 
       <div className="filter-bar">
-        <input
-          placeholder="Name current filters..."
-          value={saveSearchLabel}
-          onChange={(e) => setSaveSearchLabel(e.target.value)}
-        />
-        <button onClick={saveCurrentSearch} disabled={!filtersActive}>Save search</button>
+        {!savedSearchId && (
+          <input
+            placeholder="Name current filters..."
+            value={saveSearchLabel}
+            onChange={(e) => setSaveSearchLabel(e.target.value)}
+          />
+        )}
+        {!savedSearchId ? (
+          <button onClick={saveCurrentSearch} disabled={!filtersActive}>Save search</button>
+        ) : (
+          <button onClick={updateSavedSearch} disabled={!filtersActive}>Update search</button>
+        )}
         {savedSearchId && <button className="btn-danger" onClick={deleteSavedSearch}>Delete saved</button>}
         {savedSearchError && <span className="form-error">{savedSearchError}</span>}
       </div>

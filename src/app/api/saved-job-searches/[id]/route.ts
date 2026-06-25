@@ -10,6 +10,13 @@ const ALLOWED_FILTERS = [
   "active",
   "employmentType",
   "category",
+  "workAuthorization",
+  "dateStart",
+  "dateEnd",
+  "candidate",
+  "assignedBy",
+  "owner",
+  "score",
   "sort",
 ] as const;
 
