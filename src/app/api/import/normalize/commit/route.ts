@@ -106,6 +106,22 @@ export async function POST(req: NextRequest) {
 
       if (newRows.length === 0) continue;
 
+      // Columns stored as jsonb in PostgreSQL — their JS object/array values
+      // must be JSON.stringify'd for parameterised queries.  Native PG array
+      // columns (e.g. category_tags text[]) must NOT be stringified; the pg
+      // driver handles them natively.
+      const JSONB_COLS = new Set([
+        "benefits",
+        "company_address",
+        "raw_source_payload",
+        "parsed_description",
+        "parsed_json",
+        "adhoc_job_data",
+        "ai_summary",
+        "checklist",
+        "warnings",
+      ]);
+
       let data: any[];
       let error: any;
 
@@ -118,7 +134,13 @@ export async function POST(req: NextRequest) {
           const rowPlaceholders: string[] = [];
           for (const col of cols) {
             rowPlaceholders.push(`$${paramIdx++}`);
-            values.push((row as any)[col]);
+            const val = (row as any)[col];
+            // Only stringify objects destined for jsonb columns
+            if (val !== null && val !== undefined && typeof val === "object" && JSONB_COLS.has(col)) {
+              values.push(JSON.stringify(val));
+            } else {
+              values.push(val);
+            }
           }
           placeholders.push(`(${rowPlaceholders.join(", ")})`);
         }
