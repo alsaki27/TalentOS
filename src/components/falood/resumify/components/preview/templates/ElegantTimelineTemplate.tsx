@@ -23,11 +23,11 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
     );
   };
 
-  const getFontSizeClass = () => {
+  const getFontSizePx = () => {
     switch (fontSize) {
-      case 'small': return 'text-xs';
-      case 'large': return 'text-sm';
-      default: return 'text-xs';
+      case 'small': return '14px';
+      case 'large': return '18px';
+      default: return '16px';
     }
   };
 
@@ -41,9 +41,8 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed ${getFontSizeClass()}`}
-      style={{ 
-        color: colors.text, 
+      className={`w-full h-full leading-relaxed `}
+      style={{ fontSize: getFontSizePx(), color: colors.text, 
         fontFamily: fontFamily || 'Lato, sans-serif',
         pageBreakInside: 'avoid'
       }}
@@ -115,7 +114,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                 >
                   PROFESSIONAL SUMMARY
                 </h3>
-                <p className={`${getFontSizeClass()} leading-relaxed text-center max-w-4xl mx-auto`}>{summary}</p>
+                <p className={` leading-relaxed text-center max-w-4xl mx-auto`}>{summary}</p>
               </div>
             )}
 
@@ -149,9 +148,9 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                                 borderColor: colors.accent
                               }}
                             />
-                            <h4 className={`${getFontSizeClass()} font-semibold`}>{exp.jobTitle}</h4>
+                            <h4 className={` font-semibold`}>{exp.jobTitle}</h4>
                             <div 
-                              className={`${getFontSizeClass()} font-medium`}
+                              className={` font-medium`}
                               style={{ color: colors.secondary }}
                             >
                               {exp.company}
@@ -189,7 +188,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <div className="space-y-3">
                     {education.map((edu) => (
                       <div key={edu.id} className="text-center">
-                        <h4 className={`${getFontSizeClass()} font-semibold`}>{edu.degree}</h4>
+                        <h4 className={` font-semibold`}>{edu.degree}</h4>
                         <div style={{ color: colors.secondary }}>{edu.institution}</div>
                         <div className="text-xs">{edu.graduationYear}</div>
                       </div>
@@ -256,11 +255,11 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                     </h3>
                     <div className="text-center">
                       {customSection.type === 'paragraph' ? (
-                        <p className={`${getFontSizeClass()} leading-relaxed`}>{customSection.content}</p>
+                        <p className={` leading-relaxed`}>{customSection.content}</p>
                       ) : (
                         <ul className="space-y-1 inline-block text-left">
                           {formatBulletPoints(customSection.content).map((point, idx) => (
-                            <li key={idx} className={`${getFontSizeClass()}`}>• {point}</li>
+                            <li key={idx} className={``}>• {point}</li>
                           ))}
                         </ul>
                       )}

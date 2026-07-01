@@ -55,9 +55,9 @@ export function renderResumePdfDoc(content: ResumeDocument): jsPDF {
   const contentWidth = pageWidth - marginLeft - marginRight;
 
   const baseFontSize = formatting.fontSize || 10.5;
-  const lineHeight = (formatting.lineHeight || 1.15) * (baseFontSize / 72) * 1.15;
-  const sectionSpacing = (formatting.sectionSpacing ?? 8) / 72;
-  const bulletSpacing = (formatting.bulletSpacing ?? 2) / 72;
+  const lineHeight = (formatting.lineHeight || 1.15) * (baseFontSize / 72) * 1.05;
+  const sectionSpacing = (formatting.sectionSpacing ?? 5) / 72;
+  const bulletSpacing = (formatting.bulletSpacing ?? 1) / 72;
 
   const doc = new jsPDF({ unit: "in", format: isA4 ? "a4" : "letter" });
   doc.setFont("helvetica");
@@ -86,7 +86,7 @@ export function renderResumePdfDoc(content: ResumeDocument): jsPDF {
     ensureSpace(lineHeight + sectionSpacing);
     y += sectionSpacing * 0.5;
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(baseFontSize + 0.5);
+    doc.setFontSize(baseFontSize + 0.25);
     doc.text(title.toUpperCase(), marginLeft, y);
     const textWidth = doc.getTextWidth(title.toUpperCase());
     doc.setLineWidth(0.008);
@@ -110,9 +110,9 @@ export function renderResumePdfDoc(content: ResumeDocument): jsPDF {
 
   // Header
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(baseFontSize + 5);
+  doc.setFontSize(baseFontSize + 4);
   doc.text(content.header.fullName, pageWidth / 2, y, { align: "center" });
-  y += lineHeight + 0.02;
+  y += lineHeight + 0.01;
 
   const contact = contactLine(content);
   if (contact) {

@@ -27,13 +27,13 @@ function estimatePageCount(content: ResumeDocument): number {
 }
 
 const FLOORS = {
-  sectionSpacing: 4,
-  bulletSpacing: 1,
-  marginTop: 0.4,
-  marginRight: 0.4,
-  marginBottom: 0.4,
-  marginLeft: 0.4,
-  fontSize: 9.5,
+  sectionSpacing: 2,
+  bulletSpacing: 0,
+  marginTop: 0.3,
+  marginRight: 0.3,
+  marginBottom: 0.3,
+  marginLeft: 0.3,
+  fontSize: 8,
   lineHeight: 1.0,
 };
 

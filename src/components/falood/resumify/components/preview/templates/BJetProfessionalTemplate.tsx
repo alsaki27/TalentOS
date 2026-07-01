@@ -15,11 +15,11 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
     return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}`;
   };
 
-  const getFontSizeClass = () => {
+  const getFontSizePx = () => {
     switch (fontSize) {
-      case 'small': return 'text-[10px]';
-      case 'large': return 'text-xs';
-      default: return 'text-[11px]';
+      case 'small': return '14px';
+      case 'large': return '18px';
+      default: return '16px';
     }
   };
 
@@ -37,7 +37,7 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full ${getFontSizeClass()}`}
+      className={`w-full h-full `}
       style={{ 
         fontFamily: fontFamily || 'Arial, sans-serif',
         color: colors.text,

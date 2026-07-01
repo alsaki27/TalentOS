@@ -23,11 +23,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
     );
   };
 
-  const getFontSizeClass = () => {
+  const getFontSizePx = () => {
     switch (fontSize) {
-      case 'small': return 'text-xs';
-      case 'large': return 'text-sm';
-      default: return 'text-xs';
+      case 'small': return '14px';
+      case 'large': return '18px';
+      default: return '16px';
     }
   };
 
@@ -41,9 +41,8 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed ${getFontSizeClass()}`}
-      style={{ 
-        color: colors.text, 
+      className={`w-full h-full leading-relaxed `}
+      style={{ fontSize: getFontSizePx(), color: colors.text, 
         fontFamily: fontFamily || 'Source Sans Pro, sans-serif',
         pageBreakInside: 'avoid'
       }}
@@ -171,8 +170,8 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <div className="space-y-3">
                     {education.map((edu) => (
                       <div key={edu.id}>
-                        <h4 className={`${getFontSizeClass()} font-semibold`}>{edu.degree}</h4>
-                        <div className={`${getFontSizeClass()}`} style={{ color: colors.secondary }}>
+                        <h4 className={` font-semibold`}>{edu.degree}</h4>
+                        <div className={``} style={{ color: colors.secondary }}>
                           {edu.institution}
                         </div>
                         <div className="text-xs">{edu.graduationYear}</div>
@@ -194,11 +193,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                 {customSection.title.toUpperCase()}
               </h3>
               {customSection.type === 'paragraph' ? (
-                <p className={`${getFontSizeClass()} leading-relaxed`}>{customSection.content}</p>
+                <p className={` leading-relaxed`}>{customSection.content}</p>
               ) : (
                 <ul className="space-y-1">
                   {formatBulletPoints(customSection.content).map((point, idx) => (
-                    <li key={idx} className={`${getFontSizeClass()}`}>• {point}</li>
+                    <li key={idx} className={``}>• {point}</li>
                   ))}
                 </ul>
               )}
@@ -215,7 +214,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <h3 className={`${getHeadingSize()} font-bold mb-3`} style={{ color: colors.primary }}>
                     ABOUT ME
                   </h3>
-                  <p className={`${getFontSizeClass()} leading-relaxed`}>{summary}</p>
+                  <p className={` leading-relaxed`}>{summary}</p>
                 </div>
               )}
 
@@ -231,8 +230,8 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                           className="absolute left-0 top-2 w-3 h-3 rounded-full"
                           style={{ backgroundColor: colors.accent }}
                         />
-                        <h4 className={`${getFontSizeClass()} font-bold`}>{exp.jobTitle}</h4>
-                        <div className={`${getFontSizeClass()}`} style={{ color: colors.secondary }}>
+                        <h4 className={` font-bold`}>{exp.jobTitle}</h4>
+                        <div className={``} style={{ color: colors.secondary }}>
                           {exp.company} • {formatDate(exp.startDate)} - {exp.current ? 'Present' : formatDate(exp.endDate)}
                         </div>
                         {exp.description && <p className="text-xs mt-1">{exp.description}</p>}
@@ -257,7 +256,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <div className="space-y-3">
                     {projects.map((project) => (
                       <div key={project.id} className="page-break-inside-avoid">
-                        <h4 className={`${getFontSizeClass()} font-bold`}>{project.title}</h4>
+                        <h4 className={` font-bold`}>{project.title}</h4>
                         <p className="text-xs mb-2">{project.description}</p>
                         {project.technologies.length > 0 && (
                           <div className="flex flex-wrap gap-1">
@@ -287,11 +286,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                 {customSection.title.toUpperCase()}
               </h3>
               {customSection.type === 'paragraph' ? (
-                <p className={`${getFontSizeClass()} leading-relaxed`}>{customSection.content}</p>
+                <p className={` leading-relaxed`}>{customSection.content}</p>
               ) : (
                 <ul className="space-y-1">
                   {formatBulletPoints(customSection.content).map((point, idx) => (
-                    <li key={idx} className={`${getFontSizeClass()}`}>• {point}</li>
+                    <li key={idx} className={``}>• {point}</li>
                   ))}
                 </ul>
               )}

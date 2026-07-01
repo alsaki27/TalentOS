@@ -111,11 +111,9 @@ export const ResumePreview: React.FC = () => {
             style={{
               width: isA4 ? '210mm' : '8.5in',
               height: isA4 ? '297mm' : '11in',
-              fontSize: '11px',
-              lineHeight: '1.35',
               fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
               padding: '0.75in',
-              color: '#1f2937',
+              color: '#050505ff',
               boxSizing: 'border-box',
               transform: `scale(${scale})`,
               transformOrigin: 'top left'
