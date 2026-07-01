@@ -30,8 +30,8 @@ const DEFAULT_FORMATTING: ResumeFormatting = {
   marginRight: 0.5,
   marginBottom: 0.5,
   marginLeft: 0.5,
-  sectionSpacing: 8,
-  bulletSpacing: 2,
+  sectionSpacing: 5,
+  bulletSpacing: 1,
   lineHeight: 1.15,
 };
 

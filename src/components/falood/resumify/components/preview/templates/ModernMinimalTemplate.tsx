@@ -23,11 +23,11 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
     );
   };
 
-  const getFontSizeClass = () => {
+  const getFontSizePx = () => {
     switch (fontSize) {
-      case 'small': return 'text-xs';
-      case 'large': return 'text-sm';
-      default: return 'text-xs';
+      case 'small': return '14px';
+      case 'large': return '18px';
+      default: return '16px';
     }
   };
 
@@ -36,9 +36,8 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed ${getFontSizeClass()}`}
-      style={{ 
-        color: colors.text, 
+      className={`w-full h-full leading-relaxed `}
+      style={{ fontSize: getFontSizePx(), color: colors.text, 
         fontFamily: fontFamily || 'Poppins, sans-serif',
         pageBreakInside: 'avoid'
       }}
