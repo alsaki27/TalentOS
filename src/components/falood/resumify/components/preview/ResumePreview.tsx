@@ -1,5 +1,6 @@
 import React from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
+import { DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
 import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
 import { BusinessProfessionalTemplate } from './templates/BusinessProfessionalTemplate';
 import { ModernMinimalTemplate } from './templates/ModernMinimalTemplate';
@@ -12,6 +13,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 export const ResumePreview: React.FC = () => {
   const { state } = useResume();
   const { resumeData } = state;
+  const pagePadding = resumeData.pagePadding ?? DEFAULT_PAGE_PADDING;
 
   const renderTemplate = () => {
     switch (resumeData.template) {
@@ -112,7 +114,7 @@ export const ResumePreview: React.FC = () => {
               width: isA4 ? '210mm' : '8.5in',
               height: isA4 ? '297mm' : '11in',
               fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-              padding: '0.75in',
+              padding: `${pagePadding}in`,
               color: '#050505ff',
               boxSizing: 'border-box',
               transform: `scale(${scale})`,

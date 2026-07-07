@@ -31,6 +31,11 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
     }
   };
 
+  const formatUrl = (url: string | undefined) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `https://${url}`;
+  };
+
   const leftSections = ['skills', 'education'];
   const rightSections = ['summary', 'experience', 'projects'];
 
@@ -50,12 +55,14 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
-        <h2 
-          className="text-xl font-medium mb-4"
-          style={{ color: colors.secondary }}
-        >
-          {personalInfo.jobTitle || 'Your Job Title'}
-        </h2>
+        {personalInfo.jobTitle && (
+          <h2 
+            className="text-xl font-medium mb-4"
+            style={{ color: colors.secondary }}
+          >
+            {personalInfo.jobTitle}
+          </h2>
+        )}
         
         {/* Contact Info */}
         <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
@@ -80,19 +87,19 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
           {personalInfo.website && (
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4" style={{ color: colors.accent }} />
-              <a href={personalInfo.website} className="hover:underline">Portfolio</a>
+              <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
             </div>
           )}
           {personalInfo.linkedin && (
             <div className="flex items-center gap-2">
               <Link2 className="w-4 h-4" style={{ color: colors.accent }} />
-              <a href={personalInfo.linkedin} className="hover:underline">LinkedIn</a>
+              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
             </div>
           )}
           {personalInfo.github && (
             <div className="flex items-center gap-2">
               <Code2 className="w-4 h-4" style={{ color: colors.accent }} />
-              <a href={personalInfo.github} className="hover:underline">GitHub</a>
+              <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
             </div>
           )}
         </div>
@@ -104,7 +111,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
         <div className="w-[35%] space-y-6">
           {visibleSections.filter(s => leftSections.includes(s.id)).map(section => (
             <div key={section.id} className="page-break-inside-avoid">
-              {section.id === 'skills' && skills && (
+              {section.id === 'skills' && skills && ((skills.mode === 'simple' && skills.simple.length > 0) || (skills.mode === 'categorized' && skills.categorized.length > 0)) && (
                 <div>
                   <h3 
                     className="text-lg font-bold mb-3"
@@ -336,16 +343,18 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                           </div>
                         )}
                         {(project.liveUrl || project.githubUrl) && (
-                          <div className="text-xs space-x-4">
+                          <div className="flex gap-4 mt-2 text-sm">
                             {project.liveUrl && (
-                              <span>
-                                <strong>Live:</strong> {project.liveUrl}
-                              </span>
+                              <div className="flex items-center gap-1">
+                                <Globe className="w-3 h-3" style={{ color: colors.accent }} />
+                                <a href={formatUrl(project.liveUrl)} className="hover:underline text-blue-600">Live Demo</a>
+                              </div>
                             )}
                             {project.githubUrl && (
-                              <span>
-                                <strong>Code:</strong> {project.githubUrl}
-                              </span>
+                              <div className="flex items-center gap-1">
+                                <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
+                                <a href={formatUrl(project.githubUrl)} className="hover:underline text-blue-600">Repository</a>
+                              </div>
                             )}
                           </div>
                         )}

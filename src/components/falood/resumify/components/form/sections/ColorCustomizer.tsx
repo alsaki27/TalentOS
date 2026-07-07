@@ -4,13 +4,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Palette, RotateCcw, Type, Settings } from 'lucide-react';
-import { DEFAULT_COLORS } from '@/components/falood/resumify/types/resume';
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
 
 export const ColorCustomizer: React.FC = () => {
-  const { state, updateColors, updateFontSize, updateFontFamily } = useResume();
-  const { colors, fontSize, fontFamily } = state.resumeData;
+  const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding } = useResume();
+  const { colors, fontSize, fontFamily, pagePadding } = state.resumeData;
 
   const updateColor = (colorKey: keyof typeof colors, value: string) => {
     updateColors({ ...colors, [colorKey]: value });
@@ -18,6 +19,10 @@ export const ColorCustomizer: React.FC = () => {
 
   const resetToDefaults = () => {
     updateColors(DEFAULT_COLORS);
+  };
+
+  const resetSpacing = () => {
+    updatePagePadding(DEFAULT_PAGE_PADDING);
   };
 
   const colorPresets = [
@@ -152,6 +157,46 @@ export const ColorCustomizer: React.FC = () => {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="w-5 h-5" />
+            Page Spacing
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Resume Padding</Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Controls the top, right, bottom, and left padding of the resume page.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={resetSpacing}>
+              Reset
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">All sides</span>
+              <span className="font-medium">{pagePadding.toFixed(2)} in</span>
+            </div>
+            <Slider
+              value={[pagePadding]}
+              min={0.3}
+              max={1.25}
+              step={0.05}
+              onValueChange={(value) => updatePagePadding(value[0] ?? DEFAULT_PAGE_PADDING)}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Narrow</span>
+              <span>Wide</span>
             </div>
           </div>
         </CardContent>

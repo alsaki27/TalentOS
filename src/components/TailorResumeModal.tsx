@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { DEFAULT_COLORS, DEFAULT_SECTIONS, type ResumeData } from "@/components/falood/resumify/types/resume";
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, type ResumeData } from "@/components/falood/resumify/types/resume";
 
 interface BaseResume {
   id: string;
@@ -29,12 +29,60 @@ interface JobOption {
   applicationId?: string;
 }
 
+function buildCustomSectionsForBuilder(old: any): ResumeData["customSections"] {
+  const importedSections = Array.isArray(old.customSections)
+    ? old.customSections
+        .map((section: any, index: number) => {
+          const content = Array.isArray(section?.bullets)
+            ? section.bullets
+                .map((bullet: any) => bullet?.text || bullet)
+                .filter(Boolean)
+                .join("\n")
+            : typeof section?.content === "string"
+              ? section.content.trim()
+              : "";
+          if (!content) return null;
+          const lines = content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+          return {
+            id: section?.id || `custom-${index}`,
+            title: section?.title || `Custom Section ${index + 1}`,
+            content,
+            type: lines.length > 1 ? "bullets" : "paragraph",
+            visible: section?.visible ?? true,
+            order: index,
+            placement: section?.placement || "right",
+          };
+        })
+        .filter((section: ResumeData["customSections"][number] | null): section is ResumeData["customSections"][number] => Boolean(section))
+    : [];
+
+  const certificationLines = Array.isArray(old.certifications)
+    ? old.certifications
+        .map((cert: any) => [cert?.name, cert?.issuer, cert?.date].filter(Boolean).join(" | "))
+        .filter(Boolean)
+    : [];
+
+  if (certificationLines.length > 0) {
+    importedSections.push({
+      id: "certifications",
+      title: "Certifications",
+      content: certificationLines.join("\n"),
+      type: "bullets",
+      visible: true,
+      order: importedSections.length,
+      placement: "right",
+    });
+  }
+
+  return importedSections;
+}
+
 export function TailorResumeModal({
   candidateId,
   initialJobId,
   initialApplicationId,
   onClose,
-  onSaved,
+  onSaved: _onSaved,
 }: {
   candidateId: string;
   initialJobId?: string | null;
@@ -137,10 +185,11 @@ export function TailorResumeModal({
         customSections: [],
         sections: DEFAULT_SECTIONS,
         colors: DEFAULT_COLORS,
-        template: "tech-sidebar",
+        template: "business-professional",
         pageFormat: "letter",
         fontSize: "medium",
         fontFamily: "Inter",
+        pagePadding: DEFAULT_PAGE_PADDING,
       };
     }
 
@@ -153,7 +202,7 @@ export function TailorResumeModal({
         email: old.header?.email || "",
         phone: old.header?.phone || "",
         location: old.header?.location || "",
-        website: old.header?.website || "",
+        website: old.header?.portfolio || old.header?.website || "",
         linkedin: old.header?.linkedin || "",
         github: old.header?.github || "",
         profileImage: "",
@@ -196,20 +245,26 @@ export function TailorResumeModal({
       projects: Array.isArray(old.projects)
         ? old.projects.map((p: any) => ({
             id: p.id || Math.random().toString(),
-            title: p.title || "",
-            description: "",
-            technologies: [],
-            liveUrl: "",
+            title: p.title || p.name || "",
+            description:
+              p.description ||
+              (Array.isArray(p.bullets)
+                ? p.bullets.map((b: any) => b?.text || b).filter(Boolean).join("\n")
+                : "") ||
+              "",
+            technologies: Array.isArray(p.technologies) ? p.technologies.filter(Boolean) : [],
+            liveUrl: p.liveUrl || p.url || "",
             githubUrl: "",
           }))
         : [],
-      customSections: [],
+      customSections: buildCustomSectionsForBuilder(old),
       sections: DEFAULT_SECTIONS,
       colors: DEFAULT_COLORS,
-      template: "tech-sidebar",
+      template: "business-professional",
       pageFormat: "letter",
       fontSize: "medium",
       fontFamily: "Inter",
+      pagePadding: DEFAULT_PAGE_PADDING,
     };
   }
 

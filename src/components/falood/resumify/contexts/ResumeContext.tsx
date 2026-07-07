@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useReducer, ReactNode } from 'react';
-import { ResumeData, DEFAULT_COLORS, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
+import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
+import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
 
 interface ResumeState {
   resumeData: ResumeData;
@@ -23,6 +23,7 @@ type ResumeAction =
   | { type: 'UPDATE_PAGE_FORMAT'; payload: ResumeData['pageFormat'] }
   | { type: 'UPDATE_FONT_SIZE'; payload: ResumeData['fontSize'] }
   | { type: 'UPDATE_FONT_FAMILY'; payload: ResumeData['fontFamily'] }
+  | { type: 'UPDATE_PAGE_PADDING'; payload: ResumeData['pagePadding'] }
   | { type: 'SET_EDITING'; payload: boolean }
   | { type: 'SET_SELECTED_SECTION'; payload: string | null }
   | { type: 'RESET_RESUME' }
@@ -55,10 +56,11 @@ const initialResumeData: ResumeData = {
   customSections: [],
   sections: DEFAULT_SECTIONS,
   colors: DEFAULT_COLORS,
-  template: 'tech-sidebar',
+  template: 'business-professional',
   pageFormat: 'a4',
   fontSize: 'medium',
-  fontFamily: 'Inter'
+  fontFamily: 'Inter',
+  pagePadding: DEFAULT_PAGE_PADDING
 };
 
 const initialState: ResumeState = {
@@ -145,6 +147,11 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
         ...state,
         resumeData: { ...state.resumeData, fontFamily: action.payload }
       };
+    case 'UPDATE_PAGE_PADDING':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, pagePadding: action.payload }
+      };
     case 'SET_EDITING':
       return { ...state, isEditing: action.payload };
     case 'SET_SELECTED_SECTION':
@@ -152,7 +159,7 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
     case 'RESET_RESUME':
       return { ...initialState, resumeData: initialResumeData };
     case 'IMPORT_RESUME_DATA':
-      return { ...state, resumeData: action.payload };
+      return { ...state, resumeData: { ...initialResumeData, ...action.payload } };
     case 'SET_CHAT_HISTORY':
       return { ...state, chatHistory: action.payload };
     case 'SET_JOB_DESCRIPTION':
@@ -178,6 +185,7 @@ interface ResumeContextType {
   updatePageFormat: (format: ResumeData['pageFormat']) => void;
   updateFontSize: (fontSize: ResumeData['fontSize']) => void;
   updateFontFamily: (fontFamily: ResumeData['fontFamily']) => void;
+  updatePagePadding: (pagePadding: ResumeData['pagePadding']) => void;
   setEditing: (editing: boolean) => void;
   setSelectedSection: (section: string | null) => void;
   resetResume: () => void;
@@ -192,87 +200,91 @@ const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
 export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [state, dispatch] = useReducer(resumeReducer, initialState);
 
-  const updatePersonalInfo = (data: Partial<ResumeData['personalInfo']>) => {
+  const updatePersonalInfo = useCallback((data: Partial<ResumeData['personalInfo']>) => {
     dispatch({ type: 'UPDATE_PERSONAL_INFO', payload: data });
-  };
+  }, []);
 
-  const updateSummary = (summary: string) => {
+  const updateSummary = useCallback((summary: string) => {
     dispatch({ type: 'UPDATE_SUMMARY', payload: summary });
-  };
+  }, []);
 
-  const updateExperience = (experience: ResumeData['experience']) => {
+  const updateExperience = useCallback((experience: ResumeData['experience']) => {
     dispatch({ type: 'UPDATE_EXPERIENCE', payload: experience });
-  };
+  }, []);
 
-  const updateEducation = (education: ResumeData['education']) => {
+  const updateEducation = useCallback((education: ResumeData['education']) => {
     dispatch({ type: 'UPDATE_EDUCATION', payload: education });
-  };
+  }, []);
 
-  const updateProjects = (projects: ResumeData['projects']) => {
+  const updateProjects = useCallback((projects: ResumeData['projects']) => {
     dispatch({ type: 'UPDATE_PROJECTS', payload: projects });
-  };
+  }, []);
 
-  const updateSkills = (skills: ResumeData['skills']) => {
+  const updateSkills = useCallback((skills: ResumeData['skills']) => {
     dispatch({ type: 'UPDATE_SKILLS', payload: skills });
-  };
+  }, []);
 
-  const updateCustomSections = (sections: ResumeData['customSections']) => {
+  const updateCustomSections = useCallback((sections: ResumeData['customSections']) => {
     dispatch({ type: 'UPDATE_CUSTOM_SECTIONS', payload: sections });
-  };
+  }, []);
 
-  const updateSections = (sections: ResumeData['sections']) => {
+  const updateSections = useCallback((sections: ResumeData['sections']) => {
     dispatch({ type: 'UPDATE_SECTIONS', payload: sections });
-  };
+  }, []);
 
-  const updateColors = (colors: ResumeData['colors']) => {
+  const updateColors = useCallback((colors: ResumeData['colors']) => {
     dispatch({ type: 'UPDATE_COLORS', payload: colors });
-  };
+  }, []);
 
-  const updateTemplate = (template: ResumeData['template']) => {
+  const updateTemplate = useCallback((template: ResumeData['template']) => {
     dispatch({ type: 'UPDATE_TEMPLATE', payload: template });
-  };
+  }, []);
 
-  const updatePageFormat = (format: ResumeData['pageFormat']) => {
+  const updatePageFormat = useCallback((format: ResumeData['pageFormat']) => {
     dispatch({ type: 'UPDATE_PAGE_FORMAT', payload: format });
-  };
+  }, []);
 
-  const updateFontSize = (fontSize: ResumeData['fontSize']) => {
+  const updateFontSize = useCallback((fontSize: ResumeData['fontSize']) => {
     dispatch({ type: 'UPDATE_FONT_SIZE', payload: fontSize });
-  };
+  }, []);
 
-  const updateFontFamily = (fontFamily: ResumeData['fontFamily']) => {
+  const updateFontFamily = useCallback((fontFamily: ResumeData['fontFamily']) => {
     dispatch({ type: 'UPDATE_FONT_FAMILY', payload: fontFamily });
-  };
+  }, []);
 
-  const setEditing = (editing: boolean) => {
+  const updatePagePadding = useCallback((pagePadding: ResumeData['pagePadding']) => {
+    dispatch({ type: 'UPDATE_PAGE_PADDING', payload: pagePadding });
+  }, []);
+
+  const setEditing = useCallback((editing: boolean) => {
     dispatch({ type: 'SET_EDITING', payload: editing });
-  };
+  }, []);
 
-  const setSelectedSection = (section: string | null) => {
+  const setSelectedSection = useCallback((section: string | null) => {
     dispatch({ type: 'SET_SELECTED_SECTION', payload: section });
-  };
+  }, []);
 
-  const resetResume = () => {
+  const resetResume = useCallback(() => {
     dispatch({ type: 'RESET_RESUME' });
-  };
+  }, []);
 
-  const importResumeData = (data: ResumeData) => {
+  const importResumeData = useCallback((data: ResumeData) => {
     dispatch({ type: 'IMPORT_RESUME_DATA', payload: data });
-  };
+  }, []);
 
-  const exportResumeData = (): ResumeData => {
+  const exportResumeData = useCallback((): ResumeData => {
     return state.resumeData;
-  };
+  }, [state.resumeData]);
 
-  const setChatHistory = (history: any[]) => {
+  const setChatHistory = useCallback((history: any[]) => {
     dispatch({ type: 'SET_CHAT_HISTORY', payload: history });
-  };
+  }, []);
 
-  const setJobDescription = (jd: string) => {
+  const setJobDescription = useCallback((jd: string) => {
     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: jd });
-  };
+  }, []);
 
-  const value: ResumeContextType = {
+  const value: ResumeContextType = useMemo(() => ({
     state,
     dispatch,
     updatePersonalInfo,
@@ -288,6 +300,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     updatePageFormat,
     updateFontSize,
     updateFontFamily,
+    updatePagePadding,
     setEditing,
     setSelectedSection,
     resetResume,
@@ -295,7 +308,30 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     exportResumeData,
     setChatHistory,
     setJobDescription
-  };
+  }), [
+    state,
+    updatePersonalInfo,
+    updateSummary,
+    updateExperience,
+    updateEducation,
+    updateProjects,
+    updateSkills,
+    updateCustomSections,
+    updateSections,
+    updateColors,
+    updateTemplate,
+    updatePageFormat,
+    updateFontSize,
+    updateFontFamily,
+    updatePagePadding,
+    setEditing,
+    setSelectedSection,
+    resetResume,
+    importResumeData,
+    exportResumeData,
+    setChatHistory,
+    setJobDescription,
+  ]);
 
   return (
     <ResumeContext.Provider value={value}>

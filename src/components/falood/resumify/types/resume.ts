@@ -95,6 +95,7 @@ export interface ResumeData {
   pageFormat: 'letter' | 'a4';
   fontSize: 'small' | 'medium' | 'large';
   fontFamily: string;
+  pagePadding: number;
 }
 
 export type TemplateType = 'tech-sidebar' | 'business-professional' | 'modern-minimal' | 'elegant-timeline' | 'creative-modern' | 'bjet-professional';
@@ -111,19 +112,21 @@ export interface TemplateConfig {
 }
 
 export const DEFAULT_COLORS: ResumeColors = {
-  primary: '#3b82f6',
+  primary: '#374151',
   secondary: '#6b7280',
-  accent: '#10b981',
+  accent: '#3b82f6',
   text: '#1f2937',
   background: '#ffffff'
 };
 
+export const DEFAULT_PAGE_PADDING = 0.75;
+
 export const DEFAULT_SECTIONS: ResumeSection[] = [
   { id: 'summary', title: 'Professional Summary', visible: true, order: 1 },
-  { id: 'experience', title: 'Experience', visible: true, order: 2 },
-  { id: 'projects', title: 'Projects', visible: true, order: 3 },
-  { id: 'education', title: 'Education', visible: true, order: 4 },
-  { id: 'skills', title: 'Skills', visible: true, order: 5 },
+  { id: 'skills', title: 'Skills', visible: true, order: 2 },
+  { id: 'experience', title: 'Experience', visible: true, order: 3 },
+  { id: 'projects', title: 'Projects', visible: true, order: 4 },
+  { id: 'education', title: 'Education', visible: true, order: 5 },
   { id: 'custom', title: 'Custom Sections', visible: true, order: 6 }
 ];
 

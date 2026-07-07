@@ -5,6 +5,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
+import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 
 interface BaseResumeSummary {
   id: string;
@@ -114,6 +115,7 @@ function initials(name: string): string {
 }
 
 export default function CandidateProfilePage() {
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
@@ -302,50 +304,22 @@ export default function CandidateProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newContent: buildResumeDocumentFromParsed(parsed) }),
       });
-      loadBaseResumes();
+      router.push(`/falood/studio/base/${baseResume.id}`);
     }
   }
 
   function buildResumeDocumentFromParsed(parsed: any) {
-    return {
-      header: {
-        fullName: parsed.name ?? candidate?.name ?? "",
-        email: parsed.email ?? undefined,
-        phone: parsed.phone ?? undefined,
-        linkedin: parsed.linkedin_url ?? undefined,
-        github: parsed.github_url ?? undefined,
-        portfolio: parsed.portfolio_url ?? undefined,
-        location: parsed.location ?? undefined,
+    return buildResumeDocumentFromParsedResume(
+      parsed,
+      {
+        name: candidate?.name ?? "",
+        email: candidate?.email,
+        phone: candidate?.phone,
+        linkedin_url: candidate?.linkedin_url,
+        github_url: candidate?.github_url,
+        portfolio_url: candidate?.portfolio_url,
       },
-      summary: parsed.summary ? { id: "summary-1", text: parsed.summary } : undefined,
-      skills: (parsed.skills ?? []).map((s: string, i: number) => ({
-        id: `skill-${i}`,
-        title: s,
-        skills: [s],
-      })),
-      experience: (parsed.experience ?? []).map((exp: any, i: number) => ({
-        id: `exp-${i}`,
-        title: exp.title ?? "",
-        company: exp.company ?? "",
-        location: exp.location ?? undefined,
-        startDate: exp.startDate ?? exp.start_date ?? "",
-        endDate: exp.endDate ?? exp.end_date ?? undefined,
-        bullets: (exp.bullets ?? (exp.description ? [exp.description] : [])).map((b: string, j: number) => ({
-          id: `bullet-${i}-${j}`,
-          text: b,
-        })),
-      })),
-      education: (parsed.education ?? []).map((edu: any, i: number) => ({
-        id: `edu-${i}`,
-        degree: edu.degree ?? "",
-        school: edu.school ?? "",
-        graduationDate: edu.graduationDate ?? edu.graduation_year ?? undefined,
-      })),
-      certifications: (parsed.certifications ?? []).map((cert: string, i: number) => ({
-        id: `cert-${i}`,
-        name: cert,
-      })),
-      formatting: {
+      {
         styleId: "skarion_compact_professional",
         pageFormat: "letter",
         fontFamily: "Calibri",
@@ -358,7 +332,7 @@ export default function CandidateProfilePage() {
         bulletSpacing: 2,
         lineHeight: 1.15,
       },
-    };
+    );
   }
 
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1015,8 +989,16 @@ export default function CandidateProfilePage() {
         <CreateBaseResumeModal
           candidateId={candidate.id}
           candidateName={candidate.name}
+          hasUploadedResume={candidate.resumes.some((resume) => resume.kind === "resume")}
           onClose={() => setShowCreateBaseResume(false)}
-          onCreated={() => { setShowCreateBaseResume(false); loadBaseResumes(); }}
+          onCreated={(id) => { 
+            setShowCreateBaseResume(false); 
+            if (id) {
+              router.push(`/falood/studio/base/${id}`);
+            } else {
+              loadBaseResumes(); 
+            }
+          }}
         />
       )}
       {showParseModal && (
@@ -1476,7 +1458,19 @@ function AddEvidenceModal({ candidateId, onClose, onAdded }: { candidateId: stri
   );
 }
 
-function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated }: { candidateId: string; candidateName: string; onClose: () => void; onCreated: () => void }) {
+function CreateBaseResumeModal({
+  candidateId,
+  candidateName,
+  hasUploadedResume,
+  onClose,
+  onCreated,
+}: {
+  candidateId: string;
+  candidateName: string;
+  hasUploadedResume: boolean;
+  onClose: () => void;
+  onCreated: (id?: string) => void;
+}) {
   const [name, setName] = useState(`${candidateName} — Base Resume`);
   const [targetIndustry, setTargetIndustry] = useState("");
   const [targetRoles, setTargetRoles] = useState("");
@@ -1486,6 +1480,10 @@ function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated 
 
   async function submit() {
     if (!name.trim()) { setError("Name is required."); return; }
+    if (startingSource === "uploaded_resume" && !hasUploadedResume) {
+      setError("Please upload a resume first, then choose 'Seed from uploaded resume'.");
+      return;
+    }
     setSaving(true);
     setError("");
     const res = await fetch("/api/base-resumes", {
@@ -1505,7 +1503,8 @@ function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated 
       setError(data.error || "Failed to create base resume.");
       return;
     }
-    onCreated();
+    const data = await res.json();
+    onCreated(data.id);
   }
 
   return (
@@ -1533,6 +1532,11 @@ function CreateBaseResumeModal({ candidateId, candidateName, onClose, onCreated 
             <option value="blank">Blank canvas (build with Falood AI)</option>
             <option value="uploaded_resume">Seed from uploaded resume (if available)</option>
           </select>
+          {startingSource === "uploaded_resume" && !hasUploadedResume && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              No uploaded resume found yet. Upload a resume first, then come back and seed from it.
+            </p>
+          )}
         </div>
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
         <div className="modal-actions">

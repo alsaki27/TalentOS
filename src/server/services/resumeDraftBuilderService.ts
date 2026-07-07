@@ -17,7 +17,6 @@ import {
   createApplicationResumeVersion,
   updateApplicationResumeVersion,
   getCurrentDraftForApplication,
-  cloneResumeVersion,
   ApplicationResumeVersionRow,
 } from "@/server/repositories/applicationResumeVersionsRepository";
 import {
@@ -25,7 +24,8 @@ import {
   updateSuggestion,
   ApplicationResumeSuggestionRow,
 } from "@/server/repositories/applicationResumeSuggestionsRepository";
-import { buildResumeContext } from "@/server/services/resumeContextService";
+import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
+import type { ResumeDocument } from "@/lib/falood/types";
 
 export interface BuildResumeDraftOptions {
   baseResumeVersionId?: string | null;
@@ -226,7 +226,7 @@ async function loadSourceContent(
         .maybeSingle();
       if (resume?.parsed_json) {
         return {
-          content: parsedJsonToResumeDocument(resume.parsed_json as Record<string, unknown>),
+          content: parsedJsonToResumeDocument(resume.parsed_json as Record<string, unknown>) as unknown as Record<string, unknown>,
           baseResumeId: null,
           title: "Draft from Original Resume",
         };
@@ -313,14 +313,11 @@ function createBlankContent(): SourceContentResult {
   };
 }
 
-function parsedJsonToResumeDocument(parsed: Record<string, unknown>): Record<string, unknown> {
-  // Convert old parsed_json format to ResumeDocument shape
-  const content: Record<string, unknown> = {
-    header: { fullName: "" },
-    skills: [],
-    experience: [],
-    education: [],
-    formatting: {
+function parsedJsonToResumeDocument(parsed: Record<string, unknown>): ResumeDocument {
+  return buildResumeDocumentFromParsedResume(
+    parsed,
+    { name: "" },
+    {
       styleId: "skarion_compact_professional",
       pageFormat: "letter",
       fontFamily: "Calibri",
@@ -333,77 +330,7 @@ function parsedJsonToResumeDocument(parsed: Record<string, unknown>): Record<str
       bulletSpacing: 2,
       lineHeight: 1.15,
     },
-  };
-
-  if (parsed.header && typeof parsed.header === "object") {
-    content.header = parsed.header;
-  } else if (parsed.personalInfo && typeof parsed.personalInfo === "object") {
-    const pi = parsed.personalInfo as any;
-    content.header = {
-      fullName: pi.name ?? "",
-      location: pi.location,
-      phone: pi.phone,
-      email: pi.email,
-      linkedin: pi.linkedin,
-      github: pi.github,
-    };
-  }
-
-  if (Array.isArray(parsed.skills)) {
-    const skills: any[] = [];
-    for (const s of parsed.skills) {
-      if (typeof s === "string") {
-        skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: "Skills", skills: [s] });
-      } else if (typeof s === "object" && s) {
-        if (s.name && s.skills) {
-          skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: s.name, skills: Array.isArray(s.skills) ? s.skills : [] });
-        } else if (s.title && s.skills) {
-          skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: s.title, skills: Array.isArray(s.skills) ? s.skills : [] });
-        }
-      }
-    }
-    if (skills.length > 0) content.skills = skills;
-  }
-
-  if (Array.isArray(parsed.experience)) {
-    const experience: any[] = [];
-    for (const exp of parsed.experience) {
-      if (typeof exp !== "object" || !exp) continue;
-      const bullets: any[] = [];
-      if (Array.isArray(exp.bullets)) {
-        for (const b of exp.bullets) {
-          if (typeof b === "string") bullets.push({ id: `b-${Math.random().toString(36).slice(2)}`, text: b });
-          else if (typeof b === "object" && b && b.text) bullets.push({ id: `b-${Math.random().toString(36).slice(2)}`, text: b.text });
-        }
-      }
-      experience.push({
-        id: `exp-${Math.random().toString(36).slice(2)}`,
-        title: exp.title ?? "",
-        company: exp.company ?? "",
-        location: exp.location,
-        startDate: exp.startDate ?? "",
-        endDate: exp.endDate,
-        bullets,
-      });
-    }
-    if (experience.length > 0) content.experience = experience;
-  }
-
-  if (Array.isArray(parsed.education)) {
-    const education: any[] = [];
-    for (const edu of parsed.education) {
-      if (typeof edu !== "object" || !edu) continue;
-      education.push({
-        id: `edu-${Math.random().toString(36).slice(2)}`,
-        degree: edu.degree ?? "",
-        school: edu.school ?? "",
-        graduationDate: edu.graduationDate,
-      });
-    }
-    if (education.length > 0) content.education = education;
-  }
-
-  return content;
+  );
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -506,7 +433,7 @@ function applySuggestionToContent(
 // ───────────────────────────────────────────────────────────────
 
 async function resolveTargetJobId(
-  applicationId: string,
+  _applicationId: string,
   jobId: string | null,
   candidateId: string
 ): Promise<string | null> {

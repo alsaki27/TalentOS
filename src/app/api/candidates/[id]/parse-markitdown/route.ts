@@ -6,10 +6,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
-import { parseResumeFromMarkdown, extractText } from "@/lib/resumeParsing";
+import { parseResumeFromMarkdown, extractText, finalizeParsedResume } from "@/lib/resumeParsing";
+import { extractLinkedInUrlFromText } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
+
+// #region debug-point A:parse-markitdown-debug
+function reportParseMarkitdownDebug(
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  msg: string,
+  data: Record<string, unknown> = {}
+) {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "base-resume-load-loop",
+      runId: "pre-fix",
+      hypothesisId,
+      location: "src/app/api/candidates/[id]/parse-markitdown/route.ts",
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
 
 // Real PDF text extraction via resumeParsing.ts's extractText - see that file for
 // the history of why this isn't pdf-parse or pdfjs-dist (both confirmed broken
@@ -34,6 +57,13 @@ async function parseResumeWithAI(resumeText: string) {
   const active = await getProviderForCategory("parsing_extraction");
   if (!active) return { error: "No AI provider configured." };
 
+  // #region debug-point A:parse-markitdown-start
+  reportParseMarkitdownDebug("A", "parse-markitdown AI parse started", {
+    resumeTextLength: resumeText.length,
+    resumeText,
+  });
+  // #endregion
+
   const prompt = [
     "You are an expert resume parser. Your job is to extract EVERY SINGLE piece of structured information from the resume text below. Be thorough and exhaustive. Do not skip sections. Do not summarize — extract full details.",
     "",
@@ -50,7 +80,12 @@ async function parseResumeWithAI(resumeText: string) {
       portfolio_url: "portfolio/website URL or null",
       location: "city, state, country or null",
       summary: "full professional summary text or null — extract the complete summary, not a shortened version",
-      skills: ["array of EVERY skill mentioned — technical skills, tools, languages, frameworks, soft skills, methodologies. Be specific and exhaustive."],
+      skills: [
+        {
+          category: "string | null",
+          items: ["string"]
+        }
+      ],
       experience: [
         {
           title: "job title",
@@ -59,6 +94,15 @@ async function parseResumeWithAI(resumeText: string) {
           startDate: "Month Year or Year",
           endDate: "Month Year or null for present/current",
           bullets: ["array of EVERY bullet point, achievement, responsibility. Do not skip any. Extract the full text of each bullet."]
+        }
+      ],
+      projects: [
+        {
+          name: "project name",
+          description: "short description or null",
+          technologies: ["array of technologies used"],
+          bullets: ["array of project bullets/achievements"],
+          url: "project link or null"
         }
       ],
       education: [
@@ -71,12 +115,50 @@ async function parseResumeWithAI(resumeText: string) {
       certifications: ["array of every certification, license, or credential. Do not skip any."]
     }, null, 2),
     "",
+    "FEW-SHOT PARSING TRUTH MATRIX FOR RUN-ON SKILLS:",
+    "If the text block looks like this messy run-on string:",
+    "\"CAD & Engineering Tools: AutoCAD, GIS Mapping, ArcGIS... Skills: OSP, Design &, Engineering: AutoCAD, FTTx Network Planning,, XGS-PON Architecture... Route Optimization, Infrastructure, Engineering: Infrastructure Layout Design... QA/QC Review, Technical &, Analytical, Skills: Technical Documentation... Management, Automation, Data & Process Optimization: Python, AutoLISP (Drafting Automation)...\"",
+    "",
+    "You MUST parse and organize the run-on skills into clean categories and arrays exactly like the example below (but be sure to include any other categories found in the resume, such as 'Projects'):",
+    "  {",
+    "    \"skills\": [",
+    "      {",
+    "        \"category\": \"CAD & Engineering Tools\",",
+    "        \"items\": [\"AutoCAD\", \"GIS Mapping\", \"ArcGIS\", \"ESRI\", \"Google Earth\", \"MicroStation\", \"OCalc\", \"3-GIS\", \"Microsoft Office (Excel, Word, Outlook)\"]",
+    "      },",
+    "      {",
+    "        \"category\": \"OSP Design & Engineering\",",
+    "        \"items\": [\"AutoCAD\", \"FTTx Network Planning\", \"XGS-PON Architecture\", \"HLD/LLD Design\", \"Fiber Splice Matrix Development\", \"Splitter Configuration (1:32)\", \"Port Assignment Planning\", \"As-Built Documentation\", \"BOM/BOQ Development\", \"Aerial OSP Design\", \"Underground OSP Design\", \"Duct Bank Layouts\", \"Conduit Routing\", \"Bore Path Planning\", \"Bore Pit Planning\", \"Handhole Placement\", \"Handhole Spacing\", \"Pole Attachment Clearances\", \"GIS Basemap Integration\", \"Route Optimization\"]",
+    "      },",
+    "      {",
+    "        \"category\": \"Infrastructure Design & Engineering\",",
+    "        \"items\": [\"Infrastructure Layout Design\", \"Engineering Drawing Interpretation\", \"Construction Drawing Preparation\", \"Route Analysis\", \"As-Built Documentation\", \"Redline Integration\", \"QA/QC Review\"]",
+    "      },",
+    "      {",
+    "        \"category\": \"Technical & Analytical Skills\",",
+    "        \"items\": [\"Technical Documentation\", \"Problem Solving\", \"Design Verification\", \"Field Data Analysis\", \"Detail-Oriented Design Review\"]",
+    "      },",
+    "      {",
+    "        \"category\": \"Collaboration & Communication\",",
+    "        \"items\": [\"Team Collaboration\", \"Cross-Functional Coordination\", \"Engineering Team Support\", \"Technical Communication\", \"Project Documentation Management\"]",
+    "      },",
+    "      {",
+    "        \"category\": \"Automation, Data & Process Optimization\",",
+    "        \"items\": [\"Python\", \"AutoLISP (Drafting Automation)\", \"Advanced Microsoft Excel (Pivot Tables, VLOOKUP, VBA)\", \"MS Access\", \"Power BI Dashboards\", \"Engineering Workflow Optimization\"]",
+    "      }",
+    "    ]",
+    "  }",
+    "",
     "CRITICAL RULES:",
     "1. EXTRACT EVERYTHING. Do not skip any section, job, skill, degree, or certification.",
-    "2. For skills: list EVERY skill you can find. If the resume has a 'Skills' section, extract all of them. If skills are mentioned in job descriptions, include those too.",
-    "3. For experience: create an entry for EVERY job. Extract ALL bullet points for each job — do not summarize, do not truncate. Copy each bullet point verbatim or as close as possible.",
+    "2. For skills: Use the exact mapping shown in the FEW-SHOT PARSING TRUTH MATRIX above to clean and segregate run-on strings.",
+    "   - Never let trailing items of a previous block become merged with the title of the next category.",
+    "   - Keep parenthetical expressions whole (e.g., 'Splitter Configuration (1:32)' is a SINGLE item; do not split on the internal colon or internal commas).",
+    "3. For projects: create an entry for every project mentioned (academic, personal, or professional). Extract the name, a short description, technologies used, any bullet points, and a link/url if available.",
+    "4. For experience: create an entry for EVERY job. Extract ALL bullet points for each job — do not summarize, do not truncate. Copy each bullet point verbatim or as close as possible.",
     "4. For education: include EVERY degree, diploma, or certification program.",
     "5. For certifications: include every certification mentioned anywhere in the resume.",
+    "5b. For linkedin_url: Look carefully for ANY LinkedIn profile reference in the resume. Normalize it to a canonical 'https://www.linkedin.com/in/username' URL.",
     "6. Dates: use 'Month Year' format (e.g., 'January 2020'). If only year is available, use just the year.",
     "7. Current jobs: set endDate to null.",
     "8. If a field is truly missing from the resume, use null for strings and [] for arrays.",
@@ -91,6 +173,12 @@ async function parseResumeWithAI(resumeText: string) {
   });
 
   const raw = textOf(response.content) ?? "";
+  // #region debug-point B:parse-markitdown-provider-raw
+  reportParseMarkitdownDebug("B", "parse-markitdown provider returned raw response", {
+    responseLength: raw.length,
+    rawProviderText: raw,
+  });
+  // #endregion
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
   let parsed: any;
@@ -111,7 +199,7 @@ async function parseResumeWithAI(resumeText: string) {
   }
 
   // Normalize the response to ensure consistent shape
-  const normalized = {
+  const normalized = finalizeParsedResume({
     name: parsed?.name ?? null,
     email: parsed?.email ?? null,
     phone: parsed?.phone ?? null,
@@ -120,7 +208,12 @@ async function parseResumeWithAI(resumeText: string) {
     portfolio_url: parsed?.portfolio_url ?? null,
     location: parsed?.location ?? null,
     summary: parsed?.summary ?? null,
-    skills: Array.isArray(parsed?.skills) ? parsed.skills : [],
+    skills: Array.isArray(parsed?.skills) ? parsed.skills.map((s: any) => {
+      if (typeof s === "string") return s;
+      if (s.category && Array.isArray(s.items)) return `${s.category}: ${s.items.join(", ")}`;
+      if (Array.isArray(s.items)) return s.items.join(", ");
+      return "";
+    }).filter(Boolean) : [],
     experience: Array.isArray(parsed?.experience) ? parsed.experience.map((exp: any) => ({
       title: exp?.title ?? "",
       company: exp?.company ?? "",
@@ -129,6 +222,7 @@ async function parseResumeWithAI(resumeText: string) {
       endDate: exp?.endDate ?? exp?.end_date ?? null,
       bullets: Array.isArray(exp?.bullets) ? exp.bullets : (exp?.description ? [exp.description] : []),
     })) : [],
+    projects: Array.isArray(parsed?.projects) ? parsed.projects : [],
     education: Array.isArray(parsed?.education) ? parsed.education.map((edu: any) => ({
       degree: edu?.degree ?? "",
       school: edu?.school ?? "",
@@ -136,7 +230,22 @@ async function parseResumeWithAI(resumeText: string) {
       graduationDate: edu?.graduationDate ?? edu?.graduation_year ?? null,
     })) : [],
     certifications: Array.isArray(parsed?.certifications) ? parsed.certifications : [],
-  };
+  }, resumeText);
+
+  // #region debug-point C:parse-markitdown-normalized
+  reportParseMarkitdownDebug("C", "parse-markitdown normalized parsed resume", {
+    parsedSkills: normalized.skills,
+    summary: normalized.summary ?? null,
+    experienceCount: normalized.experience.length,
+    educationCount: normalized.education.length,
+    certificationsCount: normalized.certifications.length,
+  });
+  // #endregion
+
+  // If AI didn't find a LinkedIn URL, try regex extraction from the raw text
+  if (!normalized.linkedin_url) {
+    normalized.linkedin_url = extractLinkedInUrlFromText(resumeText);
+  }
 
   // Build a parse status so the user knows what was found
   const parseStatus = {

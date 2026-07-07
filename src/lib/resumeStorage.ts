@@ -39,9 +39,13 @@ function assertProviderConfigured(provider: ResumeStorageProvider): void {
       provider === "r2"
         ? "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME"
         : "MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, SHAREPOINT_SITE_ID";
+    const nextStep =
+      provider === "r2"
+        ? "Configure the required R2 credentials or switch to SharePoint with RESUME_STORAGE_PROVIDER=sharepoint."
+        : "Configure the required SharePoint credentials or switch to R2 with RESUME_STORAGE_PROVIDER=r2.";
     throw new Error(
       `Resume storage provider '${provider}' is selected but not configured. Missing env vars: ${missing}. ` +
-      `Set RESUME_STORAGE_PROVIDER=r2 or configure the required ${provider === "r2" ? "R2" : "SharePoint"} credentials.`
+      nextStep
     );
   }
 }
