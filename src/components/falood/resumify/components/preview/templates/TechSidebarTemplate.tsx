@@ -31,6 +31,11 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
     }
   };
 
+  const formatUrl = (url: string | undefined) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `https://${url}`;
+  };
+
   const sidebarSections = ['skills', 'education'];
   const mainSections = ['summary', 'experience', 'projects'];
 
@@ -50,12 +55,14 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
-        <h2 
-          className="text-lg font-medium mb-3"
-          style={{ color: colors.secondary }}
-        >
-          {personalInfo.jobTitle || 'Your Job Title'}
-        </h2>
+        {personalInfo.jobTitle && (
+          <h2 
+            className="text-lg font-medium mb-3"
+            style={{ color: colors.secondary }}
+          >
+            {personalInfo.jobTitle}
+          </h2>
+        )}
         
         {/* Contact Info */}
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
@@ -80,19 +87,19 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
           {personalInfo.website && (
             <div className="flex items-center gap-1">
               <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.website} className="hover:underline">Portfolio</a>
+              <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
             </div>
           )}
           {personalInfo.linkedin && (
             <div className="flex items-center gap-1">
               <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.linkedin} className="hover:underline">LinkedIn</a>
+              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
             </div>
           )}
           {personalInfo.github && (
             <div className="flex items-center gap-1">
               <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.github} className="hover:underline">GitHub</a>
+              <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
             </div>
           )}
         </div>
@@ -117,7 +124,7 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
           {/* Sidebar Sections */}
           {visibleSections.filter(s => sidebarSections.includes(s.id)).map(section => (
             <div key={section.id} className="page-break-inside-avoid">
-              {section.id === 'skills' && skills && (
+              {section.id === 'skills' && skills && ((skills.mode === 'simple' && skills.simple.length > 0) || (skills.mode === 'categorized' && skills.categorized.length > 0)) && (
                 <div>
                   <h3 
                     className="text-sm font-bold mb-2 pb-1 border-b"
@@ -320,9 +327,19 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
                           </div>
                         )}
                         {(project.liveUrl || project.githubUrl) && (
-                          <div className="text-xs space-x-3">
-                            {project.liveUrl && <span>Live: {project.liveUrl}</span>}
-                            {project.githubUrl && <span>Code: {project.githubUrl}</span>}
+                          <div className="flex gap-4 mt-2 text-xs">
+                            {project.liveUrl && (
+                              <div className="flex items-center gap-1">
+                                <Globe className="w-3 h-3" style={{ color: colors.accent }} />
+                                <a href={formatUrl(project.liveUrl)} className="hover:underline text-blue-600">Live Demo</a>
+                              </div>
+                            )}
+                            {project.githubUrl && (
+                              <div className="flex items-center gap-1">
+                                <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
+                                <a href={formatUrl(project.githubUrl)} className="hover:underline text-blue-600">Repository</a>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

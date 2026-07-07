@@ -14,6 +14,182 @@ import { query, queryOne, execute } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { buildSkeletonDocument } from "@/lib/ai/faloodBaseResume";
 import { ResumeDocument } from "@/lib/falood/types";
+import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
+import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
+import { extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
+import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
+
+// #region debug-point A:base-resume-seeding-debug
+function reportBaseResumeSeedingDebug(
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  msg: string,
+  data: Record<string, unknown> = {}
+) {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "base-resume-load-loop",
+      runId: "pre-fix",
+      hypothesisId,
+      location: "src/app/api/base-resumes/route.ts",
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+}
+
+function logBaseResumeCreateConsole(step: string, data: Record<string, unknown> = {}) {
+  console.log(`[BASE_RESUME_CREATE] ${step}`, data);
+}
+// #endregion
+
+function guessMimeType(filename: string, contentType?: string | null): string {
+  if (contentType && contentType !== "application/octet-stream") return contentType;
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".pdf")) return "application/pdf";
+  if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".doc")) return "application/msword";
+  if (lower.endsWith(".txt")) return "text/plain";
+  return "application/octet-stream";
+}
+
+async function loadLatestUploadedResume(candidateId: string) {
+  if (isNeon()) {
+    return queryOne<{
+      id: string;
+      filename: string;
+      file_url: string;
+      parsed_json: any | null;
+      is_original_upload: boolean;
+    }>(
+      `SELECT id, filename, file_url, parsed_json, is_original_upload
+       FROM resumes
+       WHERE candidate_id = $1 AND kind = 'resume'
+       ORDER BY is_original_upload DESC, created_at DESC
+       LIMIT 1`,
+      [candidateId]
+    );
+  }
+
+  const res = await supabase
+    .from("resumes")
+    .select("id, filename, file_url, parsed_json, is_original_upload")
+    .eq("candidate_id", candidateId)
+    .eq("kind", "resume")
+    .order("is_original_upload", { ascending: false })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return res.data;
+}
+
+async function updateParsedResume(resumeId: string, parsed: any) {
+  if (isNeon()) {
+    await execute("UPDATE resumes SET parsed_json = $1 WHERE id = $2", [parsed, resumeId]);
+    return;
+  }
+  await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
+}
+
+async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename: string; file_url: string }) {
+  let buffer: Uint8Array;
+  let contentType: string | null = null;
+
+  // #region debug-point A:base-seeding-start
+  reportBaseResumeSeedingDebug("A", "base resume seeding started from uploaded resume", {
+    resumeId: resume.id,
+    filename: resume.filename,
+    fileUrl: resume.file_url,
+  });
+  // #endregion
+  logBaseResumeCreateConsole("uploaded resume seeding started", {
+    resumeId: resume.id,
+    filename: resume.filename,
+    fileUrl: resume.file_url,
+  });
+
+  if (resume.file_url.includes("sharepoint.com")) {
+    const result = await downloadFromSharePoint(resume.file_url);
+    buffer = result.buffer;
+    contentType = result.contentType;
+  } else {
+    const fileRes = await fetch(resume.file_url);
+    if (!fileRes.ok) throw new Error(`Failed to download uploaded resume (${fileRes.status})`);
+    buffer = new Uint8Array(await fileRes.arrayBuffer());
+    contentType = fileRes.headers.get("content-type");
+  }
+
+  const rawText = (await extractText(buffer, guessMimeType(resume.filename, contentType))).trim();
+  // #region debug-point A:base-seeding-raw-text
+  reportBaseResumeSeedingDebug("A", "uploaded resume text extracted for base seeding", {
+    resumeId: resume.id,
+    filename: resume.filename,
+    contentType,
+    rawTextLength: rawText.length,
+    rawText,
+  });
+  // #endregion
+  logBaseResumeCreateConsole("raw text extracted from uploaded resume", {
+    resumeId: resume.id,
+    filename: resume.filename,
+    contentType,
+    rawTextLength: rawText.length,
+    rawText,
+  });
+  if (rawText.length < 50) {
+    throw new Error("We found an uploaded resume, but couldn't extract enough readable text. Please upload a text-based PDF/DOCX or paste the resume text first.");
+  }
+
+  const openAiProvider = getOpenAiProvider();
+  logBaseResumeCreateConsole("starting structured parsing for uploaded resume", {
+    resumeId: resume.id,
+    provider: openAiProvider ? "openaiProvider" : "categoryProvider",
+  });
+  const parsed = openAiProvider
+    ? await parseResumeTextWithProvider(rawText, openAiProvider)
+    : await parseResumeFields(rawText);
+
+  // #region debug-point C:base-seeding-parsed-result
+  reportBaseResumeSeedingDebug("C", "uploaded resume parsed for base seeding", {
+    resumeId: resume.id,
+    rawTextLength: rawText.length,
+    parsedSkills: parsed.skills,
+    experienceCount: parsed.experience.length,
+    educationCount: parsed.education.length,
+    certificationsCount: parsed.certifications.length,
+    summary: parsed.summary ?? null,
+  });
+  // #endregion
+  logBaseResumeCreateConsole("uploaded resume parsed into structured json", {
+    resumeId: resume.id,
+    parsedJson: parsed,
+  });
+
+  if (
+    !parsed.summary &&
+    !parsed.skills.length &&
+    !parsed.experience.length &&
+    !parsed.education.length &&
+    !parsed.certifications.length
+  ) {
+    throw new Error("We found an uploaded resume, but the parser couldn't extract structured resume data from it.");
+  }
+
+  await updateParsedResume(resume.id, parsed);
+  // #region debug-point D:base-seeding-parsed-saved
+  reportBaseResumeSeedingDebug("D", "parsed resume saved for base seeding", {
+    resumeId: resume.id,
+    parsedSkills: parsed.skills,
+  });
+  // #endregion
+  logBaseResumeCreateConsole("parsed resume json saved to resumes table", {
+    resumeId: resume.id,
+    parsedJson: parsed,
+  });
+  return parsed;
+}
 
 export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -58,6 +234,23 @@ export async function POST(req: NextRequest) {
     const styleId = (body.styleId as string | undefined) || "skarion_compact_professional";
     const startingSource = (body.startingSource as string | undefined) || "blank";
     const sourceBaseResumeId = body.sourceBaseResumeId as string | undefined;
+
+    // #region debug-point A:base-resume-post-start
+    reportBaseResumeSeedingDebug("A", "base resume POST received", {
+      candidateId,
+      name,
+      startingSource,
+      sourceBaseResumeId: sourceBaseResumeId ?? null,
+      styleId,
+    });
+    // #endregion
+    logBaseResumeCreateConsole("base resume POST received", {
+      candidateId,
+      name,
+      startingSource,
+      sourceBaseResumeId: sourceBaseResumeId ?? null,
+      styleId,
+    });
 
     if (!candidateId || !name) {
       return NextResponse.json({ error: "candidateId and name are required" }, { status: 400 });
@@ -111,60 +304,39 @@ export async function POST(req: NextRequest) {
         source = res.data;
       }
       content = source?.content ?? buildSkeletonDocument(candidate, formatting);
+      // #region debug-point D:base-resume-duplicate-source
+      reportBaseResumeSeedingDebug("D", "base resume duplicated from existing resume", {
+        candidateId,
+        sourceBaseResumeId,
+        sourceSkills: source?.content?.skills ?? null,
+        sourceSummary: source?.content?.summary ?? null,
+        sourceExperienceCount: Array.isArray(source?.content?.experience) ? source.content.experience.length : 0,
+        sourceEducationCount: Array.isArray(source?.content?.education) ? source.content.education.length : 0,
+        duplicatedSkills: content?.skills ?? null,
+      });
+      // #endregion
     } else if (startingSource === "uploaded_resume") {
-      let originalResume: any;
-      if (isNeon()) {
-        originalResume = await queryOne(
-          'SELECT parsed_json FROM resumes WHERE candidate_id = $1 AND is_original_upload = $2 ORDER BY created_at DESC LIMIT 1',
-          [candidateId, true]
+      const uploadedResume = await loadLatestUploadedResume(candidateId);
+      if (!uploadedResume) {
+        return NextResponse.json(
+          { error: "Please upload a resume first before choosing 'Seed from uploaded resume'." },
+          { status: 400 }
         );
-      } else {
-        const res = await supabase
-          .from("resumes")
-          .select("parsed_json")
-          .eq("candidate_id", candidateId)
-          .eq("is_original_upload", true)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        originalResume = res.data;
       }
-      const parsed = originalResume?.parsed_json as any;
-      content = buildSkeletonDocument(candidate, formatting);
-      if (parsed) {
-        if (parsed.summary) content.summary = { id: "summary", text: parsed.summary };
-        if (Array.isArray(parsed.skills) && parsed.skills.length) {
-          content.skills = [{ id: "skills-1", title: "Skills", skills: parsed.skills }];
-        }
-        if (Array.isArray(parsed.experience)) {
-          content.experience = parsed.experience.map((exp: any, i: number) => ({
-            id: `exp-${i}`,
-            title: exp.title ?? "",
-            company: exp.company ?? "",
-            location: exp.location ?? undefined,
-            startDate: exp.startDate ?? exp.start_date ?? "",
-            endDate: exp.endDate ?? exp.end_date ?? undefined,
-            bullets: Array.isArray(exp.bullets) ? exp.bullets.map((b: string, j: number) => ({
-              id: `exp-${i}-b${j}`,
-              text: b,
-            })) : (exp.description ? [{ id: `exp-${i}-b0`, text: exp.description }] : []),
-          }));
-        }
-        if (Array.isArray(parsed.education)) {
-          content.education = parsed.education.map((edu: any, i: number) => ({
-            id: `edu-${i}`,
-            degree: edu.degree ?? "",
-            school: edu.school ?? "",
-            graduationDate: edu.graduationDate ?? edu.graduation_year ?? undefined,
-          }));
-        }
-        if (Array.isArray(parsed.certifications) && parsed.certifications.length) {
-          content.certifications = parsed.certifications.map((cert: string, i: number) => ({
-            id: `cert-${i}`,
-            name: cert,
-          }));
-        }
-      }
+      const parsed = await parseUploadedResumeForBaseSeeding(uploadedResume);
+      content = buildResumeDocumentFromParsedResume(parsed as typeof parsed & Record<string, unknown>, candidate, formatting);
+      // #region debug-point D:base-resume-content-built
+      reportBaseResumeSeedingDebug("D", "base resume content built from uploaded parsed resume", {
+        candidateId,
+        parsedSkills: parsed.skills,
+        builderSkillSections: content.skills,
+      });
+      // #endregion
+      logBaseResumeCreateConsole("base resume content built from parsed upload", {
+        candidateId,
+        parsedJson: parsed,
+        builderSkillSections: content.skills,
+      });
     } else {
       content = buildSkeletonDocument(candidate, formatting);
     }

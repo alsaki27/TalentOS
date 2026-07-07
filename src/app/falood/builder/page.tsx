@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, Suspense, useEffect } from 'react';
+import React, { useState, useRef, Suspense, useEffect, useCallback } from 'react';
 import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
@@ -10,7 +10,7 @@ import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDo
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 const ResumeContent: React.FC = () => {
@@ -19,12 +19,18 @@ const ResumeContent: React.FC = () => {
     const [activePanel, setActivePanel] = useState<'form' | 'customize' | 'settings'>('form');
     const [pageOverflow, setPageOverflow] = useState(false);
     const { state, exportResumeData, importResumeData, setChatHistory, setJobDescription } = useResume();
-    const resumeRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const searchParams = useSearchParams();
+    const router = useRouter();
     const [isSaving, setIsSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const applicationIdFromQuery = searchParams.get('id');
+    const initialSavedApplicationId = applicationIdFromQuery;
+    const [savedApplicationId, setSavedApplicationId] = useState<string | null>(initialSavedApplicationId);
+    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(!initialSavedApplicationId);
+    const lastSavedSnapshotRef = useRef<string | null>(null);
 
     // Show a simple inline toast since we don't have shadcn toast wired into TalentOS layout
     const showToast = (msg: string) => {
@@ -33,7 +39,7 @@ const ResumeContent: React.FC = () => {
     };
 
     useEffect(() => {
-        const id = searchParams.get('id');
+        const id = applicationIdFromQuery;
         if (id) {
             const fetchApplication = async () => {
                 setIsLoading(true);
@@ -44,6 +50,13 @@ const ResumeContent: React.FC = () => {
                         importResumeData(json.data.resumeData);
                         setChatHistory(json.data.chatHistory || []);
                         setJobDescription(json.data.jobDescription || '');
+                        setSavedApplicationId(id);
+                        lastSavedSnapshotRef.current = JSON.stringify({
+                            resumeData: json.data.resumeData,
+                            chatHistory: json.data.chatHistory || [],
+                            jobDescription: json.data.jobDescription || '',
+                        });
+                        setHasLoadedInitialData(true);
                         showToast('Application loaded from dashboard.');
                     }
                 } catch (error) {
@@ -53,8 +66,12 @@ const ResumeContent: React.FC = () => {
                 }
             };
             fetchApplication();
+        } else {
+            setSavedApplicationId(null);
+            setHasLoadedInitialData(true);
+            lastSavedSnapshotRef.current = null;
         }
-    }, [searchParams]);
+    }, [applicationIdFromQuery, importResumeData, setChatHistory, setJobDescription]);
 
     React.useEffect(() => {
         const checkOverflow = () => {
@@ -83,12 +100,22 @@ const ResumeContent: React.FC = () => {
         }
     };
 
-    const handleSaveToDashboard = async () => {
+    const persistSavedApplication = useCallback(async (showSuccessToast = false, includeDerivedMetadata = false) => {
+        const snapshot = JSON.stringify({
+            resumeData: state.resumeData,
+            chatHistory: state.chatHistory,
+            jobDescription: state.jobDescription,
+        });
+
+        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
+            return true;
+        }
+
         setIsSaving(true);
+        setSaveStatus('saving');
         try {
-            let extractedSkills: string[] = [];
-            let extractedCompany: string | null = null;
-            if (state.jobDescription) {
+            let metadata: { skills?: string[]; companyName?: string | null } = {};
+            if (includeDerivedMetadata && state.jobDescription) {
                 try {
                     const skillsResponse = await fetch('/api/falood/extract-skills', {
                         method: 'POST',
@@ -97,38 +124,95 @@ const ResumeContent: React.FC = () => {
                     });
                     if (skillsResponse.ok) {
                         const skillsData = await skillsResponse.json();
-                        extractedSkills = skillsData.skills || [];
-                        extractedCompany = skillsData.companyName || null;
+                        metadata = {
+                            skills: skillsData.skills || [],
+                            companyName: skillsData.companyName || null,
+                        };
                     }
                 } catch (err) {
                     console.error("Failed to extract skills", err);
                 }
             }
 
-            const saveResponse = await fetch('/api/falood/applications', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jobDescription: state.jobDescription,
-                    companyName: extractedCompany,
-                    skills: extractedSkills,
-                    resumeData: state.resumeData,
-                    chatHistory: state.chatHistory,
-                }),
-            });
+            if (!savedApplicationId) {
+                const createResponse = await fetch('/api/falood/applications', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jobDescription: state.jobDescription,
+                        companyName: metadata.companyName ?? null,
+                        skills: metadata.skills ?? [],
+                        resumeData: state.resumeData,
+                        chatHistory: state.chatHistory,
+                    }),
+                });
 
-            if (saveResponse.ok) {
-                showToast('Saved to dashboard!');
+                const createJson = await createResponse.json().catch(() => ({}));
+                if (!createResponse.ok || !createJson?.success) {
+                    throw new Error(createJson?.error || "Failed to save application");
+                }
+
+                const newId = createJson?.data?.id;
+                if (newId) {
+                    setSavedApplicationId(newId);
+                    router.replace(`/falood/builder?id=${newId}`);
+                }
             } else {
-                throw new Error("Failed to save application");
+                const updateResponse = await fetch(`/api/falood/applications?id=${savedApplicationId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jobDescription: state.jobDescription,
+                        resumeData: state.resumeData,
+                        chatHistory: state.chatHistory,
+                        ...(includeDerivedMetadata ? metadata : {}),
+                    }),
+                });
+
+                const updateJson = await updateResponse.json().catch(() => ({}));
+                if (!updateResponse.ok || !updateJson?.success) {
+                    throw new Error(updateJson?.error || "Failed to save application");
+                }
             }
+
+            lastSavedSnapshotRef.current = snapshot;
+            setSaveStatus('saved');
+            if (showSuccessToast) {
+                showToast('Saved to dashboard!');
+            }
+            return true;
         } catch (error) {
             console.error('Error saving:', error);
-            showToast('Save failed.');
+            setSaveStatus('error');
+            if (showSuccessToast) {
+                showToast('Save failed.');
+            }
+            return false;
         } finally {
             setIsSaving(false);
         }
+    }, [router, savedApplicationId, state.chatHistory, state.jobDescription, state.resumeData]);
+
+    const handleSaveToDashboard = async () => {
+        await persistSavedApplication(true, true);
     };
+
+    useEffect(() => {
+        if (isLoading || !hasLoadedInitialData) return;
+
+        const snapshot = JSON.stringify({
+            resumeData: state.resumeData,
+            chatHistory: state.chatHistory,
+            jobDescription: state.jobDescription,
+        });
+        if (snapshot === lastSavedSnapshotRef.current) return;
+
+        const timeoutId = window.setTimeout(() => {
+            void persistSavedApplication(false, false);
+        }, 1000);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [hasLoadedInitialData, isLoading, persistSavedApplication, state.chatHistory, state.jobDescription, state.resumeData]);
 
     const handleImportJSON = () => {
         fileInputRef.current?.click();
@@ -272,6 +356,15 @@ const ResumeContent: React.FC = () => {
                         showPreview ? "flex" : "hidden lg:flex"
                     )} style={{ height: 750 }}>
                         <div className="print:hidden" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0 }}>
+                            <span className="text-xs text-muted-foreground mr-auto">
+                                {saveStatus === 'saving'
+                                    ? 'Autosaving...'
+                                    : saveStatus === 'saved'
+                                        ? 'All changes saved'
+                                        : saveStatus === 'error'
+                                            ? 'Autosave failed'
+                                            : 'Autosave on'}
+                            </span>
                             <Button size="sm" variant="outline" onClick={handleSaveToDashboard} disabled={isSaving} className="flex items-center gap-2 px-3 py-2">
                                 <Save className="w-4 h-4" />
                                 {isSaving ? 'Saving…' : 'Save'}

@@ -89,6 +89,70 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// PATCH — update an existing saved application by ?id=
+export async function PATCH(req: NextRequest) {
+  const id = req.nextUrl.searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ success: false, error: "Missing id" }, { status: 400 });
+  }
+
+  try {
+    const body = await req.json();
+    const updates: string[] = [];
+    const values: unknown[] = [];
+
+    if ("jobDescription" in body) {
+      updates.push(`job_description = $${values.length + 1}`);
+      values.push(body.jobDescription || null);
+    }
+
+    if ("companyName" in body) {
+      updates.push(`company_name = $${values.length + 1}`);
+      values.push(body.companyName || null);
+    }
+
+    if ("skills" in body) {
+      updates.push(`skills = $${values.length + 1}`);
+      values.push(body.skills || []);
+    }
+
+    if ("resumeData" in body) {
+      updates.push(`resume_data = $${values.length + 1}`);
+      values.push(JSON.stringify(body.resumeData));
+    }
+
+    if ("chatHistory" in body) {
+      updates.push(`chat_history = $${values.length + 1}`);
+      values.push(JSON.stringify(body.chatHistory || []));
+    }
+
+    if (updates.length === 0) {
+      return NextResponse.json({ success: false, error: "No fields to update" }, { status: 400 });
+    }
+
+    updates.push(`updated_at = NOW()`);
+
+    const row = await queryOne<any>(
+      `UPDATE falood_saved_applications
+       SET ${updates.join(", ")}
+       WHERE id = $${values.length + 1}
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
+                 job_description AS "jobDescription", company_name AS "companyName",
+                 skills, resume_data AS "resumeData", chat_history AS "chatHistory"`,
+      [...values, id]
+    );
+
+    if (!row) {
+      return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, data: normalizeRow(row) });
+  } catch (e: any) {
+    console.error("[Falood Applications PATCH]", e);
+    return NextResponse.json({ success: false, error: e.message }, { status: 500 });
+  }
+}
+
 // DELETE — delete by ?id=
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");

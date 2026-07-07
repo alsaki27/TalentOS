@@ -62,7 +62,10 @@ Be intent-aware based on the user's latest message:
 - If the user asks to ADD a new experience bullet/line, use type "experience_add".
 - If the user asks to REMOVE an experience bullet/line, use type "experience_remove".
 
-Default behavior: do not change Personal Info or Education unless the user explicitly asks.
+Default behavior: 
+- Do NOT suggest adding or modifying sections that do not currently exist in the resume (e.g., if there is no summary, do not suggest adding a summary) UNLESS the user explicitly asks you to.
+- Do not change Personal Info or Education unless the user explicitly asks.
+
 Ensure the length of rewritten bullet points is similar to the original to maintain formatting. Keep suggestions ATS-friendly and concise.
 For experience edits, always set targetId to the experience item's id and include "original" when modifying/removing an existing bullet.
 

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, Suspense, useEffect } from 'react';
+import React, { useState, useRef, Suspense, useEffect, useCallback } from 'react';
 import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
@@ -10,9 +10,26 @@ import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDo
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
-import { DEFAULT_COLORS, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+
+// #region debug-point A:base-resume-runtime
+const reportBaseResumeDebug = (hypothesisId: 'A' | 'B' | 'C' | 'D' | 'E', msg: string, data: Record<string, unknown> = {}) =>
+    fetch('http://127.0.0.1:7777/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            sessionId: 'base-resume-load-loop',
+            runId: 'pre-fix',
+            hypothesisId,
+            location: 'src/app/falood/studio/base/[baseResumeId]/page.tsx',
+            msg: `[DEBUG] ${msg}`,
+            data,
+            ts: Date.now(),
+        }),
+    }).catch(() => {});
+// #endregion
 
 /* ── Tailor Modal ── */
 function TailorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { jobTitle: string; company: string; jobDescription: string }) => void }) {
@@ -59,6 +76,62 @@ function TailorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (da
     );
 }
 
+function buildCustomSectionsForBuilder(old: any) {
+    const importedSections = Array.isArray(old.customSections)
+        ? old.customSections
+            .map((section: any, index: number) => {
+                const content = Array.isArray(section?.bullets)
+                    ? section.bullets
+                        .map((bullet: any) => bullet?.text || bullet)
+                        .filter(Boolean)
+                        .join('\n')
+                    : typeof section?.content === 'string'
+                        ? section.content.trim()
+                        : '';
+                if (!content) return null;
+                const lines = content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+                return {
+                    id: section?.id || `custom-${index}`,
+                    title: section?.title || `Custom Section ${index + 1}`,
+                    content,
+                    type: lines.length > 1 ? 'bullets' : 'paragraph',
+                    visible: section?.visible ?? true,
+                    order: index,
+                    placement: section?.placement || 'right',
+                };
+            })
+            .filter(Boolean)
+        : [];
+
+    const certificationLines = Array.isArray(old.certifications)
+        ? old.certifications
+            .map((cert: any) => [cert?.name, cert?.issuer, cert?.date].filter(Boolean).join(' | '))
+            .filter(Boolean)
+        : [];
+
+    if (certificationLines.length > 0) {
+        importedSections.push({
+            id: 'certifications',
+            title: 'Certifications',
+            content: certificationLines.join('\n'),
+            type: 'bullets',
+            visible: true,
+            order: importedSections.length,
+            placement: 'right',
+        });
+    }
+
+    return importedSections;
+}
+
+function projectBulletsToText(value: unknown): string {
+    if (!Array.isArray(value)) return '';
+    return value
+        .map((bullet: any) => bullet?.text || bullet)
+        .filter(Boolean)
+        .join('\n');
+}
+
 function convertOldFormatToNew(old: any): any {
     if (!old || typeof old !== 'object') return old;
     if (old.personalInfo) return old; // Already new format
@@ -73,7 +146,7 @@ function convertOldFormatToNew(old: any): any {
             location: old.header?.location || '',
             linkedin: old.header?.linkedin || '',
             github: old.header?.github || '',
-            portfolio: old.header?.portfolio || ''
+            website: old.header?.portfolio || old.header?.website || ''
         },
         summary: old.summary?.text || '',
         experience: Array.isArray(old.experience) ? old.experience.map((e: any) => ({
@@ -105,28 +178,22 @@ function convertOldFormatToNew(old: any): any {
         },
         projects: Array.isArray(old.projects) ? old.projects.map((p: any) => ({
             id: p.id || Math.random().toString(),
-            title: p.title || '',
-            description: '',
-            technologies: [],
-            bulletPoints: Array.isArray(p.bullets) ? p.bullets.map((b: any) => b.text || b) : []
-        })) : [],
-        customSections: Array.isArray(old.certifications) ? [{
-            id: 'certs',
-            title: 'Certifications',
-            items: old.certifications.map((c: any) => ({
-                id: c.id || Math.random().toString(),
-                title: c.name || '',
-                subtitle: c.issuer || '',
-                date: c.date || '',
-                description: ''
-            }))
-        }] : [],
+            title: p.title || p.name || '',
+            description: p.description || projectBulletsToText(p.bullets) || '',
+            technologies: Array.isArray(p.technologies) ? p.technologies.filter(Boolean) : [],
+            liveUrl: p.liveUrl || p.url || '',
+            githubUrl: p.githubUrl || '',
+            startDate: p.startDate || '',
+            endDate: p.endDate || ''
+        })).filter((project: any) => project.title || project.description || project.technologies.length || project.liveUrl || project.githubUrl) : [],
+        customSections: buildCustomSectionsForBuilder(old),
         sections: DEFAULT_SECTIONS,
         colors: DEFAULT_COLORS,
-        template: 'tech-sidebar',
+        template: 'business-professional',
         pageFormat: 'a4',
         fontSize: 'medium',
-        fontFamily: 'Inter'
+        fontFamily: 'Inter',
+        pagePadding: DEFAULT_PAGE_PADDING
     };
 }
 
@@ -144,7 +211,74 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     const [isLoading, setIsLoading] = useState(false);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const isNew = baseResumeId === 'new';
+    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(isNew);
+    const lastSavedSnapshotRef = useRef<string | null>(null);
+    const debugInstanceIdRef = useRef(`${baseResumeId}-${Math.random().toString(36).slice(2, 8)}`);
+    const renderCountRef = useRef(0);
+
+    renderCountRef.current += 1;
+
+    // #region debug-point A:render-commit
+    useEffect(() => {
+        if (renderCountRef.current <= 12) {
+            reportBaseResumeDebug('A', 'resume content committed', {
+                instanceId: debugInstanceIdRef.current,
+                renderCount: renderCountRef.current,
+                baseResumeId,
+                isNew,
+                isLoading,
+                hasLoadedInitialData,
+            });
+        }
+    });
+    // #endregion
+
+    // #region debug-point A:mount-cycle
+    useEffect(() => {
+        reportBaseResumeDebug('A', 'resume content mounted', {
+            instanceId: debugInstanceIdRef.current,
+            baseResumeId,
+            isNew,
+        });
+        return () => {
+            reportBaseResumeDebug('A', 'resume content unmounted', {
+                instanceId: debugInstanceIdRef.current,
+                baseResumeId,
+            });
+        };
+    }, [baseResumeId, isNew]);
+    // #endregion
+
+    // #region debug-point E:browser-errors
+    useEffect(() => {
+        const handleWindowError = (event: ErrorEvent) => {
+            reportBaseResumeDebug('E', 'window error', {
+                instanceId: debugInstanceIdRef.current,
+                message: event.message,
+                source: event.filename,
+                line: event.lineno,
+                column: event.colno,
+            });
+        };
+        const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+            reportBaseResumeDebug('E', 'unhandled rejection', {
+                instanceId: debugInstanceIdRef.current,
+                reason: typeof event.reason === 'object'
+                    ? JSON.stringify(event.reason, Object.getOwnPropertyNames(event.reason))
+                    : String(event.reason),
+            });
+        };
+
+        window.addEventListener('error', handleWindowError);
+        window.addEventListener('unhandledrejection', handleUnhandledRejection);
+        return () => {
+            window.removeEventListener('error', handleWindowError);
+            window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+        };
+    }, []);
+    // #endregion
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -155,25 +289,71 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     useEffect(() => {
         if (!isNew) {
             const fetchBaseResume = async () => {
+                // #region debug-point B:fetch-start
+                reportBaseResumeDebug('B', 'base resume fetch starting', {
+                    instanceId: debugInstanceIdRef.current,
+                    baseResumeId,
+                    isLoading,
+                    hasLoadedInitialData,
+                });
+                // #endregion
                 setIsLoading(true);
                 try {
                     const response = await fetch(`/api/base-resumes/${baseResumeId}`);
+                    // #region debug-point B:fetch-response
+                    reportBaseResumeDebug('B', 'base resume fetch completed', {
+                        instanceId: debugInstanceIdRef.current,
+                        baseResumeId,
+                        ok: response.ok,
+                        status: response.status,
+                    });
+                    // #endregion
                     const json = await response.json();
                     if (json && json.content) {
                         const convertedData = convertOldFormatToNew(json.content);
+                        // #region debug-point C:before-import
+                        reportBaseResumeDebug('C', 'importing fetched resume content', {
+                            instanceId: debugInstanceIdRef.current,
+                            baseResumeId,
+                            responseKeys: Object.keys(json || {}).slice(0, 12),
+                            experienceCount: Array.isArray(convertedData?.experience) ? convertedData.experience.length : null,
+                            projectCount: Array.isArray(convertedData?.projects) ? convertedData.projects.length : null,
+                        });
+                        // #endregion
                         importResumeData(convertedData);
+                        lastSavedSnapshotRef.current = JSON.stringify(convertedData);
                         setCandidateId(json.candidate_id || null);
+                        setHasLoadedInitialData(true);
                         showToast('Base Resume loaded.');
+                        // #region debug-point C:after-import
+                        reportBaseResumeDebug('C', 'fetched resume content imported', {
+                            instanceId: debugInstanceIdRef.current,
+                            baseResumeId,
+                            candidateId: json.candidate_id || null,
+                        });
+                        // #endregion
                     }
                 } catch (error) {
-                    console.error("Error fetching base resume", error);
+                    // #region debug-point E:fetch-error
+                    reportBaseResumeDebug('E', 'base resume fetch failed', {
+                        instanceId: debugInstanceIdRef.current,
+                        baseResumeId,
+                        error: error instanceof Error ? error.message : String(error),
+                    });
+                    // #endregion
                 } finally {
                     setIsLoading(false);
+                    // #region debug-point C:fetch-finally
+                    reportBaseResumeDebug('C', 'base resume fetch finalized', {
+                        instanceId: debugInstanceIdRef.current,
+                        baseResumeId,
+                    });
+                    // #endregion
                 }
             };
             fetchBaseResume();
         }
-    }, [baseResumeId]);
+    }, [baseResumeId, isNew]);
 
     // Page overflow detection
     React.useEffect(() => {
@@ -199,10 +379,51 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
         else showToast('Export failed.');
     };
 
-    const handleSave = async () => {
+    const persistBaseResume = useCallback(async (showSuccessToast = false) => {
+        if (isNew) return false;
+
+        const snapshot = JSON.stringify(state.resumeData);
+        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
+            return true;
+        }
+
         setIsSaving(true);
+        setSaveStatus('saving');
         try {
-            if (isNew) {
+            const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: state.resumeData,
+                }),
+            });
+            if (saveResponse.ok) {
+                lastSavedSnapshotRef.current = snapshot;
+                setSaveStatus('saved');
+                if (showSuccessToast) {
+                    showToast('Base Resume saved!');
+                }
+                return true;
+            } else {
+                throw new Error("Failed to save");
+            }
+        } catch (error) {
+            console.error('Error saving:', error);
+            setSaveStatus('error');
+            if (showSuccessToast) {
+                showToast('Save failed.');
+            }
+            return false;
+        } finally {
+            setIsSaving(false);
+        }
+    }, [baseResumeId, isNew, state.resumeData]);
+
+    const handleSave = async () => {
+        if (isNew) {
+            setIsSaving(true);
+            setSaveStatus('saving');
+            try {
                 const saveResponse = await fetch('/api/falood/applications', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -215,29 +436,36 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                     }),
                 });
                 if (saveResponse.ok) {
+                    setSaveStatus('saved');
                     showToast('Saved as standalone application!');
-                }
-            } else {
-                const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        content: state.resumeData,
-                    }),
-                });
-                if (saveResponse.ok) {
-                    showToast('Base Resume saved!');
                 } else {
-                    throw new Error("Failed to save");
+                    throw new Error('Failed to save');
                 }
+            } catch (error) {
+                console.error('Error saving:', error);
+                setSaveStatus('error');
+                showToast('Save failed.');
+            } finally {
+                setIsSaving(false);
             }
-        } catch (error) {
-            console.error('Error saving:', error);
-            showToast('Save failed.');
-        } finally {
-            setIsSaving(false);
+            return;
         }
+
+        await persistBaseResume(true);
     };
+
+    useEffect(() => {
+        if (isNew || isLoading || !hasLoadedInitialData) return;
+
+        const snapshot = JSON.stringify(state.resumeData);
+        if (snapshot === lastSavedSnapshotRef.current) return;
+
+        const timeoutId = window.setTimeout(() => {
+            void persistBaseResume(false);
+        }, 1000);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [hasLoadedInitialData, isLoading, isNew, persistBaseResume, state.resumeData]);
 
     const handleTailorSubmit = async (data: { jobTitle: string; company: string; jobDescription: string }) => {
         setShowTailorModal(false);
@@ -391,6 +619,17 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                         showPreview ? "flex" : "hidden lg:flex"
                     )} style={{ height: 750 }}>
                         <div className="print:hidden" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0 }}>
+                            {!isNew && (
+                                <span className="text-xs text-muted-foreground mr-auto">
+                                    {saveStatus === 'saving'
+                                        ? 'Autosaving...'
+                                        : saveStatus === 'saved'
+                                            ? 'All changes saved'
+                                            : saveStatus === 'error'
+                                                ? 'Autosave failed'
+                                                : 'Autosave on'}
+                                </span>
+                            )}
                             <Button size="sm" variant="outline" onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-3 py-2">
                                 <Save className="w-4 h-4" />{isSaving ? 'Saving…' : 'Save'}
                             </Button>

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, Suspense } from 'react';
+import React, { useCallback, useState, useRef, useEffect, Suspense } from 'react';
 import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
@@ -20,10 +20,13 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const { state, dispatch } = useResume();
     const [isLoading, setIsLoading] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [showEditor, setShowEditor] = useState(false);
     const [activePanel, setActivePanel] = useState<'form' | 'customize' | 'settings'>('form');
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const lastSavedSnapshotRef = useRef<string | null>(null);
+    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -49,6 +52,13 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     const existingHistory = Array.isArray(json.data.chatHistory) ? json.data.chatHistory : [];
                     const hasContextAlready = existingHistory.some((m: any) => m?.id === 'tailor-context');
                     dispatch({ type: 'SET_CHAT_HISTORY', payload: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory] });
+
+                    lastSavedSnapshotRef.current = JSON.stringify({
+                        resumeData: json.data.resumeData,
+                        chatHistory: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory],
+                        jobDescription: json.data.jobDescription || '',
+                    });
+                    setHasLoadedInitialData(true);
                 }
             } catch (error) {
                 console.error("Error loading application for tailoring", error);
@@ -59,38 +69,69 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         load();
     }, [applicationId, company, jobTitle, dispatch]);
 
-    const handleSave = async () => {
+    const persistTailoredApplication = useCallback(async (showSuccessToast = false) => {
+        const snapshot = JSON.stringify({
+            resumeData: state.resumeData,
+            chatHistory: state.chatHistory,
+            jobDescription: state.jobDescription,
+        });
+
+        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
+            return true;
+        }
+
         setIsSaving(true);
+        setSaveStatus('saving');
         try {
-            const res = await fetch('/api/falood/applications', {
-                method: 'POST',
+            const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     jobDescription: state.jobDescription,
                     companyName: company || null,
-                    skills: [],
                     resumeData: state.resumeData,
                     chatHistory: state.chatHistory,
                 }),
             });
+
             const json = await res.json().catch(() => ({}));
             if (!res.ok || !json?.success) {
                 throw new Error(json?.error || 'Save failed');
             }
 
-            const newId = json?.data?.id as string | undefined;
-            showToast('Tailored resume saved!');
-
-            if (newId && newId !== applicationId) {
-                const nextUrl = `/falood/studio/tailor/${encodeURIComponent(newId)}?jobTitle=${encodeURIComponent(jobTitle)}&company=${encodeURIComponent(company)}`;
-                router.push(nextUrl);
-            }
+            lastSavedSnapshotRef.current = snapshot;
+            setSaveStatus('saved');
+            if (showSuccessToast) showToast('Tailored resume saved!');
+            return true;
         } catch {
-            showToast('Save failed.');
+            setSaveStatus('error');
+            if (showSuccessToast) showToast('Save failed.');
+            return false;
         } finally {
             setIsSaving(false);
         }
+    }, [applicationId, company, state.chatHistory, state.jobDescription, state.resumeData]);
+
+    const handleSave = async () => {
+        await persistTailoredApplication(true);
     };
+
+    useEffect(() => {
+        if (isLoading || !hasLoadedInitialData) return;
+
+        const snapshot = JSON.stringify({
+            resumeData: state.resumeData,
+            chatHistory: state.chatHistory,
+            jobDescription: state.jobDescription,
+        });
+        if (snapshot === lastSavedSnapshotRef.current) return;
+
+        const timeoutId = window.setTimeout(() => {
+            void persistTailoredApplication(false);
+        }, 1000);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [hasLoadedInitialData, isLoading, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData]);
 
     const handleDownloadPDF = () => window.print();
 
