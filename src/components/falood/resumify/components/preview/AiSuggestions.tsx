@@ -1,4 +1,4 @@
-import React, { useCallback, useState, useRef, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useRef, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -8,6 +8,7 @@ import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { ResumeData } from '@/components/falood/resumify/types/resume';
 
 interface SkillCategory {
     id: string;
@@ -35,7 +36,7 @@ interface ChatMessage {
 }
 
 export const AiSuggestions: React.FC = () => {
-    const { state, updateExperience, updateSkills, updateSummary, updatePersonalInfo, setChatHistory, setJobDescription } = useResume();
+    const { state, importResumeData, setChatHistory, setJobDescription } = useResume();
     const { chatHistory: messages, jobDescription } = state;
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -47,22 +48,102 @@ export const AiSuggestions: React.FC = () => {
     // Let's derive pending count from messages.
 
     const scrollAreaRef = useRef<HTMLDivElement>(null);
+    const prevMessageCountRef = useRef<number>(messages.length);
+    const prevLastMessageIdRef = useRef<string | undefined>(messages[messages.length - 1]?.id);
+    const prevIsTypingRef = useRef<boolean>(isTyping);
+    const localStorageKeyRef = useRef<string | null>(null);
+    const hasInitializedStorageRef = useRef(false);
+    const skipNextPersistRef = useRef(false);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const path = window.location.pathname;
+        const url = new URL(window.location.href);
+        const key = `falood-ai-chat:${path}`;
+        localStorageKeyRef.current = key;
+
+        const shouldRestore =
+            !path.includes('/falood/studio/tailor/') &&
+            !url.searchParams.get('id') &&
+            messages.length === 1 &&
+            messages[0]?.id === 'welcome';
+
+        if (!shouldRestore) {
+            hasInitializedStorageRef.current = true;
+            return;
+        }
+
+        const raw = window.localStorage.getItem(key);
+        if (!raw) {
+            hasInitializedStorageRef.current = true;
+            return;
+        }
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 1) {
+                skipNextPersistRef.current = true;
+                setChatHistory(parsed);
+            }
+        } catch { }
+        hasInitializedStorageRef.current = true;
+    }, [setChatHistory]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!hasInitializedStorageRef.current) return;
+        if (skipNextPersistRef.current) {
+            skipNextPersistRef.current = false;
+            return;
+        }
+        const key = localStorageKeyRef.current ?? `falood-ai-chat:${window.location.pathname}`;
+        localStorageKeyRef.current = key;
+
+        try {
+            window.localStorage.setItem(key, JSON.stringify(messages));
+        } catch { }
+    }, [messages]);
 
     // Auto-scroll to bottom of chat
     useEffect(() => {
-        if (scrollAreaRef.current) {
-            const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
-            if (scrollContainer) {
-                scrollContainer.scrollTop = scrollContainer.scrollHeight;
-            }
-        }
+        const currentLastMessageId = messages[messages.length - 1]?.id;
+        const shouldAutoScroll =
+            messages.length > prevMessageCountRef.current ||
+            currentLastMessageId !== prevLastMessageIdRef.current ||
+            (isTyping && !prevIsTypingRef.current);
+
+        prevMessageCountRef.current = messages.length;
+        prevLastMessageIdRef.current = currentLastMessageId;
+        prevIsTypingRef.current = isTyping;
+
+        if (!shouldAutoScroll) return;
+
+        const scrollRoot = scrollAreaRef.current;
+        if (!scrollRoot) return;
+
+        const scrollContainer = scrollRoot.querySelector('[data-radix-scroll-area-viewport]');
+        if (!scrollContainer) return;
+
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
     }, [messages, isTyping]);
 
-    const handleAccept = (suggestion: Suggestion, messageId: string) => {
-        // Logic to update resume data
+    const pendingSuggestionsCount = useMemo(() => {
+        let count = 0;
+        for (const msg of messages) {
+            for (const s of msg.suggestions ?? []) {
+                if ((s.status ?? 'pending') === 'pending') count += 1;
+            }
+        }
+        return count;
+    }, [messages]);
+
+    const applySuggestionToResumeData = useCallback((resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
         if (suggestion.type === 'summary') {
-            updateSummary(suggestion.suggested as string);
-        } else if (suggestion.type === 'personal_info' && suggestion.targetId) {
+            return { ...resumeData, summary: (suggestion.suggested as string) ?? '' };
+        }
+
+        if (suggestion.type === 'personal_info' && suggestion.targetId) {
             const allowed: Record<string, boolean> = {
                 fullName: true,
                 jobTitle: true,
@@ -75,103 +156,160 @@ export const AiSuggestions: React.FC = () => {
                 birthDate: true,
             };
 
-            if (allowed[suggestion.targetId]) {
-                updatePersonalInfo({ [suggestion.targetId]: suggestion.suggested as string } as any);
-            }
-        } else if (suggestion.type === 'experience' && suggestion.targetId) {
-            const updatedExperience = state.resumeData.experience.map(exp => {
-                if (exp.id === suggestion.targetId) {
-                    // Try to find exact match first
-                    let targetIndex = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+            if (!allowed[suggestion.targetId]) return resumeData;
 
-                    // If no exact match, try fuzzy match (ignore whitespace/case)
-                    if (targetIndex === -1 && suggestion.original) {
-                        const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
-                        const normalizedOriginal = normalize(suggestion.original);
-                        targetIndex = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
-                    }
+            return {
+                ...resumeData,
+                personalInfo: {
+                    ...resumeData.personalInfo,
+                    [suggestion.targetId]: (suggestion.suggested as string) ?? '',
+                } as ResumeData['personalInfo'],
+            };
+        }
 
-                    if (targetIndex !== -1) {
-                        const updatedBullets = [...exp.bulletPoints];
-                        updatedBullets[targetIndex] = suggestion.suggested as string;
-                        return { ...exp, bulletPoints: updatedBullets };
-                    }
+        if (suggestion.type === 'experience' && suggestion.targetId) {
+            const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+            const updatedExperience = resumeData.experience.map(exp => {
+                if (exp.id !== suggestion.targetId) return exp;
+
+                let targetIndex = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+                if (targetIndex === -1 && suggestion.original) {
+                    const normalizedOriginal = normalize(suggestion.original);
+                    targetIndex = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
                 }
-                return exp;
-            });
-            updateExperience(updatedExperience);
-        } else if (suggestion.type === 'experience_add' && suggestion.targetId) {
-            const newBullet = (suggestion.suggested as string)?.trim();
-            if (!newBullet) return;
 
-            const updatedExperience = state.resumeData.experience.map(exp => {
+                if (targetIndex === -1) return exp;
+
+                const updatedBullets = [...exp.bulletPoints];
+                updatedBullets[targetIndex] = (suggestion.suggested as string) ?? '';
+                return { ...exp, bulletPoints: updatedBullets };
+            });
+
+            return { ...resumeData, experience: updatedExperience };
+        }
+
+        if (suggestion.type === 'experience_add' && suggestion.targetId) {
+            const newBullet = (suggestion.suggested as string)?.trim();
+            if (!newBullet) return resumeData;
+
+            const updatedExperience = resumeData.experience.map(exp => {
                 if (exp.id !== suggestion.targetId) return exp;
                 if (exp.bulletPoints.includes(newBullet)) return exp;
                 return { ...exp, bulletPoints: [...exp.bulletPoints, newBullet] };
             });
-            updateExperience(updatedExperience);
-        } else if (suggestion.type === 'experience_remove' && suggestion.targetId) {
+
+            return { ...resumeData, experience: updatedExperience };
+        }
+
+        if (suggestion.type === 'experience_remove' && suggestion.targetId) {
             const original = suggestion.original || (typeof suggestion.suggested === 'string' ? suggestion.suggested : '');
-            if (!original) return;
+            if (!original) return resumeData;
 
             const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
             const normalizedOriginal = normalize(original);
 
-            const updatedExperience = state.resumeData.experience.map(exp => {
+            const updatedExperience = resumeData.experience.map(exp => {
                 if (exp.id !== suggestion.targetId) return exp;
-                const updatedBullets = exp.bulletPoints.filter(bp => normalize(bp) !== normalizedOriginal);
-                return { ...exp, bulletPoints: updatedBullets };
-            });
-            updateExperience(updatedExperience);
-        } else if (suggestion.type === 'skill' && suggestion.targetId) {
-            const newSkills = suggestion.suggested as string[];
-            const updatedCategories = state.resumeData.skills.categorized.map(cat => {
-                if (cat.id === suggestion.targetId) {
-                    const uniqueNewSkills = newSkills.filter(s => !cat.skills.includes(s));
-                    return { ...cat, skills: [...cat.skills, ...uniqueNewSkills] };
-                }
-                return cat;
+                return { ...exp, bulletPoints: exp.bulletPoints.filter(bp => normalize(bp) !== normalizedOriginal) };
             });
 
-            updateSkills({
-                ...state.resumeData.skills,
-                categorized: updatedCategories
+            return { ...resumeData, experience: updatedExperience };
+        }
+
+        if (suggestion.type === 'skill' && suggestion.targetId) {
+            const newSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
+            if (newSkills.length === 0) return resumeData;
+
+            const updatedCategories = resumeData.skills.categorized.map(cat => {
+                if (cat.id !== suggestion.targetId) return cat;
+                const uniqueNewSkills = newSkills.filter(s => !cat.skills.includes(s));
+                return { ...cat, skills: [...cat.skills, ...uniqueNewSkills] };
             });
-        } else if (suggestion.type === 'skill_remove' && suggestion.targetId) {
-            const removeSkills = (suggestion.suggested as string[]) || [];
+
+            return {
+                ...resumeData,
+                skills: {
+                    ...resumeData.skills,
+                    categorized: updatedCategories,
+                },
+            };
+        }
+
+        if (suggestion.type === 'skill_remove' && suggestion.targetId) {
+            const removeSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
             const removeSet = new Set(removeSkills.map(s => s.trim().toLowerCase()).filter(Boolean));
+            if (removeSet.size === 0) return resumeData;
 
-            const updatedCategories = state.resumeData.skills.categorized.map(cat => {
+            const updatedCategories = resumeData.skills.categorized.map(cat => {
                 if (cat.id !== suggestion.targetId) return cat;
                 return { ...cat, skills: cat.skills.filter(s => !removeSet.has(s.trim().toLowerCase())) };
             });
 
-            updateSkills({
-                ...state.resumeData.skills,
-                categorized: updatedCategories
-            });
-        } else if (suggestion.type === 'skill_reorg') {
-            // Handle full reorganization of skills
+            return {
+                ...resumeData,
+                skills: {
+                    ...resumeData.skills,
+                    categorized: updatedCategories,
+                },
+            };
+        }
+
+        if (suggestion.type === 'skill_reorg') {
             const newCategories = suggestion.suggested as SkillCategory[];
-            if (Array.isArray(newCategories)) {
-                updateSkills({
-                    ...state.resumeData.skills,
-                    categorized: newCategories
-                });
+            if (!Array.isArray(newCategories)) return resumeData;
+            return {
+                ...resumeData,
+                skills: {
+                    ...resumeData.skills,
+                    categorized: newCategories,
+                },
+            };
+        }
+
+        return resumeData;
+    }, []);
+
+    const handleAccept = (suggestion: Suggestion, messageId: string) => {
+        const nextResumeData = applySuggestionToResumeData(state.resumeData, suggestion);
+        importResumeData(nextResumeData);
+
+        setChatHistory(messages.map(msg => {
+            if (msg.id !== messageId || !msg.suggestions) return msg;
+            return {
+                ...msg,
+                suggestions: msg.suggestions.map((s: Suggestion) =>
+                    s.id === suggestion.id ? { ...s, status: 'accepted' } : s
+                )
+            };
+        }));
+    };
+
+    const handleAcceptAll = () => {
+        const pending: { suggestion: Suggestion; messageId: string }[] = [];
+        for (const msg of messages) {
+            for (const s of msg.suggestions ?? []) {
+                if ((s.status ?? 'pending') === 'pending') {
+                    pending.push({ suggestion: s, messageId: msg.id });
+                }
             }
         }
 
-        // Mark as accepted in the message history
+        if (pending.length === 0) return;
+
+        const nextResumeData = pending.reduce((acc, { suggestion }) => {
+            return applySuggestionToResumeData(acc, suggestion);
+        }, state.resumeData);
+
+        importResumeData(nextResumeData);
+
         setChatHistory(messages.map(msg => {
-            if (msg.id === messageId && msg.suggestions) {
-                return {
-                    ...msg,
-                    suggestions: msg.suggestions.map((s: Suggestion) =>
-                        s.id === suggestion.id ? { ...s, status: 'accepted' } : s
-                    )
-                };
-            }
-            return msg;
+            if (!msg.suggestions) return msg;
+            return {
+                ...msg,
+                suggestions: msg.suggestions.map((s: Suggestion) =>
+                    (s.status ?? 'pending') === 'pending' ? { ...s, status: 'accepted' } : s
+                ),
+            };
         }));
     };
 
@@ -321,6 +459,20 @@ export const AiSuggestions: React.FC = () => {
                 <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-indigo-500" />
                     <h2 className="font-semibold text-sm">AI Copilot</h2>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-[10px]">
+                        {pendingSuggestionsCount} pending
+                    </Badge>
+                    <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={handleAcceptAll}
+                        disabled={pendingSuggestionsCount === 0 || isTyping}
+                    >
+                        <Check className="h-3.5 w-3.5 mr-1" />
+                        Accept all
+                    </Button>
                 </div>
             </div>
 

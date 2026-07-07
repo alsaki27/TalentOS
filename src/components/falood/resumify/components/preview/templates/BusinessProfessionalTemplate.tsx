@@ -31,6 +31,11 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
     }
   };
 
+  const formatUrl = (url: string | undefined) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `https://${url}`;
+  };
+
   return (
     <div
       className={`w-full h-full leading-relaxed `}
@@ -42,42 +47,46 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
       {/* Header */}
       <div className="text-center mb-4 pb-4" style={{ borderColor: colors.primary }}>
         <h1
-          className="text-2xl font-bold mb-2"
+          className="text-xl font-bold mb-2"
           style={{ color: colors.primary }}
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
-        <h2
-          className="text-lg mb-3"
-          style={{ color: colors.secondary }}
-        >
-          {personalInfo.jobTitle || 'Your Job Title'}
-        </h2>
-
+        {personalInfo.jobTitle && (
+          <h2
+            className="text-lg mb-3 mt-2"
+            style={{ color: colors.secondary }}
+          >
+            {personalInfo.jobTitle}
+          </h2>
+        )}
         {/* Contact Info */}
         <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 text-xs">
           {personalInfo.email && (
             <div className="flex items-center gap-1">
-              <Mail className="w-3 h-3" style={{ color: colors.accent }} />
+              {/* <Mail className="w-3 h-3" style={{ color: colors.accent }} /> */}
               <span>{personalInfo.email}</span>
             </div>
           )}
+          |
           {personalInfo.phone && (
             <div className="flex items-center gap-1">
-              <Phone className="w-3 h-3" style={{ color: colors.accent }} />
+              {/* <Phone className="w-3 h-3" style={{ color: colors.accent }} /> */}
               <span>{personalInfo.phone}</span>
             </div>
           )}
+          |
           {personalInfo.location && (
             <div className="flex items-center gap-1">
-              <MapPin className="w-3 h-3" style={{ color: colors.accent }} />
+              {/* <MapPin className="w-3 h-3" style={{ color: colors.accent }} /> */}
               <span>{personalInfo.location}</span>
             </div>
           )}
+          |
           {personalInfo.linkedin && (
             <div className="flex items-center gap-1">
-              <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.linkedin} className="hover:underline">LinkedIn</a>
+              {/* <Link2 className="w-3 h-3" style={{ color: colors.accent }} /> */}
+              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
             </div>
           )}
         </div>
@@ -88,19 +97,19 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
             {personalInfo.website && (
               <div className="flex items-center gap-1">
                 <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={personalInfo.website} className="hover:underline">Portfolio</a>
+                <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
               </div>
             )}
             {personalInfo.linkedin && (
               <div className="flex items-center gap-1">
                 <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={personalInfo.linkedin} className="hover:underline">LinkedIn</a>
+                <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
               </div>
             )}
             {personalInfo.github && (
               <div className="flex items-center gap-1">
                 <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-                <a href={personalInfo.github} className="hover:underline">GitHub</a>
+                <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
               </div>
             )}
           </div>
@@ -241,8 +250,8 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
                       )}
                       {(project.liveUrl || project.githubUrl) && (
                         <div className="text-xs">
-                          {project.liveUrl && <div><strong>Live:</strong> {project.liveUrl}</div>}
-                          {project.githubUrl && <div><strong>Repository:</strong> {project.githubUrl}</div>}
+                          {project.liveUrl && <div><strong>Live:</strong> <a href={formatUrl(project.liveUrl)} className="hover:underline">{project.liveUrl}</a></div>}
+                          {project.githubUrl && <div><strong>Repository:</strong> <a href={formatUrl(project.githubUrl)} className="hover:underline">{project.githubUrl}</a></div>}
                         </div>
                       )}
                     </div>
@@ -251,7 +260,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               </div>
             )}
 
-            {section.id === 'skills' && skills && (
+            {section.id === 'skills' && skills && ((skills.mode === 'simple' && skills.simple.length > 0) || (skills.mode === 'categorized' && skills.categorized.length > 0)) && (
               <div>
                 <h3
                   className="text-sm font-bold mb-2 pb-1 border-b uppercase tracking-wide"
@@ -264,11 +273,11 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
                     {skills.simple.join(' • ')}
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="">
                     {skills.categorized.map((category) => (
                       <div key={category.id} className="text-xs">
                         <strong
-                          style={{ color: colors.secondary }}
+                          style={{ color: colors.primary }}
                         >
                           {category.name}:
                         </strong> {category.skills.join(', ')}

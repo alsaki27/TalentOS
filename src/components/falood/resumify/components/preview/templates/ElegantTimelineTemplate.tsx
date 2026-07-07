@@ -39,6 +39,11 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
     }
   };
 
+  const formatUrl = (url: string | undefined) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `https://${url}`;
+  };
+
   return (
     <div 
       className={`w-full h-full leading-relaxed `}
@@ -55,12 +60,14 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
-        <h2 
-          className="text-lg font-normal mb-3"
-          style={{ color: colors.secondary }}
-        >
-          {personalInfo.jobTitle || 'Your Job Title'}
-        </h2>
+        {personalInfo.jobTitle && (
+          <h2 
+            className="text-lg font-normal mb-3"
+            style={{ color: colors.secondary }}
+          >
+            {personalInfo.jobTitle}
+          </h2>
+        )}
         
         <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 text-xs">
           {personalInfo.email && (
@@ -84,19 +91,19 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
           {personalInfo.website && (
             <div className="flex items-center gap-1">
               <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.website} className="hover:underline">Portfolio</a>
+              <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
             </div>
           )}
           {personalInfo.linkedin && (
             <div className="flex items-center gap-1">
               <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.linkedin} className="hover:underline">LinkedIn</a>
+              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
             </div>
           )}
           {personalInfo.github && (
             <div className="flex items-center gap-1">
               <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={personalInfo.github} className="hover:underline">GitHub</a>
+              <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
             </div>
           )}
         </div>
@@ -176,6 +183,54 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
             )}
 
             {/* Other sections rendered normally */}
+            {section.id === 'projects' && projects.length > 0 && (
+              <div>
+                <h3 
+                  className={`${getHeadingSize()} font-semibold mb-3 text-center`}
+                  style={{ color: colors.primary }}
+                >
+                  PROJECTS
+                </h3>
+                <div className="space-y-4">
+                  {projects.map((project) => (
+                      <div key={project.id} className="text-center page-break-inside-avoid">
+                        <h4 className={` font-semibold`}>{project.title}</h4>
+                        {project.description && <p className="text-xs mt-1 max-w-2xl mx-auto">{project.description}</p>}
+                      {project.technologies && project.technologies.length > 0 && (
+                        <div className="flex flex-wrap justify-center gap-1 mt-2">
+                          {project.technologies.map(tech => (
+                            <span 
+                              key={tech} 
+                              className="text-xs px-2 py-0.5 rounded-full" 
+                              style={{ backgroundColor: colors.accent + '20', color: colors.accent }}
+                            >
+                              {tech}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {(project.liveUrl || project.githubUrl) && (
+                        <div className="flex justify-center gap-4 mt-2 text-xs">
+                          {project.liveUrl && (
+                            <div className="flex items-center gap-1">
+                              <Globe className="w-3 h-3" style={{ color: colors.accent }} />
+                              <a href={formatUrl(project.liveUrl)} className="hover:underline text-blue-600">Live Demo</a>
+                            </div>
+                          )}
+                          {project.githubUrl && (
+                            <div className="flex items-center gap-1">
+                              <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
+                              <a href={formatUrl(project.githubUrl)} className="hover:underline text-blue-600">Repository</a>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {section.id === 'education' && education.length > 0 && (
               <div>
                 <h3 
@@ -198,7 +253,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
               </div>
             )}
 
-            {section.id === 'skills' && skills && (
+            {section.id === 'skills' && skills && ((skills.mode === 'simple' && skills.simple.length > 0) || (skills.mode === 'categorized' && skills.categorized.length > 0)) && (
               <div>
                 <h3 
                   className={`${getHeadingSize()} font-semibold mb-3 text-center`}

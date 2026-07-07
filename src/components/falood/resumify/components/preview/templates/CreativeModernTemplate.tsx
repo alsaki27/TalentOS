@@ -39,6 +39,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
     }
   };
 
+  const formatUrl = (url: string | undefined) => {
+    if (!url) return '';
+    return url.startsWith('http') ? url : `https://${url}`;
+  };
+
   return (
     <div 
       className={`w-full h-full leading-relaxed `}
@@ -56,9 +61,11 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
           <h1 className="text-3xl font-bold mb-1">
             {personalInfo.fullName || 'Your Name'}
           </h1>
-          <h2 className="text-xl mb-3 opacity-90">
-            {personalInfo.jobTitle || 'Your Job Title'}
-          </h2>
+          {personalInfo.jobTitle && (
+            <h2 className="text-xl mb-3 opacity-90">
+              {personalInfo.jobTitle}
+            </h2>
+          )}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm opacity-90">
             {personalInfo.email && (
               <div className="flex items-center gap-1">
@@ -106,7 +113,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
         <div className="w-1/3 space-y-6">
           {visibleSections.filter(s => ['skills', 'education'].includes(s.id)).map(section => (
             <div key={section.id} className="page-break-inside-avoid">
-              {section.id === 'skills' && skills && (
+              {section.id === 'skills' && skills && ((skills.mode === 'simple' && skills.simple.length > 0) || (skills.mode === 'categorized' && skills.categorized.length > 0)) && (
                 <div>
                   <h3 
                     className={`${getHeadingSize()} font-bold mb-3 pb-2 border-b-2`}
