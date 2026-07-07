@@ -201,6 +201,13 @@ export async function POST(req: NextRequest) {
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+    // Invalidate match scores for this candidate since they have a new base resume
+    if (isNeon()) {
+      await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [candidateId]);
+    } else {
+      await supabase.from("job_match_scores").delete().eq("candidate_id", candidateId);
+    }
+
     await logActivity({
       userId: context!.profile.user_id,
       actorName: context!.profile.display_name || context!.profile.email || "",
