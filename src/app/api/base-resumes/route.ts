@@ -17,7 +17,7 @@ import { ResumeDocument } from "@/lib/falood/types";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
-import { extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
+import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText, extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
 import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
 
 // #region debug-point A:base-resume-seeding-debug
@@ -43,6 +43,42 @@ function reportBaseResumeSeedingDebug(
 
 function logBaseResumeCreateConsole(step: string, data: Record<string, unknown> = {}) {
   console.log(`[BASE_RESUME_CREATE] ${step}`, data);
+}
+// #endregion
+
+// #region debug-point A:linkedin-url-seeding-debug
+function reportLinkedinUrlSeedingDebug(
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  msg: string,
+  data: Record<string, unknown> = {}
+) {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "linkedin-url-seeding",
+      runId: "pre-fix",
+      hypothesisId,
+      location: "src/app/api/base-resumes/route.ts",
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+}
+
+function scanBufferForLinkedInUrls(buffer: Uint8Array): { count: number; samples: string[] } {
+  try {
+    const nodeBuffer = Buffer.from(buffer);
+    const head = nodeBuffer.subarray(0, Math.min(nodeBuffer.length, 600_000)).toString("latin1");
+    const tail = nodeBuffer.subarray(Math.max(0, nodeBuffer.length - 600_000)).toString("latin1");
+    const combined = `${head}\n${tail}`;
+    const matches = combined.match(/linkedin\.com\/[A-Za-z0-9/_\-?&=%\.]+/gi) ?? [];
+    const samples = Array.from(new Set(matches.map((m) => m.slice(0, 180)))).slice(0, 3);
+    return { count: matches.length, samples };
+  } catch {
+    return { count: 0, samples: [] };
+  }
 }
 // #endregion
 
@@ -137,7 +173,6 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     // Prefer the markdown conversion for PDFs when it produced substantial text.
     if (markdownText && markdownText.length > 100) {
       markdown = markdownText;
-      rawText = markdownText;
     }
 
     reportBaseResumeSeedingDebug("A", "markitdown attempted for base seeding pdf", {
@@ -160,6 +195,22 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     });
   }
 
+  // #region debug-point A:linkedin-url-seeding-inputs
+  reportLinkedinUrlSeedingDebug("A", "base seeding inputs collected", {
+    resumeId: resume.id,
+    filename: resume.filename,
+    mimeType,
+    extractedTextLength,
+    rawTextLength: rawText.length,
+    markdownLength: markdown?.length ?? 0,
+    rawTextHasLinkedInWord: /linkedin/i.test(rawText),
+    markdownHasLinkedInWord: markdown ? /linkedin/i.test(markdown) : false,
+    extractedLinkedInFromRawText: extractLinkedInUrlFromText(rawText) ?? null,
+    extractedLinkedInFromMarkdown: markdown ? extractLinkedInUrlFromText(markdown) ?? null : null,
+    pdfBinaryLinkedinScan: mimeType.toLowerCase().includes("pdf") ? scanBufferForLinkedInUrls(buffer) : null,
+  });
+  // #endregion
+
   // #region debug-point A:base-seeding-raw-text
   reportBaseResumeSeedingDebug("A", "uploaded resume text extracted for base seeding", {
     resumeId: resume.id,
@@ -180,7 +231,7 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     usedMarkdownFallback: Boolean(markdown),
     rawText,
   });
-  if (rawText.length < 50) {
+  if ((markdown ?? rawText).length < 50) {
     throw new Error("We found an uploaded resume, but couldn't extract enough readable text. Please upload a text-based PDF/DOCX or paste the resume text first.");
   }
 
@@ -194,6 +245,19 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     : openAiProvider
       ? await parseResumeTextWithProvider(rawText, openAiProvider)
       : await parseResumeFields(rawText);
+
+  if (!parsed.linkedin_url && mimeType.toLowerCase().includes("pdf")) {
+    parsed.linkedin_url = extractLinkedInUrlFromBinary(buffer) ?? undefined;
+  }
+
+  // #region debug-point B:linkedin-url-seeding-parsed
+  reportLinkedinUrlSeedingDebug("B", "base seeding parsed resume contact fields", {
+    resumeId: resume.id,
+    parsedLinkedinUrl: (parsed as any)?.linkedin_url ?? null,
+    parsedGithubUrl: (parsed as any)?.github_url ?? null,
+    parsedPortfolioUrl: (parsed as any)?.portfolio_url ?? null,
+  });
+  // #endregion
 
   // #region debug-point C:base-seeding-parsed-result
   reportBaseResumeSeedingDebug("C", "uploaded resume parsed for base seeding", {
@@ -369,6 +433,15 @@ export async function POST(req: NextRequest) {
       }
       const parsed = await parseUploadedResumeForBaseSeeding(uploadedResume);
       content = buildResumeDocumentFromParsedResume(parsed as typeof parsed & Record<string, unknown>, candidate, formatting);
+      // #region debug-point C:linkedin-url-seeding-seeded-header
+      reportLinkedinUrlSeedingDebug("C", "base resume content header after seeding", {
+        candidateId,
+        resumeId: uploadedResume.id,
+        candidateLinkedinUrl: candidate?.linkedin_url ?? null,
+        parsedLinkedinUrl: (parsed as any)?.linkedin_url ?? null,
+        seededHeaderLinkedin: (content as any)?.header?.linkedin ?? null,
+      });
+      // #endregion
       // #region debug-point D:base-resume-content-built
       reportBaseResumeSeedingDebug("D", "base resume content built from uploaded parsed resume", {
         candidateId,

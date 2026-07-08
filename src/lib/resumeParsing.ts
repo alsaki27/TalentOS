@@ -38,6 +38,28 @@ function logResumeParsingConsole(step: string, data: Record<string, unknown> = {
 }
 // #endregion
 
+// #region debug-point A:linkedin-url-seeding-debug
+function reportLinkedinUrlSeedingDebug(
+  hypothesisId: "A" | "B" | "C" | "D" | "E",
+  msg: string,
+  data: Record<string, unknown> = {}
+) {
+  fetch("http://127.0.0.1:7777/event", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId: "linkedin-url-seeding",
+      runId: "pre-fix",
+      hypothesisId,
+      location: "src/lib/resumeParsing.ts",
+      msg: `[DEBUG] ${msg}`,
+      data,
+      ts: Date.now(),
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
 // PDF text extraction, decompressing /FlateDecode content streams via the
 // standard Web Platform DecompressionStream API, then regex-matching Tj/TJ
 // text-show operators on the decompressed result.
@@ -465,6 +487,29 @@ export function extractLinkedInUrlFromText(rawText: string): string | undefined 
   return extractLinkedInUrl(rawText);
 }
 
+export function extractLinkedInUrlFromBinary(buffer: Uint8Array): string | undefined {
+  try {
+    const nodeBuffer = Buffer.from(buffer);
+    const head = nodeBuffer.subarray(0, Math.min(nodeBuffer.length, 800_000)).toString("latin1");
+    const tail = nodeBuffer.subarray(Math.max(0, nodeBuffer.length - 800_000)).toString("latin1");
+    const combined = `${head}\n${tail}`;
+
+    const candidates = combined.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/[A-Za-z0-9/_\-?&=%\.]+/gi) ?? [];
+    if (candidates.length === 0) return undefined;
+
+    const first = candidates[0];
+    if (!first) return undefined;
+
+    const preferred =
+      candidates.find((c) => /linkedin\.com\/in\//i.test(c)) ??
+      first;
+
+    return cleanExtractedUrl(preferred);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeLinkedInUrl(rawLinkedInUrl: unknown, rawText: string): string | undefined {
   if (typeof rawLinkedInUrl === "string" && rawLinkedInUrl.trim()) {
     const extracted = extractLinkedInUrl(rawLinkedInUrl);
@@ -677,7 +722,7 @@ CRITICAL RULES:
 - Return ONLY the JSON object, no markdown code fences, no explanation.`;
 
 // New: Parse from markdown (better quality, fewer tokens)
-export async function parseResumeFromMarkdown(markdown: string): Promise<ParsedResume> {
+export async function parseResumeFromMarkdown(markdown: string, rawTextForNormalization?: string): Promise<ParsedResume> {
   const active = await getProviderForCategory("parsing_extraction");
   if (!active) {
     // #region debug-point E:markdown-no-provider
@@ -755,7 +800,15 @@ export async function parseResumeFromMarkdown(markdown: string): Promise<ParsedR
       certificationsCount: Array.isArray(parsed?.certifications) ? parsed.certifications.length : 0,
     });
 
-    return finalizeParsedResume(parsed as Partial<ParsedResume>, markdown);
+    const normalizedRawText = (() => {
+      const fallback = typeof rawTextForNormalization === "string" ? rawTextForNormalization.trim() : "";
+      const md = markdown.trim();
+      if (!fallback) return markdown;
+      if (fallback === md) return markdown;
+      return `${rawTextForNormalization}\n${markdown}`;
+    })();
+
+    return finalizeParsedResume(parsed as Partial<ParsedResume>, normalizedRawText);
   } catch (err: any) {
     // #region debug-point E:markdown-parse-error
     reportResumeParsingDebug("E", "markdown parse failed", {
@@ -778,6 +831,7 @@ export function finalizeParsedResume(parsed: Partial<ParsedResume>, rawText: str
   const rawSkillCategories = extractCategorizedSkillsFromRawText(rawText);
   const skillSectionLines = extractSkillsSectionLines(rawText);
   const preferRawSkillCategories = shouldPreferRawSkillCategories(rawSkillCategories, normalizedSkills);
+  const normalizedLinkedinUrl = normalizeLinkedInUrl(parsed.linkedin_url, rawText);
 
   // #region debug-point C:finalize-skills
   reportResumeParsingDebug("C", "finalizing parsed resume skills", {
@@ -805,7 +859,7 @@ export function finalizeParsedResume(parsed: Partial<ParsedResume>, rawText: str
     email: parsed.email || undefined,
     phone: parsed.phone || undefined,
     location: parsed.location || undefined,
-    linkedin_url: normalizeLinkedInUrl(parsed.linkedin_url, rawText),
+    linkedin_url: normalizedLinkedinUrl,
     github_url: parsed.github_url || undefined,
     portfolio_url: parsed.portfolio_url || undefined,
     summary: parsed.summary || undefined,
@@ -818,6 +872,17 @@ export function finalizeParsedResume(parsed: Partial<ParsedResume>, rawText: str
     certifications: Array.isArray(parsed.certifications) ? parsed.certifications : [],
     raw_text: rawText,
   };
+
+  // #region debug-point B:linkedin-url-seeding-normalization
+  if (!finalized.linkedin_url && /(linkedin|lnkd\.in)/i.test(rawText)) {
+    reportLinkedinUrlSeedingDebug("B", "linkedin normalization produced null despite linkedin-like text present", {
+      hasParsedLinkedinField: typeof parsed.linkedin_url === "string" && parsed.linkedin_url.trim().length > 0,
+      parsedLinkedinField: typeof parsed.linkedin_url === "string" ? parsed.linkedin_url.trim().slice(0, 200) : null,
+      rawTextHasLinkedInWord: /linkedin/i.test(rawText),
+      rawTextHasLnkdIn: /lnkd\.in/i.test(rawText),
+    });
+  }
+  // #endregion
 
   // #region debug-point C:finalize-result
   reportResumeParsingDebug("C", "parsed resume finalized", {
@@ -948,7 +1013,7 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
       rawTextLength: rawText.length,
       markdownLength: markdown.length,
     });
-    return parseResumeFromMarkdown(markdown);
+    return parseResumeFromMarkdown(markdown, rawText);
   }
   // Otherwise fall back to the existing raw text parser
   const active = await getProviderForCategory("parsing_extraction");
