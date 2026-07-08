@@ -27,7 +27,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
     switch (fontSize) {
       case 'small': return '14px';
       case 'large': return '18px';
-      default: return '16px';
+      default: return '14px';
     }
   };
 
