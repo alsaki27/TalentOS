@@ -230,6 +230,23 @@ button:disabled {
   background: #235c41;
 }
 
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-radius: 4px;
+}
+
+.dropdown-item:hover {
+  background-color: var(--bg);
+}
+
 input,
 select,
 textarea {

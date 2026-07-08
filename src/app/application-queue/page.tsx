@@ -552,13 +552,14 @@ export default function ApplicationQueuePage() {
                       {actionId === `${item.id}:build_base` ? "Building..." : actionId === `${item.id}:in_progress` ? "Starting..." : "Falood Studio ▾"}
                     </button>
                     {faloodOpen === item.id && item.candidates && (
-                      <div className="dropdown-menu" style={{ position: "absolute", top: "100%", left: 0, zIndex: 50, minWidth: 220, background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 0", marginTop: 4, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
+                      <div className="dropdown-menu" style={{ position: "absolute", top: "100%", right: 0, zIndex: 50, minWidth: 220, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 0", marginTop: 4, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
                         <div style={{ padding: "4px 12px", fontSize: 12, color: "var(--muted)", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
                           Base resumes for {item.candidates.name}
                         </div>
                         {(faloodResumes[item.candidates.id] ?? []).length === 0 ? (
                           <button
-                            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", fontSize: 13, background: "none", border: "none", color: "var(--accent)", cursor: "pointer" }}
+                            className="dropdown-item"
+                            style={{ color: "var(--accent)" }}
                             onClick={() => buildBaseResumeAndOpen(item)}
                             disabled={actionId === `${item.id}:build_base`}
                           >
@@ -569,7 +570,7 @@ export default function ApplicationQueuePage() {
                             <button
                               key={br.id}
                               className="dropdown-item"
-                              style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", fontSize: 13, background: "none", border: "none", color: "var(--text)", cursor: "pointer" }}
+                              style={{ color: "var(--ink)" }}
                               onClick={() => markInProgressAndOpen(item, br.id)}
                             >
                               {br.name || "Untitled"}
@@ -579,7 +580,8 @@ export default function ApplicationQueuePage() {
                         )}
                         <div style={{ borderTop: "1px solid var(--border)", marginTop: 4, paddingTop: 4 }}>
                           <button
-                            style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", fontSize: 13, background: "none", border: "none", color: "var(--muted)", cursor: "pointer" }}
+                            className="dropdown-item"
+                            style={{ color: "var(--muted)" }}
                             onClick={() => { setStatus(item.id, "in_progress"); closeFaloodDropdown(); }}
                           >
                             Mark in progress only

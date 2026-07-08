@@ -148,7 +148,28 @@ export async function GET(req: NextRequest) {
         })),
       }));
 
-      return NextResponse.json({ jobs: shaped, total: countRow?.total ?? 0, page, pageSize });
+      const jobIds = shaped.map((j: any) => j.id);
+      let matchScores: any[] = [];
+      if (jobIds.length > 0) {
+        const placeholders = jobIds.map((_, i) => `$${i + 1}`).join(",");
+        const scores = await query<Record<string, any>>(`
+          SELECT ms.job_id, ms.score, ms.breakdown, c.id as candidate_id, c.name as candidate_name 
+          FROM job_match_scores ms
+          LEFT JOIN candidates c ON ms.candidate_id = c.id
+          WHERE ms.job_id IN (${placeholders})
+        `, jobIds);
+        matchScores = scores || [];
+      }
+
+      const shapedWithScores = shaped.map((job: any) => ({
+        ...job,
+        match_scores: matchScores.filter((ms) => 
+          ms.job_id === job.id && 
+          job.applicants.some((a: any) => a.candidate_id === ms.candidate_id)
+        ),
+      }));
+
+      return NextResponse.json({ jobs: shapedWithScores, total: countRow?.total ?? 0, page, pageSize });
     } catch (error: any) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
@@ -204,7 +225,28 @@ export async function GET(req: NextRequest) {
     })),
   }));
 
-  return NextResponse.json({ jobs: shaped, total: count ?? 0, page, pageSize });
+  const jobIds = shaped.map((j: any) => j.id);
+  let matchScores: any[] = [];
+  if (jobIds.length > 0) {
+    const { data } = await supabase.from('job_match_scores').select('job_id, score, breakdown, candidates(id, name)').in('job_id', jobIds);
+    matchScores = (data || []).map((ms: any) => ({
+      job_id: ms.job_id,
+      score: ms.score,
+      breakdown: ms.breakdown,
+      candidate_id: ms.candidates?.id,
+      candidate_name: ms.candidates?.name
+    }));
+  }
+
+  const shapedWithScores = shaped.map((job: any) => ({
+    ...job,
+    match_scores: matchScores.filter((ms) => 
+      ms.job_id === job.id && 
+      job.applicants.some((a: any) => a.candidate_id === ms.candidate_id)
+    ),
+  }));
+
+  return NextResponse.json({ jobs: shapedWithScores, total: count ?? 0, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -229,6 +271,7 @@ export async function POST(req: NextRequest) {
     salary_range: body.salary_range ?? null,
     source_url: body.source_url ?? null,
     notes: body.notes ?? null,
+    description_text: body.description_text ?? null,
     posted_at: body.posted_at || null,
     applicants_count: Number.isFinite(applicantsCount) ? applicantsCount : null,
     // job_category intentionally omitted — category_status defaults to 'pending' at

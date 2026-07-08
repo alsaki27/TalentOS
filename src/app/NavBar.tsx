@@ -70,12 +70,14 @@ export default function NavBar() {
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
-    { href: "/import-sources", label: "Import Sources", show: true },
-    { href: "/audit", label: "Audit Log", show: true },
-    { href: "/ops", label: "System Health", show: true },
-    { href: "/team", label: "Team", show: canViewTeam },
-    { href: "/settings/webhooks", label: "Webhooks", show: true },
-    { href: "/settings/billing", label: "Billing", show: true },
+    { href: "/import-sources", label: "Import Sources", show: canManageSources },
+    { href: "/audit", label: "Audit Log", show: isAdmin },
+    { href: "/ops", label: "System Health", show: isAdmin },
+    { href: "/team", label: "Team", show: isAdmin },
+    { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
+    { href: "/settings/billing", label: "Billing", show: isAdmin || me?.profile.role === "manager" },
+    { href: "/companies", label: "Companies", show: canViewCompanies },
+    { href: "/interviews", label: "Interviews", show: true },
   ].filter((link) => link.show);
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
@@ -85,8 +87,7 @@ export default function NavBar() {
       <div className="navlinks flex items-center gap-5">
         <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
         {canViewJobs && <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>}
-        {canViewCompanies && <Link href="/companies" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Companies</Link>}
-        <Link href="/interviews" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Interviews</Link>
+        <Link href="/ats-score" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">ATS Score Analysis</Link>
         <Link href="/falood" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Falood AI</Link>
         <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
           Application Queue

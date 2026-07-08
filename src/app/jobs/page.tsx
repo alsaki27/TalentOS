@@ -8,6 +8,14 @@ import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
 import { DateRangePicker } from "@/components/DateRangePicker";
 
+interface MatchScore {
+  job_id: string;
+  score: number;
+  breakdown: any;
+  candidate_id: string;
+  candidate_name: string;
+}
+
 interface Applicant {
   application_id: string;
   candidate_id: string;
@@ -43,7 +51,9 @@ interface Job {
   raw_description?: string | null;
   parsed_description?: unknown | null;
   ai_extracted_at?: string | null;
+  ai_extracted_at?: string | null;
   ai_confidence_score?: number | null;
+  match_scores?: MatchScore[];
 }
 
 const WORK_AUTH_LABELS: Record<string, string> = {
@@ -777,6 +787,7 @@ export default function JobsPage() {
               <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
                 Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
               </th>
+              <th>Match Scores</th>
               <th>Applicants</th>
               <th></th>
             </tr>
@@ -853,6 +864,29 @@ export default function JobsPage() {
                 </td>
                 <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
                 <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
+                <td>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                    {(job.match_scores || []).map((ms) => {
+                      const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
+                      let color = "var(--text-muted)";
+                      let displayScore = `${ms.score}%`;
+                      
+                      if (ms.score === -1) {
+                        color = "var(--danger, #dc2626)";
+                        displayScore = "Error";
+                      } else if (ms.score >= 80) color = "var(--success, #2a6f4f)";
+                      else if (ms.score >= 60) color = "var(--warning, #eab308)";
+                      else color = "var(--danger, #dc2626)";
+
+                      return (
+                        <span key={ms.candidate_id} className="badge" title={`${ms.candidate_name}: ${ms.breakdown?.reasoning || 'No reasoning provided.'}`} style={{ borderColor: color, color }}>
+                          {initials}: {displayScore}
+                        </span>
+                      );
+                    })}
+                    {(!job.match_scores || job.match_scores.length === 0) && <span className="muted">—</span>}
+                  </div>
+                </td>
                 <td>
                   <div style={{ marginBottom: 4 }}>
                     <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
@@ -953,6 +987,9 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [sourceUrl, setSourceUrl] = useState("");
   const [postedAt, setPostedAt] = useState("");
   const [applicantsCount, setApplicantsCount] = useState("");
+  const [descriptionText, setDescriptionText] = useState("");
+  const [rawPaste, setRawPaste] = useState("");
+  const [isParsing, setIsParsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -969,6 +1006,7 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
         location,
         role_tier: roleTier || null,
         source_url: sourceUrl,
+        description_text: descriptionText || null,
         posted_at: postedAt || null,
         applicants_count: applicantsCount || null,
       }),
@@ -985,7 +1023,46 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Add job</h2>
+        <h2 style={{ marginBottom: 16 }}>Add job</h2>
+        
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 16, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>✨ AI Auto Fill</h3>
+          <p style={{ margin: "0 0 12px 0", fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.4 }}>Paste the full job posting below. AI will instantly extract the details for you to review and edit before submitting.</p>
+          <textarea
+            value={rawPaste}
+            onChange={(e) => setRawPaste(e.target.value)}
+            placeholder="Paste raw text from LinkedIn, Indeed, etc..."
+            style={{ width: "100%", height: 80, marginBottom: 12, padding: 12, borderRadius: 6, border: "1px solid var(--border)", fontFamily: "inherit", fontSize: 13, resize: "vertical", background: "var(--bg)", color: "var(--ink)" }}
+          />
+          <button
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 6, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", cursor: isParsing ? "wait" : "pointer", opacity: isParsing ? 0.7 : 1 }}
+            onClick={async () => {
+              if (!rawPaste.trim()) return;
+              setIsParsing(true);
+              setError("");
+              try {
+                const res = await fetch("/api/jobs/autofill-form", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text: rawPaste })
+                });
+                if (!res.ok) throw new Error("Failed to parse");
+                const data = await res.json();
+                if (data.title) setTitle(data.title);
+                if (data.company) setCompany(data.company);
+                if (data.location) setLocation(data.location);
+                if (data.description_text) setDescriptionText(data.description_text);
+              } catch (err: any) {
+                setError(err.message || "Error parsing text");
+              } finally {
+                setIsParsing(false);
+              }
+            }}
+            disabled={isParsing || !rawPaste.trim()}
+          >
+            {isParsing ? "Analyzing..." : "✨ Auto Fill Fields"}
+          </button>
+        </div>
         <div className="field-group">
           <label>Job title</label>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. OSP Designer" />
@@ -997,6 +1074,14 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
         <div className="field-group">
           <label>Location</label>
           <input value={location} onChange={(e) => setLocation(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Job Description</label>
+          <textarea 
+            value={descriptionText} 
+            onChange={(e) => setDescriptionText(e.target.value)} 
+            style={{ width: "100%", height: 120, padding: 12, borderRadius: 6, border: "1px solid var(--border)", fontFamily: "inherit", fontSize: 13, resize: "vertical", background: "var(--surface)", color: "var(--ink)" }} 
+          />
         </div>
         <div className="field-group">
           <label>Role tier</label>
@@ -1432,6 +1517,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [assignmentNote, setAssignmentNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [localScores, setLocalScores] = useState<MatchScore[]>(job.match_scores || []);
+  const [generatingScoreFor, setGeneratingScoreFor] = useState<string | null>(null);
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
     const bRank = b.role === "application_engineer" ? 0 : 1;
@@ -1440,7 +1527,10 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   });
 
   useEffect(() => {
-    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" }).then((r) => r.json()).then((data) => setCandidates(data.items ?? data));
+    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => setCandidates(Array.isArray(data) ? data : (data.items || [])))
+      .catch(() => setCandidates([]));
     fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
     fetch("/api/auth/me")
       .then((r) => r.ok ? r.json() : null)
@@ -1460,6 +1550,33 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
+  }
+
+  async function generateScore(candidateId: string) {
+    setGeneratingScoreFor(candidateId);
+    setError("");
+    try {
+      const res = await fetch("/api/jobs/match-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: job.id, candidate_id: candidateId }),
+      });
+      if (res.ok) {
+        const newScore = await res.json();
+        setLocalScores((prev) => {
+          const filtered = prev.filter(s => s.candidate_id !== candidateId);
+          return [...filtered, { ...newScore, candidate_id: candidateId }];
+        });
+        // We do not call onLogged() here because we don't want to close the modal yet.
+      } else {
+        const errorData = await res.json();
+        setError(errorData.error || "Failed to generate score");
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setGeneratingScoreFor(null);
+    }
   }
 
   async function submit() {
@@ -1503,30 +1620,94 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Assign application - {job.title}</h2>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "95vw", maxWidth: "650px", padding: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid var(--border)", paddingBottom: "16px" }}>
+          <h2 style={{ margin: 0, fontSize: "1.25rem", color: "var(--ink)" }}>Assign application - <span style={{ color: "var(--accent)" }}>{job.title}</span></h2>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer", padding: "4px", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center" }} onMouseOver={(e) => e.currentTarget.style.color = "var(--ink)"} onMouseOut={(e) => e.currentTarget.style.color = "var(--ink-soft)"}>
+            <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M18 6L6 18M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
 
         <div className="field-group">
-          <label>Candidates</label>
-          <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 8 }}>
-            {candidates.map((c) => (
-              <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, color: "var(--ink)", fontWeight: 400 }}>
-                <input
-                  type="checkbox"
-                  style={{ width: "auto" }}
-                  checked={candidateIds.has(c.id)}
-                  onChange={() => toggleCandidate(c.id)}
-                />
-                {c.name}{c.resume_filename ? "" : " (no resume uploaded)"}
-              </label>
-            ))}
+          <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Select Candidates</label>
+          <div style={{ maxHeight: "40vh", overflowY: "auto", padding: "4px 8px 4px 0", display: "flex", flexDirection: "column", gap: "8px" }}>
+            {candidates.map((c) => {
+              const ms = localScores.find(s => s.candidate_id === c.id);
+              let scoreColor = "var(--text-muted)";
+              let displayScore = "Match: ??%";
+              
+              if (ms) {
+                if (ms.score === -1) {
+                  scoreColor = "var(--danger, #dc2626)";
+                  displayScore = "Error";
+                } else if (ms.score >= 80) {
+                  scoreColor = "var(--success, #2a6f4f)";
+                  displayScore = `Match: ${ms.score}%`;
+                } else if (ms.score >= 60) {
+                  scoreColor = "var(--warning, #eab308)";
+                  displayScore = `Match: ${ms.score}%`;
+                } else {
+                  scoreColor = "var(--danger, #dc2626)";
+                  displayScore = `Match: ${ms.score}%`;
+                }
+              }
+
+              const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
+              const noResume = !c.resume_filename;
+
+              return (
+                <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: "8px", backgroundColor: "var(--surface)", border: "1px solid var(--border)", transition: "background 0.15s ease" }} onMouseOver={(e) => {if(!alreadyApplied && !noResume) e.currentTarget.style.backgroundColor = "var(--bg)"}} onMouseOut={(e) => e.currentTarget.style.backgroundColor = "var(--surface)"}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--ink)", fontWeight: 500, fontSize: "0.95rem", flex: 1, cursor: (alreadyApplied || noResume) ? "not-allowed" : "pointer", userSelect: "none" }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: "16px", height: "16px", accentColor: "var(--accent)", cursor: (alreadyApplied || noResume) ? "not-allowed" : "pointer" }}
+                      checked={alreadyApplied || candidateIds.has(c.id)}
+                      disabled={alreadyApplied || noResume}
+                      onChange={() => {
+                        toggleCandidate(c.id);
+                        if (!candidateIds.has(c.id) && !ms && generatingScoreFor !== c.id) {
+                          generateScore(c.id);
+                        }
+                      }}
+                    />
+                    <span style={{ opacity: (alreadyApplied || noResume) ? 0.5 : 1 }}>
+                      {c.name}
+                      {alreadyApplied && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "var(--ink-soft)", marginLeft: "6px" }}>(Already applied)</span>}
+                      {noResume && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "var(--danger)", marginLeft: "6px" }}>(no resume)</span>}
+                    </span>
+                  </label>
+                  {ms ? (
+                    <span className="badge" style={{ borderColor: scoreColor, color: scoreColor, padding: "4px 8px", fontWeight: 600 }} title={ms.breakdown?.reasoning || ""}>
+                      {displayScore}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={generatingScoreFor === c.id}
+                      onClick={() => generateScore(c.id)}
+                      style={{ padding: "4px 10px", fontSize: "12px", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)", cursor: "pointer", display: "flex", alignItems: "center", gap: "4px", fontWeight: 500 }}
+                    >
+                      {generatingScoreFor === c.id ? "🤖 Generating..." : "🤖 Gen Score"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
+          {candidates.some(c => !c.resume_filename) && (
+            <div style={{ color: "var(--danger, #dc2626)", fontSize: "13px", marginTop: "8px", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }}>
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+              Candidates without a base resume cannot be assigned.
+            </div>
+          )}
         </div>
 
         {candidateIds.size === 1 && resumeVariants.length > 0 && (
-          <div className="field-group">
+          <div className="field-group" style={{ marginTop: "16px" }}>
             <label>Resume version</label>
-            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)}>
+            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
               <option value="">Primary resume</option>
               {resumeVariants.map((r) => (
                 <option key={r.id} value={r.id}>{r.label}</option>
@@ -1535,48 +1716,54 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           </div>
         )}
 
-        <div className="field-group">
-          <label>Status</label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="assigned">Assigned to apply</option>
-            <option value="stacked">Stacked / queued</option>
-            <option value="in_progress">In progress</option>
-            <option value="applied">Applied</option>
-            <option value="replied">Replied</option>
-            <option value="interview">Interview</option>
-            <option value="rejected">Rejected</option>
-            <option value="offer">Offer</option>
-          </select>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "20px" }}>
+          <div className="field-group">
+            <label>Status</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+              <option value="assigned">Assigned to apply</option>
+              <option value="stacked">Stacked / queued</option>
+              <option value="in_progress">In progress</option>
+              <option value="applied">Applied</option>
+              <option value="replied">Replied</option>
+              <option value="interview">Interview</option>
+              <option value="rejected">Rejected</option>
+              <option value="offer">Offer</option>
+            </select>
+          </div>
+          <div className="field-group">
+            <label>Assigned by</label>
+            <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)", backgroundColor: "var(--bg)" }} />
+          </div>
+          <div className="field-group">
+            <label>Application owner</label>
+            <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+              <option value="">-- Select owner --</option>
+              {assignmentOwners.map((user) => (
+                <option key={user.user_id} value={user.user_id}>
+                  {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group">
+            <label>Due date</label>
+            <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }} />
+          </div>
         </div>
-        <div className="field-group">
-          <label>Assigned by</label>
-          <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" />
-        </div>
-        <div className="field-group">
-          <label>Application owner</label>
-          <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
-            <option value="">-- Select owner --</option>
-            {assignmentOwners.map((user) => (
-              <option key={user.user_id} value={user.user_id}>
-                {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field-group">
-          <label>Due date</label>
-          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
-        </div>
-        <div className="field-group">
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
           <label>Assignment note</label>
-          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." />
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)", resize: "vertical", fontFamily: "inherit" }} />
         </div>
 
-        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        {error && <p style={{ color: "var(--danger)", fontSize: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+          <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+          {error}
+        </p>}
 
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
+        <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+          <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
             {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
           </button>
         </div>

@@ -2,7 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { TailorResumeModal } from "@/components/TailorResumeModal";
 
@@ -100,6 +100,7 @@ interface ShortlistCandidate {
 
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
   const id = params?.id;
   const [job, setJob] = useState<JobDetail | null>(null);
   const [comments, setComments] = useState<JobComment[]>([]);
@@ -108,6 +109,39 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [showEdit, setShowEdit] = useState(false);
   const [tailorContext, setTailorContext] = useState<{ candidateId: string; applicationId?: string } | null>(null);
+  const [addingTag, setAddingTag] = useState(false);
+  const [newTagValue, setNewTagValue] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+
+  async function removeTag(tagToRemove: string) {
+    if (!job) return;
+    const updatedTags = (job.category_tags || []).filter((t) => t !== tagToRemove);
+    setJob({ ...job, category_tags: updatedTags });
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleAnalyze() {
+    if (!job) return;
+    setAnalyzing(true);
+    try {
+      const res = await fetch(`/api/jobs/${job.id}/analyze`, { method: "POST" });
+      if (!res.ok) throw new Error("Analysis failed");
+      const updatedJob = await res.json();
+      setJob(prev => prev ? { ...prev, ...updatedJob } : null);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
 
   async function load() {
     if (!id) return;
@@ -139,96 +173,176 @@ export default function JobDetailPage() {
   if (loading) return <p className="muted">Loading…</p>;
   if (!job) return <p className="muted">Job not found.</p>;
 
+  const fullText = [job.description_text, job.notes].filter(Boolean).join('\n\n');
+
   return (
     <>
-      <div className="page-header">
-        <h1>{job.title}</h1>
-        <button onClick={() => setShowEdit(true)}>Edit job</button>
-      </div>
-
-      <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          <Field label="Company" value={job.company_id && job.company ? <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link> : job.company} />
-          <Field label="Location" value={job.location} />
-          <Field label="Source" value={<span className="badge">{job.source}</span>} />
-          <Field label="Category" value={
-            job.category_status === "pending" ? <span className="muted">Categorizing…</span> :
-            job.category_status === "needs_review" ? <span className="badge" title={job.ai_suggested_category ? `AI suggested: ${job.ai_suggested_category}` : undefined}>Needs review{job.ai_suggested_category ? ` — suggested: ${job.ai_suggested_category}` : ""}</span> :
-            job.category_status === "failed" ? <span className="badge" title={job.category_error ?? undefined}>Failed{job.category_error ? ` — ${job.category_error}` : ""}</span> :
-            job.job_category ? <span className="badge">{job.job_category}</span> : null
-          } />
-          <Field label="Category score" value={job.category_relevance_score !== null && job.category_relevance_score !== undefined ? `${job.category_relevance_score}% relevant` : null} />
-          <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
-          <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
-          <Field label="Salary range" value={
-            job.salary_min || job.salary_max
-              ? `${job.salary_currency ?? ""} ${job.salary_min ?? "?"}–${job.salary_max ?? "?"}${job.salary_period ? `/${job.salary_period}` : ""}`.trim()
-              : job.salary_range
-          } />
-          <Field label="Work authorization" value={
-            job.work_authorization && job.work_authorization !== "unspecified"
-              ? <span className="badge" title={job.work_authorization_evidence ?? undefined}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
-              : null
-          } />
-          <Field label="Seniority level" value={job.seniority_level} />
-          <Field label="Employment type" value={job.employment_type} />
-          <Field label="Job function" value={job.job_function} />
-          <Field label="Industries" value={job.industries} />
-          <Field label="Applicants (per source)" value={job.applicants_count?.toString() ?? null} />
-          <Field label="Company size" value={job.company_employees_count ? `${job.company_employees_count} employees` : null} />
-          <Field label="Company website" value={job.company_website ? <a href={job.company_website} target="_blank" rel="noreferrer">{job.company_website}</a> : null} />
-          <Field label="Company LinkedIn" value={job.company_linkedin_url ? <a href={job.company_linkedin_url} target="_blank" rel="noreferrer">View company</a> : null} />
-          <Field label="Posted" value={job.posted_at ? new Date(job.posted_at).toLocaleDateString() : null} />
-          <Field label="Last synced" value={job.last_seen_at ? new Date(job.last_seen_at).toLocaleString() : null} />
-          <Field label="Status" value={job.is_active ? "Active" : "Inactive"} />
-          <Field label="Posting URL" value={job.source_url ? <a href={job.source_url} target="_blank" rel="noreferrer">View original</a> : null} />
-          <Field label="Apply URL" value={job.apply_url ? <a href={job.apply_url} target="_blank" rel="noreferrer">Apply</a> : null} />
-          <Field label="External job ID" value={job.external_job_id} />
-          <Field label="Tracking/ref" value={[job.tracking_id, job.ref_id].filter(Boolean).join(" / ") || null} />
-        </div>
-
-        {Boolean(job.company_logo_url || job.company_slogan || job.company_description || job.company_address) && (
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Company details</h2>
-            {job.company_logo_url && (
-              <img src={job.company_logo_url} alt={`${job.company ?? "Company"} logo`} style={{ width: 56, height: 56, objectFit: "contain", marginBottom: 12 }} />
-            )}
-            {job.company_slogan && <p><strong>{job.company_slogan}</strong></p>}
-            {job.company_description && <LongText value={job.company_description} />}
-            {job.company_address ? <Field label="Company address" value={<JsonValue value={job.company_address} />} /> : null}
-          </div>
-        )}
-
-        {(job.job_poster_name || job.job_poster_title || job.job_poster_profile_url) && (
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Job poster</h2>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              <Field label="Name" value={job.job_poster_profile_url ? <a href={job.job_poster_profile_url} target="_blank" rel="noreferrer">{job.job_poster_name ?? "View profile"}</a> : job.job_poster_name} />
-              <Field label="Title" value={job.job_poster_title} />
+      <div className="page-header" style={{ flexDirection: "column", alignItems: "flex-start", gap: 16 }}>
+        <button onClick={() => { if (window.history.length > 2) { router.back(); } else { router.push('/jobs'); } }} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer", padding: 0, fontSize: "0.9rem", fontWeight: 500 }} onMouseOver={(e) => e.currentTarget.style.color = "var(--ink)"} onMouseOut={(e) => e.currentTarget.style.color = "var(--ink-soft)"}>
+          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7"></path></svg>
+          Back to previous
+        </button>
+        <div style={{ display: "flex", width: "100%", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
+          <div>
+            <h1 style={{ margin: "0 0 8px 0", fontSize: "1.8rem" }}>{job.title}</h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, color: "var(--ink-soft)", fontSize: "0.95rem" }}>
+               {job.company && <span style={{ fontWeight: 600, color: "var(--accent)" }}>{job.company}</span>}
+               {job.location && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg> {job.location}</span>}
+               {job.is_active ? <span className="badge badge-success" style={{ background: "var(--success)", color: "white", padding: "2px 8px" }}>Active</span> : <span className="badge badge-danger">Inactive</span>}
             </div>
           </div>
-        )}
-
-        {job.description_text && (
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Job description and qualifications</h2>
-            <LongText value={job.description_text} />
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={handleAnalyze} disabled={analyzing} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderRadius: "8px", fontWeight: 600, boxShadow: "0 2px 4px rgba(0,0,0,0.1)", background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", cursor: analyzing ? "wait" : "pointer", opacity: analyzing ? 0.7 : 1 }}>
+              <span style={{ fontSize: "1.1rem" }}>✨</span>
+              {analyzing ? "Analyzing..." : "Analyze with AI"}
+            </button>
+            <button className="btn-primary" onClick={() => setShowEdit(true)} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 16px", borderRadius: "8px", fontWeight: 600, boxShadow: "0 2px 4px rgba(0,0,0,0.1)" }}>
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+              Edit Job
+            </button>
           </div>
-        )}
+        </div>
+      </div>
 
-        {Boolean(job.benefits) ? (
-          <div style={{ marginTop: 20 }}>
-            <h2 style={{ fontSize: 16, marginBottom: 12 }}>Benefits</h2>
-            <JsonValue value={job.benefits} />
-          </div>
-        ) : null}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+        <MetricCard icon="💼" label="Employment Type" value={job.employment_type} />
+        <MetricCard icon="📈" label="Experience Required" value={job.seniority_level || extractExperience(fullText)} />
+        <MetricCard icon="💰" label="Salary" value={job.salary_min || job.salary_max ? `${job.salary_currency ?? ""} ${job.salary_min ?? "?"}–${job.salary_max ?? "?"}${job.salary_period ? `/${job.salary_period}` : ""}`.trim() : job.salary_range} />
+        <MetricCard icon="🌐" label="Work Auth" value={(job.work_authorization && job.work_authorization !== "unspecified" ? WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization : null) || extractWorkAuth(fullText)} />
+      </div>
 
-        {job.notes && (
-          <div style={{ marginTop: 16 }}>
-            <label>Notes</label>
-            <p>{job.notes}</p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 24, marginBottom: 32 }}>
+        
+        {/* Left Column */}
+        <div style={{ flex: "1 1 60%", display: "flex", flexDirection: "column", gap: 24, minWidth: 300 }}>
+          {job.parsed_description && (
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "24px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+              <h2 style={{ fontSize: "1.25rem", margin: "0 0 16px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: "1.4rem" }}>✨</span> AI Job Analysis
+              </h2>
+              {/* @ts-ignore */}
+              {job.parsed_description.job_summary && <p style={{ fontSize: "1.05rem", lineHeight: 1.6, color: "var(--ink)", marginBottom: 20, fontWeight: 500 }}>{job.parsed_description.job_summary}</p>}
+              
+              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                {/* @ts-ignore */}
+                {job.parsed_description.required_skills?.length > 0 && (
+                  <div>
+                    <h3 style={{ fontSize: "1.1rem", margin: "0 0 8px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: "1.2rem" }}>🎯</span> Required Skills</h3>
+                    <ul style={{ margin: 0, paddingLeft: 20, color: "var(--ink-soft)", lineHeight: 1.6 }}>
+                      {/* @ts-ignore */}
+                      {job.parsed_description.required_skills.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {/* @ts-ignore */}
+                {job.parsed_description.responsibilities?.length > 0 && (
+                  <div>
+                    <h3 style={{ fontSize: "1.1rem", margin: "0 0 8px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: "1.2rem" }}>📋</span> Responsibilities</h3>
+                    <ul style={{ margin: 0, paddingLeft: 20, color: "var(--ink-soft)", lineHeight: 1.6 }}>
+                      {/* @ts-ignore */}
+                      {job.parsed_description.responsibilities.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {/* @ts-ignore */}
+                {job.parsed_description.qualifications?.length > 0 && (
+                  <div>
+                    <h3 style={{ fontSize: "1.1rem", margin: "0 0 8px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ fontSize: "1.2rem" }}>🎓</span> Qualifications</h3>
+                    <ul style={{ margin: 0, paddingLeft: 20, color: "var(--ink-soft)", lineHeight: 1.6 }}>
+                      {/* @ts-ignore */}
+                      {job.parsed_description.qualifications.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "24px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+            <h2 style={{ fontSize: "1.25rem", margin: "0 0 20px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: "1.4rem" }}>📄</span> Job Summary & Details
+            </h2>
+            <SmartDescription text={fullText || "No description provided."} />
           </div>
-        )}
+
+          {job.benefits && (
+             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "24px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+               <h2 style={{ fontSize: "1.25rem", margin: "0 0 16px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
+                 <span style={{ fontSize: "1.4rem" }}>🎁</span> Benefits & Perks
+               </h2>
+               <JsonValue value={job.benefits} />
+             </div>
+          )}
+        </div>
+
+        {/* Right Column */}
+        <div style={{ flex: "1 1 30%", display: "flex", flexDirection: "column", gap: 24, minWidth: 300 }}>
+          {/* Metadata Card */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+            <h3 style={{ fontSize: "1.1rem", margin: "0 0 16px 0", color: "var(--ink)" }}>Job Details</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <Field label="Source" value={<span className="badge" style={{ padding: "4px 8px" }}>{job.source}</span>} />
+              <Field label="Category" value={
+                job.category_status === "pending" ? <span className="muted">Categorizing…</span> :
+                job.category_status === "needs_review" ? <span className="badge" title={job.ai_suggested_category ? `AI suggested: ${job.ai_suggested_category}` : undefined}>Needs review</span> :
+                job.category_status === "failed" ? <span className="badge" title={job.category_error ?? undefined}>Failed</span> :
+                job.job_category ? <span className="badge">{job.job_category}</span> : null
+              } />
+              <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
+              <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
+              <Field label="Job function" value={job.job_function} />
+              <Field label="Industries" value={job.industries} />
+              <Field label="Applicants (per source)" value={job.applicants_count?.toString() ?? null} />
+              <Field label="External job ID" value={job.external_job_id} />
+              <Field label="Tracking/ref" value={[job.tracking_id, job.ref_id].filter(Boolean).join(" / ") || null} />
+              <Field label="Posted" value={job.posted_at ? new Date(job.posted_at).toLocaleDateString() : null} />
+              <Field label="Last synced" value={job.last_seen_at ? new Date(job.last_seen_at).toLocaleString() : null} />
+            </div>
+            
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 20, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
+              {job.source_url && (
+                <a href={job.source_url} target="_blank" rel="noreferrer" style={{ display: "block", textAlign: "center", padding: "10px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", textDecoration: "none", color: "var(--ink)", fontWeight: 500, transition: "background 0.2s" }} onMouseOver={(e) => e.currentTarget.style.background = "var(--surface)"} onMouseOut={(e) => e.currentTarget.style.background = "var(--bg)"}>
+                  View Original Posting ↗
+                </a>
+              )}
+              {job.apply_url && (
+                <a href={job.apply_url} target="_blank" rel="noreferrer" style={{ display: "block", textAlign: "center", padding: "10px", background: "var(--accent)", color: "white", borderRadius: "6px", textDecoration: "none", fontWeight: 600, transition: "opacity 0.2s" }} onMouseOver={(e) => e.currentTarget.style.opacity = "0.85"} onMouseOut={(e) => e.currentTarget.style.opacity = "1"}>
+                  Apply Now ↗
+                </a>
+              )}
+            </div>
+          </div>
+
+          {/* Company Details Card */}
+          {Boolean(job.company_logo_url || job.company_slogan || job.company_description || job.company_address || job.company_website || job.company_linkedin_url) && (
+             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+                <h3 style={{ fontSize: "1.1rem", margin: "0 0 16px 0", color: "var(--ink)" }}>About the Company</h3>
+                {job.company_logo_url && (
+                  <img src={job.company_logo_url} alt={`${job.company ?? "Company"} logo`} style={{ width: 64, height: 64, objectFit: "contain", marginBottom: 16, borderRadius: "8px", background: "white", padding: 4 }} />
+                )}
+                {job.company_slogan && <p style={{ fontSize: "1.05rem", fontWeight: 600, margin: "0 0 12px 0", color: "var(--accent)" }}>{job.company_slogan}</p>}
+                {job.company_description && <div style={{ fontSize: "0.95rem", lineHeight: 1.5, color: "var(--ink-soft)", marginBottom: 16 }}><LongText value={job.company_description} /></div>}
+                
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                   {job.company_employees_count && <Field label="Company size" value={`${job.company_employees_count} employees`} />}
+                   {job.company_address ? <Field label="Address" value={formatAddress(job.company_address)} /> : null}
+                   {job.company_website && <Field label="Website" value={<a href={job.company_website} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>{job.company_website}</a>} />}
+                   {job.company_linkedin_url && <Field label="LinkedIn" value={<a href={job.company_linkedin_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>View Profile</a>} />}
+                </div>
+             </div>
+          )}
+
+          {/* Job Poster Card */}
+          {(job.job_poster_name || job.job_poster_title || job.job_poster_profile_url) && (
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "20px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
+              <h3 style={{ fontSize: "1.1rem", margin: "0 0 16px 0", color: "var(--ink)" }}>Job Poster</h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <Field label="Name" value={job.job_poster_profile_url ? <a href={job.job_poster_profile_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontWeight: 500 }}>{job.job_poster_name ?? "View profile"}</a> : <span style={{ fontWeight: 500 }}>{job.job_poster_name}</span>} />
+                <Field label="Title" value={job.job_poster_title} />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <JobComments comments={comments} jobId={job.id} onCommented={loadComments} />
@@ -404,15 +518,134 @@ function JobComments({ comments, jobId, onCommented }: { comments: JobComment[];
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div>
-      <label>{label}</label>
-      <p>{value ?? "—"}</p>
+    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <label style={{ fontSize: "0.85rem", color: "var(--ink-soft)", fontWeight: 500, margin: 0 }}>{label}</label>
+      <div style={{ fontSize: "0.95rem", color: "var(--ink)", wordBreak: "break-word", lineHeight: 1.5 }}>{value ?? "—"}</div>
     </div>
   );
 }
 
+function extractExperience(text: string): string | null {
+  if (!text) return null;
+
+  const patterns = [
+    // 1. "Experience: 3+ years" or "Required Experience: 5 years"
+    /(?:required\s+)?experience\s*:\s*([^\n\.;]{2,60})/i,
+    // 2. "minimum of 3 years of experience", "at least 5 years experience"
+    /((?:minimum(?:\s+of)?|at\s+least|requires?|needs?)\s+(?:\d+(?:\.\d+)?\+?\s*(?:to|-)\s*)?\d+(?:\.\d+)?\+?\s*years?(?:\s+of)?(?:\s+[a-z-]+){0,3}\s+experience)/i,
+    // 3. "3-5 years of relevant experience"
+    /((?:\d+(?:\.\d+)?\+?\s*(?:to|-)\s*)?\d+(?:\.\d+)?\+?\s*years?(?:\s+of)?(?:\s+[a-z-]+){0,3}\s+experience)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      let ext = match[1].trim();
+      if (ext.length > 55) ext = ext.substring(0, 55) + '...';
+      return ext.charAt(0).toUpperCase() + ext.slice(1);
+    }
+  }
+  return null;
+}
+
+function extractWorkAuth(text: string): string | null {
+  if (!text) return null;
+  if (text.match(/us citizen/i)) return "US Citizenship Required";
+  if (text.match(/security clearance/i) || text.match(/clearance required/i)) return "Clearance Required";
+  if (text.match(/green card/i)) return "Green Card / PR";
+  if (text.match(/authorized to work in the us/i)) return "US Work Auth Required";
+  return null;
+}
+
+function formatAddress(addr: any): string | null {
+  if (!addr) return null;
+  if (typeof addr === 'string') return addr;
+  const parts = [
+    addr.streetAddress,
+    addr.addressLocality,
+    addr.addressRegion,
+    addr.postalCode,
+    addr.addressCountry
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(', ') : JSON.stringify(addr);
+}
+
 function LongText({ value }: { value: string }) {
   return <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{value}</p>;
+}
+
+function SmartDescription({ text }: { text: string }) {
+  if (!text) return <p className="muted">No description provided.</p>;
+  const paragraphs = text.split(/\n\s*\n/).filter(Boolean);
+  
+  return (
+    <div style={{ lineHeight: 1.7, color: "var(--ink)", fontSize: "0.95rem" }}>
+      {paragraphs.map((p, i) => {
+        const lines = p.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) return null;
+        
+        const firstLine = lines[0].toLowerCase();
+        let isHeader = false;
+        let icon = null;
+        
+        if (lines.length === 1 && lines[0].length < 70 && !lines[0].endsWith('.') && !lines[0].endsWith(',')) {
+          isHeader = true;
+          if (firstLine.includes('responsibilit') || firstLine.includes('what you will do') || firstLine.includes('impact') || firstLine.includes('duty') || firstLine.includes('duties')) icon = '📋';
+          else if (firstLine.includes('require') || firstLine.includes('must have') || firstLine.includes('qualif') || firstLine.includes('succeed')) icon = '⭐';
+          else if (firstLine.includes('prefer') || firstLine.includes('nice to have')) icon = '✨';
+          else if (firstLine.includes('experience') || firstLine.includes('background')) icon = '💼';
+          else if (firstLine.includes('educat') || firstLine.includes('degree')) icon = '🎓';
+          else if (firstLine.includes('benefit') || firstLine.includes('reward') || firstLine.includes('perk')) icon = '🎁';
+          else if (firstLine.includes('about')) icon = '🏢';
+        }
+
+        if (isHeader) {
+           return (
+             <h3 key={i} style={{ marginTop: 24, marginBottom: 12, color: "var(--ink)", fontSize: "1.1rem", display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid var(--border)", paddingBottom: 6 }}>
+               {icon && <span>{icon}</span>}
+               {lines[0]}
+             </h3>
+           );
+        }
+
+        return (
+          <div key={i} style={{ marginBottom: 16 }}>
+            {lines.map((line, j) => {
+               if (line.includes(':') && line.length < 150 && !line.includes('http')) {
+                 const idx = line.indexOf(':');
+                 const key = line.slice(0, idx);
+                 const rest = line.slice(idx + 1);
+                 return (
+                   <div key={j} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                     <strong style={{ minWidth: 140, color: "var(--ink)" }}>{key}:</strong>
+                     <span style={{ color: "var(--ink-soft)" }}>{rest}</span>
+                   </div>
+                 );
+               }
+               if (line.startsWith('-') || line.startsWith('•') || line.startsWith('*')) {
+                  return <div key={j} style={{ display: "flex", gap: 8, marginBottom: 4, paddingLeft: 12 }}><span style={{ color: "var(--accent)" }}>•</span><span>{line.replace(/^[-•*]\s*/, '')}</span></div>;
+               }
+               return <p key={j} style={{ margin: "0 0 8px 0" }}>{line}</p>;
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MetricCard({ icon, label, value }: { icon: string; label: string; value: string | null | undefined }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", display: "flex", alignItems: "center", gap: 16, boxShadow: "0 2px 8px rgba(0,0,0,0.03)", transition: "transform 0.15s ease", cursor: "default" }} onMouseOver={(e) => e.currentTarget.style.transform = "translateY(-2px)"} onMouseOut={(e) => e.currentTarget.style.transform = "none"}>
+      <div style={{ width: 44, height: 44, borderRadius: "10px", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "1.4rem" }}>
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: "0.85rem", color: "var(--ink-soft)", marginBottom: 4, fontWeight: 500 }}>{label}</div>
+        <div style={{ fontSize: "1rem", color: "var(--ink)", fontWeight: 600 }}>{value || "Not specified"}</div>
+      </div>
+    </div>
+  );
 }
 
 function JsonValue({ value }: { value: unknown }) {
@@ -587,6 +820,15 @@ function EditJobModal({ job, onClose, onSaved }: { job: JobDetail; onClose: () =
         <div className="field-group">
           <label>Notes</label>
           <textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={3} />
+          <div className="metric-card" style={{ background: "var(--surface)", marginTop: 12, padding: 12, borderRadius: 8, border: "1px solid var(--border)" }}>
+            <div className="metric-content">
+              <span className="metric-label" style={{ display: "block", fontSize: "0.8rem", color: "var(--ink-soft)" }}>Experience Required</span>
+              <span className="metric-value">
+                {/* @ts-ignore */}
+                {job.parsed_description?.experience_required || "Not specified"}
+              </span>
+            </div>
+          </div>
         </div>
         <div className="field-group">
           <label>

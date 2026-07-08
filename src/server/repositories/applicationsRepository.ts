@@ -315,8 +315,17 @@ export async function updateApplication(
  */
 export async function deleteApplication(id: string): Promise<void> {
   if (isNeon()) {
+    const app = await queryOne("SELECT job_id, candidate_id FROM applications WHERE id = $1", [id]);
+    if (app) {
+      await execute("DELETE FROM job_match_scores WHERE job_id = $1 AND candidate_id = $2", [app.job_id, app.candidate_id]);
+    }
     await execute("DELETE FROM applications WHERE id = $1", [id]);
     return;
+  }
+  
+  const { data: app } = await supabase.from("applications").select("job_id, candidate_id").eq("id", id).single();
+  if (app) {
+    await supabase.from("job_match_scores").delete().eq("job_id", app.job_id).eq("candidate_id", app.candidate_id);
   }
   const { error } = await supabase.from("applications").delete().eq("id", id);
   if (error) throw new Error(error.message);
