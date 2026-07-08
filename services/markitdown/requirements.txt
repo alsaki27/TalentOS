@@ -1,4 +1,4 @@
-markitdown
+markitdown[pdf]
 fastapi
 uvicorn
 python-multipart
