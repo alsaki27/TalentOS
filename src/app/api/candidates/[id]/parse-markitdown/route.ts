@@ -7,7 +7,7 @@ import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { parseResumeFromMarkdown, extractText, finalizeParsedResume } from "@/lib/resumeParsing";
-import { extractLinkedInUrlFromText } from "@/lib/resumeParsing";
+import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { getProviderForCategory } from "@/lib/ai";
 import { textOf } from "@/lib/ai/provider";
@@ -334,6 +334,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const mdResult = await convertPdfToMarkdown(buffer, resume.filename);
     if (mdResult.success && mdResult.markdown) {
       const parsed = await parseResumeFromMarkdown(mdResult.markdown);
+      if (!parsed.linkedin_url) {
+        parsed.linkedin_url = extractLinkedInUrlFromBinary(buffer) ?? undefined;
+      }
       if (isNeon()) {
         await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
       } else {
