@@ -1,0 +1,6 @@
+name = "markitdown-render-keepalive"
+main = "src/index.ts"
+compatibility_date = "2026-07-08"
+
+[triggers]
+crons = ["*/10 * * * *"]

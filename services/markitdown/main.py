@@ -7,6 +7,11 @@ from markitdown import MarkItDown
 app = FastAPI(title="TalentOS Markitdown Service")
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.post("/parse")
 async def parse_pdf(file: UploadFile = File(...)):
     # Validate file extension
