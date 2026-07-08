@@ -16,6 +16,7 @@ import { buildSkeletonDocument } from "@/lib/ai/faloodBaseResume";
 import { ResumeDocument } from "@/lib/falood/types";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
+import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
 import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
 
@@ -121,21 +122,62 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     contentType = fileRes.headers.get("content-type");
   }
 
-  const rawText = (await extractText(buffer, guessMimeType(resume.filename, contentType))).trim();
+  const mimeType = guessMimeType(resume.filename, contentType);
+  let rawText = (await extractText(buffer, mimeType)).trim();
+  let markdown: string | undefined;
+  const extractedTextLength = rawText.length;
+
+  if (
+    mimeType.toLowerCase().includes("pdf") &&
+    (process.env.MARKITDOWN_SERVICE_URL || process.env.NODE_ENV === "development")
+  ) {
+    const mdResult = await convertPdfToMarkdown(buffer, resume.filename);
+    const markdownText = mdResult.success ? mdResult.markdown?.trim() : undefined;
+
+    // Prefer the markdown conversion for PDFs when it produced substantial text.
+    if (markdownText && markdownText.length > 100) {
+      markdown = markdownText;
+      rawText = markdownText;
+    }
+
+    reportBaseResumeSeedingDebug("A", "markitdown attempted for base seeding pdf", {
+      resumeId: resume.id,
+      filename: resume.filename,
+      mimeType,
+      rawTextLengthBeforeMarkdownFallback: extractedTextLength,
+      markdownLength: markdownText?.length ?? 0,
+      usedMarkdownFallback: Boolean(markdown),
+      markitdownError: mdResult.success ? null : mdResult.error ?? "Unknown markitdown error",
+    });
+    logBaseResumeCreateConsole("markitdown attempted for base seeding pdf", {
+      resumeId: resume.id,
+      filename: resume.filename,
+      mimeType,
+      rawTextLengthBeforeMarkdownFallback: extractedTextLength,
+      markdownLength: markdownText?.length ?? 0,
+      usedMarkdownFallback: Boolean(markdown),
+      markitdownError: mdResult.success ? null : mdResult.error ?? "Unknown markitdown error",
+    });
+  }
+
   // #region debug-point A:base-seeding-raw-text
   reportBaseResumeSeedingDebug("A", "uploaded resume text extracted for base seeding", {
     resumeId: resume.id,
     filename: resume.filename,
-    contentType,
+    contentType: mimeType,
     rawTextLength: rawText.length,
+    markdownLength: markdown?.length ?? 0,
+    usedMarkdownFallback: Boolean(markdown),
     rawText,
   });
   // #endregion
   logBaseResumeCreateConsole("raw text extracted from uploaded resume", {
     resumeId: resume.id,
     filename: resume.filename,
-    contentType,
+    contentType: mimeType,
     rawTextLength: rawText.length,
+    markdownLength: markdown?.length ?? 0,
+    usedMarkdownFallback: Boolean(markdown),
     rawText,
   });
   if (rawText.length < 50) {
@@ -147,9 +189,11 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     resumeId: resume.id,
     provider: openAiProvider ? "openaiProvider" : "categoryProvider",
   });
-  const parsed = openAiProvider
-    ? await parseResumeTextWithProvider(rawText, openAiProvider)
-    : await parseResumeFields(rawText);
+  const parsed = markdown
+    ? await parseResumeFields(rawText, markdown)
+    : openAiProvider
+      ? await parseResumeTextWithProvider(rawText, openAiProvider)
+      : await parseResumeFields(rawText);
 
   // #region debug-point C:base-seeding-parsed-result
   reportBaseResumeSeedingDebug("C", "uploaded resume parsed for base seeding", {
