@@ -66,6 +66,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // If content changed, invalidate match scores for this candidate
+  if (body.content && data?.candidate_id) {
+    if (isNeon()) {
+      await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]);
+    } else {
+      await supabase.from("job_match_scores").delete().eq("candidate_id", data.candidate_id);
+    }
+  }
+
   return NextResponse.json(data);
 }
 

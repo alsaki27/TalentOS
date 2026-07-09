@@ -50,3 +50,7 @@ supabase/.temp/
 
 # large local-only reference data (not needed to run the app)
 dataset_linkedin-jobs-scraper_*.json
+
+# IDE and temporary CLI cache (never commit)
+.trae/
+.wrangler-dryrun/
