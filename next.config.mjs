@@ -32,6 +32,17 @@ const nextConfig = {
       ],
     },
   },
+  webpack: (config, { isServer }) => {
+    if (isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'jspdf': false,
+        'docx': false,
+        '@react-pdf/renderer': false,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;
