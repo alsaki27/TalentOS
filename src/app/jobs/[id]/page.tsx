@@ -113,6 +113,32 @@ export default function JobDetailPage() {
   const [newTagValue, setNewTagValue] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
 
+  async function addTag() {
+    if (!job || !newTagValue.trim()) {
+      setAddingTag(false);
+      return;
+    }
+    const tag = newTagValue.trim();
+    const currentTags = job.category_tags || [];
+    if (currentTags.includes(tag)) {
+      setAddingTag(false);
+      setNewTagValue("");
+      return;
+    }
+    const updatedTags = [...currentTags, tag];
+    setJob({ ...job, category_tags: updatedTags });
+    setAddingTag(false);
+    setNewTagValue("");
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
   async function removeTag(tagToRemove: string) {
     if (!job) return;
     const updatedTags = (job.category_tags || []).filter((t) => t !== tagToRemove);

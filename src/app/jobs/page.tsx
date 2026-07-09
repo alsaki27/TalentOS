@@ -51,7 +51,6 @@ interface Job {
   raw_description?: string | null;
   parsed_description?: unknown | null;
   ai_extracted_at?: string | null;
-  ai_extracted_at?: string | null;
   ai_confidence_score?: number | null;
   match_scores?: MatchScore[];
 }

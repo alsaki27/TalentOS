@@ -1,4 +1,4 @@
-import { query, queryOne, execute } from "c:/Shohan/Skarion/TalentOS/src/server/db/neon";
+import { query, queryOne, execute } from "../src/server/db/neon";
 import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
