@@ -104,8 +104,8 @@ export const ColorCustomizer: React.FC = () => {
   ];
 
   const fontSizeOptions = [
-    { value: 'small', label: 'Small' },
-    { value: 'medium', label: 'Medium (Default)' },
+    { value: 'small', label: 'Small (Default)' },
+    { value: 'medium', label: 'Medium' },
     { value: 'large', label: 'Large' }
   ];
 
@@ -143,7 +143,7 @@ export const ColorCustomizer: React.FC = () => {
             <div className="space-y-2">
               <Label>Font Size</Label>
               <Select 
-                value={fontSize || 'medium'} 
+                value={fontSize || 'small'} 
                 onValueChange={(value) => updateFontSize(value as 'small' | 'medium' | 'large')}
               >
                 <SelectTrigger>

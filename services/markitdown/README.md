@@ -4,7 +4,7 @@ A lightweight FastAPI microservice that converts PDF files to Markdown using [Mi
 
 ## What This Service Does
 
-Provides a single HTTP endpoint `POST /parse` that accepts a PDF file via multipart form upload and returns the extracted content as Markdown text.
+Provides a PDF parsing endpoint plus a lightweight health endpoint for uptime checks.
 
 ## Installation
 
@@ -23,9 +23,10 @@ The server will start on `http://localhost:8000`.
 
 ## API Usage
 
-### Endpoint
+### Endpoints
 
-`POST /parse`
+- `POST /parse`
+- `GET /health`
 
 ### Request
 
@@ -58,10 +59,18 @@ The server will start on `http://localhost:8000`.
 }
 ```
 
+**Health check (200):**
+```json
+{
+  "status": "ok"
+}
+```
+
 ## Testing with cURL
 
 ```bash
 curl -X POST -F "file=@resume.pdf" http://localhost:8000/parse
+curl http://localhost:8000/health
 ```
 
 ## Production Deployment Notes
@@ -70,5 +79,5 @@ curl -X POST -F "file=@resume.pdf" http://localhost:8000/parse
 - **Workers:** For production, run Uvicorn with multiple workers: `uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4`
 - **Temp files:** The service writes uploaded files to a temporary directory and cleans them up after processing. Ensure the host system has adequate temp disk space for large PDFs.
 - **Containerization:** You can containerize this service with a minimal Python image (e.g., `python:3.11-slim`). Include system dependencies if `markitdown` requires them (e.g., `poppler-utils` for PDF parsing).
-- **Health checks:** Add a `GET /health` endpoint if deploying behind a load balancer.
+- **Health checks:** `GET /health` is included for Render health probes and keepalive pings.
 - **File size limits:** Consider adding a max file size limit or timeout for large PDFs.
