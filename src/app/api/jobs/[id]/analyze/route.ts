@@ -5,7 +5,7 @@ import { queryOne } from "@/server/db/neon";
 import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build" });
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
