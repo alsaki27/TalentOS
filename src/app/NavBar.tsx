@@ -34,6 +34,8 @@ export default function NavBar() {
   const canViewJobs = ["admin", "manager"].includes(currentRole);
   const canViewCompanies = ["admin", "manager"].includes(currentRole);
   const canViewTeam = currentRole === "admin";
+  const isAdmin = currentRole === "admin";
+  const canManageSources = ["admin", "manager"].includes(currentRole);
   const canQuickApply = ["admin", "manager", "application_engineer"].includes(currentRole);
 
   useEffect(() => {

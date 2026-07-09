@@ -1,5 +1,5 @@
 import fs from "fs";
-import { execute } from "./src/server/db/neon.ts";
+import { execute } from "./src/server/db/neon";
 
 async function applyMigration() {
   const sql = fs.readFileSync("neon/migrations/0002_job_match_scores.sql", "utf-8");
