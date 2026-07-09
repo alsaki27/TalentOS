@@ -215,7 +215,7 @@ export default function JobDetailPage() {
         
         {/* Left Column */}
         <div style={{ flex: "1 1 60%", display: "flex", flexDirection: "column", gap: 24, minWidth: 300 }}>
-          {job.parsed_description && (
+          {Boolean(job.parsed_description) && (
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "24px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
               <h2 style={{ fontSize: "1.25rem", margin: "0 0 16px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
                 <span style={{ fontSize: "1.4rem" }}>✨</span> AI Job Analysis
@@ -265,7 +265,7 @@ export default function JobDetailPage() {
             <SmartDescription text={fullText || "No description provided."} />
           </div>
 
-          {job.benefits && (
+          {Boolean(job.benefits) && (
              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "24px", boxShadow: "0 4px 12px rgba(0,0,0,0.03)" }}>
                <h2 style={{ fontSize: "1.25rem", margin: "0 0 16px 0", color: "var(--ink)", display: "flex", alignItems: "center", gap: 8 }}>
                  <span style={{ fontSize: "1.4rem" }}>🎁</span> Benefits & Perks
@@ -288,7 +288,51 @@ export default function JobDetailPage() {
                 job.category_status === "failed" ? <span className="badge" title={job.category_error ?? undefined}>Failed</span> :
                 job.job_category ? <span className="badge">{job.job_category}</span> : null
               } />
-              <Field label="Category tags" value={job.category_tags?.length ? job.category_tags.join(", ") : null} />
+              <Field label="Category tags" value={
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-start" }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {(job.category_tags || []).map((tag, idx) => (
+                      <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        {tag}
+                        <button
+                          onClick={() => removeTag(tag)}
+                          style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: 10, cursor: "pointer", opacity: 0.7 }}
+                          aria-label={`Remove ${tag}`}
+                          title={`Remove ${tag}`}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  {addingTag ? (
+                    <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
+                      <input
+                        autoFocus
+                        value={newTagValue}
+                        onChange={(e) => setNewTagValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addTag();
+                          if (e.key === "Escape") setAddingTag(false);
+                        }}
+                        onBlur={addTag}
+                        style={{ padding: "4px 6px", fontSize: 12, width: 110 }}
+                        placeholder="Add tag"
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setAddingTag(true);
+                        setNewTagValue("");
+                      }}
+                      style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: 12, cursor: "pointer" }}
+                    >
+                      + Add tag
+                    </button>
+                  )}
+                </div>
+              } />
               <Field label="Role tier" value={job.role_tier ? <span className="badge">{job.role_tier}</span> : null} />
               <Field label="Job function" value={job.job_function} />
               <Field label="Industries" value={job.industries} />
