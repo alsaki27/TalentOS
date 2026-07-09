@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build" });
 
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
