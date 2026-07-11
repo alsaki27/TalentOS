@@ -9,7 +9,7 @@ import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { parseResumeFromMarkdown, extractText, finalizeParsedResume } from "@/lib/resumeParsing";
 import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText } from "@/lib/resumeParsing";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
 // #region debug-point A:parse-markitdown-debug
@@ -54,9 +54,6 @@ async function extractTextFromPDF(buffer: Uint8Array): Promise<string | null> {
 }
 
 async function parseResumeWithAI(resumeText: string) {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) return { error: "No AI provider configured." };
-
   // #region debug-point A:parse-markitdown-start
   reportParseMarkitdownDebug("A", "parse-markitdown AI parse started", {
     resumeTextLength: resumeText.length,
@@ -166,101 +163,107 @@ async function parseResumeWithAI(resumeText: string) {
     "10. Return ONLY the JSON object, no other text."
   ].join("\n");
 
-  const response = await active.provider.send({
-    system: "You are an expert resume parser. Extract ALL structured data from resume text and return it as clean JSON only. Be exhaustive — do not skip any sections, jobs, skills, or bullet points.",
-    messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-    tools: [],
-  });
-
-  const raw = textOf(response.content) ?? "";
-  // #region debug-point B:parse-markitdown-provider-raw
-  reportParseMarkitdownDebug("B", "parse-markitdown provider returned raw response", {
-    responseLength: raw.length,
-    rawProviderText: raw,
-  });
-  // #endregion
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-
-  let parsed: any;
   try {
-    parsed = JSON.parse(stripped);
-  } catch (err: any) {
-    // Try to extract JSON from within the text if the model wrapped it
-    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
+    return (await callWithUsageTracking("candidate_markitdown", undefined, async (provider) => {
+      const response = await provider.send({
+        system: "You are an expert resume parser. Extract ALL structured data from resume text and return it as clean JSON only. Be exhaustive — do not skip any sections, jobs, skills, or bullet points.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
+
+      const raw = textOf(response.content) ?? "";
+      // #region debug-point B:parse-markitdown-provider-raw
+      reportParseMarkitdownDebug("B", "parse-markitdown provider returned raw response", {
+        responseLength: raw.length,
+        rawProviderText: raw,
+      });
+      // #endregion
+      const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+
+      let parsed: any;
       try {
-        parsed = JSON.parse(jsonMatch[0]);
-      } catch {
-        throw new Error("AI returned invalid JSON: " + err.message);
+        parsed = JSON.parse(stripped);
+      } catch (err: any) {
+        // Try to extract JSON from within the text if the model wrapped it
+        const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch {
+            throw new Error("AI returned invalid JSON: " + err.message);
+          }
+        } else {
+          throw new Error("AI returned invalid JSON: " + err.message);
+        }
       }
-    } else {
-      throw new Error("AI returned invalid JSON: " + err.message);
-    }
+
+      // Normalize the response to ensure consistent shape
+      const normalized = finalizeParsedResume({
+        name: parsed?.name ?? null,
+        email: parsed?.email ?? null,
+        phone: parsed?.phone ?? null,
+        linkedin_url: parsed?.linkedin_url ?? null,
+        github_url: parsed?.github_url ?? null,
+        portfolio_url: parsed?.portfolio_url ?? null,
+        location: parsed?.location ?? null,
+        summary: parsed?.summary ?? null,
+        skills: Array.isArray(parsed?.skills) ? parsed.skills.map((s: any) => {
+          if (typeof s === "string") return s;
+          if (s.category && Array.isArray(s.items)) return `${s.category}: ${s.items.join(", ")}`;
+          if (Array.isArray(s.items)) return s.items.join(", ");
+          return "";
+        }).filter(Boolean) : [],
+        experience: Array.isArray(parsed?.experience) ? parsed.experience.map((exp: any) => ({
+          title: exp?.title ?? "",
+          company: exp?.company ?? "",
+          location: exp?.location ?? null,
+          startDate: exp?.startDate ?? exp?.start_date ?? null,
+          endDate: exp?.endDate ?? exp?.end_date ?? null,
+          bullets: Array.isArray(exp?.bullets) ? exp.bullets : (exp?.description ? [exp.description] : []),
+        })) : [],
+        projects: Array.isArray(parsed?.projects) ? parsed.projects : [],
+        education: Array.isArray(parsed?.education) ? parsed.education.map((edu: any) => ({
+          degree: edu?.degree ?? "",
+          school: edu?.school ?? "",
+          field: edu?.field ?? null,
+          graduationDate: edu?.graduationDate ?? edu?.graduation_year ?? null,
+        })) : [],
+        certifications: Array.isArray(parsed?.certifications) ? parsed.certifications : [],
+      }, resumeText);
+
+      // #region debug-point C:parse-markitdown-normalized
+      reportParseMarkitdownDebug("C", "parse-markitdown normalized parsed resume", {
+        parsedSkills: normalized.skills,
+        summary: normalized.summary ?? null,
+        experienceCount: normalized.experience.length,
+        educationCount: normalized.education.length,
+        certificationsCount: normalized.certifications.length,
+      });
+      // #endregion
+
+      // If AI didn't find a LinkedIn URL, try regex extraction from the raw text
+      if (!normalized.linkedin_url) {
+        normalized.linkedin_url = extractLinkedInUrlFromText(resumeText);
+      }
+
+      // Build a parse status so the user knows what was found
+      const parseStatus = {
+        hasName: !!normalized.name,
+        hasEmail: !!normalized.email,
+        hasPhone: !!normalized.phone,
+        hasSummary: !!normalized.summary,
+        skillsCount: normalized.skills.length,
+        experienceCount: normalized.experience.length,
+        educationCount: normalized.education.length,
+        certificationsCount: normalized.certifications.length,
+        totalBulletPoints: normalized.experience.reduce((sum: number, exp: any) => sum + (exp.bullets?.length ?? 0), 0),
+      };
+
+      return { parsed: normalized, parseStatus };
+    })).result;
+  } catch {
+    return { parsed: finalizeParsedResume({ name: undefined, email: undefined, phone: undefined, linkedin_url: undefined, github_url: undefined, portfolio_url: undefined, location: undefined, summary: undefined, skills: [], experience: [], projects: [], education: [], certifications: [] }, resumeText), parseStatus: { hasName: false, hasEmail: false, hasPhone: false, hasSummary: false, skillsCount: 0, experienceCount: 0, educationCount: 0, certificationsCount: 0, totalBulletPoints: 0 } };
   }
-
-  // Normalize the response to ensure consistent shape
-  const normalized = finalizeParsedResume({
-    name: parsed?.name ?? null,
-    email: parsed?.email ?? null,
-    phone: parsed?.phone ?? null,
-    linkedin_url: parsed?.linkedin_url ?? null,
-    github_url: parsed?.github_url ?? null,
-    portfolio_url: parsed?.portfolio_url ?? null,
-    location: parsed?.location ?? null,
-    summary: parsed?.summary ?? null,
-    skills: Array.isArray(parsed?.skills) ? parsed.skills.map((s: any) => {
-      if (typeof s === "string") return s;
-      if (s.category && Array.isArray(s.items)) return `${s.category}: ${s.items.join(", ")}`;
-      if (Array.isArray(s.items)) return s.items.join(", ");
-      return "";
-    }).filter(Boolean) : [],
-    experience: Array.isArray(parsed?.experience) ? parsed.experience.map((exp: any) => ({
-      title: exp?.title ?? "",
-      company: exp?.company ?? "",
-      location: exp?.location ?? null,
-      startDate: exp?.startDate ?? exp?.start_date ?? null,
-      endDate: exp?.endDate ?? exp?.end_date ?? null,
-      bullets: Array.isArray(exp?.bullets) ? exp.bullets : (exp?.description ? [exp.description] : []),
-    })) : [],
-    projects: Array.isArray(parsed?.projects) ? parsed.projects : [],
-    education: Array.isArray(parsed?.education) ? parsed.education.map((edu: any) => ({
-      degree: edu?.degree ?? "",
-      school: edu?.school ?? "",
-      field: edu?.field ?? null,
-      graduationDate: edu?.graduationDate ?? edu?.graduation_year ?? null,
-    })) : [],
-    certifications: Array.isArray(parsed?.certifications) ? parsed.certifications : [],
-  }, resumeText);
-
-  // #region debug-point C:parse-markitdown-normalized
-  reportParseMarkitdownDebug("C", "parse-markitdown normalized parsed resume", {
-    parsedSkills: normalized.skills,
-    summary: normalized.summary ?? null,
-    experienceCount: normalized.experience.length,
-    educationCount: normalized.education.length,
-    certificationsCount: normalized.certifications.length,
-  });
-  // #endregion
-
-  // If AI didn't find a LinkedIn URL, try regex extraction from the raw text
-  if (!normalized.linkedin_url) {
-    normalized.linkedin_url = extractLinkedInUrlFromText(resumeText);
-  }
-
-  // Build a parse status so the user knows what was found
-  const parseStatus = {
-    hasName: !!normalized.name,
-    hasEmail: !!normalized.email,
-    hasPhone: !!normalized.phone,
-    hasSummary: !!normalized.summary,
-    skillsCount: normalized.skills.length,
-    experienceCount: normalized.experience.length,
-    educationCount: normalized.education.length,
-    certificationsCount: normalized.certifications.length,
-    totalBulletPoints: normalized.experience.reduce((sum: number, exp: any) => sum + (exp.bullets?.length ?? 0), 0),
-  };
-
-  return { parsed: normalized, parseStatus };
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {

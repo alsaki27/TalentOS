@@ -5,7 +5,7 @@
 // NEVER invents experience. If evidence is not found, marks missing.
 
 import { supabase } from "@/lib/supabase";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import {
   ApplicationKeywordRow,
@@ -333,44 +333,44 @@ export async function aiMapEvidence(
   keyword: ApplicationKeywordRow,
   candidateId: string
 ): Promise<EvidenceMappingResult | null> {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) return null;
-
-  const source = await gatherCandidateEvidenceSources(candidateId);
-
-  const prompt = [
-    `Keyword from job description: "${keyword.keyword}" (category: ${keyword.category})`,
-    "Candidate profile and evidence:",
-    `Profile: ${source.profileText.slice(0, 500)}`,
-    `Evidence skills: ${source.evidenceSkills.join(", ")}`,
-    `Resume skills: ${source.resumeSkills.join(", ")}`,
-    `Base resume skills: ${source.baseResumeSkills.join(", ")}`,
-    "",
-    "Does this candidate have evidence for this keyword? Respond with ONLY a JSON object:",
-    '{"hasEvidence": boolean, "strength": "strong" | "weak" | "none", "explanation": string}',
-  ].join("\n");
-
   try {
-    const response = await active.provider.send({
-      system: "You are a conservative evidence checker. Only claim evidence exists if you can see it in the data. No invention.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("evidence_mapping", undefined, async (provider) => {
+      const source = await gatherCandidateEvidenceSources(candidateId);
+
+      const prompt = [
+        `Keyword from job description: "${keyword.keyword}" (category: ${keyword.category})`,
+        "Candidate profile and evidence:",
+        `Profile: ${source.profileText.slice(0, 500)}`,
+        `Evidence skills: ${source.evidenceSkills.join(", ")}`,
+        `Resume skills: ${source.resumeSkills.join(", ")}`,
+        `Base resume skills: ${source.baseResumeSkills.join(", ")}`,
+        "",
+        "Does this candidate have evidence for this keyword? Respond with ONLY a JSON object:",
+        '{"hasEvidence": boolean, "strength": "strong" | "weak" | "none", "explanation": string}',
+      ].join("\n");
+
+      const response = await provider.send({
+        system: "You are a conservative evidence checker. Only claim evidence exists if you can see it in the data. No invention.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
+      const raw = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      const parsed = JSON.parse(raw);
+
+      const statusMap: Record<string, "mapped" | "weak" | "missing"> = {
+        strong: "mapped",
+        weak: "weak",
+        none: "missing",
+      };
+
+      return {
+        keywordId: keyword.id,
+        evidenceStatus: statusMap[parsed.strength] ?? "missing",
+        evidenceSummary: parsed.explanation ?? "AI-evaluated evidence",
+        confidence: parsed.strength === "strong" ? 0.85 : parsed.strength === "weak" ? 0.5 : 0.0,
+      };
     });
-    const raw = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const parsed = JSON.parse(raw);
-
-    const statusMap: Record<string, "mapped" | "weak" | "missing"> = {
-      strong: "mapped",
-      weak: "weak",
-      none: "missing",
-    };
-
-    return {
-      keywordId: keyword.id,
-      evidenceStatus: statusMap[parsed.strength] ?? "missing",
-      evidenceSummary: parsed.explanation ?? "AI-evaluated evidence",
-      confidence: parsed.strength === "strong" ? 0.85 : parsed.strength === "weak" ? 0.5 : 0.0,
-    };
+    return result;
   } catch {
     return null; // Degrade cleanly
   }

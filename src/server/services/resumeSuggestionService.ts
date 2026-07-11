@@ -12,7 +12,7 @@
 //   6. Run deterministic truth-check on each candidate
 //   7. Persist suggestions to repository
 
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import {
@@ -88,15 +88,6 @@ export async function generateResumeSuggestions(
   const context = await buildResumeContext(app.candidate_id);
 
   // 4. Call AI
-  const active = await getProviderForCategory("resume_studio");
-  if (!active) {
-    return {
-      suggestions: [],
-      aiAnalysisUsed: false,
-      error: "No AI provider configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY.",
-    };
-  }
-
   const prompt = buildSuggestionPrompt(
     context,
     approvedKeywords,
@@ -105,10 +96,12 @@ export async function generateResumeSuggestions(
   );
 
   try {
-    const response = await active.provider.send({
-      system: buildSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("resume_suggestions", { userId: createdByUserId ?? undefined }, async (provider) => {
+      return provider.send({
+        system: buildSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     const raw = textOf(response.content)
       .trim()

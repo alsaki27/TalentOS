@@ -9,7 +9,7 @@
 import { supabase } from "@/lib/supabase";
 import { countJobsSince } from "@/server/repositories/jobsRepository";
 import { listOverdueApplications, listApplicationsSince, countApplicationsByStatus } from "@/server/repositories/applicationsRepository";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
 async function gatherSnapshot() {
@@ -38,9 +38,6 @@ async function gatherSnapshot() {
 }
 
 export async function generateDailyDigest(): Promise<{ content: string; provider: string } | { error: string }> {
-  const active = await getProviderForCategory("content_generation");
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
-
   const snapshot = await gatherSnapshot();
 
   const prompt = [
@@ -50,13 +47,15 @@ export async function generateDailyDigest(): Promise<{ content: string; provider
   ].join("\n\n");
 
   try {
-    const response = await active.provider.send({
-      system: "You are a reporting assistant. Be concise and factual. Use only the data given to you.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result, providerName } = await callWithUsageTracking("ai_digest", undefined, async (provider) => {
+      return provider.send({
+        system: "You are a reporting assistant. Be concise and factual. Use only the data given to you.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
-    const content = textOf(response.content) || "(no content generated)";
-    return { content, provider: active.name };
+    const content = textOf(result.content) || "(no content generated)";
+    return { content, provider: providerName };
   } catch (err: any) {
     return { error: err.message ?? "digest generation failed" };
   }

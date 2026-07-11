@@ -101,14 +101,27 @@ export async function getProviderForAutomation(
 }
 
 /**
+ * Result of a callWithUsageTracking invocation.
+ * Exposes both the user's return value and the provider metadata so callers
+ * can record which model/provider was used (e.g. jobCategorization's category_model).
+ */
+export interface CallWithUsageTrackingResult<T> {
+  result: T;
+  providerName: string;
+  aiKeyId: string | null;
+  model: string | null;
+}
+
+/**
  * Wrapper that resolves a provider via D-AI.2.1, calls fn, and records a usage event.
  * Handles both success and failure paths. Token/cost fields populated when available.
+ * Returns both the user's result and provider metadata.
  */
 export async function callWithUsageTracking<T>(
   automationId: string,
   ctx: { userId?: string } | undefined,
   fn: (provider: AiProvider) => Promise<T>
-): Promise<T> {
+): Promise<CallWithUsageTrackingResult<T>> {
   const resolved = await getProviderForAutomation(automationId);
   if (!resolved) {
     throw new Error(`No AI provider available for automation: ${automationId}`);
@@ -138,7 +151,7 @@ export async function callWithUsageTracking<T>(
       userId: ctx?.userId ?? null,
     });
 
-    return result;
+    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null };
   } catch (err: any) {
     const latencyMs = Date.now() - start;
     errorMessage = err.message ?? "Unknown error";

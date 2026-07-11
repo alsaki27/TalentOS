@@ -72,7 +72,11 @@ export async function PUT(
     }
   }
 
-  // 4. Replace all routes in a single transaction
+  // 4. Replace all routes (best-effort: @neondatabase/serverless HTTP mode has
+  //    no transaction support, so this is DELETE + individual INSERTs without
+  //    atomicity. If any INSERT fails, the automation may be left with partial
+  //    or zero routes and silently fall back to the global chain. Low blast
+  //    radius — admin-only, low-frequency endpoint.)
   await execute("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]);
 
   const userId = context?.profile.user_id;

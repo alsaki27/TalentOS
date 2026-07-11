@@ -1,5 +1,11 @@
 // GET /api/cron/ai-usage-rollup -> aggregates yesterday's ai_usage_events into ai_usage_daily
 // Runs daily via vercel.json or Cloudflare Cron Trigger. Gated by CRON_SECRET.
+//
+// ai_key_id is NOT in the GROUP BY or the PK — callWithUsageTracking passes null
+// when a route resolves via bare provider name or the global env chain (the default
+// for all 14 automations). Putting ai_key_id in the PK would make it implicitly
+// NOT NULL and crash the first cron run. Per-key daily breakdowns come from the
+// raw ai_usage_events table instead.
 
 import { NextRequest, NextResponse } from "next/server";
 import { query, execute } from "@/server/db/neon";
@@ -19,12 +25,13 @@ export async function GET(req: NextRequest) {
 
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
-  // Aggregate yesterday's events into daily rollup
+  // Aggregate yesterday's events into daily rollup.
+  // Grouped by (automation_id, provider) — ai_key_id omitted to avoid NOT NULL
+  // violations from null-keyed calls (bare provider or global chain fallback).
   const rows = await query<any>(
     `SELECT
-       created_at::date as usage_date,
+       $1::date as usage_date,
        automation_id,
-       ai_key_id,
        provider,
        COUNT(*)::int as call_count,
        COUNT(*) FILTER (WHERE outcome = 'success')::int as success_count,
@@ -35,7 +42,7 @@ export async function GET(req: NextRequest) {
        COALESCE(AVG(latency_ms)::int, 0) as avg_latency_ms
      FROM ai_usage_events
      WHERE created_at >= $1::date AND created_at < ($1::date + interval '1 day')
-     GROUP BY created_at::date, automation_id, ai_key_id, provider`,
+     GROUP BY automation_id, provider`,
     [yesterday]
   );
 
@@ -46,8 +53,8 @@ export async function GET(req: NextRequest) {
         (usage_date, automation_id, ai_key_id, provider,
          call_count, success_count, failure_count,
          total_input_tokens, total_output_tokens, total_cost_usd, avg_latency_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       ON CONFLICT (usage_date, automation_id, ai_key_id, provider)
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (usage_date, automation_id, provider)
        DO UPDATE SET
          call_count = EXCLUDED.call_count,
          success_count = EXCLUDED.success_count,
@@ -57,7 +64,7 @@ export async function GET(req: NextRequest) {
          total_cost_usd = EXCLUDED.total_cost_usd,
          avg_latency_ms = EXCLUDED.avg_latency_ms`,
       [
-        row.usage_date, row.automation_id, row.ai_key_id, row.provider,
+        row.usage_date, row.automation_id, row.provider,
         row.call_count, row.success_count, row.failure_count,
         row.total_input_tokens, row.total_output_tokens, row.total_cost_usd, row.avg_latency_ms,
       ]

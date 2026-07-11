@@ -17,7 +17,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { updateJob } from "@/server/repositories/jobsRepository";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
 export interface PendingJob {
@@ -96,45 +96,40 @@ async function markFailed(jobId: string, message: string, model?: string) {
 }
 
 export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; status: string; result?: AiCategorizationResult }> {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) {
-    await markFailed(job.id, "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY).");
-    return { ok: false, status: "failed" };
-  }
-
-  let result: AiCategorizationResult;
   try {
-    const response = await active.provider.send({
-      system: "You are a strict, literal job-posting classifier. Respond with raw JSON only.",
-      messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(job) }] }],
-      tools: [],
+    const { result: catResult, providerName } = await callWithUsageTracking("job_categorization", undefined, async (provider) => {
+      const response = await provider.send({
+        system: "You are a strict, literal job-posting classifier. Respond with raw JSON only.",
+        messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(job) }] }],
+        tools: [],
+      });
+      return parseAiJson(textOf(response.content));
     });
-    result = parseAiJson(textOf(response.content));
-  } catch (err: any) {
-    await markFailed(job.id, err.message ?? "AI categorization request failed", active.name);
-    return { ok: false, status: "failed" };
-  }
 
   const status = "done";
 
   await updateJob(job.id, {
-    job_category: result.tags.length > 0 ? result.tags[0] : null,
-    category_tags: result.tags,
-    category_relevance_score: result.confidence,
+    job_category: catResult.tags.length > 0 ? catResult.tags[0] : null,
+    category_tags: catResult.tags,
+    category_relevance_score: catResult.confidence,
     category_status: status,
     ai_suggested_category: null,
     category_error: null,
     categorized_at: new Date().toISOString(),
-    category_model: active.name,
-    salary_min: result.salary_min,
-    salary_max: result.salary_max,
-    salary_currency: result.salary_currency,
-    salary_period: result.salary_period,
-    work_authorization: result.work_authorization,
-    work_authorization_evidence: result.work_authorization_evidence,
+    category_model: providerName,
+    salary_min: catResult.salary_min,
+    salary_max: catResult.salary_max,
+    salary_currency: catResult.salary_currency,
+    salary_period: catResult.salary_period,
+    work_authorization: catResult.work_authorization,
+    work_authorization_evidence: catResult.work_authorization_evidence,
   });
 
-  return { ok: true, status, result };
+  return { ok: true, status, result: catResult };
+  } catch (err: any) {
+    await markFailed(job.id, err.message ?? "AI categorization request failed");
+    return { ok: false, status: "failed" };
+  }
 }
 
 export async function processPendingCategorization(

@@ -4,7 +4,7 @@
 // Never writes directly to tables — delegates to repository.
 
 import { supabase } from "@/lib/supabase";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import {
@@ -185,16 +185,6 @@ function extractKeywordsFromParsed(
 async function analyzeJDWithAI(
   rawText: string
 ): Promise<JdAnalysisResult & { error?: string }> {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) {
-    return {
-      requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],
-      domainKeywords: [], softSkills: [], atsKeywords: [], criticalAtsPhrases: [], visaSignals: [], redFlags: [],
-      title: null, company: null, location: null,
-      error: "No AI provider configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY.",
-    };
-  }
-
   const prompt = [
     MISSION_CONTEXT,
     "",
@@ -221,7 +211,8 @@ async function analyzeJDWithAI(
   ].join("\n");
 
   try {
-    const response = await active.provider.send({
+    const { result } = await callWithUsageTracking("keyword_extraction", undefined, async (provider) => {
+      const response = await provider.send({
       system: "You are a precise job-description keyword extractor whose accuracy directly determines whether a tailored resume passes ATS screening. Respond with raw JSON only.",
       messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
       tools: [],
@@ -244,6 +235,8 @@ async function analyzeJDWithAI(
       company: typeof parsed.company === "string" ? parsed.company : null,
       location: typeof parsed.location === "string" ? parsed.location : null,
     };
+    });
+    return result;
   } catch (err: any) {
     return {
       requiredSkills: [], preferredSkills: [], tools: [], responsibilities: [],

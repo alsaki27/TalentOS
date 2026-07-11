@@ -9,7 +9,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, execute } from "@/server/db/neon";
 import { listTargetJobsByCandidate, createTargetJob } from "@/server/repositories/targetJobsRepository";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
 export async function GET(req: NextRequest) {
@@ -65,29 +65,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "candidateId and rawDescription are required" }, { status: 400 });
   }
 
-  const active = await getProviderForCategory("parsing_extraction");
   let parsedDescription: any = null;
   let fitScore: number | null = null;
   let recommendation: string | null = null;
 
-  if (active) {
-    try {
-      const aiResponse = await active.provider.send({
+  try {
+    const { result: aiResponse } = await callWithUsageTracking("target_jobs_matching", { userId: context!.profile.user_id }, async (provider) => {
+      return provider.send({
         system: "You are a job description analyzer. Extract structured data and return ONLY raw JSON.",
         messages: [{ role: "user", content: [{ type: "text", text: `${JD_ANALYSIS_PROMPT}\n\n--- JOB DESCRIPTION ---\n${rawDescription}\n--- END ---` }] }],
         tools: [],
       });
-      const text = textOf(aiResponse.content) ?? "";
-      const clean = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-      parsedDescription = JSON.parse(clean);
+    });
+    const text = textOf(aiResponse.content) ?? "";
+    const clean = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    parsedDescription = JSON.parse(clean);
 
-      const redFlagCount = (parsedDescription.redFlags ?? []).length;
-      const skillCount = (parsedDescription.requiredSkills ?? []).length + (parsedDescription.preferredSkills ?? []).length;
-      fitScore = Math.max(0, Math.min(100, skillCount * 5 - redFlagCount * 15 + 50));
-      recommendation = fitScore > 70 ? "Apply" : fitScore > 40 ? "Maybe" : "Do Not Apply";
-    } catch {
-      // AI analysis failure is non-blocking
-    }
+    const redFlagCount = (parsedDescription.redFlags ?? []).length;
+    const skillCount = (parsedDescription.requiredSkills ?? []).length + (parsedDescription.preferredSkills ?? []).length;
+    fitScore = Math.max(0, Math.min(100, skillCount * 5 - redFlagCount * 15 + 50));
+    recommendation = fitScore > 70 ? "Apply" : fitScore > 40 ? "Maybe" : "Do Not Apply";
+  } catch {
+    // AI analysis failure is non-blocking
   }
 
   const targetJob = await createTargetJob({

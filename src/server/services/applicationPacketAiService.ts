@@ -3,7 +3,7 @@
 // NEVER invents experience, degree, certification, employer, project, or visa status.
 // NEVER uses rejected keywords. NEVER claims missing-evidence keywords.
 
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
@@ -59,9 +59,6 @@ export async function generateCoverLetterDraft(
     }
   }
 
-  const active = await getProviderForCategory("content_generation");
-  if (!active) return errorCoverLetter("No AI provider configured");
-
   const warnings: string[] = [];
 
   for (const kw of approvedKeywords) {
@@ -89,13 +86,15 @@ export async function generateCoverLetterDraft(
   });
 
   try {
-    const response = await active.provider.send({
-      system: buildCoverLetterSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("cover_letter_gen", undefined, async (provider) => {
+      return provider.send({
+        system: buildCoverLetterSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    const raw = textOf(response.content)
+    const raw = textOf(result.content)
       .trim()
       .replace(/^```(?:markdown)?\s*/i, "")
       .replace(/```\s*$/i, "")
@@ -137,9 +136,6 @@ export async function generateRecruiterMessageDraft(
     }
   }
 
-  const active = await getProviderForCategory("content_generation");
-  if (!active) return errorRecruiterMessage("No AI provider configured");
-
   const warnings: string[] = [];
 
   for (const kw of approvedKeywords) {
@@ -167,13 +163,15 @@ export async function generateRecruiterMessageDraft(
   });
 
   try {
-    const response = await active.provider.send({
-      system: buildRecruiterMessageSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("recruiter_message_gen", undefined, async (provider) => {
+      return provider.send({
+        system: buildRecruiterMessageSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    const raw = textOf(response.content)
+    const raw = textOf(result.content)
       .trim()
       .replace(/^```(?:markdown)?\s*/i, "")
       .replace(/```\s*$/i, "")
@@ -204,9 +202,6 @@ export async function generatePacketSummary(applicationId: string): Promise<stri
 
   const context = app.candidate_id ? await buildResumeContext(app.candidate_id) : null;
 
-  const active = await getProviderForCategory("content_generation");
-  if (!active) return "No AI provider configured";
-
   const prompt = buildSummaryPrompt({
     candidateName: candidate?.name ?? null,
     jobTitle: job?.title ?? null,
@@ -218,14 +213,16 @@ export async function generatePacketSummary(applicationId: string): Promise<stri
   });
 
   try {
-    const response = await active.provider.send({
-      system:
-        "You are a concise packet reviewer. Summarize the readiness and key points of a job application packet in 2-4 sentences. Be factual, not promotional. Note strengths and gaps.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("cover_letter_gen", undefined, async (provider) => {
+      return provider.send({
+        system:
+          "You are a concise packet reviewer. Summarize the readiness and key points of a job application packet in 2-4 sentences. Be factual, not promotional. Note strengths and gaps.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    return textOf(response.content).trim();
+    return textOf(result.content).trim();
   } catch (err: any) {
     return `Summary generation failed: ${err.message ?? "Unknown error"}`;
   }

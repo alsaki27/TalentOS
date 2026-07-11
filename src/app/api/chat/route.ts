@@ -6,7 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
@@ -22,14 +22,7 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  const active = await getProviderForCategory("chat_assistant");
-  if (!active) {
-    return NextResponse.json(
-      { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY (see README)." },
-      { status: 503 },
-    );
-  }
-  const { provider } = active;
+  let providerName: string | undefined;
 
   const body = await req.json();
   const userMessage = String(body.message ?? "").trim();
@@ -222,7 +215,11 @@ export async function POST(req: NextRequest) {
     iterations += 1;
     let aiResponse;
     try {
-      aiResponse = await provider.send({ system: systemPrompt, messages, tools: TOOLS });
+      const { result, providerName: pn } = await callWithUsageTracking("chat_assistant", { userId: context?.profile.user_id }, async (provider) => {
+        return provider.send({ system: systemPrompt, messages, tools: TOOLS });
+      });
+      aiResponse = result;
+      providerName = pn;
     } catch (err: any) {
       return failWithVisibleError(err.message ?? "AI request failed", 502);
     }
@@ -251,7 +248,7 @@ export async function POST(req: NextRequest) {
         await supabase.from("chat_messages").insert({ conversation_id: conversationId, role: "assistant", content: finalText });
         await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
       }
-      return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: active.name });
+      return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: providerName ?? "unknown" });
     }
 
     messages.push({ role: "assistant", content: aiResponse.content });

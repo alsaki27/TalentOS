@@ -2,7 +2,7 @@
 // Extract text from PDF/DOCX, then parse structured fields via AI.
 // Dependencies: mammoth (DOCX). PDF extraction is hand-rolled - see extractText.
 
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import type { AiMessage } from "@/lib/ai/provider";
 import type { AiProvider } from "@/lib/ai/provider";
@@ -723,21 +723,6 @@ CRITICAL RULES:
 
 // New: Parse from markdown (better quality, fewer tokens)
 export async function parseResumeFromMarkdown(markdown: string, rawTextForNormalization?: string): Promise<ParsedResume> {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) {
-    // #region debug-point E:markdown-no-provider
-    reportResumeParsingDebug("E", "markdown parse skipped because no provider is configured", {
-      markdownLength: markdown.length,
-      markdown,
-    });
-    // #endregion
-    logResumeParsingConsole("markdown parse skipped: no provider", {
-      markdownLength: markdown.length,
-      markdown,
-    });
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
-  }
-
   // #region debug-point A:markdown-parse-start
   reportResumeParsingDebug("A", "markdown parse started", {
     markdownLength: markdown.length,
@@ -754,11 +739,12 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
   ];
 
   try {
-    const response = await active.provider.send({
-      system: "You are a resume parser. Extract structured data from markdown and return ONLY raw JSON.",
-      messages,
-      tools: [],
-    });
+    const { result } = await callWithUsageTracking("resume_parsing", undefined, async (provider) => {
+      const response = await provider.send({
+        system: "You are a resume parser. Extract structured data from markdown and return ONLY raw JSON.",
+        messages,
+        tools: [],
+      });
 
     const text = textOf(response.content) ?? "";
     // #region debug-point B:markdown-provider-raw-response
@@ -808,7 +794,9 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
       return `${rawTextForNormalization}\n${markdown}`;
     })();
 
-    return finalizeParsedResume(parsed as Partial<ParsedResume>, normalizedRawText);
+      return finalizeParsedResume(parsed as Partial<ParsedResume>, normalizedRawText);
+    });
+    return result;
   } catch (err: any) {
     // #region debug-point E:markdown-parse-error
     reportResumeParsingDebug("E", "markdown parse failed", {
@@ -825,6 +813,7 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
     return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
   }
 }
+
 
 export function finalizeParsedResume(parsed: Partial<ParsedResume>, rawText: string): ParsedResume {
   const normalizedSkills = normalizeParsedSkills(parsed.skills);
@@ -1016,18 +1005,22 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
     return parseResumeFromMarkdown(markdown, rawText);
   }
   // Otherwise fall back to the existing raw text parser
-  const active = await getProviderForCategory("parsing_extraction");
   // #region debug-point A:parse-fields-raw-text-branch
   reportResumeParsingDebug("A", "parseResumeFields selected raw text branch", {
     rawTextLength: rawText.length,
-    hasProvider: Boolean(active?.provider),
   });
   // #endregion
   logResumeParsingConsole("parseResumeFields selected raw text branch", {
     rawTextLength: rawText.length,
-    hasProvider: Boolean(active?.provider),
   });
-  return parseResumeTextWithProvider(rawText, active?.provider ?? null);
+  try {
+    const { result } = await callWithUsageTracking("resume_parsing", undefined, async (provider) => {
+      return parseResumeTextWithProvider(rawText, provider);
+    });
+    return result;
+  } catch {
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+  }
 }
 
 /**

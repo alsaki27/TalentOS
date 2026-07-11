@@ -49,6 +49,12 @@ create index if not exists aue_key_time_idx on ai_usage_events (ai_key_id, creat
 create index if not exists aue_created_idx on ai_usage_events (created_at desc);
 
 -- ── ai_usage_daily (daily rollups) ──
+-- ai_key_id is intentionally NOT in the primary key: callWithUsageTracking passes
+-- null when a route resolves via bare provider name or the global env chain (the
+-- default state for every automation with no routes configured). Putting ai_key_id
+-- in the PK would make it implicitly NOT NULL and crash the first rollup cron run
+-- against real data. A nullable ai_key_id with a per-provider PK allows one rollup
+-- row per automation+provider+day regardless of which specific key served the call.
 create table if not exists ai_usage_daily (
   usage_date     date not null,
   automation_id  text not null references ai_automations(id),
@@ -61,7 +67,7 @@ create table if not exists ai_usage_daily (
   total_output_tokens int not null default 0,
   total_cost_usd numeric(10,5) not null default 0,
   avg_latency_ms int,
-  primary key (usage_date, automation_id, ai_key_id, provider)
+  primary key (usage_date, automation_id, provider)
 );
 
 -- ── Seed ai_automations (one row per real call site) ──

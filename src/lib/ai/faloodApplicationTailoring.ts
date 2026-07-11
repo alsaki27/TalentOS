@@ -18,7 +18,7 @@ import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findResumeVersionById } from "@/server/repositories/applicationResumeVersionsRepository";
 import { findTargetJobById } from "@/server/repositories/targetJobsRepository";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { FaloodCommandResult } from "@/lib/falood/types";
@@ -108,18 +108,17 @@ function buildSuggestPrompt(ctx: TailoringContext): string {
 }
 
 export async function generateResumeSuggestions(applicationResumeId: string): Promise<{ created: number } | { error: string }> {
-  const active = await getProviderForCategory("resume_studio");
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
-
   const ctx = await gatherContext(applicationResumeId);
   if (!ctx) return { error: "Application resume version not found." };
 
   let suggestions: any[];
   try {
-    const response = await active.provider.send({
-      system: "You are Falood, a controlled resume-tailoring assistant. Respond with a raw JSON array only.",
-      messages: [{ role: "user", content: [{ type: "text", text: buildSuggestPrompt(ctx) }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("application_tailoring", undefined, async (provider) => {
+      return provider.send({
+        system: "You are Falood, a controlled resume-tailoring assistant. Respond with a raw JSON array only.",
+        messages: [{ role: "user", content: [{ type: "text", text: buildSuggestPrompt(ctx) }] }],
+        tools: [],
+      });
     });
     const raw = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
     suggestions = JSON.parse(raw);
@@ -186,9 +185,6 @@ export async function runApplicationTailoringCommand(opts: {
     };
   }
 
-  const active = await getProviderForCategory("resume_studio");
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
-
   const ctx = await gatherContext(opts.applicationResumeId);
   if (!ctx) return { error: "Application resume version not found." };
 
@@ -202,10 +198,12 @@ export async function runApplicationTailoringCommand(opts: {
   ].join("\n");
 
   try {
-    const response = await active.provider.send({
-      system: "You are Falood, a resume-tailoring assistant. Answer in plain text, concisely.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("application_tailoring", undefined, async (provider) => {
+      return provider.send({
+        system: "You are Falood, a resume-tailoring assistant. Answer in plain text, concisely.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     return { message: textOf(response.content) || "(no response)", action: null, warnings: [] };
   } catch (err: any) {

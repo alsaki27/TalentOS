@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
@@ -29,14 +29,6 @@ function jobDescription(job: any) {
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
-
-  const active = await getProviderForCategory("resume_studio");
-  if (!active) {
-    return NextResponse.json(
-      { error: "AI provider is not configured. Set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY, then try again." },
-      { status: 503 },
-    );
-  }
 
   const body = await req.json();
   const candidateId = body.candidateId as string | undefined;
@@ -117,10 +109,12 @@ Target job:
 ${rawDescription}`;
 
   try {
-    const aiResponse = await active.provider.send({
-      system: "You are a careful resume editor. You tailor resumes without inventing facts.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: aiResponse, providerName } = await callWithUsageTracking("base_resume_studio", { userId: context!.profile.user_id }, async (provider) => {
+      return provider.send({
+        system: "You are a careful resume editor. You tailor resumes without inventing facts.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     const draft = stripCodeFence(textOf(aiResponse.content));
     if (!draft) return NextResponse.json({ error: "AI provider returned an empty draft." }, { status: 502 });
@@ -130,7 +124,7 @@ ${rawDescription}`;
       targetJobId: targetJob.id,
       title: `${candidate.name} - ${job.title}`,
       versionLabel: `${job.company || "Job"} tailored draft`,
-      provider: active.name,
+      provider: providerName,
       warning: "Review before sending.",
     });
   } catch {

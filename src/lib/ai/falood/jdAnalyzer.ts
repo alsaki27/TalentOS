@@ -2,7 +2,7 @@
 // Parse-only job description analyzer. Extracts structured data from raw JD text
 // via the configured AI provider. Does not write to the database — the caller handles persistence.
 
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 
@@ -213,12 +213,8 @@ function validateAndSanitize(parsed: any): JdAnalysisOutput {
 }
 
 export async function analyzeJD(input: JdAnalysisInput): Promise<JdAnalysisOutput> {
-  const active = await getProviderForCategory("parsing_extraction");
-  if (!active) {
-    throw new Error("No AI provider configured");
-  }
-
-  const response = await active.provider.send({
+  const { result: response } = await callWithUsageTracking("jd_analysis", undefined, async (provider) => {
+    return provider.send({
     system: "You are a precise job description analyzer whose extraction quality directly determines whether a tailored resume passes automated ATS screening. Extract structured data using the JD's own exact wording and return ONLY raw JSON.",
     messages: [
       {
@@ -227,6 +223,7 @@ export async function analyzeJD(input: JdAnalysisInput): Promise<JdAnalysisOutpu
       },
     ],
     tools: [],
+    });
   });
 
   const text = textOf(response.content) ?? "";

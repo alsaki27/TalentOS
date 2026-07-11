@@ -16,7 +16,7 @@ import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
-import { getProviderForCategory } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { emptyResumeDocument, FaloodCommandResult, ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
@@ -156,19 +156,18 @@ export async function runBaseResumeCommand(opts: {
   command?: string;
   message?: string;
 }): Promise<FaloodCommandResult | { error: string }> {
-  const active = await getProviderForCategory("resume_studio");
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY, NVIDIA_API_KEY, or GOOGLE_API_KEY)." };
-
   const ctx = await gatherContext(opts.baseResumeId);
   if (!ctx) return { error: "Base resume not found." };
 
   const prompt = buildPrompt(ctx, opts.command, opts.message);
 
   try {
-    const response = await active.provider.send({
-      system: "You are Falood, a controlled resume assistant. Respond with raw JSON only, exactly matching the requested schema.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("base_resume_studio", undefined, async (provider) => {
+      return provider.send({
+        system: "You are Falood, a controlled resume assistant. Respond with raw JSON only, exactly matching the requested schema.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     return parseResult(textOf(response.content));
   } catch (err: any) {
