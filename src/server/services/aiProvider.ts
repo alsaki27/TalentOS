@@ -217,7 +217,7 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       return createOpenAiCompatibleProvider({
-        apiUrl: process.env.OPENCODE_API_BASE || "http://localhost:4096/v1/chat/completions",
+        apiUrl: process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions",
         apiKey,
         model: model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash",
         errorLabel: "OpenCode API",
