@@ -31,7 +31,7 @@ export interface ExportOptions {
 
 export interface ExportResult {
   exportRecord: ApplicationResumeExportRow;
-  buffer: Buffer;
+  buffer: Uint8Array;
   fileName: string;
   contentType: string;
 }
@@ -234,12 +234,12 @@ async function exportResume(
   });
 
   // 3. Generate file
-  let buffer: Buffer;
+  let buffer: Uint8Array;
   try {
     if (exportType === "docx" || exportType === "pdf") {
       throw new Error(`${exportType.toUpperCase()} export is temporarily disabled on this deployment. Use Markdown export instead.`);
     } else if (exportType === "markdown" || exportType === "text") {
-      buffer = Buffer.from(renderResumeAsMarkdownText(content), "utf-8");
+      buffer = new TextEncoder().encode(renderResumeAsMarkdownText(content));
     } else {
       throw new Error(`Unsupported export type: ${exportType}`);
     }

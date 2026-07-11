@@ -127,8 +127,8 @@ function extractTextShowOperators(content: string): string[] {
 }
 
 async function extractTextFromPdfBuffer(buffer: Uint8Array): Promise<string> {
-  const raw = Buffer.from(buffer);
-  const latin1 = raw.toString("latin1");
+  const raw = buffer;
+  const latin1 = new TextDecoder("latin1").decode(raw);
   const streamHeaderRe = /(<<[^>]*?>>)\s*stream\r?\n/g;
   const allText: string[] = [];
   let match: RegExpExecArray | null;
@@ -146,13 +146,13 @@ async function extractTextFromPdfBuffer(buffer: Uint8Array): Promise<string> {
     if (dict.includes("/FlateDecode")) {
       try {
         const inflated = await inflateDeflateStream(new Uint8Array(rawBytes));
-        allText.push(...extractTextShowOperators(Buffer.from(inflated).toString("latin1")));
+        allText.push(...extractTextShowOperators(new TextDecoder("latin1").decode(inflated)));
       } catch {
         // Not actually deflate-compressed text (e.g. an image stream that
         // happens to also be tagged /FlateDecode) - skip it.
       }
     } else if (!dict.includes("/Filter")) {
-      allText.push(...extractTextShowOperators(rawBytes.toString("latin1")));
+      allText.push(...extractTextShowOperators(new TextDecoder("latin1").decode(rawBytes)));
     }
   }
 
@@ -489,9 +489,9 @@ export function extractLinkedInUrlFromText(rawText: string): string | undefined 
 
 export function extractLinkedInUrlFromBinary(buffer: Uint8Array): string | undefined {
   try {
-    const nodeBuffer = Buffer.from(buffer);
-    const head = nodeBuffer.subarray(0, Math.min(nodeBuffer.length, 800_000)).toString("latin1");
-    const tail = nodeBuffer.subarray(Math.max(0, nodeBuffer.length - 800_000)).toString("latin1");
+    const len = buffer.length;
+    const head = new TextDecoder("latin1").decode(buffer.subarray(0, Math.min(len, 800_000)));
+    const tail = new TextDecoder("latin1").decode(buffer.subarray(Math.max(0, len - 800_000)));
     const combined = `${head}\n${tail}`;
 
     const candidates = combined.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/[A-Za-z0-9/_\-?&=%\.]+/gi) ?? [];

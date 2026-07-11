@@ -69,9 +69,9 @@ function reportLinkedinUrlSeedingDebug(
 
 function scanBufferForLinkedInUrls(buffer: Uint8Array): { count: number; samples: string[] } {
   try {
-    const nodeBuffer = Buffer.from(buffer);
-    const head = nodeBuffer.subarray(0, Math.min(nodeBuffer.length, 600_000)).toString("latin1");
-    const tail = nodeBuffer.subarray(Math.max(0, nodeBuffer.length - 600_000)).toString("latin1");
+    const len = buffer.length;
+    const head = new TextDecoder("latin1").decode(buffer.subarray(0, Math.min(len, 600_000)));
+    const tail = new TextDecoder("latin1").decode(buffer.subarray(Math.max(0, len - 600_000)));
     const combined = `${head}\n${tail}`;
     const matches = combined.match(/linkedin\.com\/[A-Za-z0-9/_\-?&=%\.]+/gi) ?? [];
     const samples = Array.from(new Set(matches.map((m) => m.slice(0, 180)))).slice(0, 3);

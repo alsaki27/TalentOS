@@ -44,7 +44,7 @@ export const AI_TASK_CATEGORIES: { value: AiTaskCategory; label: string }[] = [
   { value: "default", label: "Default (fallback)" },
 ];
 
-function getProviderByName(name: string): ActiveProvider | null {
+export function getProviderByName(name: string): ActiveProvider | null {
   switch (name) {
     case "openai": {
       const provider = getOpenAiProvider();

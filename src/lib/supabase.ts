@@ -6,11 +6,12 @@
 // client when the migration happens. The exported `supabase` object is the stable
 // interface.
 
+import { createClient } from "@supabase/supabase-js";
+
 let _client: any;
 
-async function getClient() {
+function getClient() {
   if (!_client) {
-    const { createClient } = await import("@supabase/supabase-js");
     const url = process.env.SUPABASE_URL;
     const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!url || !key) {
@@ -30,11 +31,10 @@ async function getClient() {
 // Proxy so that existing code using `supabase.from(...)` still works without
 // calling createClient at module-import time. Build passes even when env vars
 // are absent; runtime requests fail with a clear error if they are missing.
+// Returns the actual client method reference so chained calls like
+// `supabase.from("jobs").select("*")` continue to work correctly.
 export const supabase: any = new Proxy({} as any, {
   get(_target, prop) {
-    return async (...args: any[]) => {
-      const client = await getClient();
-      return client[prop](...args);
-    };
+    return getClient()[prop];
   },
 });
