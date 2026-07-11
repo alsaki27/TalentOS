@@ -470,10 +470,14 @@ export async function listApplicationQueue(
         a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
         a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
         jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename) as candidates,
-        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs,
+        COALESCE(ap.resume_version_id, ap.final_resume_version_id) as tailored_resume_version_id,
+        arv.title as tailored_resume_title
       FROM applications a
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
+      LEFT JOIN application_packets ap ON ap.application_id = a.id
+      LEFT JOIN application_resume_versions arv ON arv.id = COALESCE(ap.resume_version_id, ap.final_resume_version_id)
       WHERE a.status = ANY($1)
         AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
         AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
@@ -571,7 +575,8 @@ export async function listApplicationQueue(
     proof_uploaded_at,
     source_type,
     candidates(id, name, email, phone, resume_url, resume_filename),
-    jobs(id, title, company, location, source_url, job_category, category_relevance_score)
+    jobs(id, title, company, location, source_url, job_category, category_relevance_score),
+    application_packets(resume_version_id, final_resume_version_id, application_resume_versions(id, title))
   `;
 
   let dbQuery = supabase
@@ -623,8 +628,22 @@ export async function listApplicationQueue(
   // Stats
   const stats = await buildQueueStats(queryParams);
 
+  // Flatten Supabase nested application_packets into tailored_resume fields
+  const normalizedItems = (data ?? []).map((row: any) => {
+    const packet = Array.isArray(row.application_packets)
+      ? row.application_packets[0]
+      : row.application_packets;
+    const version = packet?.application_resume_versions;
+    return {
+      ...row,
+      tailored_resume_version_id: packet?.resume_version_id ?? packet?.final_resume_version_id ?? version?.id ?? null,
+      tailored_resume_title: version?.title ?? null,
+      application_packets: undefined, // remove nested field
+    };
+  });
+
   return {
-    items: (data ?? []) as ApplicationRow[],
+    items: normalizedItems as ApplicationRow[],
     total: count ?? 0,
     page,
     pageSize,

@@ -1518,6 +1518,17 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [error, setError] = useState("");
   const [localScores, setLocalScores] = useState<MatchScore[]>(job.match_scores || []);
   const [generatingScoreFor, setGeneratingScoreFor] = useState<string | null>(null);
+
+  // Base resume state
+  const [baseResumes, setBaseResumes] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [resumeSource, setResumeSource] = useState<"uploaded" | "base_resume">("uploaded");
+  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
+
+  // Auto-tailoring state
+  const [autoTailorStatus, setAutoTailorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [autoTailorVersionId, setAutoTailorVersionId] = useState<string | null>(null);
+  const [autoTailorError, setAutoTailorError] = useState("");
+
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
     const bRank = b.role === "application_engineer" ? 0 : 1;
@@ -1536,11 +1547,25 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);
 
+  // Fetch both uploaded resumes and base resumes when a single candidate is selected
   useEffect(() => {
     setResumeId("");
+    setSelectedBaseResumeId("");
+    setBaseResumes([]);
+    setResumeSource("uploaded");
     if (candidateIds.size !== 1) { setResumeVariants([]); return; }
     const [candidateId] = Array.from(candidateIds);
     fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    fetch(`/api/base-resumes?candidateId=${candidateId}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: { id: string; name: string; status: string }[]) => {
+        setBaseResumes(data);
+        // Auto-select first base resume and default to base_resume source if available
+        if (data.length > 0) {
+          setSelectedBaseResumeId(data[0].id);
+          setResumeSource("base_resume");
+        }
+      });
   }, [candidateIds]);
 
   function toggleCandidate(id: string) {
@@ -1578,13 +1603,41 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     }
   }
 
+  async function autoTailorResume(applicationId: string, candidateId: string) {
+    setAutoTailorStatus("running");
+    setAutoTailorError("");
+    setAutoTailorVersionId(null);
+    try {
+      const res = await fetch("/api/quick-application/auto-tailor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId,
+          jobId: job.id,
+          applicationId,
+          baseResumeId: selectedBaseResumeId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAutoTailorStatus("error");
+        setAutoTailorError(data.error || "Auto-tailoring failed.");
+        return;
+      }
+      setAutoTailorVersionId(data.versionId);
+      setAutoTailorStatus("done");
+    } catch (err: any) {
+      setAutoTailorStatus("error");
+      setAutoTailorError(err.message || "Network error during auto-tailoring.");
+    }
+  }
+
   async function submit() {
     if (candidateIds.size === 0) { setError("Select at least one candidate."); return; }
     setSaving(true);
     setError("");
     const selectedIds = Array.from(candidateIds);
     const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
-    const variant = resumeVariants.find((r) => r.id === resumeId);
     const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
     const assignmentStatus = status === "assigned" || status === "stacked";
     if (assignmentStatus && !assignedToUserId) {
@@ -1599,9 +1652,9 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         candidate_ids: selectedIds,
         job_id: job.id,
         status,
-        resume_id: variant?.id ?? null,
-        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
-        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        resume_id: null,
+        resume_url: candidate?.resume_url ?? null,
+        resume_filename: candidate?.resume_filename ?? null,
         assigned_by: currentUser?.display_name || currentUser?.email || null,
         assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
         assigned_by_user_id: currentUser?.user_id ?? null,
@@ -1609,13 +1662,23 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         assignment_due_at: assignmentDueAt || null,
         assignment_note: assignmentNote || null,
         next_action: status === "assigned" || status === "stacked" ? "Apply to this job" : null,
+        source_type: selectedBaseResumeId ? "base_resume" : undefined,
       }),
     });
     setSaving(false);
     const data = await res.json();
     if (!res.ok) { setError(data.error || "Something went wrong."); return; }
-    onLogged();
+
+    // Auto-trigger tailoring if a base resume was selected and single candidate
+    const createdApp = data.created?.[0];
+    if (selectedBaseResumeId && createdApp && selectedIds.length === 1) {
+      autoTailorResume(createdApp.id, selectedIds[0]);
+    } else {
+      onLogged();
+    }
   }
+
+  const isTailoring = autoTailorStatus === "running" || autoTailorStatus === "done" || autoTailorStatus === "error";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1766,6 +1829,116 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
             {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
           </button>
         </div>
+        {isTailoring ? (
+          /* ── Tailoring progress view ── */
+          <div>
+            {autoTailorStatus === "running" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "var(--accent-bg, #e3f2fd)", fontSize: 13 }}>
+                <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🤖</span>
+                <span>Application created! Generating ATS-tailored resume…</span>
+              </div>
+            )}
+            {autoTailorStatus === "done" && autoTailorVersionId && (
+              <div style={{ padding: "12px 14px", borderRadius: 8, background: "#e8f5e9", border: "1px solid #a5d6a7", fontSize: 13, marginBottom: 16 }}>
+                <strong>✅ Application created & ATS-tailored resume generated!</strong>
+                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                  <a href={`/falood/studio/application/${autoTailorVersionId}`} target="_blank" rel="noreferrer">
+                    <button className="btn-primary" style={{ fontSize: 12 }}>📝 Edit in Falood Studio</button>
+                  </a>
+                  <button onClick={onLogged}>Done</button>
+                </div>
+              </div>
+            )}
+            {autoTailorStatus === "error" && (
+              <div style={{ padding: "12px 14px", borderRadius: 8, background: "#fff3e0", border: "1px solid #ffcc80", fontSize: 13, marginBottom: 16 }}>
+                <strong>⚠ Application created but auto-tailoring failed:</strong> {autoTailorError}
+                <div style={{ marginTop: 8 }}>
+                  <button onClick={onLogged}>Done</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          /* ── Normal form ── */
+          <>
+            <div className="field-group">
+              <label>Candidates</label>
+              <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 8 }}>
+                {candidates.map((c) => (
+                  <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, color: "var(--ink)", fontWeight: 400 }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: "auto" }}
+                      checked={candidateIds.has(c.id)}
+                      onChange={() => toggleCandidate(c.id)}
+                    />
+                    {c.name}{c.resume_filename ? "" : " (no resume uploaded)"}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {candidateIds.size === 1 && baseResumes.length > 0 && (
+              <div className="field-group">
+                <label>Base Resume</label>
+                <select value={selectedBaseResumeId} onChange={(e) => setSelectedBaseResumeId(e.target.value)}>
+                  {baseResumes.map((br) => (
+                    <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                  ))}
+                </select>
+                <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                  An ATS-tailored resume will be auto-generated from this base resume for &quot;{job.title}&quot;
+                </p>
+              </div>
+            )}
+
+            <div className="field-group">
+              <label>Status</label>
+              <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="assigned">Assigned to apply</option>
+                <option value="stacked">Stacked / queued</option>
+                <option value="in_progress">In progress</option>
+                <option value="applied">Applied</option>
+                <option value="replied">Replied</option>
+                <option value="interview">Interview</option>
+                <option value="rejected">Rejected</option>
+                <option value="offer">Offer</option>
+              </select>
+            </div>
+            <div className="field-group">
+              <label>Assigned by</label>
+              <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" />
+            </div>
+            <div className="field-group">
+              <label>Application owner</label>
+              <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
+                <option value="">-- Select owner --</option>
+                {assignmentOwners.map((user) => (
+                  <option key={user.user_id} value={user.user_id}>
+                    {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field-group">
+              <label>Due date</label>
+              <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
+            </div>
+            <div className="field-group">
+              <label>Assignment note</label>
+              <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." />
+            </div>
+
+            {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+            <div className="modal-actions">
+              <button onClick={onClose}>Cancel</button>
+              <button className="btn-primary" onClick={submit} disabled={saving}>
+                {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

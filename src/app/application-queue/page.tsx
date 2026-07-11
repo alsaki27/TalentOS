@@ -25,6 +25,10 @@ interface QueueItem {
   source_type: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null } | null;
+  tailored_resume_version_id: string | null;
+  tailored_resume_title: string | null;
+  // Supabase nested shape (flattened during load)
+  application_packets?: any;
 }
 
 interface TeamUser {
@@ -481,6 +485,7 @@ export default function ApplicationQueuePage() {
               <th>Job</th>
               <th>Status</th>
               <th>Source</th>
+              <th>Resume</th>
               <th>Priority</th>
               <th>Review</th>
               <th>Owner</th>
@@ -521,6 +526,21 @@ export default function ApplicationQueuePage() {
                 </td>
                 <td><span className={`badge badge-${item.status}`}>{item.status}</span></td>
                 <td><SourceTypeBadge sourceType={item.source_type} /></td>
+                <td>
+                  {(item.tailored_resume_version_id) ? (
+                    <a
+                      href={`/falood/studio/application/${item.tailored_resume_version_id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4 }}
+                      title={item.tailored_resume_title || "Tailored resume"}
+                    >
+                      📝 Tailored
+                    </a>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>—</span>
+                  )}
+                </td>
                 <td><span className={`badge badge-priority-${item.priority}`}>{item.priority}</span></td>
                 <td><span className={`badge badge-review-${item.review_status}`}>{item.review_status.replaceAll("_", " ")}</span></td>
                 <td>

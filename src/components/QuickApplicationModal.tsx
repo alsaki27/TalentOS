@@ -132,6 +132,11 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
   const [faloodLoading, setFaloodLoading] = useState(false);
   const [faloodError, setFaloodError] = useState("");
 
+  // Auto-tailoring state
+  const [autoTailorStatus, setAutoTailorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [autoTailorVersionId, setAutoTailorVersionId] = useState<string | null>(null);
+  const [autoTailorError, setAutoTailorError] = useState("");
+
   /* ── fetch candidates ── */
   const fetchCandidates = useCallback(async () => {
     setCandidatesLoading(true);
@@ -338,6 +343,10 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     const created = data.created?.[0];
     if (created) {
       setCreatedApp(created);
+      // Auto-trigger tailoring if conditions are met
+      if (selectedJob && sourceType === "base_resume" && selectedBaseResumeId) {
+        autoTailorResume(created.id);
+      }
     }
     setStep(4);
   }
@@ -378,6 +387,43 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     // Close modal and redirect to Falood studio
     onClose();
     router.push(`/falood/studio/application/${data.versionId}`);
+  }
+
+  /* ── auto-tailor resume after application creation ── */
+  async function autoTailorResume(appId: string) {
+    const jobId = selectedJob?.id;
+    if (!jobId || !selectedCandidate || sourceType !== "base_resume" || !selectedBaseResumeId) return;
+
+    setAutoTailorStatus("running");
+    setAutoTailorError("");
+    setAutoTailorVersionId(null);
+
+    try {
+      const res = await fetch("/api/quick-application/auto-tailor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: selectedCandidate.id,
+          jobId,
+          applicationId: appId,
+          baseResumeId: selectedBaseResumeId,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setAutoTailorStatus("error");
+        setAutoTailorError(data.error || "Auto-tailoring failed.");
+        return;
+      }
+
+      setAutoTailorVersionId(data.versionId);
+      setAutoTailorStatus("done");
+    } catch (err: any) {
+      setAutoTailorStatus("error");
+      setAutoTailorError(err.message || "Network error during auto-tailoring.");
+    }
   }
 
   /* ── create blank base resume inline ── */
@@ -679,6 +725,31 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                 <p><strong>Job:</strong> {selectedJob?.title ?? "Ad-hoc application"}</p>
                 <p><strong>Status:</strong> {createdApp.status}</p>
                 <p><strong>Source:</strong> {sourceType.replaceAll("_", " ")}</p>
+
+                {/* Auto-tailoring status */}
+                {autoTailorStatus === "running" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--accent-bg)", fontSize: 13 }}>
+                    <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🤖</span>
+                    <span>Auto-generating ATS-tailored resume…</span>
+                  </div>
+                )}
+                {autoTailorStatus === "done" && autoTailorVersionId && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#e8f5e9", border: "1px solid #a5d6a7", fontSize: 13 }}>
+                    <strong>✅ ATS-tailored resume generated!</strong>
+                    <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                      <Link href={`/falood/studio/application/${autoTailorVersionId}`} onClick={onClose}>
+                        <button className="btn-primary" style={{ fontSize: 12 }}>📝 Edit in Falood Studio</button>
+                      </Link>
+                    </div>
+                  </div>
+                )}
+                {autoTailorStatus === "error" && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#fff3e0", border: "1px solid #ffcc80", fontSize: 13 }}>
+                    <strong>⚠ Auto-tailoring:</strong> {autoTailorError || "Could not auto-generate tailored resume."}
+                    <span className="muted" style={{ display: "block", marginTop: 4, fontSize: 11 }}>You can still use "Build with Falood AI" to manually tailor.</span>
+                  </div>
+                )}
+
                 {faloodError && <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{faloodError}</p>}
                 <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                   {selectedCandidate && (
