@@ -1526,7 +1526,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   // Auto-tailoring state
   const [autoTailorStatus, setAutoTailorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
-  const [autoTailorVersionId, setAutoTailorVersionId] = useState<string | null>(null);
+  const [autoTailorFaloodId, setAutoTailorFaloodId] = useState<string | null>(null);
+  const [autoTailorJobMeta, setAutoTailorJobMeta] = useState<{ title: string; company: string }>({ title: "", company: "" });
   const [autoTailorError, setAutoTailorError] = useState("");
 
   const assignmentOwners = [...users].sort((a, b) => {
@@ -1606,7 +1607,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   async function autoTailorResume(applicationId: string, candidateId: string) {
     setAutoTailorStatus("running");
     setAutoTailorError("");
-    setAutoTailorVersionId(null);
+    setAutoTailorFaloodId(null);
     try {
       const res = await fetch("/api/quick-application/auto-tailor", {
         method: "POST",
@@ -1624,7 +1625,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         setAutoTailorError(data.error || "Auto-tailoring failed.");
         return;
       }
-      setAutoTailorVersionId(data.versionId);
+      setAutoTailorFaloodId(data.faloodAppId);
+      setAutoTailorJobMeta({ title: data.jobTitle || "", company: data.company || "" });
       setAutoTailorStatus("done");
     } catch (err: any) {
       setAutoTailorStatus("error");
@@ -1838,12 +1840,12 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                 <span>Application created! Generating ATS-tailored resume…</span>
               </div>
             )}
-            {autoTailorStatus === "done" && autoTailorVersionId && (
+            {autoTailorStatus === "done" && autoTailorFaloodId && (
               <div style={{ padding: "12px 14px", borderRadius: 8, background: "#e8f5e9", border: "1px solid #a5d6a7", fontSize: 13, marginBottom: 16 }}>
                 <strong>✅ Application created & ATS-tailored resume generated!</strong>
                 <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                  <a href={`/falood/studio/application/${autoTailorVersionId}`} target="_blank" rel="noreferrer">
-                    <button className="btn-primary" style={{ fontSize: 12 }}>📝 Edit in Falood Studio</button>
+                  <a href={`/falood/studio/tailor/${encodeURIComponent(autoTailorFaloodId)}?jobTitle=${encodeURIComponent(autoTailorJobMeta.title)}&company=${encodeURIComponent(autoTailorJobMeta.company)}`} target="_blank" rel="noreferrer">
+                    <button className="btn-primary" style={{ fontSize: 12 }}>📝 Edit in Resume Builder</button>
                   </a>
                   <button onClick={onLogged}>Done</button>
                 </div>

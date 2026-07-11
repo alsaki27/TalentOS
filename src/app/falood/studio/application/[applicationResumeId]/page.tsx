@@ -457,7 +457,7 @@ export default function ApplicationResumeStudioPage() {
     const pending: Keyword[] = [];
     const warnings: Keyword[] = [];
 
-    for (const k of targetJob.keywords) {
+    for (const k of (targetJob.keywords ?? [])) {
       const decision = keywordApprovals.find((ka) => ka.keyword_id === k.id)?.decision ?? "pending";
       if (decision === "approved") approved.push(k);
       else if (decision === "rejected") rejected.push(k);
@@ -481,7 +481,7 @@ export default function ApplicationResumeStudioPage() {
     const map: Record<string, string[]> = {};
     const text = JSON.stringify(content).toLowerCase();
 
-    for (const k of targetJob.keywords) {
+    for (const k of (targetJob.keywords ?? [])) {
       const sections: string[] = [];
       const kw = k.keyword.toLowerCase();
 
@@ -1338,7 +1338,7 @@ export default function ApplicationResumeStudioPage() {
           <div style={{ flex: 1, overflow: "hidden" }}>
             <A4Preview
               content={content}
-              highlights={targetJob?.keywords.map((k) => ({
+              highlights={(targetJob?.keywords ?? []).map((k) => ({
                 keyword: k.keyword,
                 color: k.evidence === "strong" ? "#bbf7d0" : k.evidence === "weak" ? "#fef08a" : k.evidence === "missing" ? "#fecaca" : "#e2e8f0",
               })) ?? []}
