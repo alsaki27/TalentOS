@@ -11,12 +11,34 @@ ALTER TABLE applications DROP CONSTRAINT IF EXISTS app_number_unique;
 ALTER TABLE applications ADD CONSTRAINT app_number_unique UNIQUE (app_number);
 
 -- 2. Backfill numbers using sequences (idempotent — uses sub-select to filter nulls)
+--    Also sync sequences to current maximums to prevent conflicts.
 CREATE SEQUENCE IF NOT EXISTS candidate_number_seq START 10001;
 UPDATE candidates SET candidate_number = nextval('candidate_number_seq') WHERE candidate_number IS NULL;
 CREATE SEQUENCE IF NOT EXISTS job_number_seq START 10001;
 UPDATE jobs SET job_number = nextval('job_number_seq') WHERE job_number IS NULL;
 CREATE SEQUENCE IF NOT EXISTS app_number_seq START 10001;
 UPDATE applications SET app_number = nextval('app_number_seq') WHERE app_number IS NULL;
+
+DO $$
+DECLARE
+  v_max bigint;
+BEGIN
+  SELECT COALESCE(MAX(candidate_number), 10000) INTO v_max FROM candidates;
+  PERFORM setval('candidate_number_seq', GREATEST(v_max, 10000));
+  SELECT COALESCE(MAX(job_number), 10000) INTO v_max FROM jobs;
+  PERFORM setval('job_number_seq', GREATEST(v_max, 10000));
+  SELECT COALESCE(MAX(app_number), 10000) INTO v_max FROM applications;
+  PERFORM setval('app_number_seq', GREATEST(v_max, 10000));
+END $$;
+
+-- Add DEFAULT nextval() and NOT NULL constraints for auto-assignment.
+ALTER TABLE candidates ALTER COLUMN candidate_number SET DEFAULT nextval('candidate_number_seq');
+ALTER TABLE jobs ALTER COLUMN job_number SET DEFAULT nextval('job_number_seq');
+ALTER TABLE applications ALTER COLUMN app_number SET DEFAULT nextval('app_number_seq');
+
+ALTER TABLE candidates ALTER COLUMN candidate_number SET NOT NULL;
+ALTER TABLE jobs ALTER COLUMN job_number SET NOT NULL;
+ALTER TABLE applications ALTER COLUMN app_number SET NOT NULL;
 
 -- 3. Direct linkage columns on application_resume_versions
 ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS application_id uuid REFERENCES applications(id);

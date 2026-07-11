@@ -31,7 +31,8 @@ interface AutomationRouteRow {
  * Falls back to the global env-based chain if no routes are configured or all fail.
  */
 export async function getProviderForAutomation(
-  automationId: string
+  automationId: string,
+  excludeKeyIds?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
   // 1. Load ordered enabled routes for this automation
   const routes = await query<AutomationRouteRow>(
@@ -41,9 +42,10 @@ export async function getProviderForAutomation(
     [automationId, true]
   );
 
-  // 2. Try each route in order
+  // 2. Try each route in order, excluding failed keys
   for (const route of routes) {
     if (route.ai_key_id) {
+      if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
       if (!keyRow || !keyRow.is_enabled) continue;
       const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
@@ -69,6 +71,7 @@ export async function getProviderForAutomation(
       // Try DB keys for this provider
       const dbKeys = await listEnabledAiKeys();
       for (const key of dbKeys) {
+        if (excludeKeyIds?.has(key.id)) continue;
         if (key.provider !== route.provider) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
@@ -120,9 +123,10 @@ export interface CallWithUsageTrackingResult<T> {
 export async function callWithUsageTracking<T>(
   automationId: string,
   ctx: { userId?: string } | undefined,
-  fn: (provider: AiProvider) => Promise<T>
+  fn: (provider: AiProvider) => Promise<T>,
+  excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
-  const resolved = await getProviderForAutomation(automationId);
+  const resolved = await getProviderForAutomation(automationId, excludeKeyIds);
   if (!resolved) {
     throw new Error(`No AI provider available for automation: ${automationId}`);
   }

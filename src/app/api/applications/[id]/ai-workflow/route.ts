@@ -1,10 +1,6 @@
-// POST /api/applications/[id]/ai-workflow — start a multi-agent workflow
-// GET /api/applications/[id]/ai-workflow — get workflow status
-// Requires APPLICATION_WORKER_ROLES
-
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { startWorkflow, processWorkflowStage, cancelWorkflow } from "@/server/services/applicationAiWorkflowService";
+import { startWorkflow, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findActiveWorkflowByApplicationId, findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne } from "@/server/db/neon";
 
@@ -22,7 +18,6 @@ export async function POST(
     return NextResponse.json({ error: "Application ID is required" }, { status: 400 });
   }
 
-  // Check for existing active workflow
   const existing = await findActiveWorkflowByApplicationId(applicationId);
   if (existing) {
     return NextResponse.json({
@@ -32,7 +27,6 @@ export async function POST(
     }, { status: 409 });
   }
 
-  // Derive candidate and job from the application
   const appRow = await queryOne<{ candidate_id: string; job_id: string | null }>(
     "SELECT candidate_id, job_id FROM applications WHERE id = $1",
     [applicationId]
@@ -48,13 +42,34 @@ export async function POST(
     if (jobRow) job = jobRow;
   }
 
-  // Load base resume for candidate (application_resume_versions joins via candidate_id, not application_id)
+  // Load base resume for the specific application's candidate+job combo.
+  // Prioritise the resume linked to the target_job for this application's job,
+  // falling back to the candidate's most recent base resume overall.
   let baseResume: any = {};
-  const resumeRow = await queryOne(
-    "SELECT * FROM application_resume_versions WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
-    [appRow.candidate_id]
-  );
-  if (resumeRow) baseResume = resumeRow;
+  let resumeRow = null;
+  if (appRow.job_id) {
+    resumeRow = await queryOne(
+      `SELECT arv.* FROM application_resume_versions arv
+       WHERE arv.target_job_id IN (
+         SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
+       )
+       AND arv.source_type = 'base_resume' AND arv.status = 'active'
+       ORDER BY arv.created_at DESC LIMIT 1`,
+      [appRow.candidate_id, appRow.job_id]
+    );
+  }
+  if (!resumeRow) {
+    resumeRow = await queryOne(
+      "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
+      [appRow.candidate_id]
+    );
+  }
+  if (!resumeRow) {
+    return NextResponse.json({
+      error: "No base resume found. Please select or create a base resume for this candidate before generating.",
+    }, { status: 400 });
+  }
+  baseResume = resumeRow;
 
   // Load evidence
   const evidence = await query(
@@ -71,9 +86,9 @@ export async function POST(
     startedBy: context?.profile.user_id,
   });
 
-  // Dispatch first stage asynchronously (don't await)
-  processWorkflowStage(workflowId).catch((err) => {
-    console.error(`[Workflow ${workflowId}] Stage processing failed:`, err);
+  // Dispatch the first stage
+  dispatchWorkflowById(workflowId).catch((err) => {
+    console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
   });
 
   return NextResponse.json({
@@ -111,5 +126,3 @@ export async function GET(
     artifacts,
   });
 }
-
-

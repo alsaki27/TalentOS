@@ -149,3 +149,29 @@ jobs:
           done
           echo "::error::Live health check failed after deploy - site is not responding healthy at /api/health"
           exit 1
+
+      - name: Verify AI key encryption readiness
+        run: |
+          for i in 1 2 3 4 5; do
+            RESPONSE=$(curl -s -w '\n%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "https://skarion-talent-os.skarion-talentos.workers.dev/api/admin/ai-key-readiness" || echo "000")
+            CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            if [ "$CODE" = "200" ]; then
+              READY=$(echo "$BODY" | grep -o '"ready":\s*true')
+              if [ -n "$READY" ]; then
+                echo "AI key encryption ready: $BODY"
+                exit 0
+              fi
+              echo "AI keys not encrypted: $BODY"
+              echo "::error::AI key encryption is not ready - plaintext keys found in production. Run 'Secure legacy keys' from the Admin UI or set ALLOW_PLAINTEXT_AI_KEYS=true for development only."
+              exit 1
+            fi
+            echo "Attempt $i: HTTP $CODE - $BODY"
+            sleep 3
+          done
+          echo "::error::AI key readiness check failed - encryption may not be configured"
+          exit 1
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

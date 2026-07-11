@@ -1,11 +1,6 @@
-// POST /api/application-ai-workflows/[id]/cancel
-// POST /api/application-ai-workflows/[id]/retry
-// POST /api/application-ai-workflows/[id]/rerun-from-stage
-// Requires APPLICATION_WORKER_ROLES
-
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { cancelWorkflow, retryWorkflow, rerunFromStage, processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
+import { cancelWorkflow, retryWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
 
 export const dynamic = "force-dynamic";
@@ -40,8 +35,8 @@ export async function POST(
         return NextResponse.json({ error: `Can only retry failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await retryWorkflow(workflowId);
-      processWorkflowStage(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Retry stage processing failed:`, err);
+      dispatchWorkflowById(workflowId).catch((err) => {
+        console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, err);
       });
       return NextResponse.json({ workflowId, status: "queued" });
     }
@@ -53,8 +48,8 @@ export async function POST(
         return NextResponse.json({ error: "Invalid stage parameter" }, { status: 400 });
       }
       await rerunFromStage(workflowId, stage);
-      processWorkflowStage(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Rerun stage processing failed:`, err);
+      dispatchWorkflowById(workflowId).catch((err) => {
+        console.error(`[Workflow ${workflowId}] Rerun dispatch failed:`, err);
       });
       return NextResponse.json({ workflowId, status: "queued", fromStage: stage });
     }

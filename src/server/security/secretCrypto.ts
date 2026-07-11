@@ -57,7 +57,15 @@ export async function encryptSecret(plaintext: string): Promise<string> {
  */
 export async function decryptSecret(ciphertext: string): Promise<string> {
   if (!ciphertext.startsWith("enc:")) {
-    console.error("[SECURITY] Plaintext API key detected — re-encrypt this key via the admin UI");
+    const isProduction = process.env.NODE_ENV === "production" || !!process.env.CLOUDFLARE_WORKER;
+    const allowedInDev = process.env.ALLOW_PLAINTEXT_AI_KEYS === "true";
+    if (isProduction || !allowedInDev) {
+      throw new Error(
+        "[SECURITY] Plaintext AI key rejected. All API keys must be encrypted with the 'enc:' prefix. " +
+        "Use the admin UI 'Secure legacy keys' action to re-encrypt, or set ALLOW_PLAINTEXT_AI_KEYS=true for local development only."
+      );
+    }
+    console.error("[SECURITY] Plaintext AI key detected — re-encrypt this key via the admin UI before deploying to production");
     return ciphertext;
   }
 

@@ -1,5 +1,5 @@
 // Orchestrates the multi-agent application pipeline.
-// Each stage runs synchronously, then dispatches the next stage.
+// Each stage runs in a single invocation, then the dispatcher picks up the next.
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
@@ -22,6 +22,7 @@ import {
   createArtifact,
   listStageRuns,
   listArtifacts,
+  claimNextPendingWorkflow,
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -47,6 +48,13 @@ function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
     data: a.data,
     createdAt: a.created_at,
   }));
+}
+
+export interface DispatchResult {
+  dispatched: boolean;
+  workflowId: string | null;
+  stage: number | null;
+  message?: string;
 }
 
 /** Persist the full workflow input as an immutable snapshot. */
@@ -96,29 +104,29 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
 /**
  * Process exactly one stage for a workflow.
  * - Transitions from 'queued' → 'running' automatically.
- * - After successful stage, dispatches the next stage.
+ * - After successful stage, re-queues for the next stage.
  * - Retries on failure up to configured max_attempts.
  * - On final failure, marks workflow as failed.
- * - Implements runtime provider fallback (up to 3 route attempts).
+ * - Implements runtime provider fallback (up to 3 distinct route attempts).
+ * - Does NOT recurse — the dispatcher picks up the next stage.
  */
 export async function processWorkflowStage(workflowId: string, _routeAttempt: number = 1): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf) return;
 
-  // Accept both queued and running states (auto-start from queued)
   if (wf.status !== "queued" && wf.status !== "running") return;
 
-  // Transition queued → running + update application status
   if (wf.status === "queued") {
-    await updateWorkflowStatus(workflowId, "running", { current_stage: 0, last_error: null } as any);
-    await query("UPDATE applications SET resume_generation_status = $1, ai_workflow_id = $2, resume_generation_started_at = NOW() WHERE id = $3",
-      ["job_analysis", workflowId, wf.application_id]);
+    await updateWorkflowStatus(workflowId, "running", { current_stage: wf.current_stage, last_error: null } as any);
+    if (wf.current_stage === 0) {
+      await query("UPDATE applications SET resume_generation_status = $1, ai_workflow_id = $2, resume_generation_started_at = NOW() WHERE id = $3",
+        ["job_analysis", workflowId, wf.application_id]);
+    }
   }
 
   const agentOrder = APPLICATION_AGENT_IDS;
   const currentIdx = wf.current_stage;
 
-  // Completed all stages
   if (currentIdx >= agentOrder.length) {
     await finalizeWorkflow(workflowId);
     return;
@@ -147,12 +155,13 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();
 
-    // Call with provider fallback (up to 3 route attempts)
+    // Provider fallback: try up to 3 distinct routes, tracking failed key IDs.
     let lastError: Error | null = null;
     let agentOutput: any = null;
     let resolvedProviderName = "";
     let resolvedKeyId: string | null = null;
     let resolvedModel: string | null = null;
+    const failedKeyIds = new Set<string>();
 
     for (let fallbackAttempt = 1; fallbackAttempt <= 3; fallbackAttempt++) {
       try {
@@ -162,7 +171,8 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
           async (provider: AiProvider) => {
             const agentFn = getAgentFn(agentId);
             return agentFn({}, provider, ctx);
-          }
+          },
+          failedKeyIds.size > 0 ? failedKeyIds : undefined,
         );
         agentOutput = callResult.result;
         resolvedProviderName = callResult.providerName;
@@ -172,8 +182,9 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         break;
       } catch (err: any) {
         lastError = err;
+        if (resolvedKeyId) failedKeyIds.add(resolvedKeyId);
+        resolvedKeyId = null;
         if (fallbackAttempt < 3) {
-          // Brief delay before retry
           await new Promise((r) => setTimeout(r, 500));
         }
       }
@@ -219,7 +230,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
           current_stage: currentIdx + 1,
           last_error: gateResult.reason ?? undefined,
         });
-        return; // Stop — waiting for human review or hard failed
+        return;
       }
     }
 
@@ -229,9 +240,8 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       return;
     }
 
-    // Advance and dispatch next stage
-    await updateWorkflowStatus(workflowId, "running", { current_stage: currentIdx + 1 });
-    await processWorkflowStage(workflowId); // Recursively dispatch next stage
+    // Advance to next stage and re-queue
+    await updateWorkflowStatus(workflowId, "queued", { current_stage: currentIdx + 1 });
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -239,18 +249,46 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       completed_at: new Date().toISOString(),
     });
 
-    // Retry with incremented attempt_number
     if (attemptNumber < maxAttempts) {
-      // Re-queue for retry — next invocation will create attempt+1
       await updateWorkflowStatus(workflowId, "queued", {
         current_stage: currentIdx,
         last_error: err.message,
       });
     } else {
-      // Maxed out — fail permanently
       await updateWorkflowStatus(workflowId, "failed", { last_error: err.message });
     }
   }
+}
+
+/** Claim and process the oldest queued workflow. Returns dispatch result metadata. */
+export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
+  const wf = await claimNextPendingWorkflow();
+  if (!wf) {
+    return { dispatched: false, workflowId: null, stage: null, message: "No queued workflows" };
+  }
+
+  processWorkflowStage(wf.id).catch((err) => {
+    console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
+  });
+
+  return { dispatched: true, workflowId: wf.id, stage: wf.current_stage };
+}
+
+/** Dispatch a specific workflow by ID (for retry / rerun / approval). */
+export async function dispatchWorkflowById(workflowId: string): Promise<DispatchResult> {
+  const wf = await findWorkflowById(workflowId);
+  if (!wf) {
+    return { dispatched: false, workflowId: null, stage: null, message: "Workflow not found" };
+  }
+  if (wf.status !== "queued") {
+    return { dispatched: false, workflowId, stage: wf.current_stage, message: `Workflow is not queued (status: ${wf.status})` };
+  }
+
+  processWorkflowStage(workflowId).catch((err) => {
+    console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
+  });
+
+  return { dispatched: true, workflowId, stage: wf.current_stage };
 }
 
 function getAgentFn(id: ApplicationAgentId) {
@@ -279,12 +317,10 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
   await updateWorkflowStatus(workflowId, "queued", { current_stage: 0 });
-  await processWorkflowStage(workflowId);
 }
 
 export async function rerunFromStage(workflowId: string, stage: number): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf) return;
   await updateWorkflowStatus(workflowId, "queued", { current_stage: Math.max(0, stage) });
-  await processWorkflowStage(workflowId);
 }

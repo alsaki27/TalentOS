@@ -1,16 +1,26 @@
 // Finalization service — creates a proper application_resume_versions row
 // linked explicitly to the workflow, target_job, application, job, and candidate.
-// Uses query() instead of execute() so RETURNING actually returns rows.
-// Updates applications table with result fields for direct queue lookup.
+// Verifies export readiness before persisting. Idempotent: calling twice returns
+// the existing result.
 
 import { updateWorkflowStatus, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
+  // Idempotency: if already finalized, return the existing version ID.
+  const existingVersion = await queryOne<{ id: string }>(
+    `SELECT id FROM application_resume_versions
+     WHERE workflow_id = $1 AND source_type = 'ai_agent'
+     LIMIT 1`,
+    [workflowId]
+  );
+  if (existingVersion) {
+    return existingVersion.id;
+  }
+
   const artifacts = await listArtifacts(workflowId);
 
-  // Find the workflow + application + job
   const wf = await queryOne<{
     id: string; application_id: string; candidate_id: string; job_id: string | null; base_resume_id: string | null;
   }>(
@@ -22,20 +32,25 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   );
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
 
-  // Get the final resume artifact
   const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
   const draftArtifact = artifacts.find((a) => a.automation_id === "application_resume_forge");
   const finalData = finalArtifact?.data ?? draftArtifact?.data;
 
   if (!finalData) {
     await updateWorkflowStatus(workflowId, "failed", { last_error: "No final resume artifact found" });
-    // Update application status
     await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
       ["No final resume artifact found", wf.application_id]);
     return null;
   }
 
-  // Find the target_job for this candidate+job combo
+  const exportReady = (finalData as any)?.exportReady ?? (finalData as any)?.ready ?? true;
+  if (!exportReady) {
+    await updateWorkflowStatus(workflowId, "failed", { last_error: "Final resume not marked as export-ready" });
+    await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
+      ["Final resume not export-ready", wf.application_id]);
+    return null;
+  }
+
   const tj = await queryOne<{ id: string }>(
     `SELECT id FROM target_jobs
      WHERE candidate_id = $1 AND job_id = (SELECT job_id FROM applications WHERE id = $2)
@@ -44,36 +59,37 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   );
   if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id}`);
 
-  // INSERT with query() so RETURNING actually returns the row
+  // Atomic INSERT + UPDATE via CTE: resume version AND application update succeed or fail together.
+  const title = "AI-Generated Tailored Resume";
+  const contentJson = JSON.stringify(finalData);
   const versionRows = await query<{ id: string }>(
-    `INSERT INTO application_resume_versions
-      (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
-       title, content, source_type, status, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
-     RETURNING id`,
+    `WITH inserted AS (
+       INSERT INTO application_resume_versions
+         (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
+          title, content, source_type, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
+       RETURNING id
+     )
+     UPDATE applications SET
+       tailored_resume_version_id = inserted.id,
+       ai_workflow_id = $9,
+       resume_generation_status = 'ready',
+       resume_generation_completed_at = NOW()
+     FROM inserted
+     WHERE applications.id = $10
+     RETURNING inserted.id`,
     [
       wf.candidate_id, tj.id, wf.application_id, wf.job_id, workflowId, wf.base_resume_id,
-      "AI-Generated Tailored Resume", JSON.stringify(finalData),
+      title, contentJson, workflowId, wf.application_id,
     ]
   );
   const versionId = versionRows[0]?.id;
   if (!versionId) throw new Error("Failed to insert resume version — no ID returned");
 
-  // Update application with result fields (direct lookup, no lateral joins needed)
-  await query(
-    `UPDATE applications SET
-       tailored_resume_version_id = $1,
-       ai_workflow_id = $2,
-       resume_generation_status = 'ready',
-       resume_generation_completed_at = NOW()
-     WHERE id = $3`,
-    [versionId, workflowId, wf.application_id]
-  );
-
   // Mark workflow completed
   await updateWorkflowStatus(workflowId, "completed");
 
-  // Log activity
+  // Log activity (non-critical — failure here does not roll back)
   await logActivity({
     userId: undefined,
     actorName: "AI Agent Pipeline",

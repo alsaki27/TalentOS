@@ -1,11 +1,8 @@
-// POST /api/application-ai-workflows/[id]/review — approve or reject after human review
-// Requires APPLICATION_WORKER_ROLES
-
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
-import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
-import { query, queryOne } from "@/server/db/neon";
+import { dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -42,9 +39,16 @@ export async function POST(
   const reviewerNote = body.note || null;
   const reviewerId = context?.profile.user_id;
 
+  const artifactData = JSON.stringify({
+    action,
+    note: reviewerNote,
+    reviewerId,
+    timestamp: new Date().toISOString(),
+  });
+
   switch (action) {
     case "approve": {
-      // Advance to Final Polish stage (stage 3 = Hiring Panel was completed, now run stage 4)
+      // Advance to Final Polish (stage 3 = Hiring Panel done, now stage 4 = Final Polish)
       await query(
         "UPDATE application_ai_workflows SET status = 'queued', current_stage = $1, last_error = NULL WHERE id = $2",
         [3, workflowId]
@@ -53,16 +57,13 @@ export async function POST(
         "UPDATE applications SET resume_generation_status = 'resume_review', resume_generation_error = NULL WHERE id = $1",
         [wf.application_id]
       );
-
-      // Log the approval decision
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
          VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, JSON.stringify({ action: "approve", note: reviewerNote, reviewerId, timestamp: new Date().toISOString() })]
+        [workflowId, `review_${Date.now()}`, artifactData]
       );
 
-      // Dispatch Final Polish
-      processWorkflowStage(workflowId).catch((err) => {
+      dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Review approval dispatch failed:`, err);
       });
 
@@ -74,7 +75,6 @@ export async function POST(
     }
 
     case "reject": {
-      // Mark as failed, keep artifacts for reference
       await query(
         "UPDATE application_ai_workflows SET status = 'failed', last_error = $1 WHERE id = $2",
         [`Rejected by reviewer: ${reviewerNote || "No reason provided"}`, workflowId]
@@ -83,11 +83,10 @@ export async function POST(
         "UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
         [`Rejected: ${reviewerNote || "No reason"}`, wf.application_id]
       );
-
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
          VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, JSON.stringify({ action: "reject", note: reviewerNote, reviewerId, timestamp: new Date().toISOString() })]
+        [workflowId, `review_${Date.now()}`, artifactData]
       );
 
       return NextResponse.json({ workflowId, status: "failed", message: "Workflow rejected." });
@@ -102,14 +101,13 @@ export async function POST(
         "UPDATE applications SET resume_generation_status = 'queued', resume_generation_error = NULL WHERE id = $1",
         [wf.application_id]
       );
-
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
          VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
-        [workflowId, `review_${Date.now()}`, JSON.stringify({ action: "reject_and_restart", note: reviewerNote, reviewerId, timestamp: new Date().toISOString() })]
+        [workflowId, `review_${Date.now()}`, artifactData]
       );
 
-      processWorkflowStage(workflowId).catch((err) => {
+      dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
       });
 
