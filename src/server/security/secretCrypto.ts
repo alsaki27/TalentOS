@@ -57,7 +57,7 @@ export async function encryptSecret(plaintext: string): Promise<string> {
  */
 export async function decryptSecret(ciphertext: string): Promise<string> {
   if (!ciphertext.startsWith("enc:")) {
-    // Not encrypted (legacy plaintext or already decrypted)
+    console.error("[SECURITY] Plaintext API key detected — re-encrypt this key via the admin UI");
     return ciphertext;
   }
 
