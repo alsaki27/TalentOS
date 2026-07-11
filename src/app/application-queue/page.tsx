@@ -28,6 +28,8 @@ interface QueueItem {
   workflow_id?: string | null;
   workflow_stage?: number | null;
   workflow_score?: number | null;
+  workflow_resume_version_id?: string | null;
+  workflow_resume_title?: string | null;
 }
 
 interface TeamUser {
@@ -426,10 +428,25 @@ export default function ApplicationQueuePage() {
 
                   {/* AI Pipeline */}
                   <td>
-                    {item.workflow_status ? (
+                    {item.workflow_resume_version_id ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        <span className="badge badge-success">✅ Agent-made</span>
+                        <button
+                          className="btn-primary btn-sm"
+                          onClick={() => window.open(`/falood/studio/application/${item.workflow_resume_version_id}`, "_blank")}
+                        >
+                          ✏️ Open in Studio
+                        </button>
+                        {item.workflow_score !== null && item.workflow_score !== undefined && (
+                          <span style={{ fontSize: 11 }}>
+                            Score: <strong>{item.workflow_score}/10</strong>
+                          </span>
+                        )}
+                      </div>
+                    ) : item.workflow_status ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                         <span className={`badge badge-${item.workflow_status === "completed" ? "success" : item.workflow_status === "failed" ? "danger" : item.workflow_status === "running" ? "info" : "warning"}`}>
-                          {item.workflow_status}
+                          {item.workflow_status === "completed" ? "Completed (no resume)" : item.workflow_status}
                         </span>
                         {item.workflow_stage !== null && item.workflow_stage !== undefined && (
                           <span style={{ fontSize: 11, color: "var(--muted)" }}>
@@ -448,7 +465,7 @@ export default function ApplicationQueuePage() {
                         )}
                       </div>
                     ) : (
-                      <button className="btn-primary btn-sm" onClick={() => startWorkflow(item)} disabled={actionLoading === `${item.id}:workflow`} title="Start 4-agent AI pipeline">
+                      <button className="btn-primary btn-sm" onClick={() => startWorkflow(item)} disabled={actionLoading === `${item.id}:workflow`} title="Start 4-agent AI pipeline (Job Lens → Resume Forge → Hiring Panel → Final Polish)">
                         {actionLoading === `${item.id}:workflow` ? "⟳" : "▶ AI Pipeline"}
                       </button>
                     )}

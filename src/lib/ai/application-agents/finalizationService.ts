@@ -9,9 +9,12 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 export async function finalizeWorkflow(workflowId: string): Promise<void> {
   const artifacts = await listArtifacts(workflowId);
 
-  // Find the workflow
-  const wf = await queryOne<{ id: string; application_id: string; base_resume_id: string | null }>(
-    "SELECT id, application_id, base_resume_id FROM application_ai_workflows WHERE id = $1",
+  // Find the workflow + application (to get candidate_id)
+  const wf = await queryOne<{ id: string; application_id: string; candidate_id: string; base_resume_id: string | null }>(
+    `SELECT w.id, w.application_id, a.candidate_id, w.base_resume_id
+     FROM application_ai_workflows w
+     JOIN applications a ON w.application_id = a.id
+     WHERE w.id = $1`,
     [workflowId]
   );
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
@@ -26,13 +29,13 @@ export async function finalizeWorkflow(workflowId: string): Promise<void> {
     return;
   }
 
-  // Create application_resume_versions row
+  // Create application_resume_versions row (uses candidate_id, not application_id)
   const versionRows = await execute(
     `INSERT INTO application_resume_versions
-      (application_id, title, content, source_type, created_at)
+      (candidate_id, title, content, source_type, created_at)
      VALUES ($1, $2, $3, $4, NOW())
      RETURNING id`,
-    [wf.application_id, "AI-Generated Tailored Resume", JSON.stringify(finalData), "ai_generated"]
+    [wf.candidate_id, "AI-Generated Tailored Resume", JSON.stringify(finalData), "ai_generated"]
   );
 
   // Log activity

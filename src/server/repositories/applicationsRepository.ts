@@ -474,7 +474,9 @@ export async function listApplicationQueue(
         w.status as workflow_status,
         w.id as workflow_id,
         w.current_stage as workflow_stage,
-        (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' LIMIT 1) as workflow_score
+        (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' LIMIT 1) as workflow_score,
+        rv.id as workflow_resume_version_id,
+        rv.title as workflow_resume_title
       FROM applications a
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
@@ -483,6 +485,11 @@ export async function listApplicationQueue(
         WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
         ORDER BY created_at DESC LIMIT 1
       ) w ON true
+      LEFT JOIN LATERAL (
+        SELECT id, title FROM application_resume_versions
+        WHERE candidate_id = a.candidate_id AND source_type = 'ai_generated'
+        ORDER BY created_at DESC LIMIT 1
+      ) rv ON true
       WHERE a.status = ANY($1)
         AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
         AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
