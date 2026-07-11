@@ -18,6 +18,7 @@ export type AiProvider =
   | "groq"
   | "openrouter"
   | "deepseek"
+  | "opencode"
   | "local";
 
 export type AiKeyStatus = "unknown" | "working" | "failing" | "disabled";

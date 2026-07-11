@@ -204,9 +204,30 @@ export function buildProviderFromDbKey(
         errorLabel: "GLM API",
       });
     }
+    case "deepseek": {
+      return createOpenAiCompatibleProvider({
+        apiUrl: process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com/v1/chat/completions",
+        apiKey,
+        model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        errorLabel: "DeepSeek API",
+        maxTokens: 4096,
+        temperature: 0.3,
+        extraHeaders: {},
+      });
+    }
+    case "opencode": {
+      return createOpenAiCompatibleProvider({
+        apiUrl: process.env.OPENCODE_API_BASE || "http://localhost:4096/v1/chat/completions",
+        apiKey,
+        model: model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash",
+        errorLabel: "OpenCode API",
+        maxTokens: 8192,
+        temperature: 0.3,
+        extraHeaders: {},
+      });
+    }
     case "groq":
     case "openrouter":
-    case "deepseek":
     case "local":
       return null;
     default:
