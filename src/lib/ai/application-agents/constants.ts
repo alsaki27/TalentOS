@@ -1,0 +1,47 @@
+// Agent constants and configuration defaults.
+
+export const AGENT_CONFIG_DEFAULTS = {
+  application_job_lens: {
+    displayName: "Job Lens",
+    temperature: 0.2,
+    maxOutputTokens: 2048,
+    timeoutMs: 30000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+  application_resume_forge: {
+    displayName: "Resume Forge",
+    temperature: 0.3,
+    maxOutputTokens: 4096,
+    timeoutMs: 60000,
+    maxAttempts: 2,
+    approvalPolicy: "risk_based" as const,
+    minimumScore: 0,
+  },
+  application_hiring_panel: {
+    displayName: "Hiring Panel",
+    temperature: 0.1,
+    maxOutputTokens: 2048,
+    timeoutMs: 30000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 6.0,
+  },
+  application_final_polish: {
+    displayName: "Final Polish",
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    timeoutMs: 60000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+} as const;
+
+export const SCHEMA_VERSIONS = {
+  jobAnalysis: "JobAnalysisV1",
+  resumeDraft: "ResumeDraftV1",
+  reviewScore: "ReviewScoreV1",
+  finalResume: "FinalResumeV1",
+} as const;

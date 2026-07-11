@@ -8,7 +8,9 @@
     "seed:admin": "node scripts/seed-admin.mjs",
     "typecheck": "tsc --noEmit --incremental false",
     "lint": "next lint",
-    "test": "npm run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "build": "next build",
     "start": "next start",
     "cf:build": "npx cloudflare",
@@ -75,6 +77,7 @@
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "^0.2.0",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^20.0.0",
     "@types/papaparse": "^5.3.14",
     "@types/react": "^18.3.0",
@@ -84,6 +87,7 @@
     "postcss": "^8.5.15",
     "tailwindcss": "^3.4.19",
     "typescript": "^5.6.0",
+    "vitest": "^4.1.10",
     "wrangler": "^3.0.0"
   }
 }
