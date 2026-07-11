@@ -30,12 +30,19 @@ export async function finalizeWorkflow(workflowId: string): Promise<void> {
   }
 
   // Create application_resume_versions row (uses candidate_id, not application_id)
+  // target_job_id is NOT NULL in the schema — derive from the application's target_jobs
+  const tj = await queryOne<{ id: string }>(
+    `SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = (SELECT job_id FROM applications WHERE id = $2) LIMIT 1`,
+    [wf.candidate_id, wf.application_id]
+  );
+  if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id} in application ${wf.application_id}`);
+
   const versionRows = await execute(
     `INSERT INTO application_resume_versions
-      (candidate_id, title, content, source_type, created_at)
-     VALUES ($1, $2, $3, $4, NOW())
+      (candidate_id, target_job_id, title, content, source_type, status, created_at)
+     VALUES ($1, $2, $3, $4, $5, 'draft', NOW())
      RETURNING id`,
-    [wf.candidate_id, "AI-Generated Tailored Resume", JSON.stringify(finalData), "ai_generated"]
+    [wf.candidate_id, tj.id, "AI-Generated Tailored Resume", JSON.stringify(finalData), "manual"]
   );
 
   // Log activity

@@ -487,7 +487,7 @@ export async function listApplicationQueue(
       ) w ON true
       LEFT JOIN LATERAL (
         SELECT id, title FROM application_resume_versions
-        WHERE candidate_id = a.candidate_id AND source_type = 'ai_generated'
+        WHERE candidate_id = a.candidate_id         AND source_type = 'manual'
         ORDER BY created_at DESC LIMIT 1
       ) rv ON true
       WHERE a.status = ANY($1)
