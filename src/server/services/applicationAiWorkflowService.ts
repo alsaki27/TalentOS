@@ -25,6 +25,7 @@ import {
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
+import { query } from "@/server/db/neon";
 
 function sha256(input: string): string {
   let hash = 0;
@@ -107,9 +108,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   // Accept both queued and running states (auto-start from queued)
   if (wf.status !== "queued" && wf.status !== "running") return;
 
-  // Transition queued → running
+  // Transition queued → running + update application status
   if (wf.status === "queued") {
-    await updateWorkflowStatus(workflowId, "running");
+    await updateWorkflowStatus(workflowId, "running", { current_stage: 0, last_error: null } as any);
+    await query("UPDATE applications SET resume_generation_status = $1, ai_workflow_id = $2, resume_generation_started_at = NOW() WHERE id = $3",
+      ["job_analysis", workflowId, wf.application_id]);
   }
 
   const agentOrder = APPLICATION_AGENT_IDS;
@@ -203,12 +206,15 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Quality gate after Hiring Panel
     if (agentId === "application_hiring_panel") {
+      await query("UPDATE applications SET resume_generation_status = 'resume_review' WHERE id = $1", [wf.application_id]);
       const gateResult = await evaluateQualityGate(
         agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
         wf.application_id
       );
       if (!gateResult.passed) {
         const isHardFail = gateResult.action === "fail";
+        await query("UPDATE applications SET resume_generation_status = $1, resume_generation_error = $2 WHERE id = $3",
+          [isHardFail ? "failed" : "human_review", gateResult.reason ?? null, wf.application_id]);
         await updateWorkflowStatus(workflowId, isHardFail ? "failed" : "waiting", {
           current_stage: currentIdx + 1,
           last_error: gateResult.reason ?? undefined,

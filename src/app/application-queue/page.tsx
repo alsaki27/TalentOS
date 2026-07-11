@@ -30,6 +30,7 @@ interface QueueItem {
   workflow_score?: number | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
+  resume_generation_status?: string | null;
 }
 
 interface TeamUser {
@@ -473,8 +474,8 @@ export default function ApplicationQueuePage() {
                         )}
                       </div>
                     ) : (
-                      <button className="btn-primary btn-sm" onClick={() => startWorkflow(item)} disabled={actionLoading === `${item.id}:workflow`} title="Start 4-agent AI pipeline (Job Lens → Resume Forge → Hiring Panel → Final Polish)">
-                        {actionLoading === `${item.id}:workflow` ? "⟳" : "▶ AI Pipeline"}
+                      <button className="btn-primary btn-sm" onClick={() => startWorkflow(item)} disabled={true} title="AI Pipeline is undergoing repairs — available again in Phase 2">
+                        🚧 Pipeline Paused
                       </button>
                     )}
                   </td>
