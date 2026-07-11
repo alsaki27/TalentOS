@@ -28,3 +28,26 @@ enabled = true
 # [[kv_namespaces]]
 # binding = "NEXT_CACHE_WORKERS_KV"
 # id = "..."
+
+# ───────────────────────────────────────────────────────────────
+# Cron Triggers (NOT available on Cloudflare Workers free tier)
+# ───────────────────────────────────────────────────────────────
+# The app uses Vercel-style cron jobs defined in vercel.json, but
+# Cloudflare Workers free tier does NOT support cron triggers.
+#
+# Workaround: Use an external scheduler (cron-job.org, EasyCron, or
+# a GitHub Actions workflow) to call these endpoints with the
+# CRON_SECRET bearer token:
+#
+#   GET /api/cron/digest             — daily AI digest (0 7 * * *)
+#   GET /api/cron/import-sources     — run import sources (0 6 * * *)
+#   GET /api/cron/backup             — daily DB backup (0 5 * * *)
+#   GET /api/cron/categorize-jobs    — AI job categorization (0 8 * * *)
+#   GET /api/cron/ai-usage-rollup    — AI usage aggregation (0 4 * * *)
+#
+# If you upgrade to a paid Cloudflare Workers plan ($5/month), add:
+#   [triggers]
+#   crons = ["0 7 * * *", "0 6 * * *", "0 5 * * *", "0 8 * * *", "0 4 * * *"]
+#
+# Then set up a handler in your worker entry to route each cron
+# pattern to the corresponding /api/cron/* endpoint.

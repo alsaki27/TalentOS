@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
+import { logActivity } from "@/lib/activity";
+import { sanitizeApiError } from "@/lib/utils";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -61,11 +63,12 @@ export async function PUT(
 
   const ranks = new Set<number>();
   const keyIds = new Set<string>();
+  const warnings: string[] = [];
 
   for (const r of inputRoutes) {
-    if (typeof r.rank !== "number" || r.rank < 0) {
+    if (typeof r.rank !== "number" || r.rank < 1) {
       return NextResponse.json(
-        { error: `Invalid rank: ${r.rank}. Must be a non-negative integer.` },
+        { error: `Invalid rank: ${r.rank}. Must be a positive integer (1-based).` },
         { status: 400 }
       );
     }
@@ -93,10 +96,11 @@ export async function PUT(
   }
 
   const existingKeys = await query<any>(
-    "SELECT id FROM ai_api_keys WHERE id = ANY($1) AND is_enabled = true",
+    "SELECT id, provider FROM ai_api_keys WHERE id = ANY($1) AND is_enabled = true",
     [[...keyIds]]
   );
   const existingKeyIds = new Set(existingKeys.map((k: any) => k.id));
+  const keyProviders = new Map<string, string>(existingKeys.map((k: any) => [k.id, k.provider]));
   for (const keyId of keyIds) {
     if (!existingKeyIds.has(keyId)) {
       return NextResponse.json(
@@ -106,14 +110,67 @@ export async function PUT(
     }
   }
 
+  const confusionPairs: Array<{ provider: string; likelyPrefix: string; badPrefix: string; badFrom: string }> = [
+    { provider: "openai", likelyPrefix: "gpt-", badPrefix: "claude-", badFrom: "Anthropic (Claude)" },
+    { provider: "anthropic", likelyPrefix: "claude-", badPrefix: "gpt-", badFrom: "OpenAI (GPT)" },
+    { provider: "google", likelyPrefix: "gemini-", badPrefix: "claude-", badFrom: "Anthropic (Claude)" },
+    { provider: "google_vertex_proxy", likelyPrefix: "gemini-", badPrefix: "claude-", badFrom: "Anthropic (Claude)" },
+    { provider: "google", likelyPrefix: "gemini-", badPrefix: "gpt-", badFrom: "OpenAI (GPT)" },
+    { provider: "google_vertex_proxy", likelyPrefix: "gemini-", badPrefix: "gpt-", badFrom: "OpenAI (GPT)" },
+    { provider: "anthropic", likelyPrefix: "claude-", badPrefix: "gemini-", badFrom: "Google (Gemini)" },
+    { provider: "openai", likelyPrefix: "gpt-", badPrefix: "gemini-", badFrom: "Google (Gemini)" },
+  ];
+
+  for (const r of inputRoutes) {
+    const modelToCheck = r.model_override;
+    if (!modelToCheck) continue;
+    const provider = keyProviders.get(r.ai_key_id);
+    if (!provider) continue;
+    const lowerModel = modelToCheck.toLowerCase();
+    const lowerProvider = provider.toLowerCase();
+
+    for (const pair of confusionPairs) {
+      if (lowerProvider === pair.provider && lowerModel.startsWith(pair.badPrefix)) {
+        warnings.push(
+          `Route rank ${r.rank}: model "${modelToCheck}" starts with "${pair.badPrefix}" but the key is on provider "${pair.provider}". This model may belong to ${pair.badFrom}.`
+        );
+        break;
+      }
+    }
+  }
+
+  const oldRoutes = await query<any>(
+    `SELECT ar.*, ak.label as key_label, ak.provider as key_provider,
+            ak.model as key_model, ak.key_fingerprint, ak.status as key_status
+     FROM ai_automation_routes ar
+     LEFT JOIN ai_api_keys ak ON ar.ai_key_id = ak.id
+     WHERE ar.automation_id = $1
+     ORDER BY ar.rank`,
+    [params.id]
+  );
+
   await execute("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]);
 
   const userId = context?.profile.user_id;
-  for (const r of inputRoutes) {
-    await execute(
-      `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
-       VALUES ($1, $2, $3, $4, true, $5)`,
-      [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
+  try {
+    for (const r of inputRoutes) {
+      await execute(
+        `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
+         VALUES ($1, $2, $3, $4, true, $5)`,
+        [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
+      );
+    }
+  } catch (insertErr: any) {
+    for (const oldRoute of oldRoutes) {
+      await execute(
+        `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [oldRoute.automation_id, oldRoute.ai_key_id, oldRoute.rank, oldRoute.model_override ?? null, oldRoute.is_enabled, oldRoute.updated_by ?? null]
+      );
+    }
+    return NextResponse.json(
+      { error: "Failed to update routes; previous routes have been restored.", detail: sanitizeApiError(insertErr) },
+      { status: 500 }
     );
   }
 
@@ -127,5 +184,19 @@ export async function PUT(
     [params.id]
   );
 
-  return NextResponse.json({ routes: updated });
+  await logActivity({
+    userId: context?.profile.user_id,
+    actorName: context?.profile.display_name || context?.profile.email || "Admin",
+    type: "update",
+    description: `Updated routing for ${params.id}: ${oldRoutes.length} → ${updated.length} routes`,
+    entityType: "ai_automation_route",
+    entityId: params.id,
+    entityName: `Routes for ${params.id}`,
+    metadata: {
+      before: oldRoutes.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
+      after: updated.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
+    },
+  });
+
+  return NextResponse.json({ routes: updated, warnings });
 }

@@ -24,10 +24,11 @@ export interface AiMessage {
 export interface AiResponse {
   content: AiContentBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | string;
+  usage?: { input_tokens: number; output_tokens: number };
 }
 
 export interface AiProvider {
-  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[] }): Promise<AiResponse>;
+  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[]; temperature?: number; maxTokens?: number; timeoutMs?: number }): Promise<AiResponse>;
 }
 
 export function textOf(content: AiContentBlock[]): string {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
+import { logActivity } from "@/lib/activity";
+import { sanitizeApiError } from "@/lib/utils";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -21,23 +23,25 @@ export async function POST(req: NextRequest) {
   }
 
   const userId = context?.profile.user_id;
+  const actorName = context?.profile.display_name || context?.profile.email || "Admin";
+  const actor = { userId, actorName };
 
   try {
     switch (action) {
       case "assign_primary":
-        return await handleAssignPrimary(body, userId);
+        return await handleAssignPrimary(body, actor);
       case "add_fallback":
-        return await handleAddFallback(body, userId);
+        return await handleAddFallback(body, actor);
       case "replace_key":
-        return await handleReplaceKey(body, userId);
+        return await handleReplaceKey(body, actor);
       case "remove_key":
-        return await handleRemoveKey(body, userId);
+        return await handleRemoveKey(body, actor);
       case "copy_routes":
-        return await handleCopyRoutes(body, userId);
+        return await handleCopyRoutes(body, actor);
       case "disable_agents":
-        return await handleDisableAgents(body, userId);
+        return await handleDisableAgents(body, actor);
       case "enable_agents":
-        return await handleEnableAgents(body, userId);
+        return await handleEnableAgents(body, actor);
       default:
         return NextResponse.json(
           { error: `Unknown action: ${action}` },
@@ -47,13 +51,13 @@ export async function POST(req: NextRequest) {
   } catch (err: any) {
     console.error(`[bulk-routes] ${action} failed:`, err.message || err);
     return NextResponse.json(
-      { error: err.message || "Internal server error" },
+      { error: sanitizeApiError(err) },
       { status: 500 }
     );
   }
 }
 
-async function handleAssignPrimary(body: any, userId: string | undefined) {
+async function handleAssignPrimary(body: any, actor: { userId?: string; actorName: string }) {
   const { key_id, agent_ids } = body;
   if (!key_id || typeof key_id !== "string") {
     return NextResponse.json({ error: "key_id is required" }, { status: 400 });
@@ -92,10 +96,19 @@ async function handleAssignPrimary(body: any, userId: string | undefined) {
     await execute(
       `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, is_enabled, updated_by)
        VALUES ($1, $2, 0, true, $3)`,
-      [agentId, key_id, userId]
+       [agentId, key_id, actor.userId]
     );
     updated++;
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk assign_primary: key ${key_id} as rank 0 for ${updated} agent(s)`,
+    entityType: "ai_automation_route",
+    metadata: { action: "assign_primary", key_id, agent_ids, updated },
+  });
 
   return NextResponse.json({
     action: "assign_primary",
@@ -104,7 +117,7 @@ async function handleAssignPrimary(body: any, userId: string | undefined) {
   });
 }
 
-async function handleAddFallback(body: any, userId: string | undefined) {
+async function handleAddFallback(body: any, actor: { userId?: string; actorName: string }) {
   const { key_id, agent_ids } = body;
   if (!key_id || typeof key_id !== "string") {
     return NextResponse.json({ error: "key_id is required" }, { status: 400 });
@@ -138,10 +151,19 @@ async function handleAddFallback(body: any, userId: string | undefined) {
     await execute(
       `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, is_enabled, updated_by)
        VALUES ($1, $2, $3, true, $4)`,
-      [agentId, key_id, nextRank, userId]
+       [agentId, key_id, nextRank, actor.userId]
     );
     updated++;
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk add_fallback: key ${key_id} as fallback for ${updated} agent(s)`,
+    entityType: "ai_automation_route",
+    metadata: { action: "add_fallback", key_id, agent_ids, updated },
+  });
 
   return NextResponse.json({
     action: "add_fallback",
@@ -150,7 +172,7 @@ async function handleAddFallback(body: any, userId: string | undefined) {
   });
 }
 
-async function handleReplaceKey(body: any, userId: string | undefined) {
+async function handleReplaceKey(body: any, actor: { userId?: string; actorName: string }) {
   const { old_key_id, new_key_id } = body;
   if (!old_key_id || typeof old_key_id !== "string") {
     return NextResponse.json({ error: "old_key_id is required" }, { status: 400 });
@@ -194,9 +216,18 @@ async function handleReplaceKey(body: any, userId: string | undefined) {
     await execute(
       `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
        VALUES ($1, $2, $3, $4, true, $5)`,
-      [r.automation_id, new_key_id, r.rank, r.model_override, userId]
+       [r.automation_id, new_key_id, r.rank, r.model_override, actor.userId]
     );
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk replace_key: replaced ${old_key_id} → ${new_key_id} across ${automationsAffected.size} agent(s) (${routes.length} routes)`,
+    entityType: "ai_automation_route",
+    metadata: { action: "replace_key", old_key_id, new_key_id, automations_affected: automationsAffected.size, routes_count: routes.length },
+  });
 
   return NextResponse.json({
     action: "replace_key",
@@ -206,7 +237,7 @@ async function handleReplaceKey(body: any, userId: string | undefined) {
   });
 }
 
-async function handleRemoveKey(body: any, userId: string | undefined) {
+async function handleRemoveKey(body: any, actor: { userId?: string; actorName: string }) {
   const { key_id, agent_ids } = body;
   if (!key_id || typeof key_id !== "string") {
     return NextResponse.json({ error: "key_id is required" }, { status: 400 });
@@ -224,6 +255,15 @@ async function handleRemoveKey(body: any, userId: string | undefined) {
     removed += result.rowCount;
   }
 
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "delete",
+    description: `Bulk remove_key: removed key ${key_id} from ${agent_ids.length} agent(s) (${removed} routes deleted)`,
+    entityType: "ai_automation_route",
+    metadata: { action: "remove_key", key_id, agent_ids, removed },
+  });
+
   return NextResponse.json({
     action: "remove_key",
     summary: `Removed key ${key_id} from ${agent_ids.length} agent(s) (${removed} routes deleted)`,
@@ -231,7 +271,7 @@ async function handleRemoveKey(body: any, userId: string | undefined) {
   });
 }
 
-async function handleCopyRoutes(body: any, userId: string | undefined) {
+async function handleCopyRoutes(body: any, actor: { userId?: string; actorName: string }) {
   const { from_agent_id, to_agent_ids } = body;
   if (!from_agent_id || typeof from_agent_id !== "string") {
     return NextResponse.json({ error: "from_agent_id is required" }, { status: 400 });
@@ -263,11 +303,20 @@ async function handleCopyRoutes(body: any, userId: string | undefined) {
       await execute(
         `INSERT INTO ai_automation_routes (automation_id, ai_key_id, provider, rank, model_override, is_enabled, updated_by)
          VALUES ($1, $2, $3, $4, $5, true, $6)`,
-        [targetId, r.ai_key_id, r.provider, r.rank, r.model_override, userId]
+         [targetId, r.ai_key_id, r.provider, r.rank, r.model_override, actor.userId]
       );
     }
     updated++;
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk copy_routes: copied ${sourceRoutes.length} route(s) from ${from_agent_id} to ${updated} agent(s)`,
+    entityType: "ai_automation_route",
+    metadata: { action: "copy_routes", from_agent_id, to_agent_ids, updated, source_route_count: sourceRoutes.length },
+  });
 
   return NextResponse.json({
     action: "copy_routes",
@@ -276,7 +325,7 @@ async function handleCopyRoutes(body: any, userId: string | undefined) {
   });
 }
 
-async function handleDisableAgents(body: any, userId: string | undefined) {
+async function handleDisableAgents(body: any, actor: { userId?: string; actorName: string }) {
   const { agent_ids } = body;
   if (!Array.isArray(agent_ids) || agent_ids.length === 0) {
     return NextResponse.json({ error: "agent_ids must be a non-empty array" }, { status: 400 });
@@ -291,11 +340,20 @@ async function handleDisableAgents(body: any, userId: string | undefined) {
     if (result.rowCount > 0) {
       await execute(
         "UPDATE ai_agent_configs SET is_active = false, updated_by = $1, updated_at = NOW() WHERE automation_id = $2 AND is_active = true",
-        [userId, agentId]
+        [actor.userId, agentId]
       );
       updated++;
     }
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk disable_agents: disabled ${updated} agent(s)`,
+    entityType: "ai_automation",
+    metadata: { action: "disable_agents", agent_ids, updated },
+  });
 
   return NextResponse.json({
     action: "disable_agents",
@@ -304,7 +362,7 @@ async function handleDisableAgents(body: any, userId: string | undefined) {
   });
 }
 
-async function handleEnableAgents(body: any, userId: string | undefined) {
+async function handleEnableAgents(body: any, actor: { userId?: string; actorName: string }) {
   const { agent_ids } = body;
   if (!Array.isArray(agent_ids) || agent_ids.length === 0) {
     return NextResponse.json({ error: "agent_ids must be a non-empty array" }, { status: 400 });
@@ -319,11 +377,20 @@ async function handleEnableAgents(body: any, userId: string | undefined) {
     if (result.rowCount > 0) {
       await execute(
         "UPDATE ai_agent_configs SET is_active = true, updated_by = $1, updated_at = NOW() WHERE automation_id = $2 AND is_active = false",
-        [userId, agentId]
+        [actor.userId, agentId]
       );
       updated++;
     }
   }
+
+  await logActivity({
+    userId: actor.userId,
+    actorName: actor.actorName,
+    type: "update",
+    description: `Bulk enable_agents: enabled ${updated} agent(s)`,
+    entityType: "ai_automation",
+    metadata: { action: "enable_agents", agent_ids, updated },
+  });
 
   return NextResponse.json({
     action: "enable_agents",

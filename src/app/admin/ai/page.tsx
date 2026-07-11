@@ -99,6 +99,7 @@ interface OverviewData {
     criticalAgentsRouted: boolean; usageTrackingOperational: boolean;
   };
   alerts: Array<{ type: string; severity: string; message: string; resourceType: string; resourceId: string }>;
+  securityWarnings: Array<{ type: string; keyId?: string; keyLabel?: string; agentCount?: number; count?: number; message: string }>;
   trafficByProvider: Array<{ provider: string; calls: number; cost: number }>;
   recentIncidents: Array<{ timestamp: string; keyId: string; keyLabel: string; event: string }>;
 }
@@ -321,6 +322,27 @@ function OverviewTab({ onError }: { onError: (e: string) => void }) {
           )}
         </div>
       </div>
+
+      {data.securityWarnings.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <h3>Security</h3>
+          {data.securityWarnings.map((w, i) => (
+            <div key={i}
+              className={`alert ${w.type === "broken_key_in_use" ? "alert-error" : "alert-warning"}`}
+              style={{ marginBottom: 8 }}>
+              <span className={`badge ${w.type === "broken_key_in_use" ? "badge-danger" : "badge-warning"}`} style={{ marginRight: 8 }}>
+                {w.type === "broken_key_in_use" ? "critical" : "warning"}
+              </span>
+              {w.message}
+              {(w.type === "stale_key" || w.type === "broken_key_in_use") && w.keyId && (
+                <span className="text-muted" style={{ marginLeft: 8, fontSize: 11 }}>
+                  (key: {w.keyLabel ?? w.keyId.slice(0, 8)})
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {data.alerts.length > 0 && (
         <div style={{ marginBottom: 24 }}>
@@ -706,7 +728,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     try {
       const routes = editRoutes
         .filter(r => r.keyId)
-        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, rank: i }));
+        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, rank: i + 1 }));
       const res = await fetch(`/api/admin/ai/agents/${agentId}/routes`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ routes }),

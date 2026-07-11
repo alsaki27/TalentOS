@@ -84,11 +84,17 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
 
   const [summary, setSummary] = useState<any>(null);
+  const [summaryError, setSummaryError] = useState(false);
   const [funnel, setFunnel] = useState<any>(null);
+  const [funnelError, setFunnelError] = useState(false);
   const [timeToFill, setTimeToFill] = useState<any>(null);
+  const [ttfError, setTtfError] = useState(false);
   const [sources, setSources] = useState<any>(null);
+  const [sourcesError, setSourcesError] = useState(false);
   const [diversity, setDiversity] = useState<any>(null);
+  const [diversityError, setDiversityError] = useState(false);
   const [recruiters, setRecruiters] = useState<any>(null);
+  const [recruitersError, setRecruitersError] = useState(false);
 
   const dateRange = useMemo(() => {
     if (preset === "custom") {
@@ -103,24 +109,43 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     setLoading(true);
+    setSummaryError(false);
+    setFunnelError(false);
+    setTtfError(false);
+    setSourcesError(false);
+    setDiversityError(false);
+    setRecruitersError(false);
     const params = new URLSearchParams();
     if (dateRange.from) params.set("dateFrom", dateRange.from);
     if (dateRange.to) params.set("dateTo", dateRange.to);
 
-    Promise.all([
-      fetch(`/api/analytics/summary?${params}`, { cache: "no-store" }).then((r) => r.json()),
-      fetch(`/api/analytics/funnel?${params}`, { cache: "no-store" }).then((r) => r.json()),
-      fetch(`/api/analytics/time-to-fill?${params}&groupBy=role`, { cache: "no-store" }).then((r) => r.json()),
-      fetch(`/api/analytics/sources?${params}`, { cache: "no-store" }).then((r) => r.json()),
-      fetch(`/api/analytics/diversity?${params}`, { cache: "no-store" }).then((r) => r.json()),
-      fetch(`/api/analytics/recruiters?${params}`, { cache: "no-store" }).then((r) => r.json()),
-    ]).then(([sum, fun, ttf, src, div, rec]) => {
-      setSummary(sum);
-      setFunnel(fun);
-      setTimeToFill(ttf);
-      setSources(src);
-      setDiversity(div);
-      setRecruiters(rec);
+    const fetchWidget = (
+      endpoint: string,
+      setter: (data: any) => void,
+      setError: (v: boolean) => void,
+    ): Promise<void> => {
+      return fetch(endpoint, { cache: "no-store" })
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })
+        .then((data) => {
+          setter(data);
+          setError(false);
+        })
+        .catch(() => {
+          setError(true);
+        });
+    };
+
+    Promise.allSettled([
+      fetchWidget(`/api/analytics/summary?${params}`, setSummary, setSummaryError),
+      fetchWidget(`/api/analytics/funnel?${params}`, setFunnel, setFunnelError),
+      fetchWidget(`/api/analytics/time-to-fill?${params}&groupBy=role`, setTimeToFill, setTtfError),
+      fetchWidget(`/api/analytics/sources?${params}`, setSources, setSourcesError),
+      fetchWidget(`/api/analytics/diversity?${params}`, setDiversity, setDiversityError),
+      fetchWidget(`/api/analytics/recruiters?${params}`, setRecruiters, setRecruitersError),
+    ]).finally(() => {
       setLoading(false);
     });
   }, [dateRange.from, dateRange.to]);
@@ -223,6 +248,10 @@ export default function AnalyticsPage() {
 
       {/* Top stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+        {summaryError ? (
+          <div className="empty col-span-full">Failed to load summary stats.</div>
+        ) : (
+          <>
         <StatCard
           label="Total candidates"
           value={summary?.totalCandidates ?? "—"}
@@ -253,6 +282,8 @@ export default function AnalyticsPage() {
           value={summary?.hiresMade ?? "—"}
           icon={<IconCheckCircle />}
         />
+          </>
+        )}
       </div>
 
       {/* Charts grid */}
@@ -260,7 +291,9 @@ export default function AnalyticsPage() {
         {/* Hiring Funnel */}
         <div className="card lg:col-span-2">
           <h2 className="section-title">Hiring Funnel</h2>
-          {loading ? (
+          {funnelError ? (
+            <div className="empty">Failed to load funnel data.</div>
+          ) : loading ? (
             <div className="loading-panel">Loading funnel…</div>
           ) : funnelData.length === 0 ? (
             <div className="empty">No funnel data for this period.</div>
@@ -284,7 +317,9 @@ export default function AnalyticsPage() {
         {/* Time-to-Fill */}
         <div className="card">
           <h2 className="section-title">Time-to-Fill by Role</h2>
-          {loading ? (
+          {ttfError ? (
+            <div className="empty">Failed to load time-to-fill data.</div>
+          ) : loading ? (
             <div className="loading-panel">Loading…</div>
           ) : ttfData.length === 0 ? (
             <div className="empty">No filled jobs in this period.</div>
@@ -296,7 +331,9 @@ export default function AnalyticsPage() {
         {/* Source Effectiveness */}
         <div className="card">
           <h2 className="section-title">Source Effectiveness</h2>
-          {loading ? (
+          {sourcesError ? (
+            <div className="empty">Failed to load source data.</div>
+          ) : loading ? (
             <div className="loading-panel">Loading…</div>
           ) : sourceData.length === 0 ? (
             <div className="empty">No source data.</div>
@@ -308,7 +345,9 @@ export default function AnalyticsPage() {
         {/* Diversity */}
         <div className="card lg:col-span-2">
           <h2 className="section-title">Diversity Breakdown</h2>
-          {loading ? (
+          {diversityError ? (
+            <div className="empty">Failed to load diversity data.</div>
+          ) : loading ? (
             <div className="loading-panel">Loading…</div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -344,7 +383,9 @@ export default function AnalyticsPage() {
       {/* Recruiter Leaderboard */}
       <div className="card">
         <h2 className="section-title">Recruiter Leaderboard</h2>
-        {loading ? (
+        {recruitersError ? (
+          <div className="empty">Failed to load recruiter data.</div>
+        ) : loading ? (
           <div className="loading-panel">Loading…</div>
         ) : sortedRecruiters.length === 0 ? (
           <div className="empty">No recruiter activity for this period.</div>

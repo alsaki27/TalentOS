@@ -46,12 +46,29 @@ Our `secretCrypto.ts` uses Web Crypto API (`crypto.subtle`), which is fully supp
 
 The app uses `vercel.json` for cron jobs. Cloudflare Workers free tier does NOT support Cron Triggers (paid only).
 
+**Affected endpoints** (defined in `vercel.json`, need external scheduler):
+| Path | Schedule | Purpose |
+|------|----------|---------|
+| `GET /api/cron/digest` | `0 7 * * *` | Daily AI digest — new jobs, overdue tickets, pipeline summary |
+| `GET /api/cron/import-sources` | `0 6 * * *` | Run saved import sources |
+| `GET /api/cron/backup` | `0 5 * * *` | Daily DB backup |
+| `GET /api/cron/categorize-jobs` | `0 8 * * *` | AI job categorization |
+| `GET /api/cron/ai-usage-rollup` | `0 4 * * *` | Aggregate AI usage events into daily rollup |
+
+All endpoints require `Authorization: Bearer {CRON_SECRET}` header.
+
 **Workarounds:**
-1. **Use an external scheduler** — Cron-job.org, EasyCron, or a simple GitHub Actions workflow that calls your API endpoints
-2. **Use Cloudflare Workers paid plan** — $5/month adds Cron Triggers
+1. **Use an external scheduler** — Cron-job.org, EasyCron, or a simple GitHub Actions workflow that calls your API endpoints. Configure each endpoint with its schedule and the CRON_SECRET bearer token.
+2. **Use Cloudflare Workers paid plan** — $5/month adds Cron Triggers. Add `[triggers]` with `crons = [...]` to `wrangler.toml` and route each pattern to the matching endpoint.
 3. **Use a separate Vercel project** for cron endpoints only
 
 **Recommended:** Option 1 (external scheduler). Cron-job.org is free and reliable.
+   - Create a monitor for each endpoint URL
+   - Set the schedule per the table above
+   - Add `Authorization: Bearer {CRON_SECRET}` header
+   - Request method: GET
+
+**Manual fallback:** The `/ops` page has a "Generate now" button for the digest. For import sources and job categorization, there are also manual triggers on the ops page.
 
 ### 5. File System Access — ❌ Not Supported
 

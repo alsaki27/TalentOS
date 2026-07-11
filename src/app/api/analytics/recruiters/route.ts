@@ -5,7 +5,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
-import { query, queryOne } from "@/server/db/neon";
+import { query } from "@/server/db/neon";
+import { sanitizeError } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
   const dateFrom = url.searchParams.get("dateFrom") || null;
   const dateTo = url.searchParams.get("dateTo") || null;
 
+  try {
   let candidates: any[];
   let applications: any[];
   let interviews: any[];
@@ -26,23 +28,23 @@ export async function GET(req: NextRequest) {
     const candParams: any[] = [];
     if (dateFrom) {
       candParams.push(dateFrom);
-      candSql += ` AND created_at >= $${candParams.length}`;
+      candSql += ` AND created_at >= $${candParams.length}::timestamptz`;
     }
     if (dateTo) {
       candParams.push(dateTo);
-      candSql += ` AND created_at <= $${candParams.length}`;
+      candSql += ` AND created_at <= $${candParams.length}::timestamptz`;
     }
     candidates = await query(candSql, candParams);
 
-    let appSql = 'SELECT created_by, status, job_id, applied_at FROM applications WHERE 1=1';
+    let appSql = 'SELECT created_by, status, job_id, created_at FROM applications WHERE 1=1';
     const appParams: any[] = [];
     if (dateFrom) {
       appParams.push(dateFrom);
-      appSql += ` AND applied_at >= $${appParams.length}`;
+      appSql += ` AND created_at >= $${appParams.length}::timestamptz`;
     }
     if (dateTo) {
       appParams.push(dateTo);
-      appSql += ` AND applied_at <= $${appParams.length}`;
+      appSql += ` AND created_at <= $${appParams.length}::timestamptz`;
     }
     applications = await query(appSql, appParams);
 
@@ -50,11 +52,11 @@ export async function GET(req: NextRequest) {
     const intParams: any[] = [];
     if (dateFrom) {
       intParams.push(dateFrom);
-      intSql += ` AND scheduled_at >= $${intParams.length}`;
+      intSql += ` AND scheduled_at >= $${intParams.length}::timestamptz`;
     }
     if (dateTo) {
       intParams.push(dateTo);
-      intSql += ` AND scheduled_at <= $${intParams.length}`;
+      intSql += ` AND scheduled_at <= $${intParams.length}::timestamptz`;
     }
     interviews = await query(intSql, intParams);
   } else {
@@ -230,4 +232,8 @@ export async function GET(req: NextRequest) {
   );
 
   return NextResponse.json({ recruiters });
+  } catch (error: unknown) {
+    const { message, status } = sanitizeError(error);
+    return NextResponse.json({ error: message }, { status });
+  }
 }

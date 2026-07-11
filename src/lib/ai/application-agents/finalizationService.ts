@@ -89,6 +89,22 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   // Mark workflow completed
   await updateWorkflowStatus(workflowId, "completed");
 
+  // Upsert application packet — separate try/catch so packet failure
+  // does not roll back the core finalization.
+  try {
+    await query(
+      `INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
+       VALUES ($1, $2, $3, $4, NULL)
+       ON CONFLICT (application_id) DO UPDATE SET
+         final_resume_version_id = EXCLUDED.final_resume_version_id,
+         base_resume_id = COALESCE(application_packets.base_resume_id, EXCLUDED.base_resume_id),
+         target_job_id = COALESCE(application_packets.target_job_id, EXCLUDED.target_job_id)`,
+      [wf.application_id, wf.base_resume_id, tj.id, versionId]
+    );
+  } catch (err: any) {
+    console.error("[finalizeWorkflow] Failed to upsert application_packet:", err.message || err);
+  }
+
   // Log activity (non-critical — failure here does not roll back)
   await logActivity({
     userId: undefined,

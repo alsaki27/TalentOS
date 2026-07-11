@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
+import { sanitizeApiError } from "@/lib/utils";
 import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -169,7 +170,7 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error("[ai/usage]", err.message || err);
     return NextResponse.json(
-      { error: "Failed to load usage data" },
+      { error: sanitizeApiError(err) },
       { status: 500 }
     );
   }

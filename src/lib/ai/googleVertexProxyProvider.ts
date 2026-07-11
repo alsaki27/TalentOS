@@ -138,9 +138,15 @@ export async function callVertexProxy(opts: {
   const content = fromGeminiParts(parts);
   const hasToolUse = content.some((b) => b.type === "tool_use");
 
+  const usageMeta = data.usage ?? data.usageMetadata;
+  const usage = usageMeta
+    ? { input_tokens: usageMeta.promptTokenCount ?? usageMeta.input_tokens ?? 0, output_tokens: usageMeta.candidatesTokenCount ?? usageMeta.output_tokens ?? 0 }
+    : undefined;
+
   return {
     content: content.length > 0 ? content : [{ type: "text", text: "" }],
     stopReason: hasToolUse ? "tool_use" : data.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
+    usage,
   };
 }
 

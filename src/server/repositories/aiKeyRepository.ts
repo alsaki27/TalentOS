@@ -21,7 +21,7 @@ export type AiProvider =
   | "opencode"
   | "local";
 
-export type AiKeyStatus = "unknown" | "working" | "failing" | "disabled";
+export type AiKeyStatus = "unknown" | "working" | "failing" | "disabled" | "rate_limited" | "quota_exhausted";
 
 export interface AiApiKeyRow {
   id: string;
@@ -111,7 +111,14 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
 export async function listAiKeys(): Promise<AiApiKeyMetadata[]> {
   if (isNeon()) {
     const rows = await query<AiApiKeyRow>(
-      `SELECT * FROM ai_api_keys ORDER BY priority ASC, created_at ASC`
+      `SELECT id, provider, label, model, base_url, priority,
+              is_enabled, status, last_tested_at, last_test_status,
+              last_test_latency_ms, last_success_at, last_failure_at,
+              last_error_code, last_error_message, usage_count, failure_count,
+              daily_request_warning, daily_request_limit, monthly_request_limit,
+              monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+              key_fingerprint, created_by, created_at, updated_at
+       FROM ai_api_keys ORDER BY priority ASC, created_at ASC`
     );
     return rows.map((r) => toMetadata(r));
   } else {
@@ -132,7 +139,14 @@ export async function listAiKeys(): Promise<AiApiKeyMetadata[]> {
 export async function listEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
   if (isNeon()) {
     const rows = await query<AiApiKeyRow>(
-      `SELECT * FROM ai_api_keys WHERE is_enabled = $1 ORDER BY priority ASC, created_at ASC`,
+      `SELECT id, provider, label, model, base_url, priority,
+              is_enabled, status, last_tested_at, last_test_status,
+              last_test_latency_ms, last_success_at, last_failure_at,
+              last_error_code, last_error_message, usage_count, failure_count,
+              daily_request_warning, daily_request_limit, monthly_request_limit,
+              monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+              key_fingerprint, created_by, created_at, updated_at
+       FROM ai_api_keys WHERE is_enabled = $1 ORDER BY priority ASC, created_at ASC`,
       [true]
     );
     return rows.map((r) => toMetadata(r));
@@ -186,7 +200,15 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
 
   if (isNeon()) {
     const rows = await query<AiApiKeyRow>(
-      `INSERT INTO ai_api_keys (provider, label, encrypted_key, key_fingerprint, model, priority, is_enabled, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      `INSERT INTO ai_api_keys (provider, label, encrypted_key, key_fingerprint, model, priority, is_enabled, status, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, provider, label, model, base_url, priority,
+                 is_enabled, status, last_tested_at, last_test_status,
+                 last_test_latency_ms, last_success_at, last_failure_at,
+                 last_error_code, last_error_message, usage_count, failure_count,
+                 daily_request_warning, daily_request_limit, monthly_request_limit,
+                 monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+                 key_fingerprint, created_by, created_at, updated_at`,
       [input.provider, input.label, encrypted, fingerprint, input.model ?? null, input.priority ?? 100, input.isEnabled ?? true, "unknown", input.createdBy ?? null]
     );
     return toMetadata(rows[0]);
@@ -246,7 +268,14 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
     values.push(id);
 
     const rows = await query<AiApiKeyRow>(
-      `UPDATE ai_api_keys SET ${fields.join(", ")} WHERE id = $${idx} RETURNING *`,
+      `UPDATE ai_api_keys SET ${fields.join(", ")} WHERE id = $${idx}
+       RETURNING id, provider, label, model, base_url, priority,
+                 is_enabled, status, last_tested_at, last_test_status,
+                 last_test_latency_ms, last_success_at, last_failure_at,
+                 last_error_code, last_error_message, usage_count, failure_count,
+                 daily_request_warning, daily_request_limit, monthly_request_limit,
+                 monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+                 key_fingerprint, created_by, created_at, updated_at`,
       values
     );
     return toMetadata(rows[0]);
@@ -279,7 +308,14 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
 export async function disableAiKey(id: string): Promise<AiApiKeyMetadata> {
   if (isNeon()) {
     const rows = await query<AiApiKeyRow>(
-      `UPDATE ai_api_keys SET is_enabled = $1, status = $2, updated_at = $3 WHERE id = $4 RETURNING *`,
+      `UPDATE ai_api_keys SET is_enabled = $1, status = $2, updated_at = $3 WHERE id = $4
+       RETURNING id, provider, label, model, base_url, priority,
+                 is_enabled, status, last_tested_at, last_test_status,
+                 last_test_latency_ms, last_success_at, last_failure_at,
+                 last_error_code, last_error_message, usage_count, failure_count,
+                 daily_request_warning, daily_request_limit, monthly_request_limit,
+                 monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+                 key_fingerprint, created_by, created_at, updated_at`,
       [false, "disabled", new Date().toISOString(), id]
     );
     return toMetadata(rows[0]);
@@ -327,17 +363,27 @@ export async function recordAiKeySuccess(id: string): Promise<void> {
  * Record a failure for an AI key (increments failure_count, updates status).
  */
 export async function recordAiKeyFailure(id: string, error: string): Promise<void> {
+  const errLower = error.toLowerCase();
+  let status: AiKeyStatus;
+  if (errLower.includes("rate limit") || errLower.includes("429")) {
+    status = "rate_limited";
+  } else if (errLower.includes("quota") || errLower.includes("billing")) {
+    status = "quota_exhausted";
+  } else {
+    status = "failing";
+  }
+
   if (isNeon()) {
     const now = new Date().toISOString();
     await execute(
       `UPDATE ai_api_keys SET status = $1, last_failure_at = $2, last_tested_at = $3, last_error = $4, failure_count = failure_count + 1, updated_at = $5 WHERE id = $6`,
-      ["failing", now, now, error, now, id]
+      [status, now, now, error, now, id]
     );
   } else {
     await supabase
       .from("ai_api_keys")
       .update({
-        status: "failing",
+        status,
         last_failure_at: new Date().toISOString(),
         last_tested_at: new Date().toISOString(),
         last_error: error,

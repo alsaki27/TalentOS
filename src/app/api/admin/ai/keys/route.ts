@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
+import { sanitizeApiError } from "@/lib/utils";
 import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 import { query, execute } from "@/server/db/neon";
 import {
@@ -18,8 +19,14 @@ export async function GET() {
 
   try {
     const keys = await query<any>(
-      `SELECT
-         ak.*,
+       `SELECT
+          ak.id, ak.provider, ak.label, ak.model, ak.base_url, ak.priority,
+          ak.is_enabled, ak.status, ak.last_tested_at, ak.last_test_status,
+          ak.last_test_latency_ms, ak.last_success_at, ak.last_failure_at,
+          ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
+          ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
+          ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
+          ak.created_by, ak.created_at, ak.updated_at,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -48,7 +55,7 @@ export async function GET() {
 
     return NextResponse.json({ keys });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }
 
@@ -149,18 +156,43 @@ export async function POST(req: NextRequest) {
       metadata: { provider, priority, fingerprint: key.key_fingerprint },
     });
 
+    const testResult = await testAiKey(key.id);
+
+    let autoEnabled = false;
+    if (testResult.success) {
+      autoEnabled = true;
+      if (!key.is_enabled) {
+        await execute(
+          `UPDATE ai_api_keys SET is_enabled = $1, updated_at = $2 WHERE id = $3`,
+          [true, new Date().toISOString(), key.id]
+        );
+      }
+    } else {
+      const newStatus = testResult.error ? "invalid" : "unknown";
+      await execute(
+        `UPDATE ai_api_keys SET is_enabled = $1, status = $2, updated_at = $3 WHERE id = $4`,
+        [false, newStatus, new Date().toISOString(), key.id]
+      );
+    }
+
     const refreshedKey = await query<any>(
-      "SELECT * FROM ai_api_keys WHERE id = $1",
+      `SELECT id, provider, label, model, base_url, priority,
+               is_enabled, status, last_tested_at, last_test_status,
+               last_test_latency_ms, last_success_at, last_failure_at,
+               last_error_code, last_error_message, usage_count, failure_count,
+               daily_request_warning, daily_request_limit, monthly_request_limit,
+               monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+               created_by, created_at, updated_at
+        FROM ai_api_keys WHERE id = $1`,
       [key.id]
     );
-
-    const testResult = await testAiKey(key.id);
 
     return NextResponse.json({
       key: refreshedKey[0] ?? key,
       test: testResult,
+      autoEnabled,
     }, { status: 201 });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }

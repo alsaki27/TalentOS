@@ -6,6 +6,7 @@ import { getCurrentUserContext } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
+import { sanitizeError } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -43,8 +44,8 @@ export async function GET(req: NextRequest) {
           AND ($1 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $2 OR ($3 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3) OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4))
           AND ($5 = '' OR c.name ILIKE $6 OR j.title ILIKE $6 OR j.company ILIKE $6)
           AND ($7 = '' OR a.status = $7)
-          AND ($8 = '' OR a.follow_up_at <= $8)
-          AND ($9 = '' OR a.follow_up_at > $9)
+          AND ($8 = '' OR a.follow_up_at <= $8::date)
+          AND ($9 = '' OR a.follow_up_at > $9::date)
         ORDER BY a.follow_up_at ASC
         OFFSET $10 LIMIT $11
       `;
@@ -58,8 +59,8 @@ export async function GET(req: NextRequest) {
           AND ($1 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $2 OR ($3 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3) OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4))
           AND ($5 = '' OR c.name ILIKE $6 OR j.title ILIKE $6 OR j.company ILIKE $6)
           AND ($7 = '' OR a.status = $7)
-          AND ($8 = '' OR a.follow_up_at <= $8)
-          AND ($9 = '' OR a.follow_up_at > $9)
+          AND ($8 = '' OR a.follow_up_at <= $8::date)
+          AND ($9 = '' OR a.follow_up_at > $9::date)
       `;
 
       const data = await query<Record<string, any>>(dataSql, [
@@ -96,8 +97,8 @@ export async function GET(req: NextRequest) {
 
       const [allRow, dueRow, upcomingRow, autoRow] = await Promise.all([
         queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere}`, statsBaseParams),
-        queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere} AND a.follow_up_at <= $5`, [...statsBaseParams, today]),
-        queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere} AND a.follow_up_at > $5`, [...statsBaseParams, today]),
+        queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere} AND a.follow_up_at <= $5::date`, [...statsBaseParams, today]),
+        queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere} AND a.follow_up_at > $5::date`, [...statsBaseParams, today]),
         queryOne<{ total: number }>(`SELECT COUNT(*)::int as total FROM applications a WHERE ${statsBaseWhere} AND a.follow_up_source = 'auto_status_rule'`, statsBaseParams),
       ]);
 
@@ -110,8 +111,9 @@ export async function GET(req: NextRequest) {
       };
 
       return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize, stats });
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    } catch (error: unknown) {
+      const { message, status } = sanitizeError(error);
+      return NextResponse.json({ error: message }, { status });
     }
   }
 

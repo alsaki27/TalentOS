@@ -277,11 +277,23 @@ export default function ApplicationQueuePage() {
   async function buildBaseResume(item: QueueItem) {
     if (!item.candidates) return;
     setActionLoading(`${item.id}:build_base`);
-    const res = await fetch("/api/base-resumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidateId: item.candidates.id, name: "Base Resume", targetIndustry: item.jobs?.job_category || "", targetRoles: item.jobs?.title ? [item.jobs.title] : [], startingSource: "blank" }) });
-    setActionLoading(null);
-    if (res.ok) { const d = await res.json(); setFaloodResumes(p => ({ ...p, [item.candidates!.id]: [...(p[item.candidates!.id] ?? []), d] })); setStatus(item.id, "in_progress"); window.open(`/falood/studio/base/${d.id}`, "_blank"); }
-    else { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Build failed." }); }
-    setFaloodOpen(null);
+    try {
+      const res = await fetch("/api/base-resumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidateId: item.candidates.id, name: "Base Resume", targetIndustry: item.jobs?.job_category || "", targetRoles: item.jobs?.title ? [item.jobs.title] : [], startingSource: "blank" }) });
+      if (res.ok) {
+        const d = await res.json();
+        setFaloodResumes(p => ({ ...p, [item.candidates!.id]: [...(p[item.candidates!.id] ?? []), d] }));
+        setFeedback({ kind: "success", text: "Base resume created. Opening Studio…" });
+        window.open(`/falood/studio/base/${d.id}`, "_blank");
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Build failed." });
+      }
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    } finally {
+      setActionLoading(null);
+      setFaloodOpen(null);
+    }
   }
 
   function workflowStageLabel(stage: number | null | undefined): string {
@@ -461,6 +473,21 @@ export default function ApplicationQueuePage() {
                     <PipelineActions item={item} actionLoading={actionLoading}
                       onStartWorkflow={startWorkflow}
                       onFetchDetails={fetchWorkflowDetails}
+                      onReview={async (wfId: string, action: string) => {
+                        setActionLoading(`${item.id}:${action}`);
+                        try {
+                          const res = await fetch(`/api/application-ai-workflows/${wfId}/review`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action }),
+                          });
+                          if (!res.ok) {
+                            const d = await res.json().catch(() => ({}));
+                            alert(d.error || `${action} failed`);
+                          }
+                        } catch (err: any) { alert(err.message); }
+                        finally { setActionLoading(null); load(page, false); }
+                      }}
                       expandedWorkflow={expandedWorkflow}
                       workflowDetails={workflowDetails}
                       workflowStageLabel={workflowStageLabel}
@@ -510,7 +537,7 @@ export default function ApplicationQueuePage() {
                               </button>
                             ) : (
                               (faloodResumes[item.candidates.id] ?? []).map((br: any) => (
-                                <button key={br.id} className="dropdown-item" onClick={() => { setStatus(item.id, "in_progress"); window.open(`/falood/studio/base/${br.id}`, "_blank"); setFaloodOpen(null); }}>
+                                <button key={br.id} className="dropdown-item" onClick={() => { window.open(`/falood/studio/base/${br.id}`, "_blank"); setFaloodOpen(null); }}>
                                   {br.name || "Untitled"}
                                 </button>
                               ))
@@ -618,13 +645,14 @@ export default function ApplicationQueuePage() {
 
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
-  item, actionLoading, onStartWorkflow, onFetchDetails,
+  item, actionLoading, onStartWorkflow, onFetchDetails, onReview,
   expandedWorkflow, workflowDetails, workflowStageLabel
 }: {
   item: QueueItem;
   actionLoading: string | null;
   onStartWorkflow: (item: QueueItem) => void;
   onFetchDetails: (item: QueueItem) => void;
+  onReview: (wfId: string, action: string) => void;
   expandedWorkflow: string | null;
   workflowDetails: Record<string, any>;
   workflowStageLabel: (stage: number | null | undefined) => string;
@@ -662,13 +690,33 @@ function PipelineActions({
     );
   }
 
-  // Human review needed
+  // Human review needed — show Approve / Reject / Restart buttons
   if (genStatus === "human_review" || wfStatus === "waiting") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className="badge badge-warning">👁 Human Review</span>
+        <span className="badge badge-warning">Human Review</span>
+        {item.workflow_score !== null && item.workflow_score !== undefined && (
+          <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
+        )}
         {item.workflow_id && (
           <>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <button className="btn-primary btn-sm"
+                onClick={() => onReview(item.workflow_id!, "approve")}
+                disabled={actionLoading === `${item.id}:approve`}>
+                {actionLoading === `${item.id}:approve` ? "⟳" : "Approve"}
+              </button>
+              <button className="btn-compact btn-sm"
+                onClick={() => { if (confirm("Reject this resume?")) onReview(item.workflow_id!, "reject"); }}
+                disabled={actionLoading === `${item.id}:reject`}>
+                {actionLoading === `${item.id}:reject` ? "⟳" : "Reject"}
+              </button>
+              <button className="btn-compact btn-sm"
+                onClick={() => { if (confirm("Reject and restart from stage 1?")) onReview(item.workflow_id!, "reject_and_restart"); }}
+                disabled={actionLoading === `${item.id}:restart`}>
+                {actionLoading === `${item.id}:restart` ? "⟳" : "Restart"}
+              </button>
+            </div>
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
               {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
             </button>

@@ -56,7 +56,7 @@ export function toOpenAiTools(tools: AiTool[]) {
   }));
 }
 
-export function fromOpenAiChoice(choice: any): AiResponse {
+export function fromOpenAiChoice(choice: any, usage?: any): AiResponse {
   const message = choice.message ?? {};
   const content: AiContentBlock[] = [];
 
@@ -69,7 +69,8 @@ export function fromOpenAiChoice(choice: any): AiResponse {
   }
 
   const stopReason = choice.finish_reason === "tool_calls" ? "tool_use" : choice.finish_reason === "length" ? "max_tokens" : "end_turn";
-  return { content, stopReason };
+  const tokenUsage = usage ? { input_tokens: usage.prompt_tokens ?? 0, output_tokens: usage.completion_tokens ?? 0 } : undefined;
+  return { content, stopReason, usage: tokenUsage };
 }
 
 export interface OpenAiCompatibleConfig {
@@ -85,7 +86,7 @@ export interface OpenAiCompatibleConfig {
 
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): AiProvider {
   return {
-    async send({ system, messages, tools }) {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
       const res = await fetch(config.apiUrl, {
         method: "POST",
         headers: {
@@ -97,8 +98,8 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: "system", content: system }, ...toOpenAiMessages(messages)],
-          max_tokens: config.maxTokens ?? 4096,
-          temperature: config.temperature ?? 0.4,
+          max_tokens: maxTokens ?? config.maxTokens ?? 4096,
+          temperature: temperature ?? config.temperature ?? 0.4,
           stream: false,
           ...config.extraBody,
           ...(tools.length > 0 ? { tools: toOpenAiTools(tools) } : {}),
@@ -113,7 +114,7 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
       const data = await res.json();
       const choice = data.choices?.[0];
       if (!choice) throw new Error(`${config.errorLabel} returned no choices.`);
-      return fromOpenAiChoice(choice);
+      return fromOpenAiChoice(choice, data.usage);
     },
   };
 }

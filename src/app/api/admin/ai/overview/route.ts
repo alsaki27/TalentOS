@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
+import { sanitizeApiError } from "@/lib/utils";
 import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -213,6 +214,63 @@ export async function GET() {
       });
     }
 
+    const staleKeys = await query<{ keyId: string; keyLabel: string }>(
+      `SELECT ak.id::text as "keyId", ak.label as "keyLabel"
+       FROM ai_api_keys ak
+       WHERE (ak.last_tested_at IS NULL OR ak.last_tested_at < NOW() - interval '7 days')
+         AND NOT EXISTS (SELECT 1 FROM ai_automation_routes ar WHERE ar.ai_key_id = ak.id)`
+    );
+
+    const brokenKeysInUse = await query<{
+      keyId: string;
+      keyLabel: string;
+      agentCount: number;
+    }>(
+      `SELECT ak.id::text as "keyId", ak.label as "keyLabel", COUNT(DISTINCT ar.automation_id)::int as "agentCount"
+       FROM ai_api_keys ak
+       JOIN ai_automation_routes ar ON ar.ai_key_id = ak.id
+       WHERE ak.status IN ('invalid', 'failing')
+       GROUP BY ak.id, ak.label`
+    );
+
+    const plaintextCount = keyStats?.unencrypted_keys ?? 0;
+
+    const securityWarnings: Array<{
+      type: string;
+      keyId?: string;
+      keyLabel?: string;
+      agentCount?: number;
+      count?: number;
+      message: string;
+    }> = [];
+
+    for (const k of staleKeys) {
+      securityWarnings.push({
+        type: "stale_key",
+        keyId: k.keyId,
+        keyLabel: k.keyLabel,
+        message: `Key "${k.keyLabel}" has not been tested in 7+ days and has no routes`,
+      });
+    }
+
+    for (const k of brokenKeysInUse) {
+      securityWarnings.push({
+        type: "broken_key_in_use",
+        keyId: k.keyId,
+        keyLabel: k.keyLabel,
+        agentCount: k.agentCount,
+        message: `Failing key still assigned to ${k.agentCount} agent${k.agentCount !== 1 ? "s" : ""}`,
+      });
+    }
+
+    if (plaintextCount > 0) {
+      securityWarnings.push({
+        type: "plaintext_key",
+        count: plaintextCount,
+        message: `${plaintextCount} key${plaintextCount !== 1 ? "s are" : " is"} stored in plaintext. Use 'Secure legacy keys' to encrypt ${plaintextCount !== 1 ? "them" : "it"}.`,
+      });
+    }
+
     return NextResponse.json({
       summary: {
         totalKeys: keyStats?.total_keys ?? 0,
@@ -236,13 +294,14 @@ export async function GET() {
         usageTrackingOperational: hasRecentUsage?.exists ?? false,
       },
       alerts,
+      securityWarnings,
       trafficByProvider,
       recentIncidents,
     });
   } catch (err: any) {
     console.error("[ai/overview]", err.message || err);
     return NextResponse.json(
-      { error: "Failed to load AI overview" },
+      { error: sanitizeApiError(err) },
       { status: 500 }
     );
   }

@@ -175,3 +175,29 @@ jobs:
           exit 1
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+# ── Cloudflare Cron Trigger setup ─────────────────────────────────────────
+# This workflow deploys the Worker but does NOT configure cron triggers.
+# Cron triggers must be set up in the Cloudflare Dashboard or via
+# `wrangler.toml`:
+#
+# wrangler.toml (add under [triggers]):
+#
+#   [triggers]
+#   crons = ["*/30 * * * *"]
+#
+# Or, in the Cloudflare Dashboard:
+#   Workers & Pages → skarion-talent-os → Triggers → Cron Triggers
+#   Add cron trigger:
+#     Cron pattern: */30 * * * *     (every 30 seconds)
+#     Endpoint:     GET /api/application-ai-workflows/dispatch
+#
+# The dispatcher endpoint requires a CRON_SECRET bearer token,
+# which is already set as a secret on the Worker. Configure the
+# cron trigger to include an `Authorization: Bearer <CRON_SECRET>`
+# header. On the Cloudflare Dashboard, add a Custom Header:
+#   Authorization: Bearer <your-cron-secret-value>
+#
+# The GET handler processes up to 3 queued workflows per invocation
+# to clear any backlogs between cron ticks.
+# ──────────────────────────────────────────────────────────────────────────

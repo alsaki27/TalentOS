@@ -156,6 +156,13 @@ export interface StageRunRecord {
 
 // ── Agent function signature ──
 
+export interface AgentOptions {
+  system_prompt?: string;
+  temperature?: number;
+  max_output_tokens?: number;
+  timeout_ms?: number;
+}
+
 export type AgentFunction<I, O> = (
   input: I,
   provider: AiProvider,

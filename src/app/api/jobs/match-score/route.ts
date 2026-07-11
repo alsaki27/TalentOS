@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
-import { queryOne, execute, query } from "@/server/db/neon";
+import { queryOne } from "@/server/db/neon";
 import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
 
@@ -8,9 +8,40 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build",
 });
 
+async function storeErrorScore(job_id: string, candidate_id: string, reasoning: string) {
+  const errorBreakdown = {
+    skills_match: 0,
+    experience_match: 0,
+    reasoning,
+  };
+  if (isNeon()) {
+    const insertSql = `
+      INSERT INTO job_match_scores (job_id, candidate_id, base_resume_id, score, breakdown) 
+      VALUES ($1, $2, null, -1, $3)
+      ON CONFLICT (job_id, candidate_id) 
+      DO UPDATE SET score = -1, base_resume_id = null, breakdown = $3, updated_at = now() 
+      RETURNING *`;
+    return queryOne(insertSql, [job_id, candidate_id, JSON.stringify(errorBreakdown)]);
+  } else {
+    const { data } = await supabase.from("job_match_scores").upsert({
+      job_id,
+      candidate_id,
+      base_resume_id: null,
+      score: -1,
+      breakdown: errorBreakdown,
+    }, { onConflict: "job_id, candidate_id" }).select().single();
+    return data;
+  }
+}
+
 export async function POST(req: NextRequest) {
+  let job_id = "";
+  let candidate_id = "";
+
   try {
-    const { job_id, candidate_id } = await req.json();
+    const body = await req.json();
+    job_id = body.job_id;
+    candidate_id = body.candidate_id;
 
     if (!job_id || !candidate_id) {
       return NextResponse.json({ error: "job_id and candidate_id are required" }, { status: 400 });
@@ -29,30 +60,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (brError || !baseResumes || baseResumes.length === 0) {
-      const errorBreakdown = {
-        skills_match: 0,
-        experience_match: 0,
-        reasoning: "Error: No base resume found for this candidate.",
-      };
-      let finalScoreRecord = null;
-      if (isNeon()) {
-        const insertSql = `
-          INSERT INTO job_match_scores (job_id, candidate_id, base_resume_id, score, breakdown) 
-          VALUES ($1, $2, null, -1, $3)
-          ON CONFLICT (job_id, candidate_id) 
-          DO UPDATE SET score = -1, base_resume_id = null, breakdown = $3, updated_at = now() 
-          RETURNING *`;
-        finalScoreRecord = await queryOne(insertSql, [job_id, candidate_id, JSON.stringify(errorBreakdown)]);
-      } else {
-        const { data } = await supabase.from("job_match_scores").upsert({
-          job_id,
-          candidate_id,
-          base_resume_id: null,
-          score: -1,
-          breakdown: errorBreakdown,
-        }, { onConflict: "job_id, candidate_id" }).select().single();
-        finalScoreRecord = data;
-      }
+      const finalScoreRecord = await storeErrorScore(job_id, candidate_id, "Error: No base resume found for this candidate.");
       return NextResponse.json(finalScoreRecord);
     }
 
@@ -68,7 +76,6 @@ export async function POST(req: NextRequest) {
     }
 
     if (existingScore && existingScore.base_resume_id === latestBaseResume.id) {
-      // Valid score already exists and is up to date with current base resume
       return NextResponse.json(existingScore);
     }
 
@@ -85,7 +92,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (!jobDescText || jobDescText.trim().length === 0) {
-      return NextResponse.json({ error: "Job has no description" }, { status: 400 });
+      const finalScoreRecord = await storeErrorScore(job_id, candidate_id, "Error: Job has no description text to score against.");
+      return NextResponse.json(finalScoreRecord);
     }
 
     // 4. Generate Score via OpenAI
@@ -131,7 +139,6 @@ ${JSON.stringify(latestBaseResume.content)}
     let finalScoreRecord = null;
     if (isNeon()) {
       if (existingScore) {
-        // Update existing record with new resume analysis
         const updateSql = `UPDATE job_match_scores SET base_resume_id = $1, score = $2, breakdown = $3, updated_at = now() WHERE id = $4 RETURNING *`;
         finalScoreRecord = await queryOne(updateSql, [latestBaseResume.id, score, JSON.stringify(breakdown), existingScore.id]);
       } else {
@@ -163,6 +170,18 @@ ${JSON.stringify(latestBaseResume.content)}
 
   } catch (error: any) {
     console.error("Match score error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (job_id && candidate_id) {
+      try {
+        const errorRecord = await storeErrorScore(
+          job_id,
+          candidate_id,
+          `Error: ${error.message || "Unknown error during score generation"}`
+        );
+        if (errorRecord) return NextResponse.json(errorRecord);
+      } catch (dbError) {
+        console.error("Failed to store match score error record:", dbError);
+      }
+    }
+    return NextResponse.json({ error: error.message || "Score generation failed" }, { status: 500 });
   }
 }

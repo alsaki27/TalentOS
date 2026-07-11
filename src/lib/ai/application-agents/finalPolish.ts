@@ -1,13 +1,13 @@
 // Final Polish agent — applies reviewer feedback and runs final QA.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import type { AgentContext } from "./types";
+import type { AgentContext, AgentOptions } from "./types";
 import { FinalResumeSchema, type FinalResumeV1 } from "./schemas";
 import { buildFinalPolishPrompt } from "./prompts/finalPolish";
 import { textOf } from "@/lib/ai/provider";
 
 export async function runFinalPolish(
-  _input: Record<string, never>,
+  options: AgentOptions,
   provider: AiProvider,
   ctx: AgentContext
 ): Promise<FinalResumeV1> {
@@ -16,7 +16,7 @@ export async function runFinalPolish(
   const review = ctx.previousOutputs["application_hiring_panel"]?.data ?? {};
 
   const response = await provider.send({
-    system: "You are Final Polish, an AI that applies reviewer feedback and produces a final resume. Return only valid JSON.",
+    system: options.system_prompt ?? "You are Final Polish, an AI that applies reviewer feedback and produces a final resume. Return only valid JSON.",
     messages: [
       {
         role: "user",
@@ -29,6 +29,9 @@ export async function runFinalPolish(
       },
     ],
     tools: [],
+    temperature: options.temperature,
+    maxTokens: options.max_output_tokens,
+    timeoutMs: options.timeout_ms,
   });
 
   const raw = textOf(response.content);

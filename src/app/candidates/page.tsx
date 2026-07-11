@@ -221,6 +221,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   function reset() {
     setStep(1);
@@ -239,6 +240,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     setTargetRoles("");
     setFile(null);
     setError("");
+    setFeedback(null);
   }
 
   useEffect(() => {
@@ -249,6 +251,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     if (!name.trim()) { setError("Name is required."); return; }
     setSaving(true);
     setError("");
+    setFeedback(null);
 
     const payload = {
       name,
@@ -266,42 +269,47 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
       target_roles: targetRoles.split(",").map((s) => s.trim()).filter(Boolean),
     };
 
-    const res = await fetch("/api/candidates", {
-      method: "POST",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const res = await fetch("/api/candidates", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    if (!res.ok) {
-      setSaving(false);
-      const data = await res.json();
-      setError(data.error || "Something went wrong.");
-      return;
-    }
-
-    const candidate = await res.json();
-    const candidateId = candidate.id;
-
-    if (file && candidateId) {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("label", "Original Upload");
-      formData.append("kind", "resume");
-      formData.append("is_original_upload", "true");
-      try {
-        await fetch(`/api/candidates/${candidateId}/resumes`, {
-          method: "POST",
-          cache: "no-store",
-          body: formData,
-        });
-      } catch {
-        // Upload failure is non-blocking; candidate already created.
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: data.error || "Something went wrong." });
+        return;
       }
-    }
 
-    setSaving(false);
-    onCreated();
+      const candidate = await res.json();
+      const candidateId = candidate.id;
+
+      if (file && candidateId) {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("label", "Original Upload");
+        formData.append("kind", "resume");
+        formData.append("is_original_upload", "true");
+        try {
+          await fetch(`/api/candidates/${candidateId}/resumes`, {
+            method: "POST",
+            cache: "no-store",
+            body: formData,
+          });
+        } catch {
+          // Upload failure is non-blocking; candidate already created.
+        }
+      }
+
+      setFeedback({ kind: "success", text: `Candidate "${name}" created.` });
+      setTimeout(() => onCreated(), 800);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -389,6 +397,13 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
         )}
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+        {feedback && (
+          <div className={`alert ${feedback.kind === "error" ? "alert-error" : "alert-success"}`} style={{ marginTop: 8 }}>
+            {feedback.text}
+            <button className="alert-close" onClick={() => setFeedback(null)}>&times;</button>
+          </div>
+        )}
 
         <div className="modal-actions">
           {step === 1 ? (

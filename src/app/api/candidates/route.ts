@@ -22,17 +22,26 @@ export async function GET(req: NextRequest) {
     const offset = (page - 1) * pageSize;
     const searchParam = `%${search}%`;
     const columns = compact
-      ? "id, name, resume_url, resume_filename"
-      : "id, name, email, phone, status, target_tier, resume_filename, avatar_url, created_at";
+      ? "c.id, c.name, c.resume_url, c.resume_filename, EXISTS(SELECT 1 FROM base_resumes br WHERE br.candidate_id = c.id) as has_base_resume"
+      : "c.id, c.name, c.email, c.phone, c.status, c.target_tier, c.resume_filename, c.avatar_url, c.created_at";
 
-    const dataSql = `
-      SELECT ${columns} FROM candidates
-      WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-        AND ($3 = '' OR status = $3)
-        AND ($4 = '' OR target_tier = $4)
-      ORDER BY created_at DESC
-      OFFSET $5 LIMIT $6
-    `;
+    const dataSql = compact
+      ? `
+        SELECT ${columns} FROM candidates c
+        WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
+          AND ($3 = '' OR c.status = $3)
+          AND ($4 = '' OR c.target_tier = $4)
+        ORDER BY c.created_at DESC
+        OFFSET $5 LIMIT $6
+      `
+      : `
+        SELECT ${columns} FROM candidates c
+        WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
+          AND ($3 = '' OR c.status = $3)
+          AND ($4 = '' OR c.target_tier = $4)
+        ORDER BY c.created_at DESC
+        OFFSET $5 LIMIT $6
+      `;
     const countSql = `
       SELECT COUNT(*)::int as total FROM candidates
       WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
@@ -66,7 +75,23 @@ export async function GET(req: NextRequest) {
     .range(from, from + pageSize - 1);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ items: data ?? [], total: count ?? 0, page, pageSize });
+
+  const items = data ?? [];
+  if (compact && items.length > 0) {
+    const candidateIds = items.map((c: any) => c.id);
+    const { data: baseResumeRows, error: brError } = await supabase
+      .from("base_resumes")
+      .select("candidate_id")
+      .in("candidate_id", candidateIds);
+    if (!brError && baseResumeRows) {
+      const hasBaseResumeIds = new Set(baseResumeRows.map((r: any) => r.candidate_id));
+      for (const c of items) { c.has_base_resume = hasBaseResumeIds.has(c.id); }
+    } else {
+      for (const c of items) { c.has_base_resume = false; }
+    }
+  }
+
+  return NextResponse.json({ items, total: count ?? 0, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -82,8 +107,8 @@ export async function POST(req: NextRequest) {
   if (isNeon()) {
     try {
       const sql = `
-        INSERT INTO candidates (name, email, phone, status, target_tier, notes)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO candidates (name, email, phone, status, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *
       `;
       const data = await queryOne<Record<string, any>>(sql, [
@@ -93,6 +118,15 @@ export async function POST(req: NextRequest) {
         body.status ?? "active",
         body.target_tier ?? null,
         body.notes ?? null,
+        body.linkedin_url ?? null,
+        body.github_url ?? null,
+        body.portfolio_url ?? null,
+        body.visa_status ?? null,
+        body.target_industries ?? null,
+        body.location_preference ?? null,
+        body.work_mode_preference ?? null,
+        body.available_start_date ?? null,
+        body.target_roles ?? null,
       ]);
       if (!data) throw new Error("Insert failed");
 
@@ -130,6 +164,15 @@ export async function POST(req: NextRequest) {
       status: body.status ?? "active",
       target_tier: body.target_tier ?? null,
       notes: body.notes ?? null,
+      linkedin_url: body.linkedin_url ?? null,
+      github_url: body.github_url ?? null,
+      portfolio_url: body.portfolio_url ?? null,
+      visa_status: body.visa_status ?? null,
+      target_industries: body.target_industries ?? null,
+      location_preference: body.location_preference ?? null,
+      work_mode_preference: body.work_mode_preference ?? null,
+      available_start_date: body.available_start_date ?? null,
+      target_roles: body.target_roles ?? null,
     })
     .select()
     .single();

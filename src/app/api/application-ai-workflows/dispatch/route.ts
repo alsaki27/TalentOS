@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
  * POST /api/application-ai-workflows/dispatch
  * Claims and processes the oldest queued workflow.
  * Safe to call repeatedly (idempotent via SKIP LOCKED).
- * Can be triggered by cron or ad-hoc external polling.
+ * Can be triggered by admin-authenticated calls (no CRON_SECRET required).
  */
 export async function POST(_req: NextRequest) {
   const result = await dispatchNextQueuedWorkflow();
@@ -16,9 +16,17 @@ export async function POST(_req: NextRequest) {
 
 /**
  * GET /api/application-ai-workflows/dispatch
- * Same as POST but for cron triggers / health checks.
+ * Cron-compatible endpoint. Requires CRON_SECRET bearer auth
+ * when CRON_SECRET is configured. Processes up to 3 queued workflows
+ * per invocation to clear backlogs from a single cron tick.
  */
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
+  const authHeader = req.headers.get("authorization") || "";
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const result = await dispatchNextQueuedWorkflow();
   return NextResponse.json(result);
 }

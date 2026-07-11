@@ -29,11 +29,21 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'ai_automation_routes' AND column_name = 'created_at'
+    WHERE table_name = 'ai_automation_routes' AND column_name = 'updated_at'
   ) THEN
-    ALTER TABLE ai_automation_routes ADD COLUMN created_at timestamptz NOT NULL DEFAULT now();
+    ALTER TABLE ai_automation_routes ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
   END IF;
 END $$;
 
 -- Index for route fallback queries
 CREATE INDEX IF NOT EXISTS aue_route_idx ON ai_usage_events (automation_id, route_rank, attempt_number);
+
+-- Foreign keys and indexes for usage event enrichment
+ALTER TABLE ai_usage_events
+  ADD CONSTRAINT IF NOT EXISTS aue_workflow_fk
+    FOREIGN KEY (workflow_id) REFERENCES application_ai_workflows(id) ON DELETE SET NULL,
+  ADD CONSTRAINT IF NOT EXISTS aue_application_fk
+    FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS aue_workflow_idx ON ai_usage_events (workflow_id);
+CREATE INDEX IF NOT EXISTS aue_application_idx ON ai_usage_events (application_id);

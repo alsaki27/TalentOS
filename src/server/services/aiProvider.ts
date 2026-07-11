@@ -37,18 +37,13 @@ const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 export function buildProviderFromDbKey(
   provider: DbAiProvider,
   apiKey: string,
-  model?: string | null
+  model?: string | null,
+  baseUrl?: string | null
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
       const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
       if (!proxyUrl) return null;
-      // Delegates to the same conversion logic as the env-based provider
-      // (src/lib/ai/googleVertexProxyProvider.ts) instead of duplicating it -
-      // this case used to flatten messages to plain text and never sent `tools`
-      // at all, which (a) never let Gemini use real function-calling and
-      // (b) is now broken outright regardless, since the proxy was changed to
-      // return a `parts` array instead of a flattened `text` field.
       return {
         send({ system, messages, tools }) {
           return callVertexProxy({
@@ -63,7 +58,6 @@ export function buildProviderFromDbKey(
       };
     }
     case "anthropic": {
-      // Reuse the anthropic provider logic but with a custom key
       const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
@@ -95,6 +89,7 @@ export function buildProviderFromDbKey(
           return {
             content: (data.content ?? []).map((block: any) => ({ type: "text", text: block.text ?? "" })),
             stopReason: data.stop_reason ?? "end_turn",
+            usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
           };
         },
       };
@@ -186,11 +181,8 @@ export function buildProviderFromDbKey(
       };
     }
     case "openai": {
-      // "openai" was previously listed here returning null - selectable in the
-      // admin AI Key Manager UI but silently non-functional, since this function
-      // never actually built a real provider for it.
       return createOpenAiCompatibleProvider({
-        apiUrl: "https://api.openai.com/v1/chat/completions",
+        apiUrl: baseUrl || "https://api.openai.com/v1/chat/completions",
         apiKey,
         model: model || process.env.OPENAI_MODEL || "gpt-4o",
         errorLabel: "OpenAI API",
@@ -198,7 +190,7 @@ export function buildProviderFromDbKey(
     }
     case "glm": {
       return createOpenAiCompatibleProvider({
-        apiUrl: "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        apiUrl: baseUrl || "https://open.bigmodel.cn/api/paas/v4/chat/completions",
         apiKey,
         model: model || process.env.GLM_MODEL || "glm-4-plus",
         errorLabel: "GLM API",
@@ -206,7 +198,7 @@ export function buildProviderFromDbKey(
     }
     case "deepseek": {
       return createOpenAiCompatibleProvider({
-        apiUrl: process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com/v1/chat/completions",
+        apiUrl: baseUrl || process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com/v1/chat/completions",
         apiKey,
         model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
         errorLabel: "DeepSeek API",
@@ -217,7 +209,7 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       return createOpenAiCompatibleProvider({
-        apiUrl: process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions",
+        apiUrl: baseUrl || process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions",
         apiKey,
         model: model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash",
         errorLabel: "OpenCode API",
@@ -229,6 +221,14 @@ export function buildProviderFromDbKey(
     case "groq":
     case "openrouter":
     case "local":
+      if (baseUrl) {
+        return createOpenAiCompatibleProvider({
+          apiUrl: baseUrl,
+          apiKey,
+          model: model || "default",
+          errorLabel: provider,
+        });
+      }
       return null;
     default:
       return null;
@@ -250,7 +250,7 @@ export async function testAiKey(id: string): Promise<{
     return { success: false, error: "Key not found", latencyMs: Date.now() - start };
   }
 
-  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url);
   if (!provider) {
     const err = `Provider adapter for "${keyRow.provider}" is not implemented yet.`;
     await recordAiKeyFailure(id, err);
@@ -304,7 +304,7 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
   for (const key of dbKeys) {
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url);
     if (provider) {
       return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" };
     }

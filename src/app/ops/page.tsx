@@ -4,6 +4,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { CardSkeleton } from "../Skeleton";
 import CrawlerStatusLive from "./CrawlerStatusLive";
 import AiKeyManager from "./components/ai-key-manager";
@@ -427,6 +428,11 @@ export default function OpsPage() {
         )}
       </div>
 
+      <div className="card" style={{ borderColor: "var(--warning)", backgroundColor: "#fff8e1", marginBottom: 16 }}>
+        <p style={{ margin: 0, fontSize: 14 }}>
+          {"\u26A0 "}AI management has moved to the <Link href="/admin/ai" style={{ fontWeight: 600 }}>AI Control Center at /admin/ai</Link>
+        </p>
+      </div>
       <AiKeyManager />
       <AiTaskRouting />
       <AiAgentManager />
@@ -440,6 +446,21 @@ export default function OpsPage() {
       <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
         Single-shot summary (new jobs, overdue tickets, today's applications, pipeline count) —
         no tool-calling, generated automatically once daily via <code>/api/cron/digest</code>.
+        {digests.length > 0 && (() => {
+          const latestMs = new Date(digests[0].generated_at).getTime();
+          const hoursAgo = Math.round((Date.now() - latestMs) / 3600000);
+          const daysAgo = Math.round((Date.now() - latestMs) / 86400000);
+          const stale = hoursAgo > 24;
+          let stalenessLabel = "";
+          if (hoursAgo < 1) stalenessLabel = " (just now)";
+          else if (hoursAgo < 24) stalenessLabel = ` (${hoursAgo}h ago)`;
+          else stalenessLabel = ` (${hoursAgo}h / ${daysAgo}d ago)`;
+          return (
+            <span style={{ color: stale ? "var(--danger)" : "var(--ink-soft)", fontWeight: stale ? 600 : 400 }}>
+              {" — latest: "}{new Date(digests[0].generated_at).toLocaleDateString()}{stalenessLabel}
+            </span>
+          );
+        })()}
       </p>
       {digestError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{digestError}</p>}
       {digests.length === 0 ? (

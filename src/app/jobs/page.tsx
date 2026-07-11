@@ -869,17 +869,25 @@ export default function JobsPage() {
                       const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
                       let color = "var(--text-muted)";
                       let displayScore = `${ms.score}%`;
+                      const isError = ms.score === -1;
                       
-                      if (ms.score === -1) {
+                      if (isError) {
                         color = "var(--danger, #dc2626)";
                         displayScore = "Error";
                       } else if (ms.score >= 80) color = "var(--success, #2a6f4f)";
                       else if (ms.score >= 60) color = "var(--warning, #eab308)";
                       else color = "var(--danger, #dc2626)";
 
+                      const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : null;
+
                       return (
-                        <span key={ms.candidate_id} className="badge" title={`${ms.candidate_name}: ${ms.breakdown?.reasoning || 'No reasoning provided.'}`} style={{ borderColor: color, color }}>
+                        <span key={ms.candidate_id} className="badge" style={{ borderColor: color, color, cursor: isError && errorReason ? "help" : "default" }}>
                           {initials}: {displayScore}
+                          {isError && errorReason && (
+                            <span style={{ position: "relative", marginLeft: 2 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", cursor: "help" }} title={errorReason}> ⓘ</span>
+                            </span>
+                          )}
                         </span>
                       );
                     })}
@@ -1504,7 +1512,7 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
 }
 
 function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: () => void; onLogged: () => void }) {
-  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
+  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null; has_base_resume?: boolean }[]>([]);
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
@@ -1518,6 +1526,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [error, setError] = useState("");
   const [localScores, setLocalScores] = useState<MatchScore[]>(job.match_scores || []);
   const [generatingScoreFor, setGeneratingScoreFor] = useState<string | null>(null);
+  const [expandedScoreError, setExpandedScoreError] = useState<string | null>(null);
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
     const bRank = b.role === "application_engineer" ? 0 : 1;
@@ -1528,7 +1537,11 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   useEffect(() => {
     fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
       .then((r) => r.ok ? r.json() : [])
-      .then((data) => setCandidates(Array.isArray(data) ? data : (data.items || [])))
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (data.items || []);
+        list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
+        setCandidates(list);
+      })
       .catch(() => setCandidates([]));
     fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
     fetch("/api/auth/me")
@@ -1566,13 +1579,29 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           const filtered = prev.filter(s => s.candidate_id !== candidateId);
           return [...filtered, { ...newScore, candidate_id: candidateId }];
         });
-        // We do not call onLogged() here because we don't want to close the modal yet.
       } else {
-        const errorData = await res.json();
-        setError(errorData.error || "Failed to generate score");
+        const errorData = await res.json().catch(() => ({ error: "Failed to generate score" }));
+        const errorReason = errorData.error || "Failed to generate score";
+        setLocalScores((prev) => {
+          const filtered = prev.filter(s => s.candidate_id !== candidateId);
+          return [...filtered, {
+            job_id: job.id,
+            candidate_id: candidateId,
+            score: -1,
+            breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${errorReason}` },
+          }];
+        });
       }
     } catch (err: any) {
-      setError(err.message);
+      setLocalScores((prev) => {
+        const filtered = prev.filter(s => s.candidate_id !== candidateId);
+        return [...filtered, {
+          job_id: job.id,
+          candidate_id: candidateId,
+          score: -1,
+          breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${err.message || "Network error"}` },
+        }];
+      });
     } finally {
       setGeneratingScoreFor(null);
     }
@@ -1636,9 +1665,10 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
               const ms = localScores.find(s => s.candidate_id === c.id);
               let scoreColor = "var(--text-muted)";
               let displayScore = "Match: ??%";
+              const isError = ms && ms.score === -1;
               
               if (ms) {
-                if (ms.score === -1) {
+                if (isError) {
                   scoreColor = "var(--danger, #dc2626)";
                   displayScore = "Error";
                 } else if (ms.score >= 80) {
@@ -1655,9 +1685,12 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
               const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
               const noResume = !c.resume_filename;
+              const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : "";
+              const isExpanded = expandedScoreError === c.id;
 
               return (
-                <div key={c.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", borderRadius: "8px", backgroundColor: "var(--surface)", border: "1px solid var(--border)", transition: "background 0.15s ease" }} onMouseOver={(e) => {if(!alreadyApplied && !noResume) e.currentTarget.style.backgroundColor = "var(--bg)"}} onMouseOut={(e) => e.currentTarget.style.backgroundColor = "var(--surface)"}>
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "12px 14px", borderRadius: "8px", backgroundColor: "var(--surface)", border: isExpanded && isError ? "1px solid var(--danger, #dc2626)" : "1px solid var(--border)", transition: "background 0.15s ease" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }} onMouseOver={(e) => {if(!alreadyApplied && !noResume) e.currentTarget.parentElement!.style.backgroundColor = "var(--bg)"}} onMouseOut={(e) => e.currentTarget.parentElement!.style.backgroundColor = "var(--surface)"}>
                   <label style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--ink)", fontWeight: 500, fontSize: "0.95rem", flex: 1, cursor: (alreadyApplied || noResume) ? "not-allowed" : "pointer", userSelect: "none" }}>
                     <input
                       type="checkbox"
@@ -1677,10 +1710,28 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                       {noResume && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "var(--danger)", marginLeft: "6px" }}>(no resume)</span>}
                     </span>
                   </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                   {ms ? (
-                    <span className="badge" style={{ borderColor: scoreColor, color: scoreColor, padding: "4px 8px", fontWeight: 600 }} title={ms.breakdown?.reasoning || ""}>
-                      {displayScore}
-                    </span>
+                    <>
+                      <span
+                        className="badge"
+                        style={{ borderColor: scoreColor, color: scoreColor, padding: "4px 8px", fontWeight: 600, cursor: isError ? "pointer" : "default" }}
+                        title={isError ? "Click for details" : (ms.breakdown?.reasoning || "")}
+                        onClick={() => { if (isError) setExpandedScoreError(isExpanded ? null : c.id); }}
+                      >
+                        {displayScore}
+                      </span>
+                      {isError && (
+                        <button
+                          type="button"
+                          disabled={generatingScoreFor === c.id}
+                          onClick={(e) => { e.stopPropagation(); generateScore(c.id); }}
+                          style={{ padding: "3px 8px", fontSize: "11px", borderRadius: "4px", border: "1px solid var(--accent)", background: "var(--surface)", color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}
+                        >
+                          {generatingScoreFor === c.id ? "Retrying..." : "Retry"}
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <button
                       type="button"
@@ -1691,11 +1742,22 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                       {generatingScoreFor === c.id ? "🤖 Generating..." : "🤖 Gen Score"}
                     </button>
                   )}
+                  </div>
+                  </div>
+                  {isExpanded && isError && (
+                    <div style={{ marginTop: "10px", padding: "10px 12px", backgroundColor: "rgba(220, 38, 38, 0.06)", borderRadius: "6px", border: "1px solid rgba(220, 38, 38, 0.2)", fontSize: "13px", color: "var(--danger, #dc2626)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px", fontWeight: 600 }}>
+                        <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                        Scoring error
+                      </div>
+                      <p style={{ margin: 0, lineHeight: 1.4 }}>{errorReason}</p>
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
-          {candidates.some(c => !c.resume_filename) && (
+          {candidates.some(c => !c.resume_filename && !c.has_base_resume) && (
             <div style={{ color: "var(--danger, #dc2626)", fontSize: "13px", marginTop: "8px", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }}>
               <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
               Candidates without a base resume cannot be assigned.

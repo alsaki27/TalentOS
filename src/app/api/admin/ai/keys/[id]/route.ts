@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
+import { sanitizeApiError } from "@/lib/utils";
 import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 import { query, queryOne, execute } from "@/server/db/neon";
 import {
   updateAiKey,
 } from "@/server/repositories/aiKeyRepository";
+import { testAiKey } from "@/server/services/aiProvider";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +26,13 @@ export async function GET(
   try {
     const key = await queryOne<any>(
       `SELECT
-         ak.*,
+         ak.id, ak.provider, ak.label, ak.model, ak.base_url, ak.priority,
+         ak.is_enabled, ak.status, ak.last_tested_at, ak.last_test_status,
+         ak.last_test_latency_ms, ak.last_success_at, ak.last_failure_at,
+         ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
+         ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
+         ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
+         ak.created_by, ak.created_at, ak.updated_at,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -72,7 +80,7 @@ export async function GET(
       },
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }
 
@@ -108,13 +116,19 @@ export async function PATCH(
   if (body.priority !== undefined) standardUpdates.priority = body.priority;
   if (body.is_enabled !== undefined) standardUpdates.is_enabled = body.is_enabled;
   if (body.apiKey !== undefined) {
+    if (typeof body.apiKey !== "string" || body.apiKey.trim() === "") {
+      return NextResponse.json(
+        { error: "apiKey must be a non-empty string" },
+        { status: 400 }
+      );
+    }
     if (!isEncryptionAvailable()) {
       return NextResponse.json(
         { error: "AI key encryption is not configured. Set AI_KEYS_ENCRYPTION_SECRET to replace API keys." },
         { status: 503 }
       );
     }
-    standardUpdates.apiKey = body.apiKey;
+    standardUpdates.apiKey = body.apiKey.trim();
   }
 
   const hasStandardUpdates = Object.keys(standardUpdates).length > 0;
@@ -174,9 +188,38 @@ export async function PATCH(
       );
     }
 
+    let testResult: { success: boolean; error?: string; latencyMs: number } | null = null;
+    if (body.apiKey !== undefined) {
+      testResult = await testAiKey(id);
+
+      const now = new Date().toISOString();
+      if (!testResult.success) {
+        const newStatus = testResult.error ? "invalid" : "unknown";
+        await execute(
+          `UPDATE ai_api_keys
+           SET last_test_status = $1, last_tested_at = $2, status = $3, last_success_at = NULL, updated_at = $4
+           WHERE id = $5`,
+          [newStatus, now, newStatus, now, id]
+        );
+      } else {
+        await execute(
+          `UPDATE ai_api_keys
+           SET last_test_status = $1, last_tested_at = $2, updated_at = $3
+           WHERE id = $4`,
+          ["working", now, now, id]
+        );
+      }
+    }
+
     const key = await queryOne<any>(
       `SELECT
-         ak.*,
+         ak.id, ak.provider, ak.label, ak.model, ak.base_url, ak.priority,
+         ak.is_enabled, ak.status, ak.last_tested_at, ak.last_test_status,
+         ak.last_test_latency_ms, ak.last_success_at, ak.last_failure_at,
+         ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
+         ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
+         ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
+         ak.created_by, ak.created_at, ak.updated_at,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -215,9 +258,9 @@ export async function PATCH(
       metadata: { provider: key?.provider },
     });
 
-    return NextResponse.json({ key });
+    return NextResponse.json({ key, ...(testResult ? { test: testResult } : {}) });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }
 
@@ -235,7 +278,14 @@ export async function DELETE(
 
   try {
     const key = await queryOne<any>(
-      "SELECT * FROM ai_api_keys WHERE id = $1",
+      `SELECT id, provider, label, model, base_url, priority,
+               is_enabled, status, last_tested_at, last_test_status,
+               last_test_latency_ms, last_success_at, last_failure_at,
+               last_error_code, last_error_message, usage_count, failure_count,
+               daily_request_warning, daily_request_limit, monthly_request_limit,
+               monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
+               created_by, created_at, updated_at
+        FROM ai_api_keys WHERE id = $1`,
       [id]
     );
 
@@ -276,6 +326,6 @@ export async function DELETE(
 
     return NextResponse.json({ deleted: true });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }

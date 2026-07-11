@@ -5,7 +5,7 @@
 import { AiProvider, AiMessage, AiTool } from "@/lib/ai/provider";
 import { estimateCost } from "@/lib/ai/pricing";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiProvider } from "@/server/repositories/aiKeyRepository";
+import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
 import { buildProviderFromDbKey } from "@/server/services/aiProvider";
 import { getProviderByName, getActiveProviderAsync } from "@/lib/ai/index";
 
@@ -15,6 +15,7 @@ export interface AutomationRouteResult {
   aiKeyId: string | null;
   automationId: string;
   model?: string | null;
+  routeRank: number | null;
 }
 
 interface AutomationRouteRow {
@@ -24,6 +25,7 @@ interface AutomationRouteRow {
   provider: string | null;
   rank: number;
   is_enabled: boolean;
+  model_override: string | null;
 }
 
 /**
@@ -48,14 +50,18 @@ export async function getProviderForAutomation(
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
       if (!keyRow || !keyRow.is_enabled) continue;
-      const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+      const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted"];
+      if (blockedStatuses.includes(keyRow.status)) continue;
+      const effectiveModel = route.model_override ?? keyRow.model;
+      const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
       if (provider) {
         return {
           provider,
           name: keyRow.provider as AutomationRouteResult["name"],
           aiKeyId: keyRow.id,
           automationId,
-          model: keyRow.model,
+          model: effectiveModel,
+          routeRank: route.rank,
         };
       }
     } else if (route.provider) {
@@ -66,6 +72,7 @@ export async function getProviderForAutomation(
           name: route.provider as AutomationRouteResult["name"],
           aiKeyId: null,
           automationId,
+          routeRank: route.rank,
         };
       }
       // Try DB keys for this provider
@@ -73,16 +80,20 @@ export async function getProviderForAutomation(
       for (const key of dbKeys) {
         if (excludeKeyIds?.has(key.id)) continue;
         if (key.provider !== route.provider) continue;
+        const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted"];
+        if (blockedStatuses.includes(key.status)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
-        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+        const effectiveModel = route.model_override ?? keyRow.model;
+        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
         if (dbProvider) {
           return {
             provider: dbProvider,
             name: keyRow.provider as AutomationRouteResult["name"],
             aiKeyId: keyRow.id,
             automationId,
-            model: keyRow.model,
+            model: effectiveModel,
+            routeRank: route.rank,
           };
         }
       }
@@ -97,6 +108,7 @@ export async function getProviderForAutomation(
       name: global.name,
       aiKeyId: null,
       automationId,
+      routeRank: null,
     };
   }
 
@@ -113,16 +125,25 @@ export interface CallWithUsageTrackingResult<T> {
   providerName: string;
   aiKeyId: string | null;
   model: string | null;
+  routeRank: number | null;
+}
+
+export interface CallContext {
+  userId?: string;
+  workflowId?: string;
+  applicationId?: string;
+  attemptNumber?: number;
 }
 
 /**
  * Wrapper that resolves a provider via D-AI.2.1, calls fn, and records a usage event.
- * Handles both success and failure paths. Token/cost fields populated when available.
+ * Handles both success and failure paths. Token/cost fields populated from provider
+ * response usage when available.
  * Returns both the user's result and provider metadata.
  */
 export async function callWithUsageTracking<T>(
   automationId: string,
-  ctx: { userId?: string } | undefined,
+  ctx: CallContext | undefined,
   fn: (provider: AiProvider) => Promise<T>,
   excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
@@ -134,11 +155,30 @@ export async function callWithUsageTracking<T>(
   const start = Date.now();
   let outcome: "success" | "failure" | "timeout" = "success";
   let errorMessage: string | null = null;
+  let errorCode: string | null = null;
   let inputTokens: number | null = null;
   let outputTokens: number | null = null;
 
+  let capturedUsage: { input_tokens: number; output_tokens: number } | null = null;
+
+  const wrappedProvider: AiProvider = {
+    send: async (opts) => {
+      const response = await resolved.provider.send(opts);
+      if (response.usage) {
+        capturedUsage = response.usage;
+      }
+      return response;
+    },
+  };
+
   try {
-    const result = await fn(resolved.provider);
+    const result = await fn(wrappedProvider);
+
+    if (capturedUsage) {
+      inputTokens = capturedUsage.input_tokens;
+      outputTokens = capturedUsage.output_tokens;
+    }
+
     const latencyMs = Date.now() - start;
     outcome = "success";
 
@@ -152,14 +192,25 @@ export async function callWithUsageTracking<T>(
       inputTokens,
       outputTokens,
       errorMessage,
+      errorCode,
       userId: ctx?.userId ?? null,
+      workflowId: ctx?.workflowId ?? null,
+      applicationId: ctx?.applicationId ?? null,
+      attemptNumber: ctx?.attemptNumber ?? null,
+      routeRank: resolved.routeRank,
     });
 
-    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null };
+    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null, routeRank: resolved.routeRank };
   } catch (err: any) {
     const latencyMs = Date.now() - start;
     errorMessage = err.message ?? "Unknown error";
     outcome = latencyMs > 60000 ? "timeout" : "failure";
+    errorCode = classifyErrorCode(err);
+
+    if (capturedUsage) {
+      inputTokens = capturedUsage.input_tokens;
+      outputTokens = capturedUsage.output_tokens;
+    }
 
     await recordUsageEvent({
       automationId,
@@ -171,11 +222,26 @@ export async function callWithUsageTracking<T>(
       inputTokens,
       outputTokens,
       errorMessage,
+      errorCode,
       userId: ctx?.userId ?? null,
+      workflowId: ctx?.workflowId ?? null,
+      applicationId: ctx?.applicationId ?? null,
+      attemptNumber: ctx?.attemptNumber ?? null,
+      routeRank: resolved.routeRank,
     });
 
     throw err;
   }
+}
+
+function classifyErrorCode(err: any): string | null {
+  const msg: string = (err?.message ?? "").toLowerCase();
+  if (msg.includes("unauthorized") || msg.includes("401") || msg.includes("invalid api key") || msg.includes("auth")) return "auth_error";
+  if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) return "rate_limit";
+  if (msg.includes("timeout") || msg.includes("408") || msg.includes("timed out")) return "timeout";
+  if (msg.includes("not found") || msg.includes("404")) return "not_found";
+  if (msg.includes("server error") || msg.includes("500") || msg.includes("502") || msg.includes("503")) return "server_error";
+  return null;
 }
 
 interface UsageEventInput {
@@ -188,7 +254,12 @@ interface UsageEventInput {
   inputTokens: number | null;
   outputTokens: number | null;
   errorMessage: string | null;
+  errorCode: string | null;
   userId: string | null;
+  workflowId: string | null;
+  applicationId: string | null;
+  attemptNumber: number | null;
+  routeRank: number | null;
 }
 
 async function recordUsageEvent(input: UsageEventInput): Promise<void> {
@@ -198,8 +269,9 @@ async function recordUsageEvent(input: UsageEventInput): Promise<void> {
     `INSERT INTO ai_usage_events
       (automation_id, ai_key_id, provider, model, outcome,
        latency_ms, input_tokens, output_tokens, estimated_cost_usd,
-       error_message, triggered_by_user_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+       error_message, error_code, triggered_by_user_id,
+       route_rank, attempt_number, workflow_id, application_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [
       input.automationId,
       input.aiKeyId,
@@ -211,7 +283,12 @@ async function recordUsageEvent(input: UsageEventInput): Promise<void> {
       input.outputTokens,
       cost,
       input.errorMessage,
+      input.errorCode,
       input.userId,
+      input.routeRank,
+      input.attemptNumber,
+      input.workflowId,
+      input.applicationId,
     ]
   );
 }

@@ -57,6 +57,7 @@ export function getAnthropicProvider(): AiProvider | null {
       const response: AiResponse = {
         content: fromAnthropicContent(data.content ?? []),
         stopReason: data.stop_reason ?? "end_turn",
+        usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
       };
       return response;
     },

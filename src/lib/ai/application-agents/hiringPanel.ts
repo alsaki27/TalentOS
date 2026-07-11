@@ -1,13 +1,13 @@
 // Hiring Panel agent — grades the tailored draft as recruiter, HR, and ATS.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import type { AgentContext } from "./types";
+import type { AgentContext, AgentOptions } from "./types";
 import { ReviewScoreSchema, type ReviewScoreV1 } from "./schemas";
 import { buildHiringPanelPrompt } from "./prompts/hiringPanel";
 import { textOf } from "@/lib/ai/provider";
 
 export async function runHiringPanel(
-  _input: Record<string, never>,
+  options: AgentOptions,
   provider: AiProvider,
   ctx: AgentContext
 ): Promise<ReviewScoreV1> {
@@ -15,7 +15,7 @@ export async function runHiringPanel(
   const draft = ctx.previousOutputs["application_resume_forge"]?.data ?? {};
 
   const response = await provider.send({
-    system: "You are Hiring Panel, an AI that grades resumes. Return only valid JSON.",
+    system: options.system_prompt ?? "You are Hiring Panel, an AI that grades resumes. Return only valid JSON.",
     messages: [
       {
         role: "user",
@@ -28,6 +28,9 @@ export async function runHiringPanel(
       },
     ],
     tools: [],
+    temperature: options.temperature,
+    maxTokens: options.max_output_tokens,
+    timeoutMs: options.timeout_ms,
   });
 
   const raw = textOf(response.content);

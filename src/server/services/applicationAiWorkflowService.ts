@@ -3,7 +3,7 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import { callWithUsageTracking } from "@/lib/ai/routing";
+import { callWithUsageTracking, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS } from "@/lib/ai/application-agents/constants";
 import { runJobLens } from "@/lib/ai/application-agents/jobLens";
@@ -12,6 +12,7 @@ import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
 import { evaluateQualityGate } from "@/lib/ai/application-agents/qualityGate";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
+import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import {
   createWorkflow,
@@ -54,6 +55,7 @@ export interface DispatchResult {
   dispatched: boolean;
   workflowId: string | null;
   stage: number | null;
+  count: number;
   message?: string;
 }
 
@@ -136,6 +138,29 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   const agentConfig = await findAgentConfigByAutomationId(agentId);
   const maxAttempts = agentConfig?.max_attempts ?? 2;
 
+  if (agentConfig && agentConfig.is_active === false) {
+    const stageRun = await createStageRun({
+      workflowId,
+      automationId: agentId,
+      sequenceNumber: currentIdx + 1,
+      attemptNumber: 1,
+    });
+    await updateStageRun(stageRun.id, {
+      status: "failed",
+      error_message: `Agent "${agentId}" is disabled via ai_agent_configs.is_active`,
+      completed_at: new Date().toISOString(),
+    });
+    await updateWorkflowStatus(workflowId, "failed", { last_error: `Agent "${agentId}" is disabled` });
+    return;
+  }
+
+  const agentOptions: AgentOptions = {
+    system_prompt: agentConfig?.system_prompt ?? undefined,
+    temperature: agentConfig?.temperature ?? undefined,
+    max_output_tokens: agentConfig?.max_output_tokens ?? undefined,
+    timeout_ms: agentConfig?.timeout_ms ?? undefined,
+  };
+
   const previousRuns = await listStageRuns(workflowId);
   const previousArtifacts = await listArtifacts(workflowId);
   const attemptNumber = previousRuns.filter(
@@ -165,12 +190,18 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     for (let fallbackAttempt = 1; fallbackAttempt <= 3; fallbackAttempt++) {
       try {
+        const callCtx: CallContext = {
+          userId: wf.started_by ?? undefined,
+          workflowId,
+          applicationId: wf.application_id,
+          attemptNumber,
+        };
         const callResult = await callWithUsageTracking(
           agentId,
-          { userId: wf.started_by ?? undefined },
+          callCtx,
           async (provider: AiProvider) => {
             const agentFn = getAgentFn(agentId);
-            return agentFn({}, provider, ctx);
+            return agentFn(agentOptions, provider, ctx);
           },
           failedKeyIds.size > 0 ? failedKeyIds : undefined,
         );
@@ -195,6 +226,13 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     }
 
     const latencyMs = Date.now() - startMs;
+
+    if (agentConfig?.minimum_score != null && agentOutput != null && typeof agentOutput === "object" && "score" in agentOutput) {
+      const outputScore = (agentOutput as Record<string, unknown>).score;
+      if (typeof outputScore === "number" && outputScore < agentConfig.minimum_score) {
+        throw new Error(`Output score ${outputScore} below minimum threshold ${agentConfig.minimum_score}`);
+      }
+    }
 
     const artifact = await createArtifact({
       workflowId,
@@ -260,35 +298,48 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   }
 }
 
-/** Claim and process the oldest queued workflow. Returns dispatch result metadata. */
+/** Claim and process up to 3 queued workflows per invocation to clear backlogs.
+ *  Returns dispatch result metadata with the count of workflows processed. */
 export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
-  const wf = await claimNextPendingWorkflow();
-  if (!wf) {
-    return { dispatched: false, workflowId: null, stage: null, message: "No queued workflows" };
+  let count = 0;
+  let lastDispatched: { id: string; current_stage: number } | null = null;
+
+  for (let i = 0; i < 3; i++) {
+    const wf = await claimNextPendingWorkflow();
+    if (!wf) break;
+    lastDispatched = wf;
+    count++;
+    try {
+      await processWorkflowStage(wf.id);
+    } catch (err: any) {
+      console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
+    }
   }
 
-  processWorkflowStage(wf.id).catch((err) => {
-    console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
-  });
+  if (count === 0) {
+    return { dispatched: false, workflowId: null, stage: null, count: 0, message: "No queued workflows" };
+  }
 
-  return { dispatched: true, workflowId: wf.id, stage: wf.current_stage };
+  return { dispatched: true, workflowId: lastDispatched!.id, stage: lastDispatched!.current_stage, count };
 }
 
 /** Dispatch a specific workflow by ID (for retry / rerun / approval). */
 export async function dispatchWorkflowById(workflowId: string): Promise<DispatchResult> {
   const wf = await findWorkflowById(workflowId);
   if (!wf) {
-    return { dispatched: false, workflowId: null, stage: null, message: "Workflow not found" };
+    return { dispatched: false, workflowId: null, stage: null, count: 0, message: "Workflow not found" };
   }
   if (wf.status !== "queued") {
-    return { dispatched: false, workflowId, stage: wf.current_stage, message: `Workflow is not queued (status: ${wf.status})` };
+    return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: `Workflow is not queued (status: ${wf.status})` };
   }
 
-  processWorkflowStage(workflowId).catch((err) => {
+  try {
+    await processWorkflowStage(workflowId);
+  } catch (err: any) {
     console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
-  });
+  }
 
-  return { dispatched: true, workflowId, stage: wf.current_stage };
+  return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
 }
 
 function getAgentFn(id: ApplicationAgentId) {

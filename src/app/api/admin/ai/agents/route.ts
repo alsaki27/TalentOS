@@ -92,14 +92,16 @@ export async function GET() {
     const usage = usageByAutomation[auto.id] ?? { calls: 0, success_rate: 0, total_cost: 0, avg_latency: 0 };
 
     let configStatus: string;
-    const hasActiveRoutes = routes.some((r: any) => r.is_enabled);
     const hasConfig = config !== null && config.is_active;
-    const primaryHealthy = routes.length > 0 && routes[0].is_enabled;
+    const primaryKey = routes.length > 0 ? routes[0] : null;
+    const fallbacks = routes.slice(1);
 
-    if (!hasActiveRoutes) configStatus = "no_route";
+    if (!auto.is_active) configStatus = "disabled";
+    else if (routes.length === 0) configStatus = "no_route";
+    else if (!primaryKey || !primaryKey.is_enabled) configStatus = "primary_unhealthy";
+    else if (primaryKey.key_status === "failing" || primaryKey.key_status === "disabled") configStatus = "primary_unhealthy";
+    else if (fallbacks.length > 0 && fallbacks.every((f: any) => !f.is_enabled || f.key_status === "failing")) configStatus = "no_healthy_fallback";
     else if (!hasConfig) configStatus = "no_config";
-    else if (!primaryHealthy) configStatus = "primary_unhealthy";
-    else if (!auto.is_active) configStatus = "disabled";
     else configStatus = "ready";
 
     return {
