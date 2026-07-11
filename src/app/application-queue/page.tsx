@@ -172,12 +172,17 @@ export default function ApplicationQueuePage() {
     setActionLoading(`${item.id}:workflow`);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/applications/${item.id}/ai-workflow`, { method: "POST" });
-      setActionLoading(null);
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Workflow start failed." }); return; }
-      setFeedback({ kind: "success", text: "AI pipeline started." });
+      const res = await fetch(`/api/applications/${item.id}/ai-workflow`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: d.error || "Workflow start failed." });
+        return;
+      }
+      const data = await res.json();
+      setFeedback({ kind: "success", text: `AI pipeline started: ${data.workflowId}` });
       load(page, false);
-    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message }); }
+    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
+    finally { setActionLoading(null); }
   }
 
   async function fetchWorkflowDetails(item: QueueItem) {
