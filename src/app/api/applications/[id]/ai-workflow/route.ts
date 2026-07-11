@@ -48,11 +48,11 @@ export async function POST(
     if (jobRow) job = jobRow;
   }
 
-  // Load candidate data
+  // Load base resume for candidate (application_resume_versions joins via candidate_id, not application_id)
   let baseResume: any = {};
   const resumeRow = await queryOne(
-    "SELECT * FROM application_resume_versions WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1",
-    [applicationId]
+    "SELECT * FROM application_resume_versions WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [appRow.candidate_id]
   );
   if (resumeRow) baseResume = resumeRow;
 

@@ -126,6 +126,15 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
     if (!isRecord(input)) return { error: "ResumeDraftV1 must be an object" };
     const skills = expectStringArray(input.skills, "skills");
     const experience = Array.isArray(input.experience) ? input.experience.map(parseExperienceEntry).filter((e): e is ExperienceEntry => e !== null) : [];
+    const truthRisks: { risk: string; severity: "low" | "medium" | "high" }[] = [];
+    if (Array.isArray(input.truthRisks)) {
+      for (const r of input.truthRisks) {
+        if (!isRecord(r) || typeof r.risk !== "string" || !["low", "medium", "high"].includes(r.severity as string)) {
+          return { error: `Invalid truthRisk severity: ${JSON.stringify(r)}` };
+        }
+        truthRisks.push(r as any);
+      }
+    }
     return {
       summary: expectString(input.summary, "summary"),
       skills: skills ?? [],
@@ -158,10 +167,7 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
       })) : [],
       missingRequirements: expectStringArray(input.missingRequirements, "missingRequirements") ?? [],
       excludedKeywords: expectStringArray(input.excludedKeywords, "excludedKeywords") ?? [],
-      truthRisks: Array.isArray(input.truthRisks) ? input.truthRisks.filter((r: unknown): r is { risk: string; severity: "low" | "medium" | "high" } => {
-        if (!isRecord(r)) return false;
-        return typeof r.risk === "string" && ["low", "medium", "high"].includes(r.severity as string);
-      }) : [],
+      truthRisks,
     };
   },
 };
@@ -191,16 +197,26 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
     if (atsScore === null) return { error: "atsScore is required" };
     if (recruiterScore === null) return { error: "recruiterScore is required" };
     if (roleFitScore === null) return { error: "roleFitScore is required" };
+    if (atsScore < 0 || atsScore > 10) return { error: `atsScore must be 0-10, got ${atsScore}` };
+    if (recruiterScore < 0 || recruiterScore > 10) return { error: `recruiterScore must be 0-10, got ${recruiterScore}` };
+    if (roleFitScore < 0 || roleFitScore > 10) return { error: `roleFitScore must be 0-10, got ${roleFitScore}` };
+    if (truthfulnessRisk !== null && (truthfulnessRisk < 0 || truthfulnessRisk > 10)) return { error: `truthfulnessRisk must be 0-10, got ${truthfulnessRisk}` };
+    const requiredEdits: { issueId: string; description: string; severity: "minor" | "major" | "critical" }[] = [];
+    if (Array.isArray(input.requiredEdits)) {
+      for (const e of input.requiredEdits) {
+        if (!isRecord(e) || typeof e.issueId !== "string" || typeof e.description !== "string" || !["minor", "major", "critical"].includes(e.severity as string)) {
+          return { error: `Invalid requiredEdit: ${JSON.stringify(e)}` };
+        }
+        requiredEdits.push(e as any);
+      }
+    }
     return {
       atsScore,
       recruiterScore,
       roleFitScore,
       truthfulnessRisk: truthfulnessRisk ?? 0,
       formattingIssues: expectStringArray(input.formattingIssues, "formattingIssues") ?? [],
-      requiredEdits: Array.isArray(input.requiredEdits) ? input.requiredEdits.filter((e: unknown): e is { issueId: string; description: string; severity: "minor" | "major" | "critical" } => {
-        if (!isRecord(e)) return false;
-        return typeof e.issueId === "string" && typeof e.description === "string" && ["minor", "major", "critical"].includes(e.severity as string);
-      }) : [],
+      requiredEdits,
       optionalEdits: Array.isArray(input.optionalEdits) ? input.optionalEdits.filter((e: unknown): e is { issueId: string; description: string } => {
         if (!isRecord(e)) return false;
         return typeof e.issueId === "string" && typeof e.description === "string";

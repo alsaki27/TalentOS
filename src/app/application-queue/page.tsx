@@ -66,6 +66,7 @@ const WORKFLOW_LABELS: Record<number, string> = {
 export default function ApplicationQueuePage() {
   const [items, setItems] = useState<QueueItem[]>([]);
   const [users, setUsers] = useState<TeamUser[]>([]);
+  const [me, setMe] = useState<{ profile: { user_id: string; role: string } } | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
@@ -105,9 +106,10 @@ export default function ApplicationQueuePage() {
     setLoading(true);
     if (clearFeedback) setFeedback(null);
     try {
-      const [queueRes, usersRes] = await Promise.all([
+      const [queueRes, usersRes, meRes] = await Promise.all([
         fetch(`/api/application-queue?${buildParams(pn)}`, { cache: "no-store" }),
         fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/auth/me", { cache: "no-store" }),
       ]);
       if (!queueRes.ok) throw new Error("Could not load queue.");
       const data = await queueRes.json();
@@ -118,6 +120,7 @@ export default function ApplicationQueuePage() {
       setTotal(newTotal);
       setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
+      if (meRes.ok) setMe(await meRes.json());
       setSelected(new Set());
       setPage(pn);
     } catch (err: any) {
@@ -136,7 +139,7 @@ export default function ApplicationQueuePage() {
   const assignmentOwners = [...users].sort((a, b) => ((a.role === "application_engineer" ? 0 : 1) - (b.role === "application_engineer" ? 0 : 1)) || (a.display_name || "").localeCompare(b.display_name || ""));
   const selectedItems = items.filter(i => selected.has(i.id));
   const today = new Date().toISOString().slice(0, 10);
-  const isManager = ["admin", "manager"].includes(users.find(u => u.user_id === items[0]?.assigned_to_user_id)?.role ?? "");
+  const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
 
   function toggleOne(id: string) {
     setSelected(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -546,7 +549,7 @@ export default function ApplicationQueuePage() {
                     </div>
 
                     {/* Workflow detail expand */}
-                    {expandedWorkflow === item.id && workflowDetails[item.workflow_id!] && (
+                    {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Pipeline Stages</div>
                         {workflowDetails[item.workflow_id!].stages?.map((s: any, i: number) => (

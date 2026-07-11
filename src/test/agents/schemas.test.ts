@@ -198,17 +198,14 @@ describe("ReviewScoreSchema", () => {
     }
   });
 
-  it("filters invalid severity values in requiredEdits", () => {
+  it("rejects invalid severity values in requiredEdits", () => {
     const result = ReviewScoreSchema.parse({
       atsScore: 5, recruiterScore: 5, roleFitScore: 5, passFail: "pass",
       requiredEdits: [
-        { issueId: "r1", description: "Valid", severity: "major" },
         { issueId: "r2", description: "Invalid severity", severity: "extreme" },
       ],
     });
-    if (!("error" in result)) {
-      expect(result.requiredEdits).toHaveLength(1);
-    }
+    expect("error" in result).toBe(true);
   });
 });
 

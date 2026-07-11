@@ -96,7 +96,7 @@ describe("runResumeForge", () => {
     expect(result.changeLog).toHaveLength(1);
   });
 
-  it("filters out truth risks with invalid severity instead of throwing", async () => {
+  it("rejects truth risks with invalid severity instead of filtering", async () => {
     const provider = mockProvider(JSON.stringify({
       summary: null, skills: [], experience: [], education: [],
       certifications: [], projects: [], changeLog: [],
@@ -104,9 +104,7 @@ describe("runResumeForge", () => {
       truthRisks: [{ risk: "Bad", severity: "extreme" }],
     }));
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
-    const result = await runResumeForge({}, provider, makeContext());
-    // Invalid severity is filtered out by the schema (extreme is not low/medium/high)
-    expect(result.truthRisks).toEqual([]);
+    await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
 });
 
@@ -137,14 +135,12 @@ describe("runHiringPanel", () => {
     await expect(runHiringPanel({}, provider, makeContext())).rejects.toThrow();
   });
 
-  it("throws on score out of valid range in schema", async () => {
+  it("rejects atsScore above 10", async () => {
     const provider = mockProvider(JSON.stringify({
       atsScore: 15, recruiterScore: 7, roleFitScore: 6, passFail: "pass",
     }));
     const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
-    // Scores are stored as-is; no range validation in the schema
-    const result = await runHiringPanel({}, provider, makeContext());
-    expect(result.atsScore).toBe(15);
+    await expect(runHiringPanel({}, provider, makeContext())).rejects.toThrow("must be 0-10");
   });
 });
 
