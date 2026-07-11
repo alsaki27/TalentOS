@@ -470,10 +470,19 @@ export async function listApplicationQueue(
         a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
         a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
         jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename) as candidates,
-        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score) as jobs,
+        w.status as workflow_status,
+        w.id as workflow_id,
+        w.current_stage as workflow_stage,
+        (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' LIMIT 1) as workflow_score
       FROM applications a
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
+      LEFT JOIN LATERAL (
+        SELECT id, status, current_stage FROM application_ai_workflows
+        WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
+        ORDER BY created_at DESC LIMIT 1
+      ) w ON true
       WHERE a.status = ANY($1)
         AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
         AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
