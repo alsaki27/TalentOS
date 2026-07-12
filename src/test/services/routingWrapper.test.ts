@@ -1,7 +1,7 @@
 // Hard test: callWithUsageTracking wrapper, getProviderForAutomation error paths.
 // Mocks the DB and provider construction so no real AI calls are made.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // routing.ts reads this once at module-eval time to gate the global env-based
 // fallback chain (defaults to disabled in production). These tests exercise
@@ -117,6 +117,42 @@ describe("buildProviderFromDbKey — new providers", () => {
   it("creates an openai_compatible provider with baseUrl", async () => {
     const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
     const provider = actual.buildProviderFromDbKey("openai_compatible", "test-key", "gpt-4o", "https://custom.api.com/v1/chat/completions");
+    expect(provider).not.toBeNull();
+    expect(provider).toHaveProperty("send");
+  });
+});
+
+describe("buildProviderFromDbKey — google_vertex_proxy authenticates via Cloudflare env, not the DB key", () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it("returns null when GOOGLE_VERTEX_PROXY_SECRET is unset, even with a DB apiKey present", async () => {
+    delete process.env.GOOGLE_VERTEX_PROXY_SECRET;
+    process.env.GOOGLE_VERTEX_PROXY_URL = "https://vertex-proxy.example.com";
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    const provider = actual.buildProviderFromDbKey("google_vertex_proxy", "whatever-was-typed-into-the-db-key-field");
+    expect(provider).toBeNull();
+  });
+
+  it("returns null when GOOGLE_VERTEX_PROXY_URL is unset", async () => {
+    process.env.GOOGLE_VERTEX_PROXY_SECRET = "real-cloudflare-secret";
+    delete process.env.GOOGLE_VERTEX_PROXY_URL;
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    const provider = actual.buildProviderFromDbKey("google_vertex_proxy", "whatever-was-typed-into-the-db-key-field");
+    expect(provider).toBeNull();
+  });
+
+  it("builds a provider from Cloudflare env vars regardless of the DB key's own apiKey value", async () => {
+    process.env.GOOGLE_VERTEX_PROXY_SECRET = "real-cloudflare-secret";
+    process.env.GOOGLE_VERTEX_PROXY_URL = "https://vertex-proxy.example.com";
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    // A DB key row created via the admin UI always has *some* apiKey value
+    // (the form requires one), but for this provider it must never be used
+    // as the proxy secret sent upstream - only the env var should be.
+    const provider = actual.buildProviderFromDbKey("google_vertex_proxy", "placeholder-not-a-real-secret");
     expect(provider).not.toBeNull();
     expect(provider).toHaveProperty("send");
   });

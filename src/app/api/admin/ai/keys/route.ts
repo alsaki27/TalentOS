@@ -28,7 +28,7 @@ export async function GET() {
           ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
           ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
           ak.created_by, ak.created_at, ak.updated_at,
-          ak.supports_tools, ak.supports_json_mode, ak.supports_streaming,
+          ak.supports_tools, ak.supports_json_mode, ak.supports_streaming, ak.is_protected,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -144,6 +144,7 @@ export async function POST(req: NextRequest) {
   const supportsTools = body.supports_tools !== undefined ? body.supports_tools === true : undefined;
   const supportsJsonMode = body.supports_json_mode !== undefined ? body.supports_json_mode === true : undefined;
   const supportsStreaming = body.supports_streaming !== undefined ? body.supports_streaming === true : undefined;
+  const isProtected = body.is_protected === true;
 
   if (baseUrl) {
     const ssrfError = validateBaseUrl(baseUrl);
@@ -190,6 +191,7 @@ export async function POST(req: NextRequest) {
       supportsTools,
       supportsJsonMode,
       supportsStreaming,
+      isProtected,
     });
 
     if (

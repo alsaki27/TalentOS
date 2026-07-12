@@ -39,6 +39,7 @@ interface KeyItem {
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  is_protected: boolean;
   supports_tools: boolean;
   supports_json_mode: boolean;
   supports_streaming: boolean;
@@ -536,7 +537,10 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
               {filtered.map(k => (
                 <tr key={k.id}>
                   <td className="cell-main">
-                    <div style={{ fontWeight: 500 }}>{k.label}</div>
+                    <div style={{ fontWeight: 500 }}>
+                      {k.label}
+                      {k.is_protected && <span title="Protected from deletion" style={{ marginLeft: 6, fontSize: 11 }}>🔒</span>}
+                    </div>
                     {k.notes && <div className="text-muted" style={{ fontSize: 11 }}>{k.notes.slice(0, 60)}</div>}
                   </td>
                   <td><span className="badge badge-info">{PROVIDER_LABELS[k.provider] || k.provider}</span></td>
@@ -575,7 +579,9 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
                       <button className="btn-compact btn-sm" onClick={() => toggleKey(k.id, k.is_enabled)}>
                         {k.is_enabled ? "Disable" : "Enable"}
                       </button>
-                      <button className="btn-compact btn-sm btn-danger" onClick={() => deleteKey(k.id)}>Delete</button>
+                      {!k.is_protected && (
+                        <button className="btn-compact btn-sm btn-danger" onClick={() => deleteKey(k.id)}>Delete</button>
+                      )}
                     </div>
                     {testResults[k.id] && (
                       <div className={`alert ${testResults[k.id].success ? "alert-success" : "alert-error"}`} style={{ marginTop: 4, fontSize: 11, padding: "4px 8px" }}>
@@ -618,6 +624,7 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
   const [providerMode, setProviderMode] = useState("native");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [isProtected, setIsProtected] = useState(false);
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [chatEndpoint, setChatEndpoint] = useState("/chat/completions");
@@ -642,6 +649,7 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
   );
 
   const opencodeWarning = provider === "opencode" && providerMode !== "native" && !baseUrl.trim();
+  const isVertexProxy = provider === "google_vertex_proxy";
 
   function handleProviderChange(p: string) {
     setProvider(p);
@@ -649,6 +657,14 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
     setModelSearch("");
     setModelDropdownOpen(false);
     setCustomModelInput("");
+    if (p === "google_vertex_proxy") {
+      // This provider reads GOOGLE_VERTEX_PROXY_URL / _SECRET / GOOGLE_VERTEX_MODEL
+      // directly from Cloudflare Worker env at call time — the API Key field below
+      // is never used for authentication, it just needs a non-empty placeholder to
+      // satisfy the form/API's required-field validation.
+      if (!apiKey.trim()) setApiKey("env-managed (see GOOGLE_VERTEX_PROXY_SECRET in Cloudflare)");
+      setIsProtected(true);
+    }
   }
 
   function handleProviderModeChange(mode: string) {
@@ -705,6 +721,7 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           supports_tools: supportsTools,
           supports_json_mode: supportsJsonMode,
           supports_streaming: supportsStreaming,
+          is_protected: isProtected,
         }),
       });
       if (!res.ok) {
@@ -724,6 +741,15 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
       {opencodeWarning && (
         <div className="alert alert-warning" style={{ marginBottom: 12, fontSize: 13 }}>
           OpenCode Go is primarily documented for use inside OpenCode. To use it as a TalentOS backend, provide a verified external API base URL.
+        </div>
+      )}
+
+      {isVertexProxy && (
+        <div className="alert alert-info" style={{ marginBottom: 12, fontSize: 13 }}>
+          Google Vertex (Proxy) authenticates using the Worker's own <code>GOOGLE_VERTEX_PROXY_URL</code>,{" "}
+          <code>GOOGLE_VERTEX_PROXY_SECRET</code>, and <code>GOOGLE_VERTEX_MODEL</code> Cloudflare secrets — not the
+          value below. The API Key field is a required placeholder only; it's never sent anywhere. This key row just
+          makes "Google Vertex (Proxy)" assignable to automations in Agents &amp; Routing.
         </div>
       )}
 
@@ -747,8 +773,14 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           <input className="input" placeholder="e.g. Production OpenAI" value={label} onChange={e => setLabel(e.target.value)} />
         </div>
         <div className="field-group">
-          <label>API Key</label>
-          <input className="input" type="password" placeholder="sk-..." value={apiKey} onChange={e => setApiKey(e.target.value)} />
+          <label>API Key{isVertexProxy ? " (placeholder, unused)" : ""}</label>
+          <input className="input" type={isVertexProxy ? "text" : "password"} placeholder="sk-..." value={apiKey} onChange={e => setApiKey(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={isProtected} onChange={e => setIsProtected(e.target.checked)} />
+            Protect from deletion
+          </label>
         </div>
         <div className="field-group" style={{ position: "relative" }}>
           <label>Default Model</label>

@@ -32,7 +32,7 @@ export async function GET(
          ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
          ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
          ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
-         ak.created_by, ak.created_at, ak.updated_at,
+         ak.is_protected, ak.created_by, ak.created_at, ak.updated_at,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -109,12 +109,14 @@ export async function PATCH(
     priority?: number;
     is_enabled?: boolean;
     apiKey?: string;
+    isProtected?: boolean;
   } = {};
 
   if (body.label !== undefined) standardUpdates.label = body.label;
   if (body.model !== undefined) standardUpdates.model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
   if (body.priority !== undefined) standardUpdates.priority = body.priority;
   if (body.is_enabled !== undefined) standardUpdates.is_enabled = body.is_enabled;
+  if (body.is_protected !== undefined) standardUpdates.isProtected = body.is_protected === true;
   if (body.apiKey !== undefined) {
     if (typeof body.apiKey !== "string" || body.apiKey.trim() === "") {
       return NextResponse.json(
@@ -219,7 +221,7 @@ export async function PATCH(
          ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
          ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
          ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
-         ak.created_by, ak.created_at, ak.updated_at,
+         ak.is_protected, ak.created_by, ak.created_at, ak.updated_at,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -284,13 +286,20 @@ export async function DELETE(
                last_error_code, last_error_message, usage_count, failure_count,
                daily_request_warning, daily_request_limit, monthly_request_limit,
                monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
-               created_by, created_at, updated_at
+               is_protected, created_by, created_at, updated_at
         FROM ai_api_keys WHERE id = $1`,
       [id]
     );
 
     if (!key) {
       return NextResponse.json({ error: "Key not found" }, { status: 404 });
+    }
+
+    if (key.is_protected) {
+      return NextResponse.json(
+        { error: `"${key.label}" is protected and cannot be deleted from the UI. Unprotect it first if this is intentional.` },
+        { status: 409 }
+      );
     }
 
     const assignments = await query<any>(

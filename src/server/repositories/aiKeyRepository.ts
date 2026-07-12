@@ -77,6 +77,11 @@ export interface AiApiKeyRow {
   supports_tools: boolean;
   supports_json_mode: boolean;
   supports_streaming: boolean;
+  // Code-enforced deletion protection (migration 019) — for keys whose real
+  // secret material lives outside this table (e.g. google_vertex_proxy reads
+  // GOOGLE_VERTEX_PROXY_SECRET from Cloudflare env), where deleting the row
+  // would silently break every automation routed to it with no recovery path.
+  is_protected: boolean;
 }
 
 export interface AiApiKeyMetadata {
@@ -112,6 +117,7 @@ export interface AiApiKeyMetadata {
   supports_tools: boolean;
   supports_json_mode: boolean;
   supports_streaming: boolean;
+  is_protected: boolean;
 }
 
 export interface CreateAiKeyInput {
@@ -135,6 +141,7 @@ export interface CreateAiKeyInput {
   supportsTools?: boolean;
   supportsJsonMode?: boolean;
   supportsStreaming?: boolean;
+  isProtected?: boolean;
 }
 
 export interface UpdateAiKeyInput {
@@ -155,6 +162,7 @@ export interface UpdateAiKeyInput {
   supportsTools?: boolean;
   supportsJsonMode?: boolean;
   supportsStreaming?: boolean;
+  isProtected?: boolean;
 }
 
 // Canonical metadata column list (NEVER includes encrypted_key).
@@ -169,7 +177,8 @@ const METADATA_COLUMNS = `id, provider, label, model, default_model, base_url, p
        provider_mode, api_style, models_endpoint, chat_endpoint,
        auth_header_name, auth_scheme, custom_headers, available_models,
        models_last_synced_at, models_sync_error,
-       supports_model_discovery, supports_tools, supports_json_mode, supports_streaming`;
+       supports_model_discovery, supports_tools, supports_json_mode, supports_streaming,
+       is_protected`;
 
 function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
   return {
@@ -204,6 +213,7 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
     supports_tools: row.supports_tools,
     supports_json_mode: row.supports_json_mode,
     supports_streaming: row.supports_streaming,
+    is_protected: row.is_protected,
   };
 }
 
@@ -295,9 +305,10 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
          priority, is_enabled, status, created_by,
          provider_mode, api_style, models_endpoint, chat_endpoint,
          auth_header_name, auth_scheme, custom_headers, available_models,
-         supports_model_discovery, supports_tools, supports_json_mode, supports_streaming
+         supports_model_discovery, supports_tools, supports_json_mode, supports_streaming,
+         is_protected
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        RETURNING ${METADATA_COLUMNS}`,
       [
         input.provider, input.label, encrypted, fingerprint,
@@ -312,6 +323,7 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
         input.supportsTools ?? true,
         input.supportsJsonMode ?? true,
         input.supportsStreaming ?? false,
+        input.isProtected ?? false,
       ]
     );
     return toMetadata(rows[0]);
@@ -341,6 +353,7 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
         supports_tools: input.supportsTools ?? true,
         supports_json_mode: input.supportsJsonMode ?? true,
         supports_streaming: input.supportsStreaming ?? false,
+        is_protected: input.isProtected ?? false,
       })
       .select()
       .single();
@@ -421,6 +434,10 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
       fields.push(`supports_streaming = $${idx++}`);
       values.push(input.supportsStreaming);
     }
+    if (input.isProtected !== undefined) {
+      fields.push(`is_protected = $${idx++}`);
+      values.push(input.isProtected);
+    }
     if (input.apiKey !== undefined) {
       fields.push(`encrypted_key = $${idx++}`);
       fields.push(`key_fingerprint = $${idx++}`);
@@ -455,6 +472,7 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
     if (input.supportsTools !== undefined) updates.supports_tools = input.supportsTools;
     if (input.supportsJsonMode !== undefined) updates.supports_json_mode = input.supportsJsonMode;
     if (input.supportsStreaming !== undefined) updates.supports_streaming = input.supportsStreaming;
+    if (input.isProtected !== undefined) updates.is_protected = input.isProtected;
     if (input.apiKey !== undefined) {
       updates.encrypted_key = await encryptSecret(input.apiKey);
       updates.key_fingerprint = await fingerprintKey(input.apiKey);
