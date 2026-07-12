@@ -183,8 +183,9 @@ export async function PUT(
       await sql.transaction(queries);
     } catch (insertErr: any) {
       console.error("[routes:PUT] transaction failed:", insertErr?.message);
+      // TEMP DIAGNOSTIC — remove once root-caused.
       return NextResponse.json(
-        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr) },
+        { error: `DIAG transaction: ${insertErr?.message ?? insertErr}`, stack: insertErr?.stack },
         { status: 500 }
       );
     }
@@ -216,8 +217,9 @@ export async function PUT(
     return NextResponse.json({ routes: updated, routeVersion: newVersion, warnings });
   } catch (err: any) {
     console.error("[routes:PUT] Validation failed:", err.message);
+    // TEMP DIAGNOSTIC — remove once root-caused.
     return NextResponse.json(
-      { error: sanitizeApiError(err) },
+      { error: `DIAG outer: ${err?.message ?? err}`, stack: err?.stack },
       { status: 500 }
     );
   }
