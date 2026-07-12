@@ -126,6 +126,7 @@ function AuthForm() {
           <label>Email</label>
           <input
             type="email"
+            name="email"
             autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
@@ -137,6 +138,7 @@ function AuthForm() {
           <label>Password</label>
           <input
             type="password"
+            name="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}

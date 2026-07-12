@@ -146,6 +146,9 @@ test.describe("Core hiring workflow (API-driven)", () => {
         status: "applied",
       },
     });
+    if (appRes.status() !== 201) {
+      console.log(`POST /api/applications failed (${appRes.status()}): ${await appRes.text()}`);
+    }
     expect(appRes.status()).toBe(201);
     const appBody = await appRes.json();
     const applicationId: string =
