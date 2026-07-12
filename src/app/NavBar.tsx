@@ -79,6 +79,7 @@ export default function NavBar() {
     { href: "/import-sources", label: "Import Sources", show: canManageSources },
     { href: "/audit", label: "Audit Log", show: isAdmin },
     { href: "/ops", label: "System Health", show: isAdmin },
+    { href: "/admin/ai", label: "AI Control Center", show: isAdmin },
     { href: "/team", label: "Team", show: isAdmin },
     { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
     { href: "/settings/billing", label: "Billing", show: isAdmin || me?.profile.role === "manager" },
