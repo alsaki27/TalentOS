@@ -176,6 +176,12 @@ body {
   padding: 28px 24px 60px;
 }
 
+/* Application Queue shows extra ID columns (job/base resume/ticket/tailored
+   resume) for debugging - wider than the default page container. */
+.page:has(.app-queue-page) {
+  max-width: 1600px;
+}
+
 .page-header {
   display: flex;
   align-items: center;

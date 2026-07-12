@@ -477,6 +477,7 @@ export async function listApplicationQueue(
         (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' LIMIT 1) as workflow_score,
         a.tailored_resume_version_id as workflow_resume_version_id,
         rv.title as workflow_resume_title,
+        rv.base_resume_id as base_resume_id,
         a.resume_generation_status
       FROM applications a
       LEFT JOIN candidates c ON a.candidate_id = c.id

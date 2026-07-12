@@ -30,6 +30,7 @@ interface QueueItem {
   workflow_score?: number | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
+  base_resume_id?: string | null;
   resume_generation_status?: string | null;
 }
 
@@ -63,6 +64,19 @@ const WORKFLOW_LABELS: Record<number, string> = {
   3: "👥 Hiring Panel",
   4: "✨ Final Polish",
 };
+
+function IdCell({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-muted" style={{ fontSize: 11 }}>—</span>;
+  return (
+    <span
+      title={value}
+      style={{ fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}
+      onClick={() => navigator.clipboard?.writeText(value)}
+    >
+      {value.slice(0, 8)}…
+    </span>
+  );
+}
 
 export default function ApplicationQueuePage() {
   const [items, setItems] = useState<QueueItem[]>([]);
@@ -417,6 +431,10 @@ export default function ApplicationQueuePage() {
                 <th>Review</th>
                 <th>Owner</th>
                 <th>Due</th>
+                <th style={{ width: 120 }}>Ticket ID</th>
+                <th style={{ width: 120 }}>Job ID</th>
+                <th style={{ width: 120 }}>Base Resume ID</th>
+                <th style={{ width: 120 }}>Tailored Resume ID</th>
                 <th style={{ width: 280 }}>Actions</th>
               </tr>
             </thead>
@@ -523,6 +541,11 @@ export default function ApplicationQueuePage() {
                   <td className={item.assignment_due_at ? dueClass(item.assignment_due_at) : "text-muted"} style={{ fontSize: 13 }}>
                     {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
                   </td>
+
+                  <td><IdCell value={item.id} /></td>
+                  <td><IdCell value={item.jobs?.id ?? null} /></td>
+                  <td><IdCell value={item.base_resume_id ?? null} /></td>
+                  <td><IdCell value={item.workflow_resume_version_id ?? null} /></td>
 
                   <td>
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
