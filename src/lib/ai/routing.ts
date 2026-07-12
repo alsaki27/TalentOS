@@ -75,6 +75,20 @@ export async function getProviderForAutomation(
   automationId: string,
   excludeKeyIds?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
+  // 0. Mock provider takes priority when explicitly configured
+  if (process.env.AI_PROVIDER === "mock") {
+    const mockProv = getProviderByName("mock");
+    if (mockProv) {
+      return {
+        provider: mockProv.provider,
+        name: "mock",
+        aiKeyId: null,
+        automationId,
+        routeRank: 0,
+      };
+    }
+  }
+
   // 1. Load ordered enabled routes for this automation
   const routes = await query<AutomationRouteRow>(
     `SELECT * FROM ai_automation_routes

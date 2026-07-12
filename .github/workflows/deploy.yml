@@ -1,10 +1,10 @@
 name: Deploy TalentOS (Cloudflare)
 
-# Replaces the previous deploy process, which was an undocumented local
-# `wrangler deploy` run from a developer's machine - the actual deployed
-# code had drifted 8 commits + ~150 files ahead of what was in GitHub
-# until this workflow's introduction. From here on, every deploy goes
-# through this pipeline, off a real commit, with real CI gates.
+# Every deploy goes through this pipeline, off a real commit, with CI as a
+# pre-flight gate. The CI workflow (ci.yml) handles typecheck, lint, unit
+# tests, E2E tests, and Cloudflare build — this workflow only runs after CI
+# passes, then performs deploy-specific steps (size check, schema fixes,
+# deploy, post-deploy health checks).
 #
 # `wrangler deploy` does NOT wipe a Worker's existing secrets - only a
 # named `wrangler secret put` changes that one secret. This workflow only
@@ -16,132 +16,58 @@ name: Deploy TalentOS (Cloudflare)
 # CRON_SECRET, SUPABASE_*, AI provider keys, etc.) is left untouched by
 # this workflow - add an explicit `secret put` step here if one of those
 # ever needs to be rotated through CI instead of by hand.
-
-# Verified working end to end (run #5) - now auto-deploys on every push to
-# this branch, by explicit choice. Anyone pushing here (including
-# concurrent local work outside this pipeline) ships straight to
-# production with no review gate in between.
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [neon-cloudflare-migration]
   workflow_dispatch:
 
 jobs:
   build-and-deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
+
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
+
+      - name: Build for Cloudflare (OpenNext)
+        run: npm run cf:build
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
       - name: Install Playwright browsers
-        # No step anywhere in this workflow ever installed Playwright's
-        # browsers - "Run E2E tests" would fail immediately (browserType.launch:
-        # Executable doesn't exist) on any test using the `page` fixture
-        # (the whole "Page smoke tests" suite), independent of any secret.
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        # Re-enabled for one real run: deploy just succeeded for the first
-        # time (schema fixes + Worker deploy + live health all passed), so
-        # this is the first point where E2E actually tests the NEW code
-        # instead of stale production. Re-disable with `if: false` again
-        # after reading this run's result if it's still too slow to run on
-        # every push (continue-on-error below already makes it non-blocking
-        # either way).
-        # tests/e2e/coreWorkflow.spec.ts hard-fails (no silent skip) if CRON_SECRET
-        # is missing from its environment - that secret already exists in this repo
-        # (see the "Verify AI key encryption readiness" step below) but was never
-        # wired into this step, so every deploy failed here unconditionally. Points
-        # TEST_BASE_URL at the live Worker, same as the post-deploy checks below -
-        # this step only exercises workflow creation/dispatch via the API (per the
-        # test file's own docstring, it does not wait on live AI model inference).
-        #
-        # TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD are also required (the "Page smoke
-        # tests" suite throws instead of skipping without them, same hardening as
-        # CRON_SECRET above) but no secret by that name appears to exist yet in
-        # this repo - nothing else in .github/workflows/ references it. If unset,
-        # this step will now fail with an explicit "Missing browser credentials"
-        # error instead of the previous opaque failure - add
-        # TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD repo secrets, pointing at a
-        # dedicated test/service account rather than a real admin's personal
-        # login, to make this suite pass.
-        #
-        # TEMPORARY (continue-on-error): this step runs BEFORE "Build for
-        # Cloudflare"/"Deploy Worker" below, so it always tests the
-        # CURRENTLY-LIVE production app, never the new code in this push.
-        # That's a structural deadlock for any push whose whole point is to
-        # fix something E2E would catch (e.g. the login-form regression fixed
-        # in this same commit) - the fix can't take effect until deployed,
-        # and it can't deploy until E2E passes against the OLD, still-broken
-        # production. Un-blocking deploy here so today's real fixes actually
-        # ship; re-tighten to a hard gate once a run against the newly-fixed
-        # production confirms these tests genuinely pass end to end.
         run: npm run test:e2e
-        continue-on-error: true
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
           TEST_BASE_URL: https://skarion-talent-os.skarion-talentos.workers.dev
           TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
           TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
 
-      - name: Build for Cloudflare (OpenNext)
-        # Next.js's "Collecting page data" build phase evaluates route
-        # modules in a way that, at least in this CI environment, ends up
-        # calling code that checks for DATABASE_URL - even though that
-        # value is otherwise only needed at runtime, not build time
-        # (confirmed: this exact build succeeds locally with no
-        # DATABASE_URL set at all, so it's environment-specific, not a
-        # universal requirement - but providing the real value here costs
-        # nothing and sidesteps the question of exactly which code path
-        # triggers it).
-        run: npm run cf:build
-        env:
-          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
-          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
 
       - name: Check Worker bundle size before deploying
-        # Cloudflare's 3 MiB free-plan script-size rejection only surfaced at the
-        # real `wrangler deploy` step, after the build already ran - a slow,
-        # unclear failure mode discovered the hard way (a single library, @react-
-        # pdf/renderer's PDFKit dependency, silently pushed the script over the
-        # limit; the real error wasn't visible until this exact point in CI three
-        # separate times). A dry-run deploy reports the same size without
-        # touching the live Worker, so this fails fast with a clear message
-        # instead of waiting for Cloudflare's own rejection.
-        #
-        # Budget is the real 3072 KiB (3 MiB) free-plan hard limit, not a more
-        # conservative number below it - the app is *already* at ~3052 KiB gzipped
-        # (confirmed at the time this check was added), so there's only ~20 KiB of
-        # real headroom left regardless of what budget this check uses. A tighter
-        # budget would fail CI on every deploy today even though nothing is
-        # actually broken. If you want real headroom back, it has to come from
-        # removing weight from the bundle (the @react-pdf/renderer -> jsPDF swap
-        # bought back ~900 KiB once already) - this check can only warn, not
-        # create margin that doesn't exist.
-        #
-        # NOTE: As of the unused-dependency cleanup (recharts, redux, sonner,
-        # next-themes, react-beautiful-dnd removed from dependencies) the bundle
-        # may have regained some headroom, but the exact amount depends on whether
-        # Next.js's output file tracing was already excluding them. If the bundle
-        # is still near the limit, the next largest candidates for removal are:
-        #   - jspdf (swappable for a lighter PDF lib)
-        #   - mammoth (only used for DOCX parsing)
-        #   - docx (only used for DOCX generation)
-        #   - @supabase/supabase-js (if fully migrated to Neon, this is dead weight)
         run: |
           OUTPUT=$(npx wrangler deploy --dry-run --outdir /tmp/wrangler-dryrun 2>&1)
           echo "$OUTPUT"
-          # Cloudflare's free-plan limit applies to the *gzipped* size, not the raw
-          # upload total - "Total Upload: 17329.79 KiB / gzip: 3052.37 KiB" - the
-          # raw figure is an order of magnitude larger and not the right number to
-          # budget against.
           SIZE_KIB=$(echo "$OUTPUT" | grep -oP 'gzip: \K[0-9.]+' || echo "")
           if [ -z "$SIZE_KIB" ] || [ "$SIZE_KIB" = "0" ]; then
             echo "::error::Could not parse gzip size from wrangler output. Raw output:" && echo "$OUTPUT"
@@ -163,10 +89,6 @@ jobs:
       - name: Run Neon schema fixes (sql/neon_fixes/)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
-          # Apply each SQL file individually and report failures without
-          # stopping the entire deploy — idempotent files are safe to retry
-          # after fixing on a subsequent push. ON_ERROR_STOP ensures we catch
-          # schema errors before the new Worker ships.
           FAILED_FILES=""
           for f in sql/neon_fixes/*.sql; do
             echo "::group::Applying $f"
@@ -193,14 +115,6 @@ jobs:
           command: deploy
 
       - name: Set DATABASE_URL secret (corrected non-pooler format)
-        # `wrangler secret put <key>` has no `--value` flag at all (that was
-        # wrong - confirmed via the actual CI failure: "Unknown argument:
-        # value"). The real, documented mechanism is reading the value from
-        # stdin, which is what this does. Calling wrangler directly here
-        # instead of through cloudflare/wrangler-action@v3, since this needs
-        # a shell pipe that the action's `command:` input can't express -
-        # CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID as env vars is wrangler's
-        # own documented way to authenticate without the action wrapper.
         run: echo "$SECRET_VALUE" | npx wrangler secret put DATABASE_URL
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -208,11 +122,6 @@ jobs:
           SECRET_VALUE: ${{ secrets.TALENTOS_DATABASE_URL }}
 
       - name: Verify live health after deploy
-        # Every prior deploy this pipeline shipped was manually checked with a
-        # one-off curl against /api/health afterward - this just makes that
-        # check part of the pipeline instead of a step a human has to remember.
-        # A few retries since a fresh Worker version can take a moment to
-        # propagate after `wrangler deploy` returns.
         run: |
           for i in 1 2 3 4 5; do
             RESPONSE=$(curl -s -w '\n%{http_code}' "https://skarion-talent-os.skarion-talentos.workers.dev/api/health" || echo "000")
@@ -253,4 +162,3 @@ jobs:
           exit 1
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-

@@ -357,16 +357,11 @@ test.describe("Page smoke tests", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Full mock-provider pipeline test (requires mock server infra)
+// Full mock-provider pipeline test — moved to tests/e2e/fullPipeline.spec.ts
 // ---------------------------------------------------------------------------
 
-test("full pipeline with mock providers (requires mock server)", async () => {
-  // TODO: Set up mock AI provider that returns deterministic outputs
-  // 1. Mock Job Lens returns structured job analysis
-  // 2. Mock Resume Forge returns draft resume
-  // 3. Mock Hiring Panel returns passing score + approval
-  // 4. Mock Final Polish returns exportReady resume
-  // 5. Verify: workflow completed, tailored_resume_version_id linked,
-  //    candidate_id, job_id, application_id, workflow_id all correct
+test("full pipeline with mock providers (moved to fullPipeline.spec.ts)", async () => {
   test.skip();
+  // Full deterministic pipeline test now lives in fullPipeline.spec.ts.
+  // Run with: AI_PROVIDER=mock ALLOW_GLOBAL_AI_FALLBACK=true npm run test:e2e
 });

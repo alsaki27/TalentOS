@@ -17,6 +17,7 @@ import { getGoogleVertexProxyProvider, getGoogleVertexFallbackProvider } from "@
 import { getGoogleProvider, getGoogleFallbackProvider } from "@/lib/ai/googleProvider";
 import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
 import { getGlmProvider } from "@/lib/ai/glmProvider";
+import { createMockProvider } from "@/lib/ai/mockProvider";
 import { AiProvider } from "@/lib/ai/provider";
 import { getActiveProviderWithFallback, buildProviderFromDbKey } from "@/server/services/aiProvider";
 import { getAiKeyWithDecryptedKey, listEnabledAiKeys } from "@/server/repositories/aiKeyRepository";
@@ -26,7 +27,7 @@ import { supabase } from "@/lib/supabase";
 
 export interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm";
+  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" | "mock";
 }
 
 export type AiTaskCategory =
@@ -76,6 +77,9 @@ export function getProviderByName(name: string): ActiveProvider | null {
       if (provider) return { provider, name: "anthropic" };
       break;
     }
+    case "mock": {
+      return { provider: createMockProvider(), name: "mock" };
+    }
   }
   return null;
 }
@@ -97,6 +101,9 @@ async function getDbProviderByName(name: string): Promise<ActiveProvider | null>
 export function getActiveProvider(): ActiveProvider | null {
   const preferred = process.env.AI_PROVIDER;
 
+  if (preferred === "mock") {
+    return { provider: createMockProvider(), name: "mock" };
+  }
   if (preferred === "openai") {
     const provider = getOpenAiProvider();
     if (provider) return { provider, name: "openai" };
