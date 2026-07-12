@@ -211,6 +211,9 @@ test.describe("Core hiring workflow (API-driven)", () => {
     const dispatchRes = await request.get(dispatchUrl, {
       headers: { Authorization: `Bearer ${CRON_SECRET}` },
     });
+    if (dispatchRes.status() !== 200) {
+      console.log(`GET dispatch failed (${dispatchRes.status()}): ${await dispatchRes.text()}`);
+    }
     expect(dispatchRes.status()).toBe(200);
 
     // ─── CI-verifiable assertion #3: at least one stage run was created ───
@@ -322,6 +325,9 @@ test.describe("Page smoke tests", () => {
         '[role="alert"]:visible, .error-banner:visible',
       );
       const hasError = await errorBanner.isVisible().catch(() => false);
+      if (hasError) {
+        console.log(`${path}: error banner text: ${await errorBanner.first().textContent().catch(() => "<unreadable>")}`);
+      }
       expect(hasError).toBe(false);
 
       // Check at least one heading or meaningful content
