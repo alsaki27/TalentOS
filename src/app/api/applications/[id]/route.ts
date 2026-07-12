@@ -16,6 +16,24 @@ import {
   deleteApplication,
 } from "@/server/repositories/applicationsRepository";
 
+// Had no GET handler at all (only PATCH/DELETE) - same missing-method pattern
+// already found and fixed on the workflow status route. Confirmed live via
+// the E2E test's status-poll: "SyntaxError: Unexpected end of JSON input" on
+// r.json(), from Next.js's default empty-body 405 for an unmatched method.
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+
+  const application = await findApplicationById(params.id);
+  if (!application) {
+    return NextResponse.json({ error: "Application not found" }, { status: 404 });
+  }
+
+  return NextResponse.json(application);
+}
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json();
   const currentUser = await getCurrentUserContext();
