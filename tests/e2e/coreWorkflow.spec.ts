@@ -134,8 +134,35 @@ test.describe("Core hiring workflow (API-driven)", () => {
     expect(jobsRes.status()).toBe(200);
     const jobsBody = await jobsRes.json();
     expect(jobsBody.jobs?.length || jobsBody.total).toBeGreaterThan(0);
-    const jobId: string = jobsBody.jobs?.[0]?.id;
+    const job = jobsBody.jobs?.[0];
+    const jobId: string = job?.id;
     expect(jobId).toBeDefined();
+
+    // 3a. Target this job for the candidate. Required before the AI pipeline
+    // can resolve a resume (see step 3b) - POST /api/target-jobs also runs
+    // its own AI call (target_jobs_matching) to analyze the JD, non-blocking
+    // on failure, so this alone is a first real signal of AI connectivity.
+    const targetJobRes = await request.post(`${BASE_URL}/api/target-jobs`, {
+      data: {
+        candidateId,
+        jobId,
+        rawDescription: `${job?.title ?? "Role"} at ${job?.company ?? "Company"}. ${job?.location ?? ""}`.trim(),
+      },
+    });
+    expect(targetJobRes.status()).toBe(201);
+    const targetJob = await targetJobRes.json();
+    const targetJobId: string = targetJob.id ?? targetJob.targetJob?.id;
+    expect(targetJobId).toBeDefined();
+
+    // 3b. Link the base resume to this target job. The AI pipeline dispatch
+    // route (src/app/api/applications/[id]/ai-workflow/route.ts) resolves the
+    // resume to tailor via application_resume_versions (source_type =
+    // 'base_resume') joined through target_jobs - the base_resumes row from
+    // step 2 alone isn't visible to it.
+    const resumeVersionRes = await request.post(`${BASE_URL}/api/application-resume-versions`, {
+      data: { baseResumeId, targetJobId },
+    });
+    expect(resumeVersionRes.status()).toBe(201);
 
     // 4. Create an application ticket
     // NOTE: applications.resume_id is a legacy FK into the plain `resumes`
