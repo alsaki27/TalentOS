@@ -31,14 +31,26 @@ export async function GET(req: NextRequest) {
   const startedMs = Date.now();
   await recordJobAttempt("dispatch-workflows");
 
-  const result = await dispatchNextQueuedWorkflow();
-  const durationMs = Date.now() - startedMs;
+  // recordJobFailure was imported but never called - any error in
+  // dispatchNextQueuedWorkflow() (e.g. claimNextPendingWorkflow's query)
+  // propagated as an unhandled exception, producing an empty-body 500 with
+  // no diagnostic trail in scheduled_job_runs either. Confirmed live via
+  // the E2E test's own diagnostic logging (500, empty body).
+  try {
+    const result = await dispatchNextQueuedWorkflow();
+    const durationMs = Date.now() - startedMs;
 
-  if (result.dispatched) {
-    await recordJobSuccess("dispatch-workflows", durationMs, JSON.stringify(result));
-  } else {
-    await recordJobSuccess("dispatch-workflows", durationMs, "no queued workflows");
+    if (result.dispatched) {
+      await recordJobSuccess("dispatch-workflows", durationMs, JSON.stringify(result));
+    } else {
+      await recordJobSuccess("dispatch-workflows", durationMs, "no queued workflows");
+    }
+
+    return NextResponse.json(result);
+  } catch (err: any) {
+    const durationMs = Date.now() - startedMs;
+    const message = err?.message || String(err);
+    await recordJobFailure("dispatch-workflows", message, durationMs).catch(() => {});
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-
-  return NextResponse.json(result);
 }

@@ -61,7 +61,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   const title = "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(finalData);
   const dbSql = getSql();
-  let versionId: string | undefined;
+  let versionId: string | null = null;
   try {
     const [versionRows] = await dbSql.transaction([
       dbSql`WITH inserted AS (

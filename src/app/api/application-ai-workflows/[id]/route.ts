@@ -1,9 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
-import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
+import { findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 
 export const dynamic = "force-dynamic";
+
+// Status/detail lookup — used by the Application Queue's "▼ Details" expand
+// (src/app/application-queue/page.tsx's fetchWorkflowDetails, ?action=status)
+// and by the E2E workflow-verification test. Never had a GET handler at all
+// (only POST for cancel/retry/restart/rerun) - both callers were silently
+// getting a 405 (frontend swallows it in an empty catch, no UI symptom).
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
+  if (response) return response;
+
+  const workflowId = params.id;
+  const wf = await findWorkflowById(workflowId);
+  if (!wf) {
+    return NextResponse.json({ error: "Workflow not found" }, { status: 404 });
+  }
+
+  const [stages, artifacts] = await Promise.all([
+    listStageRuns(workflowId),
+    listArtifacts(workflowId),
+  ]);
+
+  return NextResponse.json({ workflow: wf, stages, artifacts });
+}
 
 export async function POST(
   req: NextRequest,
