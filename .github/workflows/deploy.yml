@@ -92,18 +92,27 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Run Neon schema fixes (sql/neon_fixes/)
-        # Additive-only, idempotent patches - see sql/neon_fixes/README.md for why
-        # this exists and the rules for what's allowed in this directory. Runs
-        # before the deploy so any new column/sequence the deploy's code depends
-        # on already exists by the time the new Worker version goes live. This
-        # closes the exact gap that broke production earlier: a correct,
-        # idempotent migration was written but never actually executed.
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          # Apply each SQL file individually and report failures without
+          # stopping the entire deploy — idempotent files are safe to retry
+          # after fixing on a subsequent push. ON_ERROR_STOP ensures we catch
+          # schema errors before the new Worker ships.
+          FAILED_FILES=""
           for f in sql/neon_fixes/*.sql; do
-            echo "Applying $f"
-            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+            echo "::group::Applying $f"
+            if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" 2>&1; then
+              echo "  OK"
+            else
+              echo "::error::Schema fix $f failed"
+              FAILED_FILES="$FAILED_FILES $f"
+            fi
+            echo "::endgroup::"
           done
+          if [ -n "$FAILED_FILES" ]; then
+            echo "::error::Failed schema fixes:$FAILED_FILES"
+            exit 1
+          fi
         env:
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
