@@ -40,6 +40,13 @@ jobs:
       - run: npm run lint
       - run: npm test
 
+      - name: Install Playwright browsers
+        # No step anywhere in this workflow ever installed Playwright's
+        # browsers - "Run E2E tests" would fail immediately (browserType.launch:
+        # Executable doesn't exist) on any test using the `page` fixture
+        # (the whole "Page smoke tests" suite), independent of any secret.
+        run: npx playwright install --with-deps chromium
+
       - name: Run E2E tests
         # tests/e2e/coreWorkflow.spec.ts hard-fails (no silent skip) if CRON_SECRET
         # is missing from its environment - that secret already exists in this repo
