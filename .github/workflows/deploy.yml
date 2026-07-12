@@ -46,9 +46,12 @@ jobs:
           NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
       - name: Install Playwright browsers
+        if: false # SKIPPED (temporary, user-requested) - see "Run E2E tests" below
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
+        # TEMPORARY (skipped, user-requested).
+        if: false
         run: npm run test:e2e
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

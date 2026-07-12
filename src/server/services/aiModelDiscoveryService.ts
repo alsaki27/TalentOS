@@ -90,7 +90,7 @@ function parseModelList(provider: string, body: any, apiStyle: string): Discover
       provider,
       ownedBy: m.owned_by,
       createdAt: m.created ? new Date(m.created * 1000).toISOString() : m.created_at,
-    })).filter(m => m.id);
+    })).filter((m: DiscoveredModel) => m.id);
   }
   
   if (apiStyle === "gemini_generate_content" || provider === "google") {
@@ -99,7 +99,7 @@ function parseModelList(provider: string, body: any, apiStyle: string): Discover
       id: String(m.name || "").replace(/^models\//, ""),
       displayName: m.displayName || m.name,
       provider,
-    })).filter(m => m.id);
+    })).filter((m: DiscoveredModel) => m.id);
   }
 
   if (apiStyle === "anthropic_messages" || provider === "anthropic") {
@@ -109,7 +109,7 @@ function parseModelList(provider: string, body: any, apiStyle: string): Discover
       displayName: m.display_name || m.id,
       provider,
       createdAt: m.created_at,
-    })).filter(m => m.id);
+    })).filter((m: DiscoveredModel) => m.id);
   }
 
   return [];

@@ -27,9 +27,17 @@ jobs:
           NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
       - name: Install Playwright browsers
+        if: false # SKIPPED (temporary, user-requested) - see "Run E2E tests" below
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
+        # TEMPORARY (skipped, user-requested): this step also has no server to
+        # test against - TEST_BASE_URL isn't set here so the suite defaults to
+        # http://localhost:3000, but nothing in this job starts a dev server
+        # (playwright.config.ts has no webServer block either). Re-enable only
+        # after that's fixed, or after wiring TEST_BASE_URL to a real preview
+        # deployment.
+        if: false
         run: npm run test:e2e
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
