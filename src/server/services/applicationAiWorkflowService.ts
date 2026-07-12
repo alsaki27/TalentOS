@@ -16,6 +16,7 @@ import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConf
 import {
   createWorkflow,
   findWorkflowById,
+  findActiveWorkflowByApplicationId,
   updateWorkflowStatus,
   createStageRun,
   updateStageRun,
@@ -27,7 +28,8 @@ import {
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query, queryOne } from "@/server/db/neon";
+import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 function sha256(input: string): string {
@@ -90,6 +92,149 @@ export async function startWorkflow(input: {
     startedBy: input.startedBy,
   });
   return { workflowId: wf.id };
+}
+
+function jobDescriptionForTargetJob(job: any): string {
+  return [
+    `Title: ${job.title ?? ""}`,
+    job.company ? `Company: ${job.company}` : null,
+    job.location ? `Location: ${job.location}` : null,
+    job.job_category ? `Category: ${job.job_category}` : null,
+    job.description_text ? job.description_text : null,
+    job.notes ? `Internal notes: ${job.notes}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * A ticket created with "Resume Source: Base Resume" only materializes an
+ * application_resume_versions row if the user separately clicks "Build with
+ * Falood AI" right after creation (POST /api/quick-application/falood-setup).
+ * Skip that and Generate 400s with "No base resume found" even though the
+ * candidate has one. Replicates falood-setup's copy-from-base-resume step so
+ * Generate works directly off a candidate's base resume, matching what the
+ * ticket-creation UI already implied by letting you pick one as the source.
+ */
+async function materializeFromBaseResume(
+  candidateId: string,
+  jobId: string,
+  applicationId: string,
+  job: any,
+  createdBy: string | undefined,
+): Promise<any | null> {
+  const baseResumeRow = await queryOne<{ id: string; content: unknown }>(
+    "SELECT id, content FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [candidateId]
+  );
+  if (!baseResumeRow) return null;
+
+  const targetJob = await upsertTargetJobByCandidateAndJob(candidateId, jobId, {
+    raw_description: jobDescriptionForTargetJob(job),
+    created_by: createdBy,
+  });
+  if (!targetJob) return null;
+
+  const version = await queryOne(
+    `INSERT INTO application_resume_versions
+       (candidate_id, base_resume_id, target_job_id, content, status, source_type, created_by, source_resume_id)
+     VALUES ($1, $2, $3, $4::jsonb, 'active', 'base_resume', $5, $2)
+     RETURNING *`,
+    [candidateId, baseResumeRow.id, targetJob.id, JSON.stringify(baseResumeRow.content ?? {}), createdBy ?? null]
+  );
+  if (!version) return null;
+
+  await execute(
+    `INSERT INTO application_packets (application_id, resume_version_id, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (application_id) DO UPDATE SET resume_version_id = EXCLUDED.resume_version_id, updated_at = NOW()`,
+    [applicationId, version.id]
+  );
+
+  return version;
+}
+
+export type TriggerWorkflowResult =
+  | { started: true; workflowId: string }
+  | { started: false; reason: string };
+
+/**
+ * Resolves the candidate's base resume for this application's job, starts a
+ * workflow, and dispatches the first stage. Shared by the manual "Generate"
+ * endpoint (POST /api/applications/[id]/ai-workflow) and automatic
+ * triggering on ticket creation - both need the exact same base-resume
+ * resolution (target_job match -> most recent version -> materialize from
+ * base_resumes) so a candidate with a base resume never needs a second
+ * manual step to get a first tailored draft.
+ */
+export async function triggerAiWorkflowForApplication(
+  applicationId: string,
+  startedBy?: string,
+): Promise<TriggerWorkflowResult> {
+  const existing = await findActiveWorkflowByApplicationId(applicationId);
+  if (existing) {
+    return { started: false, reason: "An active workflow already exists for this application" };
+  }
+
+  const appRow = await queryOne<{ candidate_id: string; job_id: string | null }>(
+    "SELECT candidate_id, job_id FROM applications WHERE id = $1",
+    [applicationId]
+  );
+  if (!appRow) {
+    return { started: false, reason: "Application not found" };
+  }
+  if (!appRow.job_id) {
+    return { started: false, reason: "No job attached to this application" };
+  }
+
+  const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
+  const job: any = jobRow ?? {};
+
+  // Prioritise the resume linked to the target_job for this application's
+  // job, falling back to the candidate's most recent base resume overall.
+  let resumeRow = await queryOne<any>(
+    `SELECT arv.* FROM application_resume_versions arv
+     WHERE arv.target_job_id IN (
+       SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
+     )
+     AND arv.source_type = 'base_resume' AND arv.status = 'active'
+     ORDER BY arv.created_at DESC LIMIT 1`,
+    [appRow.candidate_id, appRow.job_id]
+  );
+  if (!resumeRow) {
+    resumeRow = await queryOne<any>(
+      "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
+      [appRow.candidate_id]
+    );
+  }
+  if (!resumeRow) {
+    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy);
+  }
+  if (!resumeRow) {
+    return { started: false, reason: "No base resume found for this candidate yet" };
+  }
+
+  const evidence = await query(
+    "SELECT * FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
+    [appRow.candidate_id]
+  );
+
+  const { workflowId } = await startWorkflow({
+    applicationId,
+    candidateId: appRow.candidate_id,
+    job,
+    baseResume: resumeRow,
+    evidence: evidence ?? [],
+    startedBy,
+  });
+
+  backgroundDispatch(
+    dispatchWorkflowById(workflowId).catch((err) => {
+      console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
+    })
+  );
+
+  return { started: true, workflowId };
 }
 
 /** Build agent context from the immutable workflow snapshot + previous artifacts. */

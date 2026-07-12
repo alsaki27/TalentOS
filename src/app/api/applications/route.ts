@@ -14,6 +14,8 @@ import {
   findExistingCandidateIdsForJob,
   createApplications,
 } from "@/server/repositories/applicationsRepository";
+import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export async function GET(req: NextRequest) {
   const currentUser = await getCurrentUserContext();
@@ -175,6 +177,23 @@ export async function POST(req: NextRequest) {
           status,
           created_by: currentUser.profile.user_id,
         });
+      }
+    }
+
+    // A job "logged" for a candidate (an application ticket with a real
+    // job_id) automatically kicks off the 4-agent pipeline - no separate
+    // manual Generate click required. Fire-and-forget, registered with the
+    // Workers execution context so it survives past this response; if the
+    // candidate has no base resume yet, triggerAiWorkflowForApplication
+    // just returns started:false and the ticket still gets created
+    // normally (Generate remains available to retry manually later).
+    if (body.job_id) {
+      for (const application of data ?? []) {
+        backgroundDispatch(
+          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id).catch((err) => {
+            console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
+          })
+        );
       }
     }
 
