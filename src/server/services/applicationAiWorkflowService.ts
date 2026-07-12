@@ -324,11 +324,25 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       completed_at: new Date().toISOString(),
     });
 
-    // Hiring Panel = AI quality review, not a human gate.
-    // Always proceed to Final Polish. Human review happens in Falood Studio
-    // after the pipeline completes.
+    // Hiring Panel = AI quality review, not a mid-pipeline human gate.
+    // Borderline scores no longer block — they flow through to Final Polish
+    // and the human reviews the finished resume in Falood Studio. A hard-fail
+    // score (fabricated content, wildly unqualified) still stops the pipeline
+    // before wasting a Final Polish call on unsalvageable output.
     if (agentId === "application_hiring_panel") {
       await syncWorkflowToApplication(workflowId, "running", currentIdx + 1);
+      const gateResult = await evaluateQualityGate(
+        agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
+        wf.application_id
+      );
+      if (gateResult.action === "fail") {
+        await syncWorkflowToApplication(workflowId, "failed", undefined, gateResult.reason ?? undefined);
+        await updateWorkflowStatus(workflowId, "failed", {
+          current_stage: currentIdx + 1,
+          last_error: gateResult.reason ?? undefined,
+        });
+        return;
+      }
     }
 
     // Final polish complete → finalize
