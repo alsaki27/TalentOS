@@ -2,9 +2,70 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { startWorkflow, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findActiveWorkflowByApplicationId, findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query, queryOne } from "@/server/db/neon";
+import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
+import { query, queryOne, execute } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
+
+function jobDescriptionForTargetJob(job: any): string {
+  return [
+    `Title: ${job.title ?? ""}`,
+    job.company ? `Company: ${job.company}` : null,
+    job.location ? `Location: ${job.location}` : null,
+    job.job_category ? `Category: ${job.job_category}` : null,
+    job.description_text ? job.description_text : null,
+    job.notes ? `Internal notes: ${job.notes}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * A ticket created with "Resume Source: Base Resume" only materializes an
+ * application_resume_versions row if the user separately clicks "Build with
+ * Falood AI" right after creation (POST /api/quick-application/falood-setup).
+ * Skip that and Generate 400s with "No base resume found" even though the
+ * candidate has one. Replicates falood-setup's copy-from-base-resume step so
+ * Generate works directly off a candidate's base resume, matching what the
+ * ticket-creation UI already implied by letting you pick one as the source.
+ */
+async function materializeFromBaseResume(
+  candidateId: string,
+  jobId: string,
+  applicationId: string,
+  job: any,
+  createdBy: string | undefined,
+): Promise<any | null> {
+  const baseResumeRow = await queryOne<{ id: string; content: unknown }>(
+    "SELECT id, content FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
+    [candidateId]
+  );
+  if (!baseResumeRow) return null;
+
+  const targetJob = await upsertTargetJobByCandidateAndJob(candidateId, jobId, {
+    raw_description: jobDescriptionForTargetJob(job),
+    created_by: createdBy,
+  });
+  if (!targetJob) return null;
+
+  const version = await queryOne(
+    `INSERT INTO application_resume_versions
+       (candidate_id, base_resume_id, target_job_id, content, status, source_type, created_by, source_resume_id)
+     VALUES ($1, $2, $3, $4::jsonb, 'active', 'base_resume', $5, $2)
+     RETURNING *`,
+    [candidateId, baseResumeRow.id, targetJob.id, JSON.stringify(baseResumeRow.content ?? {}), createdBy ?? null]
+  );
+  if (!version) return null;
+
+  await execute(
+    `INSERT INTO application_packets (application_id, resume_version_id, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (application_id) DO UPDATE SET resume_version_id = EXCLUDED.resume_version_id, updated_at = NOW()`,
+    [applicationId, version.id]
+  );
+
+  return version;
+}
 
 export async function POST(
   req: NextRequest,
@@ -62,6 +123,15 @@ export async function POST(
     resumeRow = await queryOne(
       "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
       [appRow.candidate_id]
+    );
+  }
+  if (!resumeRow && appRow.job_id) {
+    resumeRow = await materializeFromBaseResume(
+      appRow.candidate_id,
+      appRow.job_id,
+      applicationId,
+      job,
+      context?.profile.user_id,
     );
   }
   if (!resumeRow) {
