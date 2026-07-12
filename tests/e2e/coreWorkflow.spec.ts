@@ -138,11 +138,17 @@ test.describe("Core hiring workflow (API-driven)", () => {
     expect(jobId).toBeDefined();
 
     // 4. Create an application ticket
+    // NOTE: applications.resume_id is a legacy FK into the plain `resumes`
+    // table (raw uploads), unrelated to Falood base resumes (`base_resumes`
+    // table). Passing baseResumeId here violates applications_resume_id_fkey
+    // - confirmed live via this test's own diagnostic logging. The AI
+    // pipeline (src/app/api/applications/[id]/ai-workflow/route.ts) doesn't
+    // read this field at all; it resolves the base resume via
+    // candidate_id/job_id through target_jobs/application_resume_versions.
     const appRes = await request.post(`${BASE_URL}/api/applications`, {
       data: {
         candidate_id: candidateId,
         job_id: jobId,
-        resume_id: baseResumeId,
         status: "applied",
       },
     });
