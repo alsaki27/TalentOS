@@ -35,11 +35,32 @@ const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
  * Manager UI) - undefined/null falls back to that provider's env var / built-in
  * default, same as the env-based providers in src/lib/ai/*Provider.ts.
  */
+// A key's base_url and chat_endpoint are stored as two separate columns
+// (sql/neon_fixes/017), but every case below used to fetch() `baseUrl`
+// directly as the WHOLE api url whenever it was set, silently dropping
+// chat_endpoint entirely. Confirmed live: a key with base_url
+// "https://api.openai.com/v1" and chat_endpoint "/chat/completions" made
+// requests to just "https://api.openai.com/v1" (OpenAI's API root, no
+// chat-completions route there) -> 404 with an empty body, on every
+// OpenAI-compatible-shaped provider (openai, glm, deepseek, moonshot,
+// opencode, openai_compatible, groq, openrouter, local) - including the
+// OpenCode key, independent of whether its endpoint was ever verified.
+function resolveApiUrl(
+  baseUrl: string | null | undefined,
+  chatEndpoint: string | null | undefined,
+  defaultFullUrl: string
+): string {
+  if (!baseUrl) return defaultFullUrl;
+  const path = chatEndpoint || "/chat/completions";
+  return baseUrl.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
+}
+
 export function buildProviderFromDbKey(
   provider: DbAiProvider,
   apiKey: string,
   model?: string | null,
-  baseUrl?: string | null
+  baseUrl?: string | null,
+  chatEndpoint?: string | null
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -60,7 +81,8 @@ export function buildProviderFromDbKey(
     }
     case "anthropic": {
       const preset = PROVIDER_NATIVE_DEFAULTS["anthropic"];
-      const apiUrl = baseUrl || (preset ? preset.baseUrl + preset.chatEndpoint : "https://api.anthropic.com/v1/messages");
+      const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.anthropic.com/v1/messages";
+      const apiUrl = resolveApiUrl(baseUrl, chatEndpoint, defaultUrl);
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const MAX_TOKENS = 256;
@@ -188,7 +210,7 @@ export function buildProviderFromDbKey(
       const preset = PROVIDER_NATIVE_DEFAULTS["openai"];
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.openai.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || defaultUrl,
+        apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
         apiKey,
         model: model || process.env.OPENAI_MODEL || "gpt-4o",
         errorLabel: "OpenAI API",
@@ -196,7 +218,7 @@ export function buildProviderFromDbKey(
     }
     case "glm": {
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        apiUrl: resolveApiUrl(baseUrl, chatEndpoint, "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
         apiKey,
         model: model || process.env.GLM_MODEL || "glm-4-plus",
         errorLabel: "GLM API",
@@ -206,7 +228,7 @@ export function buildProviderFromDbKey(
       const preset = PROVIDER_NATIVE_DEFAULTS["deepseek"];
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.deepseek.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || process.env.DEEPSEEK_API_BASE || defaultUrl,
+        apiUrl: baseUrl ? resolveApiUrl(baseUrl, chatEndpoint, defaultUrl) : (process.env.DEEPSEEK_API_BASE || defaultUrl),
         apiKey,
         model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
         errorLabel: "DeepSeek API",
@@ -219,7 +241,7 @@ export function buildProviderFromDbKey(
       const preset = PROVIDER_NATIVE_DEFAULTS["moonshot"];
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.moonshot.ai/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || defaultUrl,
+        apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
         apiKey,
         model: model || process.env.MOONSHOT_MODEL || "kimi-k2.6",
         errorLabel: "Moonshot API",
@@ -227,7 +249,9 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions",
+        apiUrl: baseUrl
+          ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
+          : (process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions"),
         apiKey,
         model: model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash",
         errorLabel: "OpenCode API",
@@ -239,7 +263,7 @@ export function buildProviderFromDbKey(
     case "openai_compatible": {
       if (baseUrl) {
         return createOpenAiCompatibleProvider({
-          apiUrl: baseUrl,
+          apiUrl: resolveApiUrl(baseUrl, chatEndpoint, baseUrl),
           apiKey,
           model: model || "default",
           errorLabel: "OpenAI-Compatible API",
@@ -252,7 +276,7 @@ export function buildProviderFromDbKey(
     case "local":
       if (baseUrl) {
         return createOpenAiCompatibleProvider({
-          apiUrl: baseUrl,
+          apiUrl: resolveApiUrl(baseUrl, chatEndpoint, baseUrl),
           apiKey,
           model: model || "default",
           errorLabel: provider,
@@ -279,7 +303,7 @@ export async function testAiKey(id: string): Promise<{
     return { success: false, error: "Key not found", latencyMs: Date.now() - start };
   }
 
-  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url);
+  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
   if (!provider) {
     const err = `Provider adapter for "${keyRow.provider}" is not implemented yet.`;
     await recordAiKeyFailure(id, err);
@@ -333,7 +357,7 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
   for (const key of dbKeys) {
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
     if (provider) {
       return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" };
     }

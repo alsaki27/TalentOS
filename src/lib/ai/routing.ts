@@ -131,7 +131,7 @@ export async function getProviderForAutomation(
       }
 
       const effectiveModel = route.model_override ?? keyRow.model;
-      const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
+      const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
       if (provider) {
         return {
           provider,
@@ -189,7 +189,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
+        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
         if (dbProvider) {
           return {
             provider: dbProvider,
