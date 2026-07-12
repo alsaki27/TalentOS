@@ -1,5 +1,8 @@
 name: Scheduled Jobs
 
+env:
+  TALENTOS_BASE_URL: https://skarion-talent-os.skarion-talentos.workers.dev
+
 on:
   schedule:
     - cron: '*/5 * * * *'  # Workflow dispatcher – every 5 minutes
@@ -10,74 +13,100 @@ on:
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
     - cron: '0 2 * * *'    # AI key health – daily at 02:00 UTC
   workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to run (leave blank for all)'
+        required: false
+        type: string
 
 jobs:
   dispatch-workflows:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'dispatch-workflows' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: Workflow dispatcher
     steps:
       - name: Call Workflow dispatcher
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/application-ai-workflows/dispatch"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   ai-digest:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 8 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-digest' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: AI digest
     steps:
       - name: Call AI digest
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/digest"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/digest")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   import-sources:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'import-sources' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: Import sources
     steps:
       - name: Call Import sources
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/import-sources"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/import-sources")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   backup:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 4 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'backup' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: Backup
     steps:
       - name: Call Backup
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/backup"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/backup")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   job-categorization:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 7 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'job-categorization' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: Job categorization
     steps:
       - name: Call Job categorization
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/categorize-jobs"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   ai-usage-rollup:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-usage-rollup' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: AI usage rollup
     steps:
       - name: Call AI usage rollup
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/ai-usage-rollup"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-usage-rollup")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
 
   ai-key-health:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 2 * * *'
+    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-key-health' || github.event.inputs.job == ''
     runs-on: ubuntu-latest
     name: AI key health
     steps:
-      - name: Call AI key readiness
+      - name: Call AI key health
         run: |
-          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-            "https://skarion-talent-os.skarion-talentos.workers.dev/api/admin/ai-key-readiness"
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-key-health")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi

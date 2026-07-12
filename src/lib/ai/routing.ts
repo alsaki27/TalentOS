@@ -9,6 +9,8 @@ import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiPro
 import { buildProviderFromDbKey } from "@/server/services/aiProvider";
 import { getProviderByName, getActiveProviderAsync } from "@/lib/ai/index";
 
+const ALLOW_GLOBAL_FALLBACK = process.env.ALLOW_GLOBAL_AI_FALLBACK !== 'false';
+
 export interface AutomationRouteResult {
   provider: AiProvider;
   name: string;
@@ -37,7 +39,17 @@ async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?:
       [keyRow.id]
     );
     if (todayCalls && todayCalls.count >= keyRow.daily_request_limit) {
-      return { allowed: false, reason: 'daily_limit_reached' };
+      return { allowed: false, reason: 'daily_request_limit_reached' };
+    }
+  }
+
+  if (keyRow.monthly_request_limit) {
+    const monthCount = await queryOne<{ cnt: number }>(
+      `SELECT COUNT(*)::int as cnt FROM ai_usage_events WHERE ai_key_id = $1 AND created_at >= date_trunc('month', CURRENT_DATE)`,
+      [keyRow.id]
+    );
+    if (monthCount && monthCount.cnt >= keyRow.monthly_request_limit) {
+      return { allowed: false, reason: 'monthly_request_limit_reached' };
     }
   }
 
@@ -78,12 +90,29 @@ export async function getProviderForAutomation(
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
       if (!keyRow || !keyRow.is_enabled) continue;
-      const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted"];
+      const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
       if (blockedStatuses.includes(keyRow.status)) continue;
 
       const limitCheck = await checkKeyLimits(keyRow);
       if (!limitCheck.allowed) {
         limitSkipped = true;
+        await recordUsageEvent({
+          automationId,
+          aiKeyId: keyRow.id,
+          provider: keyRow.provider,
+          model: route.model_override ?? keyRow.model ?? null,
+          outcome: "skipped",
+          latencyMs: 0,
+          inputTokens: null,
+          outputTokens: null,
+          errorMessage: null,
+          errorCode: limitCheck.reason ?? null,
+          userId: null,
+          workflowId: null,
+          applicationId: null,
+          attemptNumber: null,
+          routeRank: route.rank,
+        });
         continue;
       }
 
@@ -117,7 +146,7 @@ export async function getProviderForAutomation(
       for (const key of dbKeys) {
         if (excludeKeyIds?.has(key.id)) continue;
         if (key.provider !== route.provider) continue;
-        const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted"];
+        const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
         if (blockedStatuses.includes(key.status)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
@@ -125,6 +154,23 @@ export async function getProviderForAutomation(
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
           limitSkipped = true;
+          await recordUsageEvent({
+            automationId,
+            aiKeyId: keyRow.id,
+            provider: keyRow.provider,
+            model: route.model_override ?? keyRow.model ?? null,
+            outcome: "skipped",
+            latencyMs: 0,
+            inputTokens: null,
+            outputTokens: null,
+            errorMessage: null,
+            errorCode: limitCheck.reason ?? null,
+            userId: null,
+            workflowId: null,
+            applicationId: null,
+            attemptNumber: null,
+            routeRank: route.rank,
+          });
           continue;
         }
 
@@ -146,8 +192,30 @@ export async function getProviderForAutomation(
   }
 
   // 3. Fall back to global env-based chain
+  if (!ALLOW_GLOBAL_FALLBACK) {
+    throw new Error("All configured routes failed and global fallback is disabled.");
+  }
+
   const global = await getActiveProviderAsync();
   if (global) {
+    await recordUsageEvent({
+      automationId,
+      aiKeyId: null,
+      provider: global.name,
+      model: null,
+      outcome: "success",
+      latencyMs: 0,
+      inputTokens: null,
+      outputTokens: null,
+      errorMessage: null,
+      errorCode: "global_emergency_fallback",
+      userId: null,
+      workflowId: null,
+      applicationId: null,
+      attemptNumber: null,
+      routeRank: null,
+    });
+
     return {
       provider: global.provider,
       name: global.name,
@@ -172,6 +240,30 @@ export interface CallWithUsageTrackingResult<T> {
   model: string | null;
   routeRank: number | null;
   limitSkipped?: boolean;
+}
+
+export class AiRouteCallError extends Error {
+  aiKeyId: string | null;
+  provider: string;
+  model: string | null;
+  routeRank: number | null;
+  errorCode: string | null;
+
+  constructor(message: string, details: {
+    aiKeyId: string | null;
+    provider: string;
+    model: string | null;
+    routeRank: number | null;
+    errorCode: string | null;
+  }) {
+    super(message);
+    this.name = 'AiRouteCallError';
+    this.aiKeyId = details.aiKeyId;
+    this.provider = details.provider;
+    this.model = details.model;
+    this.routeRank = details.routeRank;
+    this.errorCode = details.errorCode;
+  }
 }
 
 export interface CallContext {
@@ -278,7 +370,14 @@ export async function callWithUsageTracking<T>(
       routeRank: resolved.routeRank,
     });
 
-    throw err;
+    if (err instanceof AiRouteCallError) throw err;
+    throw new AiRouteCallError(err.message || "Provider call failed", {
+      aiKeyId: resolved.aiKeyId,
+      provider: resolved.name,
+      model: resolved.model ?? null,
+      routeRank: resolved.routeRank,
+      errorCode: classifyErrorCode(err),
+    });
   }
 }
 
@@ -297,7 +396,7 @@ interface UsageEventInput {
   aiKeyId: string | null;
   provider: string;
   model: string | null;
-  outcome: "success" | "failure" | "timeout";
+  outcome: "success" | "failure" | "timeout" | "skipped";
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;

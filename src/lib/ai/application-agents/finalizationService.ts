@@ -31,34 +31,36 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
 
   const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
-  const draftArtifact = artifacts.find((a) => a.automation_id === "application_resume_forge");
-  const finalData = finalArtifact?.data ?? draftArtifact?.data;
+  const finalData = finalArtifact?.data;
 
   if (!finalData) {
-    await updateWorkflowStatus(workflowId, "failed", { last_error: "No final resume artifact found" });
+    const errMsg = "No Final Polish artifact found — pipeline incomplete.";
+    await updateWorkflowStatus(workflowId, "failed", { last_error: errMsg });
     await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
-      ["No final resume artifact found", wf.application_id]);
+      [errMsg, wf.application_id]);
     return null;
   }
 
-  const exportReady = (finalData as any)?.exportReady ?? (finalData as any)?.ready ?? true;
-  if (!exportReady) {
-    await updateWorkflowStatus(workflowId, "failed", { last_error: "Final resume not marked as export-ready" });
+  if ((finalData as any)?.exportReady !== true) {
+    const errMsg = "Final resume not marked as export-ready by Final Polish agent.";
+    await updateWorkflowStatus(workflowId, "failed", { last_error: errMsg });
     await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
-      ["Final resume not export-ready", wf.application_id]);
+      [errMsg, wf.application_id]);
     return null;
   }
 
   const tj = await queryOne<{ id: string }>(
     `SELECT id FROM target_jobs
      WHERE candidate_id = $1 AND job_id = (SELECT job_id FROM applications WHERE id = $2)
-     LIMIT 1`,
+     ORDER BY created_at DESC LIMIT 1`,
     [wf.candidate_id, wf.application_id]
   );
   if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id}`);
 
-  // Atomic INSERT + UPDATE via CTE: resume version AND application update succeed or fail together.
-  // ON CONFLICT handles concurrent finalizers — both get the same version ID.
+  // ATOMICITY BOUNDARY (critical path): CTE atomically inserts resume version AND updates
+  // application (tailored_resume_version_id + status) in a single round-trip. If this fails,
+  // the entire finalization fails — nothing is persisted. ON CONFLICT handles concurrent
+  // finalizers — both get the same version ID.
   const title = "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(finalData);
   const versionRows = await query<{ id: string }>(

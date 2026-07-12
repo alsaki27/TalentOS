@@ -180,7 +180,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
 
 export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
   await execute(
-    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), lock_version = lock_version + 1 WHERE id = $1`,
+    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
     [workflowId]
   );
 }

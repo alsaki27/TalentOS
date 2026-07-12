@@ -21,7 +21,7 @@ export type AiProvider =
   | "opencode"
   | "local";
 
-export type AiKeyStatus = "unknown" | "working" | "failing" | "disabled" | "rate_limited" | "quota_exhausted";
+export type AiKeyStatus = "unknown" | "working" | "failing" | "disabled" | "rate_limited" | "quota_exhausted" | "invalid" | "invalid_credential" | "admin_limit_reached";
 
 export interface AiApiKeyRow {
   id: string;

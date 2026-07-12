@@ -3,7 +3,7 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import { callWithUsageTracking, type CallContext } from "@/lib/ai/routing";
+import { callWithUsageTracking, AiRouteCallError, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS } from "@/lib/ai/application-agents/constants";
 import { runJobLens } from "@/lib/ai/application-agents/jobLens";
@@ -28,7 +28,7 @@ import {
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 
 function sha256(input: string): string {
   let hash = 0;
@@ -282,7 +282,9 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         break;
       } catch (err: any) {
         lastError = err;
-        if (resolvedKeyId) failedKeyIds.add(resolvedKeyId);
+        if (err instanceof AiRouteCallError && err.aiKeyId) {
+          failedKeyIds.add(err.aiKeyId);
+        }
         resolvedKeyId = null;
         if (fallbackAttempt < 3) {
           await new Promise((r) => setTimeout(r, 500));
@@ -387,6 +389,12 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
     if (!wf) break;
     lastDispatched = wf;
     count++;
+
+    if (wf.recovery_count >= 3 && wf.status === 'failed') {
+      await syncWorkflowToApplication(wf.id, 'failed', undefined, 'Workflow failed after 3 recovery attempts');
+      continue;
+    }
+
     try {
       await processWorkflowStage(wf.id);
     } catch (err: any) {
@@ -411,11 +419,21 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: `Workflow is not queued (status: ${wf.status})` };
   }
 
-  try {
-    await processWorkflowStage(workflowId);
-  } catch (err: any) {
-    console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
+  const claimed = await queryOne(
+    `UPDATE application_ai_workflows 
+     SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '5 minutes',
+         claimed_by = 'dispatcher', heartbeat_at = NOW(), lock_version = lock_version + 1
+     WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
+     RETURNING id`,
+    [workflowId]
+  );
+  if (!claimed) {
+    return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher" };
   }
+
+  processWorkflowStage(workflowId).catch(err => {
+    console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
+  });
 
   return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
 }
