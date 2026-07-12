@@ -79,7 +79,6 @@ export async function POST(
     return NextResponse.json({ error: "Application ID is required" }, { status: 400 });
   }
 
-  try {
   const existing = await findActiveWorkflowByApplicationId(applicationId);
   if (existing) {
     return NextResponse.json({
@@ -169,10 +168,6 @@ export async function POST(
     status: "queued",
     message: "Multi-agent workflow started",
   }, { status: 202 });
-  } catch (diagErr: any) {
-    // TEMP DIAGNOSTIC — remove once the empty-body 500 here is root-caused.
-    return NextResponse.json({ error: `DIAG POST ai-workflow: ${diagErr?.message ?? diagErr}`, stack: diagErr?.stack }, { status: 500 });
-  }
 }
 
 export async function GET(

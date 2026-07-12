@@ -28,6 +28,18 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   );
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
 
+  // application_ai_workflows.base_resume_id's FK actually references
+  // application_resume_versions(id), not base_resumes(id), despite the
+  // column name (see startWorkflow() in applicationAiWorkflowService.ts).
+  // The rows below need a real base_resumes.id, so resolve it via the
+  // version row's own base_resume_id FK.
+  const realBaseResumeId = wf.base_resume_id
+    ? (await queryOne<{ base_resume_id: string | null }>(
+        "SELECT base_resume_id FROM application_resume_versions WHERE id = $1",
+        [wf.base_resume_id]
+      ))?.base_resume_id ?? null
+    : null;
+
   const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
   const finalData = finalArtifact?.data;
 
@@ -68,7 +80,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
             title, content, source_type, status, created_at)
-         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${wf.base_resume_id ?? null},
+         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${realBaseResumeId},
                  ${title}, ${contentJson}, 'ai_agent', 'draft', NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
          DO UPDATE SET updated_at = NOW()
@@ -90,7 +102,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       dbSql`INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
         VALUES (
           ${wf.application_id},
-          ${wf.base_resume_id ?? null},
+          ${realBaseResumeId},
           ${tj.id},
           (SELECT id FROM application_resume_versions WHERE workflow_id = ${workflowId} ORDER BY created_at DESC LIMIT 1),
           NULL

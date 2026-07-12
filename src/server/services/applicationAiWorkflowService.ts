@@ -77,18 +77,14 @@ export async function startWorkflow(input: {
     evidence: input.evidence,
   };
 
-  // input.baseResume is usually an application_resume_versions row (it has
-  // its own .id plus a .base_resume_id FK back to the actual base_resumes
-  // row) - application_ai_workflows.base_resume_id must reference the real
-  // base_resumes.id, not the version's own primary key, or finalization's
-  // INSERT into application_resume_versions later violates the FK on
-  // base_resume_id. Fall back to .id only for the rare case where a real
-  // base_resumes row (no separate .base_resume_id field) is passed directly.
-  const resolvedBaseResumeId = input.baseResume?.base_resume_id ?? input.baseResume?.id;
-
+  // Despite its name, application_ai_workflows.base_resume_id's FK actually
+  // references application_resume_versions(id), not base_resumes(id) - so
+  // input.baseResume.id (an application_resume_versions row's own primary
+  // key) is the correct value here. finalizationService resolves the real
+  // base_resumes.id separately via a join when it needs one.
   const wf = await createWorkflow({
     applicationId: input.applicationId,
-    baseResumeId: resolvedBaseResumeId,
+    baseResumeId: input.baseResume?.id,
     idempotencyKey: input.idempotencyKey,
     configSnapshot,
     startedBy: input.startedBy,
