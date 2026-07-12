@@ -184,7 +184,7 @@ export async function PUT(
     } catch (insertErr: any) {
       console.error("[routes:PUT] transaction failed:", insertErr?.message);
       return NextResponse.json(
-        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr), _debug: insertErr?.message ?? String(insertErr) },
+        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr) },
         { status: 500 }
       );
     }
