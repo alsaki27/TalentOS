@@ -1,12 +1,13 @@
 // Regression coverage for processWorkflowStage's Hiring Panel branch.
 //
 // Context: the Hiring Panel stage used to hard-block the pipeline (status
-// 'waiting') for ANY non-clean score, including borderline ones. That was
-// changed so borderline ("review") scores flow through to Final Polish and
-// only a genuine hard-fail (fabricated content, disqualifying scores) still
-// stops the pipeline. A prior commit accidentally deleted the quality-gate
-// call entirely, silently removing the hard-fail stop too — these tests
-// guard against that regression recurring.
+// 'failed') for a genuine hard-fail-grade review (fabricated content,
+// disqualifying scores). That's no longer correct: Hiring Panel is a review
+// step, not a gate — whatever it finds must always reach Final Polish, which
+// is the stage responsible for actually applying the fixes (stripping
+// unsupported claims, trimming for length) and producing an export-ready
+// resume. These tests guard against a hard-fail-before-Final-Polish path
+// being reintroduced.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -49,7 +50,6 @@ import {
   findWorkflowById,
   updateWorkflowStatus,
 } from "@/server/repositories/applicationAiWorkflowRepository";
-import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 
 function hiringPanelWorkflow() {
@@ -79,29 +79,33 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     (findWorkflowById as any).mockResolvedValue(hiringPanelWorkflow());
   });
 
-  it("hard-fail score stops the pipeline (does not reach Final Polish)", async () => {
-    const hardFailReview = {
-      atsScore: 2, // below MIN_ATS_SCORE (4) -> action: "fail"
+  it("hard-fail-grade score does NOT stop the pipeline — still reaches Final Polish", async () => {
+    const hardFailGradeReview = {
+      atsScore: 2, // would have been below the old MIN_ATS_SCORE (4) hard-fail threshold
       recruiterScore: 8,
       roleFitScore: 8,
-      truthfulnessRisk: 1,
+      truthfulnessRisk: 9, // would have exceeded the old MAX_TRUTH_RISK (7) threshold
       passFail: "fail",
+      requiredEdits: [{ issueId: "x", severity: "critical", description: "fabricated PE license" }],
     };
     (callWithUsageTracking as any).mockResolvedValue(
-      mockCallResult(hardFailReview)
+      mockCallResult(hardFailGradeReview)
     );
 
     await processWorkflowStage("wf-1");
 
-    // Only one provider call — Final Polish must never have been invoked.
-    expect(callWithUsageTracking).toHaveBeenCalledTimes(1);
-    expect(finalizeWorkflow).not.toHaveBeenCalled();
-
-    // Workflow must be marked failed, not left queued/waiting.
+    // Must NOT be marked failed — Hiring Panel's findings (however severe)
+    // are Final Polish's job to fix, not a reason to stop the pipeline.
     const failedCall = (updateWorkflowStatus as any).mock.calls.find(
       (c: any[]) => c[1] === "failed"
     );
-    expect(failedCall).toBeTruthy();
+    expect(failedCall).toBeFalsy();
+
+    // Must have advanced past Hiring Panel (queued for next stage).
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find(
+      (c: any[]) => c[1] === "queued"
+    );
+    expect(queuedCall).toBeTruthy();
   });
 
   it("borderline ('review') score does NOT stop the pipeline — continues past Hiring Panel", async () => {

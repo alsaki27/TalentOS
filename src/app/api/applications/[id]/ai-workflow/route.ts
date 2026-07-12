@@ -4,6 +4,7 @@ import { startWorkflow, dispatchWorkflowById } from "@/server/services/applicati
 import { findActiveWorkflowByApplicationId, findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { query, queryOne, execute } from "@/server/db/neon";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
@@ -159,9 +160,13 @@ export async function POST(
   // Dispatch the first stage
   // Fire-and-forget: respond 202 immediately so the UI isn't blocked;
   // stage processing runs asynchronously via the background dispatcher.
-  dispatchWorkflowById(workflowId).catch((err) => {
-    console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
-  });
+  // Registered with the Workers execution context (backgroundDispatch) so
+  // it survives past this response instead of racing it.
+  backgroundDispatch(
+    dispatchWorkflowById(workflowId).catch((err) => {
+      console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
+    })
+  );
 
   return NextResponse.json({
     workflowId,

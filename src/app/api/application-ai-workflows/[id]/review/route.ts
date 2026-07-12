@@ -3,6 +3,7 @@ import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
 import { dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { query } from "@/server/db/neon";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
@@ -64,9 +65,11 @@ export async function POST(
       );
 
       // Fire-and-forget: respond immediately, dispatch runs in background
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Review approval dispatch failed:`, err);
-      });
+      backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((err) => {
+          console.error(`[Workflow ${workflowId}] Review approval dispatch failed:`, err);
+        })
+      );
 
       return NextResponse.json({
         workflowId,
@@ -109,9 +112,11 @@ export async function POST(
       );
 
       // Fire-and-forget: respond immediately, dispatch runs in background
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
-      });
+      backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((err) => {
+          console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
+        })
+      );
 
       return NextResponse.json({ workflowId, status: "restarting", message: "Restarting from stage 1." });
     }

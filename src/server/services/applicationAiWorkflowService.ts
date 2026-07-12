@@ -10,7 +10,6 @@ import { runJobLens } from "@/lib/ai/application-agents/jobLens";
 import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
-import { evaluateQualityGate } from "@/lib/ai/application-agents/qualityGate";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
@@ -29,6 +28,7 @@ import {
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne } from "@/server/db/neon";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 function sha256(input: string): string {
   let hash = 0;
@@ -337,25 +337,15 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       completed_at: new Date().toISOString(),
     });
 
-    // Hiring Panel = AI quality review, not a mid-pipeline human gate.
-    // Borderline scores no longer block — they flow through to Final Polish
-    // and the human reviews the finished resume in Falood Studio. A hard-fail
-    // score (fabricated content, wildly unqualified) still stops the pipeline
-    // before wasting a Final Polish call on unsalvageable output.
+    // Hiring Panel = AI quality review, not a pipeline gate. Whatever it
+    // finds — including a hard-fail-grade truthfulness risk or missing
+    // credentials — always flows to Final Polish, which is the stage
+    // responsible for actually applying those fixes (stripping unsupported
+    // claims, trimming for length) and producing an export-ready resume.
+    // Never stop the pipeline here; only Final Polish's own exportReady
+    // flag (checked in finalizeWorkflow) can leave a workflow unfinished.
     if (agentId === "application_hiring_panel") {
       await syncWorkflowToApplication(workflowId, "running", currentIdx + 1);
-      const gateResult = await evaluateQualityGate(
-        agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
-        wf.application_id
-      );
-      if (gateResult.action === "fail") {
-        await syncWorkflowToApplication(workflowId, "failed", undefined, gateResult.reason ?? undefined);
-        await updateWorkflowStatus(workflowId, "failed", {
-          current_stage: currentIdx + 1,
-          last_error: gateResult.reason ?? undefined,
-        });
-        return;
-      }
     }
 
     // Final polish complete → finalize
@@ -377,9 +367,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Immediately dispatch the next stage so the pipeline doesn't stall
     // between stages waiting for the 5-minute cron dispatcher.
-    dispatchWorkflowById(workflowId).catch((err) => {
-      console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} failed:`, err);
-    });
+    backgroundDispatch(
+      dispatchWorkflowById(workflowId).catch((err) => {
+        console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} failed:`, err);
+      })
+    );
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -395,9 +387,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       await syncWorkflowToApplication(workflowId, "queued");
 
       // Continue retry immediately — don't wait for cron
-      dispatchWorkflowById(workflowId).catch((retryErr) => {
-        console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, retryErr);
-      });
+      backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((retryErr) => {
+          console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, retryErr);
+        })
+      );
     } else {
       await updateWorkflowStatus(workflowId, "failed", { last_error: err.message });
       await syncWorkflowToApplication(workflowId, "failed", undefined, err.message);
