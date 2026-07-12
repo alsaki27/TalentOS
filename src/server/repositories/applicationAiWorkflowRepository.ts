@@ -17,6 +17,11 @@ export interface WorkflowRow {
   cancelled_at: string | null;
   last_error: string | null;
   created_at: string;
+  claimed_at: string | null;
+  claim_expires_at: string | null;
+  claimed_by: string | null;
+  heartbeat_at: string | null;
+  lock_version: number;
 }
 
 export interface StageRunRow {
@@ -134,20 +139,38 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 }
 
 // ── Claim pending workflow (for async dispatcher) ──
-
+// Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
+// Also recovers abandoned workflows where status='running' but the lease
+// has expired (claim_expires_at IS NULL or claim_expires_at < NOW()).
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
-    `UPDATE application_ai_workflows
-     SET status = 'running', started_at = NOW()
-     WHERE id = (
-       SELECT id FROM application_ai_workflows
-       WHERE status = 'queued'
-       ORDER BY created_at ASC
-       LIMIT 1 FOR UPDATE SKIP LOCKED
-     )
-     RETURNING *`
+    `WITH next_workflow AS (
+      SELECT id FROM application_ai_workflows
+      WHERE (status = 'queued')
+         OR (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
+      ORDER BY created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE application_ai_workflows w
+    SET status = 'running',
+        claimed_at = NOW(),
+        claim_expires_at = NOW() + INTERVAL '5 minutes',
+        claimed_by = 'dispatcher',
+        heartbeat_at = NOW(),
+        lock_version = lock_version + 1
+    FROM next_workflow n
+    WHERE w.id = n.id
+    RETURNING w.*`
   );
   return rows[0] ?? null;
+}
+
+export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
+  await execute(
+    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), lock_version = lock_version + 1 WHERE id = $1`,
+    [workflowId]
+  );
 }
 
 // ── Stage runs ──

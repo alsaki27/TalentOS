@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { sanitizeApiError } from "@/lib/utils";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { sql as getSql, query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,7 @@ export async function GET(
   if (response) return response;
 
   const auto = await queryOne<any>(
-    "SELECT id FROM ai_automations WHERE id = $1",
+    "SELECT id, route_version FROM ai_automations WHERE id = $1",
     [params.id]
   );
   if (!auto) {
@@ -31,7 +31,7 @@ export async function GET(
     [params.id]
   );
 
-  return NextResponse.json({ routes });
+  return NextResponse.json({ routes, routeVersion: auto.route_version ?? 1 });
 }
 
 export async function PUT(
@@ -42,7 +42,7 @@ export async function PUT(
   if (response) return response;
 
   const auto = await queryOne<any>(
-    "SELECT id FROM ai_automations WHERE id = $1",
+    "SELECT id, route_version FROM ai_automations WHERE id = $1",
     [params.id]
   );
   if (!auto) {
@@ -59,6 +59,15 @@ export async function PUT(
   const inputRoutes: { ai_key_id: string; model_override?: string; rank: number }[] = body.routes;
   if (!Array.isArray(inputRoutes) || inputRoutes.length === 0) {
     return NextResponse.json({ error: "routes must be a non-empty array" }, { status: 400 });
+  }
+
+  const clientVersion: number | undefined = body.routeVersion;
+  const currentVersion: number = auto.route_version ?? 1;
+  if (clientVersion !== undefined && clientVersion !== currentVersion) {
+    return NextResponse.json(
+      { error: "Another admin modified these routes. Please refresh and try again.", currentRouteVersion: currentVersion },
+      { status: 409 }
+    );
   }
 
   const ranks = new Set<number>();
@@ -149,27 +158,31 @@ export async function PUT(
     [params.id]
   );
 
-  await execute("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]);
-
+  const newVersion = currentVersion + 1;
   const userId = context?.profile.user_id;
+
+  const sql = getSql();
+
   try {
-    for (const r of inputRoutes) {
-      await execute(
-        `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
-         VALUES ($1, $2, $3, $4, true, $5)`,
-        [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
-      );
-    }
+    const queries = [
+      sql.query("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]),
+      ...inputRoutes.map((r) =>
+        sql.query(
+          `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
+           VALUES ($1, $2, $3, $4, true, $5)`,
+          [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
+        )
+      ),
+      sql.query(
+        "UPDATE ai_automations SET route_version = $1, updated_at = NOW() WHERE id = $2",
+        [newVersion, params.id]
+      ),
+    ];
+
+    await sql.transaction(queries);
   } catch (insertErr: any) {
-    for (const oldRoute of oldRoutes) {
-      await execute(
-        `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [oldRoute.automation_id, oldRoute.ai_key_id, oldRoute.rank, oldRoute.model_override ?? null, oldRoute.is_enabled, oldRoute.updated_by ?? null]
-      );
-    }
     return NextResponse.json(
-      { error: "Failed to update routes; previous routes have been restored.", detail: sanitizeApiError(insertErr) },
+      { error: "Failed to update routes.", detail: sanitizeApiError(insertErr) },
       { status: 500 }
     );
   }
@@ -198,5 +211,5 @@ export async function PUT(
     },
   });
 
-  return NextResponse.json({ routes: updated, warnings });
+  return NextResponse.json({ routes: updated, routeVersion: newVersion, warnings });
 }

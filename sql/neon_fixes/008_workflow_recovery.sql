@@ -8,3 +8,10 @@ insert into ai_automations (id, label, description, group_label) values
   ('application_hiring_panel',  'Hiring Panel Review',     'Simulate a hiring panel review of the tailored resume',                              'Application Pipeline'),
   ('application_final_polish',  'Final Polish',            'Polish and finalize resume content before delivery',                                 'Application Pipeline')
 on conflict (id) do nothing;
+
+-- Workflow lease/recovery columns for safe concurrent dispatch
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS claim_expires_at timestamptz;
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS claimed_by text;
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS lock_version int NOT NULL DEFAULT 0;

@@ -1,0 +1,72 @@
+name: Scheduled Jobs
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Workflow dispatcher – every 5 minutes
+    - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
+    - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
+    - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
+    - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
+    - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  dispatch-workflows:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '*/5 * * * *'
+    runs-on: ubuntu-latest
+    name: Workflow dispatcher
+    steps:
+      - name: Call Workflow dispatcher
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/application-ai-workflows/dispatch"
+
+  ai-digest:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 8 * * *'
+    runs-on: ubuntu-latest
+    name: AI digest
+    steps:
+      - name: Call AI digest
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/ai-digest"
+
+  import-sources:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * *'
+    runs-on: ubuntu-latest
+    name: Import sources
+    steps:
+      - name: Call Import sources
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/import-sources"
+
+  backup:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 4 * * *'
+    runs-on: ubuntu-latest
+    name: Backup
+    steps:
+      - name: Call Backup
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/backup"
+
+  job-categorization:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 7 * * *'
+    runs-on: ubuntu-latest
+    name: Job categorization
+    steps:
+      - name: Call Job categorization
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/job-categorization"
+
+  ai-usage-rollup:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 3 * * *'
+    runs-on: ubuntu-latest
+    name: AI usage rollup
+    steps:
+      - name: Call AI usage rollup
+        run: |
+          curl -s -w '\n%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "https://skarion-talent-os.skarion-talentos.workers.dev/api/cron/ai-usage-rollup"

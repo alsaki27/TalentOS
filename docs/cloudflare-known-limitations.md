@@ -137,6 +137,57 @@ If the Cloudflare deployment has issues:
 2. **Code rollback:** The Supabase code is still in the `else` branch of every `isNeon()` switch
 3. **No data loss:** Supabase database remains unchanged
 
+---
+
+## RBAC: Manager Role
+
+The TalentOS role-based access control system includes a `manager` role between `admin` and `application_engineer`.
+
+### Role definition
+
+| Role | Description |
+|------|-------------|
+| `admin` | Full access: all pages, team management, system config, AI key management, backup/restore |
+| `manager` | Read access to all pages; can create/edit candidates, jobs, applications, resumes, follow-ups; **cannot** access Team page or modify system config |
+| `application_engineer` | Application queue, follow-ups, candidates (read), applications (assigned only) |
+
+### Implementation
+
+- Defined in `profiles` table: `role IN ('admin', 'manager', 'application_engineer', 'recruiter')` (`sql/01_schema.sql:90`)
+- Check constraint on `profiles.role` (`sql/01_schema.sql:89-90`)
+- Enforced in app-layer auth (`src/lib/auth.ts`):
+  - `MASTER_DATA_MANAGER_ROLES = ["admin", "manager"]` — can create/edit master data
+  - `APPLICATION_WORKER_ROLES = ["admin", "manager", "application_engineer"]` — can work on applications
+  - `ASSIGNMENT_MANAGER_ROLES = ["admin", "manager", "application_engineer"]` — can manage assignments
+  - `DESTRUCTIVE_MANAGER_ROLES = ["admin", "manager"]` — can delete candidates/jobs/applications
+- Team page (`/team`) restricted to `admin` only via `canAccessPath()` (`src/lib/auth.ts:71-73`)
+- Manager cannot access `/team`, `/api/users/*`, or modify AI keys/system config
+
+### Current state
+
+- **No production account currently holds the `manager` role.** The role exists in the schema and code but has not been assigned to any user.
+- To activate: open `/team` as admin, assign `manager` role to the target account.
+- **This should be done after validating the manager dashboard works** — verify the manager can access all non-admin pages, cannot access `/team`, and has correct data scope.
+- Do not modify any user's role in the database directly; use the `/team` UI.
+
+### Manager permissions summary
+
+| Page/Feature | Admin | Manager | Application Engineer |
+|---|---|---|---|
+| `/candidates` | Full CRUD | Full CRUD | Read only |
+| `/jobs` | Full CRUD | Full CRUD | Hidden |
+| `/companies` | Full access | Full access | Hidden |
+| `/application-queue` | Full access | Full access | Assigned only |
+| `/follow-ups` | Full access | Full access | Assigned only |
+| `/review` | Full access | Full access | Read only |
+| `/interviews` | Full access | Full access | Read only |
+| `/analytics` | Full access | Full access | No access |
+| `/team` | Full access | No access | No access |
+| `/admin/ai` | Full access | No access | No access |
+| `/ops` | Full access | No access | No access |
+| `/audit` | Full access | No access | No access |
+| `/chat` | Full access | Full access | Full access |
+
 ## External Service Architecture (Recommended for Full Production)
 
 For a production setup that handles all features:

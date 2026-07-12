@@ -23,15 +23,26 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await generateDailyDigest();
-  if ("error" in result) return NextResponse.json(result, { status: 502 });
+  if ("error" in result) {
+    const errMsg = result.error;
+    if (isNeon()) {
+      await query(
+        "INSERT INTO ai_digests (content, provider, last_error) VALUES ($1, $2, $3)",
+        ["(generation failed)", "unknown", errMsg]
+      );
+    } else {
+      await supabase.from("ai_digests").insert({ content: "(generation failed)", provider: "unknown", last_error: errMsg });
+    }
+    return NextResponse.json(result, { status: 502 });
+  }
 
   if (isNeon()) {
     await query(
-      "INSERT INTO ai_digests (content, provider) VALUES ($1, $2)",
+      "INSERT INTO ai_digests (content, provider, last_success_at) VALUES ($1, $2, NOW())",
       [result.content, result.provider]
     );
   } else {
-    const { error } = await supabase.from("ai_digests").insert({ content: result.content, provider: result.provider });
+    const { error } = await supabase.from("ai_digests").insert({ content: result.content, provider: result.provider, last_success_at: new Date().toISOString() });
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   }
 

@@ -1,7 +1,7 @@
 // src/components/QuickApplicationModal.tsx
 // Quick Application modal — 4-step workflow:
 // 1. Select candidate
-// 2. Paste JD and auto-analyze
+// 2. Paste JD (with toggle to search existing jobs)
 // 3. Review job (handle duplicates)
 // 4. Create application → optional Falood AI build
 //
@@ -9,7 +9,7 @@
 
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -74,6 +74,16 @@ interface ApplicationResult {
   status: string;
 }
 
+interface JobSearchResult {
+  id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  source: string;
+  employment_type: string | null;
+  seniority_level: string | null;
+}
+
 interface Props {
   onClose: () => void;
   userRole?: string;
@@ -131,6 +141,13 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
   const [appError, setAppError] = useState("");
   const [faloodLoading, setFaloodLoading] = useState(false);
   const [faloodError, setFaloodError] = useState("");
+
+  // Job search mode (alternative to pasting JD)
+  const [jdMode, setJdMode] = useState<"paste" | "search">("paste");
+  const [jobSearchInput, setJobSearchInput] = useState("");
+  const [jobSearchResults, setJobSearchResults] = useState<JobSearchResult[]>([]);
+  const [jobSearchLoading, setJobSearchLoading] = useState(false);
+  const jobSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* ── fetch candidates ── */
   const fetchCandidates = useCallback(async () => {
@@ -405,13 +422,42 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     }
   }
 
+  /* ── search existing jobs ── */
+  async function searchExistingJobs(query: string) {
+    if (!query.trim()) { setJobSearchResults([]); return; }
+    setJobSearchLoading(true);
+    const params = new URLSearchParams();
+    params.set("search", query.trim());
+    params.set("pageSize", "15");
+    const res = await fetch(`/api/jobs?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      setJobSearchResults(data.jobs ?? []);
+    }
+    setJobSearchLoading(false);
+  }
+
+  useEffect(() => {
+    if (jdMode !== "search") return;
+    if (jobSearchTimerRef.current) clearTimeout(jobSearchTimerRef.current);
+    jobSearchTimerRef.current = setTimeout(() => {
+      searchExistingJobs(jobSearchInput);
+    }, 300);
+    return () => { if (jobSearchTimerRef.current) clearTimeout(jobSearchTimerRef.current); };
+  }, [jobSearchInput, jdMode]);
+
+  function handleSelectExistingJob(job: JobSearchResult) {
+    setSelectedJob({ id: job.id, title: job.title, company: job.company });
+    setStep(4);
+  }
+
   /* ── helpers ── */
   const hasBaseResumes = candidateBaseResumes.length > 0;
   const hasOriginalResume = candidateResumes.some((r) => r.is_original_upload);
 
   const availableSourceTypes = [
     { value: "base_resume", label: "Base Resume", enabled: hasBaseResumes },
-    { value: "original_resume", label: "Original Resume", enabled: hasOriginalResume },
+    { value: "original_resume", label: "Uploaded Resume", enabled: hasOriginalResume },
     { value: "blank", label: "Blank Canvas", enabled: true },
     { value: "manual", label: "Manual", enabled: true },
   ];
@@ -507,67 +553,137 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
           </>
         )}
 
-        {/* ── Step 2: Paste JD ── */}
+        {/* ── Step 2: Paste JD or Search existing jobs ── */}
         {step === 2 && (
           <>
-            <div className="field-group">
-              <label>Job Description</label>
-              <textarea
-                value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                placeholder="Paste the full job description here..."
-                rows={8}
-                style={{ resize: "vertical" }}
-              />
-              <p className="muted" style={{ fontSize: 11 }}>{rawText.length} characters (minimum 100, max 30,000)</p>
+            <div className="filter-bar" style={{ marginBottom: 16 }}>
+              {[
+                { value: "paste", label: "Paste new JD" },
+                { value: "search", label: "Search existing jobs" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setJdMode(opt.value as "paste" | "search"); setError(""); }}
+                  style={{
+                    borderRadius: "var(--radius)",
+                    padding: "6px 12px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid var(--border)",
+                    background: jdMode === opt.value ? "var(--accent-soft)" : "var(--surface)",
+                    color: jdMode === opt.value ? "var(--accent)" : "var(--ink)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
-            <div className="field-group">
-              <label>Source URL (optional)</label>
-              <input
-                value={sourceUrl}
-                onChange={(e) => setSourceUrl(e.target.value)}
-                placeholder="https://..."
-              />
-            </div>
-            {analyzeError && <p style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{analyzeError}</p>}
-            {analysis && (
-              <div className="card" style={{ marginBottom: 14, borderColor: "var(--accent)" }}>
-                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>AI Analysis</h3>
-                <p><strong>Title:</strong> {analysis.title ?? "—"}</p>
-                <p><strong>Company:</strong> {analysis.company ?? "—"}</p>
-                <p><strong>Location:</strong> {analysis.location ?? "—"}</p>
-                <p><strong>Workplace:</strong> {analysis.workplaceType}</p>
-                <p><strong>Employment:</strong> {analysis.employmentType}</p>
-                <p><strong>Seniority:</strong> {analysis.seniorityLevel ?? "—"}</p>
-                <p><strong>Salary:</strong> {analysis.salaryMin ?? "—"} — {analysis.salaryMax ?? "—"} {analysis.salaryCurrency}</p>
-                <p><strong>Confidence:</strong> {Math.round((analysis.confidenceScore ?? 0) * 100)}%</p>
-                {analysis.requiredSkills.length > 0 && (
-                  <p><strong>Required:</strong> {analysis.requiredSkills.join(", ")}</p>
+
+            {jdMode === "paste" && (
+              <>
+                <div className="field-group">
+                  <label>Job Description</label>
+                  <textarea
+                    value={rawText}
+                    onChange={(e) => setRawText(e.target.value)}
+                    placeholder="Paste the full job description here..."
+                    rows={8}
+                    style={{ resize: "vertical" }}
+                  />
+                  <p className="muted" style={{ fontSize: 11 }}>{rawText.length} characters (minimum 100, max 30,000)</p>
+                </div>
+                <div className="field-group">
+                  <label>Source URL (optional)</label>
+                  <input
+                    value={sourceUrl}
+                    onChange={(e) => setSourceUrl(e.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+                {analyzeError && <p style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{analyzeError}</p>}
+                {analysis && (
+                  <div className="card" style={{ marginBottom: 14, borderColor: "var(--accent)" }}>
+                    <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>AI Analysis</h3>
+                    <p><strong>Title:</strong> {analysis.title ?? "—"}</p>
+                    <p><strong>Company:</strong> {analysis.company ?? "—"}</p>
+                    <p><strong>Location:</strong> {analysis.location ?? "—"}</p>
+                    <p><strong>Workplace:</strong> {analysis.workplaceType}</p>
+                    <p><strong>Employment:</strong> {analysis.employmentType}</p>
+                    <p><strong>Seniority:</strong> {analysis.seniorityLevel ?? "—"}</p>
+                    <p><strong>Salary:</strong> {analysis.salaryMin ?? "—"} — {analysis.salaryMax ?? "—"} {analysis.salaryCurrency}</p>
+                    <p><strong>Confidence:</strong> {Math.round((analysis.confidenceScore ?? 0) * 100)}%</p>
+                    {analysis.requiredSkills.length > 0 && (
+                      <p><strong>Required:</strong> {analysis.requiredSkills.join(", ")}</p>
+                    )}
+                    {analysis.preferredSkills.length > 0 && (
+                      <p><strong>Preferred:</strong> {analysis.preferredSkills.join(", ")}</p>
+                    )}
+                    {analysis.redFlags.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <strong>Red Flags:</strong>
+                        {analysis.redFlags.map((f, i) => (
+                          <div key={i} style={{ fontSize: 12, color: f.severity === "high" ? "var(--danger)" : "var(--warning)" }}>
+                            • {f.flag} ({f.severity}): {f.reason}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
-                {analysis.preferredSkills.length > 0 && (
-                  <p><strong>Preferred:</strong> {analysis.preferredSkills.join(", ")}</p>
+                <div className="modal-actions">
+                  <button onClick={() => setStep(1)}>Back</button>
+                  <button onClick={analyzeJD} disabled={loading || rawText.length < 100} className="btn-primary">
+                    {loading ? "Analyzing..." : "Auto-Analyze JD"}
+                  </button>
+                  <button onClick={goToStep3} disabled={!analysis || !analysis.title} className="btn-primary">
+                    Next: Review Job
+                  </button>
+                </div>
+              </>
+            )}
+
+            {jdMode === "search" && (
+              <>
+                <div className="field-group">
+                  <label>Search existing jobs</label>
+                  <input
+                    value={jobSearchInput}
+                    onChange={(e) => setJobSearchInput(e.target.value)}
+                    placeholder="Search by title, company..."
+                  />
+                </div>
+                {jobSearchLoading && <div className="empty">Searching...</div>}
+                {!jobSearchLoading && jobSearchInput.trim() && jobSearchResults.length === 0 && (
+                  <div className="empty">No jobs found for "{jobSearchInput}".</div>
                 )}
-                {analysis.redFlags.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Red Flags:</strong>
-                    {analysis.redFlags.map((f, i) => (
-                      <div key={i} style={{ fontSize: 12, color: f.severity === "high" ? "var(--danger)" : "var(--warning)" }}>
-                        • {f.flag} ({f.severity}): {f.reason}
+                {jobSearchResults.length > 0 && (
+                  <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, padding: 4, marginBottom: 14 }}>
+                    {jobSearchResults.map((job) => (
+                      <div
+                        key={job.id}
+                        onClick={() => handleSelectExistingJob(job)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "transparent",
+                        }}
+                        onMouseEnter={(e) => { (e.target as HTMLDivElement).style.background = "var(--accent-bg)"; }}
+                        onMouseLeave={(e) => { (e.target as HTMLDivElement).style.background = "transparent"; }}
+                      >
+                        <strong>{job.title}</strong>
+                        {job.company && <span className="muted" style={{ marginLeft: 8 }}>{job.company}</span>}
+                        {job.location && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>— {job.location}</span>}
                       </div>
                     ))}
                   </div>
                 )}
-              </div>
+                <div className="modal-actions">
+                  <button onClick={() => setStep(1)}>Back</button>
+                </div>
+              </>
             )}
-            <div className="modal-actions">
-              <button onClick={() => setStep(1)}>Back</button>
-              <button onClick={analyzeJD} disabled={loading || rawText.length < 100} className="btn-primary">
-                {loading ? "Analyzing..." : "Auto-Analyze JD"}
-              </button>
-              <button onClick={goToStep3} disabled={!analysis || !analysis.title} className="btn-primary">
-                Next: Review Job
-              </button>
-            </div>
           </>
         )}
 

@@ -545,6 +545,8 @@ documented in [docs/integrations.md](./docs/integrations.md).
 Public REST API scopes, endpoints, and examples are documented in
 [docs/public-api.md](./docs/public-api.md).
 
+See [QA_CHECKLIST.md](QA_CHECKLIST.md) for pre-deploy verification steps.
+
 ## Background
 
 This started from a much larger vision document (`Project Goals.docx`, distilled from

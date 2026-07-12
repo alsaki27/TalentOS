@@ -437,7 +437,7 @@ export default function ApplicationQueuePage() {
                         </div>
                         <div className="text-muted" style={{ fontSize: 12 }}>{item.candidates.email || item.candidates.phone || ""}</div>
                         <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
-                          {item.candidates.resume_url && <a href={item.candidates.resume_url} target="_blank" rel="noreferrer">Resume</a>}
+                          {item.candidates.resume_url && <a href={item.candidates.resume_url} target="_blank" rel="noreferrer">Uploaded Resume</a>}
                         </div>
                       </>
                     ) : <span className="text-muted">—</span>}

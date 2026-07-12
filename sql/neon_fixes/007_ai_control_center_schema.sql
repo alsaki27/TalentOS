@@ -39,11 +39,23 @@ END $$;
 CREATE INDEX IF NOT EXISTS aue_route_idx ON ai_usage_events (automation_id, route_rank, attempt_number);
 
 -- Foreign keys and indexes for usage event enrichment
-ALTER TABLE ai_usage_events
-  ADD CONSTRAINT IF NOT EXISTS aue_workflow_fk
-    FOREIGN KEY (workflow_id) REFERENCES application_ai_workflows(id) ON DELETE SET NULL,
-  ADD CONSTRAINT IF NOT EXISTS aue_application_fk
-    FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE SET NULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'aue_workflow_fk'
+  ) THEN
+    ALTER TABLE ai_usage_events
+      ADD CONSTRAINT aue_workflow_fk
+      FOREIGN KEY (workflow_id) REFERENCES application_ai_workflows(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'aue_application_fk'
+  ) THEN
+    ALTER TABLE ai_usage_events
+      ADD CONSTRAINT aue_application_fk
+      FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS aue_workflow_idx ON ai_usage_events (workflow_id);
 CREATE INDEX IF NOT EXISTS aue_application_idx ON ai_usage_events (application_id);

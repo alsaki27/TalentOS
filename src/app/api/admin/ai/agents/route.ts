@@ -16,7 +16,7 @@ export async function GET() {
     is_active: boolean;
     created_at: string;
   }>(
-    `SELECT id, label, description, group_label, is_active,
+    `SELECT id, label, description, group_label, is_active, route_version,
             created_at AT TIME ZONE 'UTC' as created_at
      FROM ai_automations
      ORDER BY group_label, label`

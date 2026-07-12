@@ -46,6 +46,7 @@ interface AgentItem {
   description: string;
   group_label: string;
   is_active: boolean;
+  route_version: number;
   config_status: string;
   routes: RouteItem[];
   config: AgentConfig | null;
@@ -687,6 +688,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
   const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; rank: number }[]>([]);
+  const [editRouteVersion, setEditRouteVersion] = useState<number>(0);
   const [editConfig, setEditConfig] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
@@ -719,6 +721,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   function startEdit(agent: AgentItem) {
     setEditingAgent(agent.id);
     setEditRoutes(agent.routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", rank: r.rank })));
+    setEditRouteVersion(agent.route_version ?? 0);
     setEditConfig(agent.config || { is_active: agent.is_active } as any);
     setMessage(null);
   }
@@ -731,12 +734,21 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, rank: i + 1 }));
       const res = await fetch(`/api/admin/ai/agents/${agentId}/routes`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routes }),
+        body: JSON.stringify({ routes, routeVersion: editRouteVersion }),
       });
+      if (res.status === 409) {
+        const d = await res.json().catch(() => ({}));
+        setMessage({ type: "error", text: d.error || "Another admin modified these routes. Please refresh and try again." });
+        setEditRouteVersion(d.currentRouteVersion ?? 0);
+        loadAll();
+        return;
+      }
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || "Failed to save routes");
       }
+      const data = await res.json();
+      setEditRouteVersion(data.routeVersion ?? 0);
       setMessage({ type: "success", text: "Routes saved" });
       loadAll();
     } catch (e: any) { setMessage({ type: "error", text: e.message }); }

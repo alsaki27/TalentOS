@@ -30,8 +30,11 @@ export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fetchingRef = useRef(false);
 
   async function loadNotifications() {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       const res = await fetch("/api/notifications?page=1&pageSize=10&unread=1", { cache: "no-store" });
       if (!res.ok) return;
@@ -41,12 +44,14 @@ export default function NotificationBell() {
       setUnreadCount(data.total ?? 0);
     } catch {
       // ignore polling errors
+    } finally {
+      fetchingRef.current = false;
     }
   }
 
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000);
+    const interval = setInterval(loadNotifications, 60000);
     return () => clearInterval(interval);
   }, []);
 

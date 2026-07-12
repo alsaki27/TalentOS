@@ -16,6 +16,7 @@ export interface AutomationRouteResult {
   automationId: string;
   model?: string | null;
   routeRank: number | null;
+  limitSkipped?: boolean;
 }
 
 interface AutomationRouteRow {
@@ -26,6 +27,32 @@ interface AutomationRouteRow {
   rank: number;
   is_enabled: boolean;
   model_override: string | null;
+}
+
+async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?: string }> {
+  if (keyRow.daily_request_limit) {
+    const todayCalls = await queryOne<{ count: number }>(
+      `SELECT COUNT(*)::int as count FROM ai_usage_events
+       WHERE ai_key_id = $1 AND created_at >= CURRENT_DATE`,
+      [keyRow.id]
+    );
+    if (todayCalls && todayCalls.count >= keyRow.daily_request_limit) {
+      return { allowed: false, reason: 'daily_limit_reached' };
+    }
+  }
+
+  if (keyRow.monthly_budget_limit_usd) {
+    const monthCost = await queryOne<{ total: number }>(
+      `SELECT COALESCE(SUM(estimated_cost_usd), 0) as total FROM ai_usage_events
+       WHERE ai_key_id = $1 AND created_at >= date_trunc('month', CURRENT_DATE)`,
+      [keyRow.id]
+    );
+    if (monthCost && monthCost.total >= keyRow.monthly_budget_limit_usd) {
+      return { allowed: false, reason: 'monthly_budget_exhausted' };
+    }
+  }
+
+  return { allowed: true };
 }
 
 /**
@@ -45,6 +72,7 @@ export async function getProviderForAutomation(
   );
 
   // 2. Try each route in order, excluding failed keys
+  let limitSkipped = false;
   for (const route of routes) {
     if (route.ai_key_id) {
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
@@ -52,6 +80,13 @@ export async function getProviderForAutomation(
       if (!keyRow || !keyRow.is_enabled) continue;
       const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted"];
       if (blockedStatuses.includes(keyRow.status)) continue;
+
+      const limitCheck = await checkKeyLimits(keyRow);
+      if (!limitCheck.allowed) {
+        limitSkipped = true;
+        continue;
+      }
+
       const effectiveModel = route.model_override ?? keyRow.model;
       const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
       if (provider) {
@@ -62,6 +97,7 @@ export async function getProviderForAutomation(
           automationId,
           model: effectiveModel,
           routeRank: route.rank,
+          limitSkipped,
         };
       }
     } else if (route.provider) {
@@ -73,6 +109,7 @@ export async function getProviderForAutomation(
           aiKeyId: null,
           automationId,
           routeRank: route.rank,
+          limitSkipped,
         };
       }
       // Try DB keys for this provider
@@ -84,6 +121,13 @@ export async function getProviderForAutomation(
         if (blockedStatuses.includes(key.status)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
+
+        const limitCheck = await checkKeyLimits(keyRow);
+        if (!limitCheck.allowed) {
+          limitSkipped = true;
+          continue;
+        }
+
         const effectiveModel = route.model_override ?? keyRow.model;
         const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url);
         if (dbProvider) {
@@ -94,6 +138,7 @@ export async function getProviderForAutomation(
             automationId,
             model: effectiveModel,
             routeRank: route.rank,
+            limitSkipped,
           };
         }
       }
@@ -126,6 +171,7 @@ export interface CallWithUsageTrackingResult<T> {
   aiKeyId: string | null;
   model: string | null;
   routeRank: number | null;
+  limitSkipped?: boolean;
 }
 
 export interface CallContext {
@@ -200,7 +246,7 @@ export async function callWithUsageTracking<T>(
       routeRank: resolved.routeRank,
     });
 
-    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null, routeRank: resolved.routeRank };
+    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null, routeRank: resolved.routeRank, limitSkipped: resolved.limitSkipped };
   } catch (err: any) {
     const latencyMs = Date.now() - start;
     errorMessage = err.message ?? "Unknown error";

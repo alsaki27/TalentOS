@@ -449,7 +449,7 @@ export default function JobDetailPage() {
                   <td className="muted">{candidate.match_reasons.join(", ") || "-"}</td>
                   <td>
                     {candidate.resume_url ? (
-                      <a href={candidate.resume_url} target="_blank" rel="noreferrer">{candidate.resume_filename || "Resume"}</a>
+                      <a href={candidate.resume_url} target="_blank" rel="noreferrer">{candidate.resume_filename || "Uploaded Resume"}</a>
                     ) : <span className="muted">Missing</span>}
                   </td>
                   <td>

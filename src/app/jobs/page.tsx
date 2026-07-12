@@ -773,158 +773,160 @@ export default function JobsPage() {
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
-              </th>
-              <th>Job</th>
-              <th>Company</th>
-              <th>Category</th>
-              <th>Tier</th>
-              <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
-                Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
-              </th>
-              <th>Match Scores</th>
-              <th>Applicants</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id}>
-                <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
-                <td>
-                  <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
-                  <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
-                  {(job.salary_min || job.salary_max) ? (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {job.salary_currency ?? ""} {job.salary_min ?? "?"}–{job.salary_max ?? "?"}{job.salary_period ? `/${job.salary_period}` : ""}
-                    </div>
-                  ) : null}
-                  {job.work_authorization && job.work_authorization !== "unspecified" && (
-                    <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
-                  )}
-                </td>
-                <td className="muted">
-                  {job.company_id && job.company ? (
-                    <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
-                  ) : job.company || "—"}
-                </td>
-                <td>
-                  {job.category_status === "pending" ? (
-                    <span className="muted">Categorizing…</span>
-                  ) : job.category_status === "failed" ? (
-                    <span className="badge" title="AI categorization failed">Failed</span>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
-                        {(job.category_tags || []).map((tag, idx) => (
-                          <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                            {tag}
-                            <button
-                              onClick={() => removeTag(job, tag)}
-                              style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: "10px", cursor: "pointer", opacity: 0.6 }}
-                            >
-                              ✕
-                            </button>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
+                </th>
+                <th>Job</th>
+                <th>Company</th>
+                <th>Category</th>
+                <th>Tier</th>
+                <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
+                  Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
+                </th>
+                <th>Match Scores</th>
+                <th>Applicants</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={job.id}>
+                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
+                  <td>
+                    <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
+                    <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
+                    {(job.salary_min || job.salary_max) ? (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {job.salary_currency ?? ""} {job.salary_min ?? "?"}–{job.salary_max ?? "?"}{job.salary_period ? `/${job.salary_period}` : ""}
+                      </div>
+                    ) : null}
+                    {job.work_authorization && job.work_authorization !== "unspecified" && (
+                      <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
+                    )}
+                  </td>
+                  <td className="muted">
+                    {job.company_id && job.company ? (
+                      <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
+                    ) : job.company || "—"}
+                  </td>
+                  <td>
+                    {job.category_status === "pending" ? (
+                      <span className="muted">Categorizing…</span>
+                    ) : job.category_status === "failed" ? (
+                      <span className="badge" title="AI categorization failed">Failed</span>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                          {(job.category_tags || []).map((tag, idx) => (
+                            <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              {tag}
+                              <button
+                                onClick={() => removeTag(job, tag)}
+                                style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: "10px", cursor: "pointer", opacity: 0.6 }}
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        {addingTagForJobId === job.id ? (
+                          <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+                            <input
+                              autoFocus
+                              value={newTagValue}
+                              onChange={(e) => setNewTagValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") addTag(job);
+                                else if (e.key === "Escape") setAddingTagForJobId(null);
+                              }}
+                              onBlur={() => addTag(job)}
+                              style={{ padding: "2px 4px", fontSize: "11px", width: "80px" }}
+                              placeholder="Type..."
+                            />
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setAddingTagForJobId(job.id); setNewTagValue(""); }}
+                            style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: "11px", cursor: "pointer", marginTop: "2px" }}
+                          >
+                            + Add tag
+                          </button>
+                        )}
+                        {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
+                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Score: {job.category_relevance_score}</div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
+                  <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
+                  <td>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                      {(job.match_scores || []).map((ms) => {
+                        const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
+                        let color = "var(--text-muted)";
+                        let displayScore = `${ms.score}%`;
+                        const isError = ms.score === -1;
+                        
+                        if (isError) {
+                          color = "var(--danger, #dc2626)";
+                          displayScore = "Error";
+                        } else if (ms.score >= 80) color = "var(--success, #2a6f4f)";
+                        else if (ms.score >= 60) color = "var(--warning, #eab308)";
+                        else color = "var(--danger, #dc2626)";
+
+                        const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : null;
+
+                        return (
+                          <span key={ms.candidate_id} className="badge" style={{ borderColor: color, color, cursor: isError && errorReason ? "help" : "default" }}>
+                            {initials}: {displayScore}
+                            {isError && errorReason && (
+                              <span style={{ position: "relative", marginLeft: 2 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", cursor: "help" }} title={errorReason}> ⓘ</span>
+                              </span>
+                            )}
                           </span>
+                        );
+                      })}
+                      {(!job.match_scores || job.match_scores.length === 0) && <span className="muted">—</span>}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ marginBottom: 4 }}>
+                      <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
+                    </div>
+                    {job.applicants.length > 0 && (
+                      <div>
+                        {job.applicants.map((a) => (
+                          <button
+                            key={a.application_id}
+                            className="avatar-button"
+                            title={`${a.name} — ${a.status} (click to remove)`}
+                            onClick={() => removeAssignment(a)}
+                          >
+                            {a.avatar_url ? (
+                              <img className="avatar-circle" src={a.avatar_url} alt={a.name} />
+                            ) : (
+                              <span className="avatar-circle">{initials(a.name)}</span>
+                            )}
+                          </button>
                         ))}
                       </div>
-                      {addingTagForJobId === job.id ? (
-                        <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
-                          <input
-                            autoFocus
-                            value={newTagValue}
-                            onChange={(e) => setNewTagValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") addTag(job);
-                              else if (e.key === "Escape") setAddingTagForJobId(null);
-                            }}
-                            onBlur={() => addTag(job)}
-                            style={{ padding: "2px 4px", fontSize: "11px", width: "80px" }}
-                            placeholder="Type..."
-                          />
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => { setAddingTagForJobId(job.id); setNewTagValue(""); }}
-                          style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: "11px", cursor: "pointer", marginTop: "2px" }}
-                        >
-                          + Add tag
-                        </button>
-                      )}
-                      {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
-                        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Score: {job.category_relevance_score}</div>
-                      )}
-                    </div>
-                  )}
-                </td>
-                <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
-                <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
-                <td>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
-                    {(job.match_scores || []).map((ms) => {
-                      const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
-                      let color = "var(--text-muted)";
-                      let displayScore = `${ms.score}%`;
-                      const isError = ms.score === -1;
-                      
-                      if (isError) {
-                        color = "var(--danger, #dc2626)";
-                        displayScore = "Error";
-                      } else if (ms.score >= 80) color = "var(--success, #2a6f4f)";
-                      else if (ms.score >= 60) color = "var(--warning, #eab308)";
-                      else color = "var(--danger, #dc2626)";
-
-                      const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : null;
-
-                      return (
-                        <span key={ms.candidate_id} className="badge" style={{ borderColor: color, color, cursor: isError && errorReason ? "help" : "default" }}>
-                          {initials}: {displayScore}
-                          {isError && errorReason && (
-                            <span style={{ position: "relative", marginLeft: 2 }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", cursor: "help" }} title={errorReason}> ⓘ</span>
-                            </span>
-                          )}
-                        </span>
-                      );
-                    })}
-                    {(!job.match_scores || job.match_scores.length === 0) && <span className="muted">—</span>}
-                  </div>
-                </td>
-                <td>
-                  <div style={{ marginBottom: 4 }}>
-                    <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
-                  </div>
-                  {job.applicants.length > 0 && (
-                    <div>
-                      {job.applicants.map((a) => (
-                        <button
-                          key={a.application_id}
-                          className="avatar-button"
-                          title={`${a.name} — ${a.status} (click to remove)`}
-                          onClick={() => removeAssignment(a)}
-                        >
-                          {a.avatar_url ? (
-                            <img className="avatar-circle" src={a.avatar_url} alt={a.name} />
-                          ) : (
-                            <span className="avatar-circle">{initials(a.name)}</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </td>
-                <td style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => setShowApplyFor(job)}>Log application</button>
-                  <button onClick={() => deleteOne(job.id)}>Delete</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    )}
+                  </td>
+                  <td style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setShowApplyFor(job)}>Log application</button>
+                    <button onClick={() => deleteOne(job.id)}>Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {total > 0 && (
@@ -1769,7 +1771,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           <div className="field-group" style={{ marginTop: "16px" }}>
             <label>Resume version</label>
             <select value={resumeId} onChange={(e) => setResumeId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
-              <option value="">Primary resume</option>
+              <option value="">Uploaded Resume (default)</option>
               {resumeVariants.map((r) => (
                 <option key={r.id} value={r.id}>{r.label}</option>
               ))}
@@ -1825,7 +1827,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
           <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={saving} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
-            {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
+            {saving ? "Saving..." : `Create ${candidateIds.size} ticket${candidateIds.size !== 1 ? "s" : ""}`}
           </button>
         </div>
       </div>

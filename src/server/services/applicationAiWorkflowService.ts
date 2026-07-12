@@ -24,6 +24,7 @@ import {
   listStageRuns,
   listArtifacts,
   claimNextPendingWorkflow,
+  updateWorkflowHeartbeat,
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -176,6 +177,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
   try {
     await updateStageRun(stageRun.id, { status: "running", started_at: new Date().toISOString() });
+    await updateWorkflowHeartbeat(workflowId);
 
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();

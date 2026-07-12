@@ -358,7 +358,7 @@ export default function ReviewPage() {
   }, [items, activeTab, search]);
 
   const stats = useMemo(() => {
-    const pending = items.filter((i) => i.status === "in_review").length;
+    const pending = items.filter((i) => i.status === "in_review" || i.status === "draft").length;
     const approvedToday = items.filter((i) => i.status === "approved" && isToday(i.updatedAt)).length;
     const rejectedToday = items.filter((i) => i.status === "rejected" && isToday(i.updatedAt)).length;
     const approvedItems = items.filter((i) => i.status === "approved");
@@ -436,7 +436,7 @@ export default function ReviewPage() {
 
       <div className="stats-strip">
         <div className="stat-card">
-          <span className="stat-label">Pending reviews</span>
+          <span className="stat-label">Pending (incl. drafts)</span>
           <span className="stat-value">{stats.pending}</span>
         </div>
         <div className="stat-card">

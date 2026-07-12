@@ -894,7 +894,7 @@ export async function listAllApplicationsWithStatus(): Promise<{ status: string 
   return (data ?? []) as { status: string }[];
 }
 
-export async function listOverdueApplications(since: string, limit = 20): Promise<any[]> {
+export async function listOverdueApplications(limit = 20): Promise<any[]> {
   if (isNeon()) {
     return query<any>(
       `
@@ -905,19 +905,19 @@ export async function listOverdueApplications(since: string, limit = 20): Promis
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.status = ANY($1)
-        AND a.assignment_due_at <= $2::date
+        AND a.assignment_due_at <= CURRENT_DATE
         AND a.assignment_due_at IS NOT NULL
       ORDER BY a.assignment_due_at ASC
-      LIMIT $3
+      LIMIT $2
       `,
-      [["assigned", "stacked", "in_progress"], since, limit]
+      [["assigned", "stacked", "in_progress"], limit]
     );
   }
   const { data, error } = await supabase
     .from("applications")
     .select("id, assignment_due_at, assigned_to, candidates(name), jobs(title)")
     .in("status", ["assigned", "stacked", "in_progress"])
-    .lte("assignment_due_at", since)
+    .lte("assignment_due_at", new Date().toISOString())
     .not("assignment_due_at", "is", null)
     .limit(limit);
   if (error) throw error;

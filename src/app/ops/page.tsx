@@ -61,6 +61,8 @@ interface Digest {
   content: string;
   provider: string;
   generated_at: string;
+  last_success_at: string | null;
+  last_error: string | null;
 }
 
 interface CategorizationRun {
@@ -95,6 +97,16 @@ interface CategorizationStatus {
   categories: JobCategory[];
 }
 
+interface BackupHealth {
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureError: string | null;
+  backupAgeHours: number | null;
+  backupAgeDays: number | null;
+  totalStored: number;
+}
+
 export default function OpsPage() {
   const [status, setStatus] = useState<OpsStatus | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
@@ -112,20 +124,23 @@ export default function OpsPage() {
   const [processingCategorization, setProcessingCategorization] = useState(false);
   const [categorizationError, setCategorizationError] = useState("");
   const [reviewChoice, setReviewChoice] = useState<Record<string, string>>({});
+  const [backupHealth, setBackupHealth] = useState<BackupHealth | null>(null);
 
   async function load() {
     setLoading(true);
-    const [statusRes, backupsRes, digestsRes, categorizationRes] = await Promise.all([
+    const [statusRes, backupsRes, digestsRes, categorizationRes, backupHealthRes] = await Promise.all([
       fetch("/api/ops/status"),
       fetch("/api/ops/backups"),
       fetch("/api/ops/digests"),
       fetch("/api/ops/categorize"),
+      fetch("/api/ops/backup-status"),
     ]);
     if (statusRes.status === 403) { setForbidden(true); setLoading(false); return; }
     setStatus(await statusRes.json());
     setBackups(backupsRes.ok ? await backupsRes.json() : []);
     setDigests(digestsRes.ok ? await digestsRes.json() : []);
     setCategorization(categorizationRes.ok ? await categorizationRes.json() : null);
+    setBackupHealth(backupHealthRes.ok ? await backupHealthRes.json() : null);
     setLoading(false);
   }
 
@@ -335,28 +350,70 @@ export default function OpsPage() {
       {status.recentImportRuns.length === 0 ? (
         <div className="empty">No import runs recorded yet.</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Source</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {status.recentImportRuns.map((run) => (
-              <tr key={run.id}>
-                <td className="muted" style={{ fontSize: 12 }}>{new Date(run.ran_at).toLocaleString()}</td>
-                <td>{sourcesById.get(run.import_source_id) ?? run.import_source_id.slice(0, 8)}</td>
-                <td>
-                  {run.error
-                    ? <span style={{ color: "var(--danger)" }}>{run.error}</span>
-                    : <span className="muted">{run.imported ?? 0} imported, {run.skipped ?? 0} skipped</span>}
-                </td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>Result</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {status.recentImportRuns.map((run) => (
+                <tr key={run.id}>
+                  <td className="muted" style={{ fontSize: 12 }}>{new Date(run.ran_at).toLocaleString()}</td>
+                  <td>{sourcesById.get(run.import_source_id) ?? run.import_source_id.slice(0, 8)}</td>
+                  <td>
+                    {run.error
+                      ? <span style={{ color: "var(--danger)" }}>{run.error}</span>
+                      : <span className="muted">{run.imported ?? 0} imported, {run.skipped ?? 0} skipped</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Backup health</h2>
+      {backupHealth ? (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
+            <StatCard label="Last backup attempt" value={backupHealth.lastAttemptAt ? new Date(backupHealth.lastAttemptAt).toLocaleString() : "Never"} />
+            <StatCard label="Last successful backup" value={backupHealth.lastSuccessAt ? new Date(backupHealth.lastSuccessAt).toLocaleString() : "Never"} />
+            <StatCard
+              label="Backup age"
+              value={
+                backupHealth.backupAgeHours != null
+                  ? backupHealth.backupAgeHours < 1
+                    ? "Just now"
+                    : backupHealth.backupAgeHours < 24
+                      ? `${backupHealth.backupAgeHours}h ago`
+                      : `${backupHealth.backupAgeDays}d ago`
+                  : "—"
+              }
+            />
+          </div>
+          {backupHealth.lastFailureAt && (
+            <div className="card" style={{ marginBottom: 12, borderColor: "var(--danger)" }}>
+              <label style={{ color: "var(--danger)" }}>Last backup failure</label>
+              <p style={{ margin: "6px 0 0", fontSize: 13 }}>
+                {new Date(backupHealth.lastFailureAt).toLocaleString()}
+                {backupHealth.lastFailureError ? ` — ${backupHealth.lastFailureError}` : ""}
+              </p>
+            </div>
+          )}
+          {!backupHealth.lastAttemptAt && (
+            <div className="card" style={{ marginBottom: 12 }}>
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                No backup attempts recorded yet — ensure daily cron is configured with <code>CRON_SECRET</code>.
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="empty" style={{ marginBottom: 12 }}>Loading backup health...</div>
       )}
 
       <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Stored backups</h2>
@@ -368,24 +425,26 @@ export default function OpsPage() {
       {backups.length === 0 ? (
         <div className="empty">No automated backups yet — the daily cron hasn't run, or `CRON_SECRET` isn't set.</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Created</th>
-              <th>Size</th>
-            </tr>
-          </thead>
-          <tbody>
-            {backups.map((b) => (
-              <tr key={b.name}>
-                <td className="muted" style={{ fontSize: 12 }}>{b.name}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{b.createdAt ? new Date(b.createdAt).toLocaleString() : "—"}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{b.sizeBytes ? `${Math.round(b.sizeBytes / 1024)} KB` : "—"}</td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Created</th>
+                <th>Size</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr key={b.name}>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.name}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.createdAt ? new Date(b.createdAt).toLocaleString() : "—"}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.sizeBytes ? `${Math.round(b.sizeBytes / 1024)} KB` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -468,11 +527,18 @@ export default function OpsPage() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {digests.map((d) => (
-            <div key={d.id} className="card">
+            <div key={d.id} className="card" style={d.last_error ? { borderColor: "var(--danger)" } : undefined}>
               <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
                 {new Date(d.generated_at).toLocaleString()} · <span className="badge">{d.provider}</span>
+                {d.last_success_at && (
+                  <span style={{ color: "var(--accent)" }}> · success</span>
+                )}
               </div>
-              <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+              {d.last_error ? (
+                <p style={{ margin: 0, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{d.last_error}</p>
+              ) : (
+                <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+              )}
             </div>
           ))}
         </div>
@@ -508,16 +574,17 @@ export default function OpsPage() {
       {categorization && categorization.needsReview.length > 0 && (
         <>
           <h3 style={{ fontSize: 14, margin: "12px 0 8px" }}>Needs review ({categorization.needsReview.length})</h3>
-          <table className="table" style={{ marginBottom: 16 }}>
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>AI suggested</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categorization.needsReview.map((job) => (
+          <div className="table-shell">
+            <table className="table" style={{ marginBottom: 16 }}>
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>AI suggested</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categorization.needsReview.map((job) => (
                 <tr key={job.id}>
                   <td>{job.title} {job.company ? <span className="muted">— {job.company}</span> : null}</td>
                   <td className="muted">{job.ai_suggested_category ?? "—"}</td>
@@ -547,15 +614,17 @@ export default function OpsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </>
       )}
 
       {categorization && categorization.recentRuns.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Triggered by</th>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Triggered by</th>
               <th>Result</th>
             </tr>
           </thead>
@@ -573,6 +642,7 @@ export default function OpsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </>
   );

@@ -19,7 +19,7 @@ async function gatherSnapshot() {
 
   const [newJobsToday, overdueTickets, recentAppsRes, pipelineCount] = await Promise.all([
     countJobsSince(sinceIso),
-    listOverdueApplications(sinceIso, 20),
+    listOverdueApplications(20),
     listApplicationsSince(sinceIso),
     countApplicationsByStatus(["assigned", "stacked", "in_progress"]),
   ]);

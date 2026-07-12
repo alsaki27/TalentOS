@@ -44,10 +44,14 @@ export default function NavBar() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setMe(data))
       .catch(() => setMe(null));
-    fetch("/api/notifications")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setNotifications(data))
-      .catch(() => setNotifications(null));
+    // Notification count fetched once on mount; periodic refresh handled by NotificationBell
+    async function loadBadgeCounts() {
+      const res = await fetch("/api/notifications", { cache: "no-store" });
+      if (res.ok) setNotifications(await res.json());
+    }
+    loadBadgeCounts();
+    const interval = setInterval(loadBadgeCounts, 60000);
+    return () => clearInterval(interval);
   }, [pathname]);
 
   // Close the "More" dropdown on outside click or navigation.

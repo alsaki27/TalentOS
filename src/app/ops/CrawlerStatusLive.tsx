@@ -20,13 +20,23 @@ export default function CrawlerStatusLive() {
   const [jobsReceived, setJobsReceived] = useState(0);
   const [lastJobTitle, setLastJobTitle] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [crawlerConfigured, setCrawlerConfigured] = useState<boolean | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    fetch("/api/integrations/crawler/status")
-      .then((res) => (res.ok ? res.json() : []))
-      .then(setStatuses)
-      .catch(() => setStatuses([]));
+    fetch("/api/ops/crawler-configured")
+      .then((res) => (res.ok ? res.json() : { configured: false }))
+      .then(({ configured }) => {
+        setCrawlerConfigured(configured);
+        if (!configured) return [];
+      })
+      .then(() =>
+        fetch("/api/integrations/crawler/status")
+          .then((res) => (res.ok ? res.json() : []))
+          .then(setStatuses)
+          .catch(() => setStatuses([]))
+      )
+      .catch(() => setCrawlerConfigured(false));
 
     const source = new EventSource("/api/integrations/crawler/stream");
     sourceRef.current = source;
@@ -48,6 +58,18 @@ export default function CrawlerStatusLive() {
 
     return () => source.close();
   }, []);
+
+  if (crawlerConfigured === false) {
+    return (
+      <div className="card" style={{ marginBottom: 24 }}>
+        <label>Job crawler</label>
+        <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+          Not enabled — set <code>CRAWLER_API_KEY</code> to activate crawler ingestion via{" "}
+          <code>/api/integrations/crawler/heartbeat</code>.
+        </p>
+      </div>
+    );
+  }
 
   if (statuses.length === 0 && jobsReceived === 0) {
     return (
