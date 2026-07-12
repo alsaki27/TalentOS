@@ -21,27 +21,17 @@ CREATE INDEX IF NOT EXISTS arv_job_idx ON application_resume_versions (job_id);
 CREATE INDEX IF NOT EXISTS arv_workflow_idx ON application_resume_versions (workflow_id);
 CREATE INDEX IF NOT EXISTS arv_candidate_idx ON application_resume_versions (candidate_id);
 
--- Ensure sequences exist and sync with current maximums
-CREATE SEQUENCE IF NOT EXISTS candidate_number_seq START 10001;
-CREATE SEQUENCE IF NOT EXISTS job_number_seq START 10001;
-CREATE SEQUENCE IF NOT EXISTS app_number_seq START 10001;
-
-ALTER TABLE candidates ALTER COLUMN candidate_number SET DEFAULT nextval('candidate_number_seq');
-ALTER TABLE jobs ALTER COLUMN job_number SET DEFAULT nextval('job_number_seq');
-ALTER TABLE applications ALTER COLUMN app_number SET DEFAULT nextval('app_number_seq');
-
--- Sync sequences with current maximums
-DO $$
-DECLARE
-  v_max bigint;
-BEGIN
-  SELECT COALESCE(MAX(candidate_number), 10000) INTO v_max FROM candidates;
-  PERFORM setval('candidate_number_seq', GREATEST(v_max, 10000));
-  SELECT COALESCE(MAX(job_number), 10000) INTO v_max FROM jobs;
-  PERFORM setval('job_number_seq', GREATEST(v_max, 10000));
-  SELECT COALESCE(MAX(app_number), 10000) INTO v_max FROM applications;
-  PERFORM setval('app_number_seq', GREATEST(v_max, 10000));
-END $$;
+-- NOTE: candidate_number/job_number/app_number sequence creation, defaults,
+-- and sync are already fully handled by 006_number_defaults_and_not_null.sql,
+-- which runs earlier in this pipeline (alphabetically before 010). That file
+-- deliberately uses 'applications_app_number_seq' (not 'app_number_seq') to
+-- match the sequence 001_app_number_and_timestamps.sql actually created in
+-- production, which applicationsRepository.ts already calls by that exact
+-- name. A duplicate 'CREATE SEQUENCE app_number_seq' here previously
+-- re-pointed applications.app_number's DEFAULT at a second, unsynchronized
+-- sequence - both sequences would then issue "next" numbers independently,
+-- eventually colliding against app_number's UNIQUE constraint. Removed;
+-- do not recreate sequence/default logic here, only in 006.
 
 -- Add ai_agent as valid source_type value
 DO $$

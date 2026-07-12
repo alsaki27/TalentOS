@@ -48,9 +48,12 @@ export async function GET(req: NextRequest) {
   for (const source of sources) {
     const result = await runAndRecord(source);
     results.push({ id: source.id, label: source.label, ...result });
-    totalImported += result.imported ?? 0;
-    totalSkipped += result.skipped ?? 0;
-    if (result.error) hasErrors = true;
+    if ("error" in result) {
+      hasErrors = true;
+    } else {
+      totalImported += result.imported;
+      totalSkipped += result.skipped;
+    }
   }
 
   const durationMs = Date.now() - startedMs;
