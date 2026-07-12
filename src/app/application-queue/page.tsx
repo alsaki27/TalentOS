@@ -102,6 +102,7 @@ export default function ApplicationQueuePage() {
   const [expandedWorkflow, setExpandedWorkflow] = useState<string | null>(null);
   const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
   const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
+  const [findingsWorkflowId, setFindingsWorkflowId] = useState<string | null>(null);
   const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
 
   function buildParams(pn: number) {
@@ -236,6 +237,20 @@ export default function ApplicationQueuePage() {
         setWorkflowDetails(p => ({ ...p, [item.workflow_id!]: data }));
       }
     } catch {}
+  }
+
+  async function showFindings(item: QueueItem) {
+    if (!item.workflow_id) return;
+    if (!workflowDetails[item.workflow_id]) {
+      try {
+        const res = await fetch(`/api/application-ai-workflows/${item.workflow_id}?action=status`, { cache: "no-store" });
+        if (res.ok) {
+          const data = await res.json();
+          setWorkflowDetails(p => ({ ...p, [item.workflow_id!]: data }));
+        }
+      } catch {}
+    }
+    setFindingsWorkflowId(item.workflow_id);
   }
 
   async function uploadProof(item: QueueItem) {
@@ -511,6 +526,7 @@ export default function ApplicationQueuePage() {
                       expandedWorkflow={expandedWorkflow}
                       workflowDetails={workflowDetails}
                       workflowStageLabel={workflowStageLabel}
+                      onShowFindings={showFindings}
                     />
                     {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
@@ -664,14 +680,136 @@ export default function ApplicationQueuePage() {
           </div>
         </div>
       )}
+
+      {findingsWorkflowId && (() => {
+        const details = workflowDetails[findingsWorkflowId];
+        const artifacts: any[] = details?.artifacts ?? [];
+        const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
+        const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+        return (
+          <div className="modal-overlay" onClick={() => setFindingsWorkflowId(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 640 }}>
+              <h2>AI findings</h2>
+              <div className="modal-body" style={{ display: "grid", gap: 16 }}>
+                {!details ? (
+                  <div className="text-muted">Loading…</div>
+                ) : !hiringPanel ? (
+                  <div className="text-muted">Hiring Panel hasn't run for this workflow yet.</div>
+                ) : (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>ATS</div>
+                        <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.atsScore}/10</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>Recruiter</div>
+                        <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.recruiterScore}/10</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>Role fit</div>
+                        <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.roleFitScore}/10</div>
+                      </div>
+                      <div style={{ textAlign: "center" }}>
+                        <div style={{ fontSize: 11, color: "var(--muted)" }}>Truth risk</div>
+                        <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.truthfulnessRisk}/10</div>
+                      </div>
+                    </div>
+
+                    {hiringPanel.overallComment && (
+                      <div style={{ fontSize: 13, fontStyle: "italic", color: "var(--muted)" }}>
+                        "{hiringPanel.overallComment}"
+                      </div>
+                    )}
+
+                    {hiringPanel.requiredEdits?.length > 0 && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Required edits</div>
+                        {hiringPanel.requiredEdits.map((e: any, i: number) => (
+                          <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "3px 0", fontSize: 13 }}>
+                            <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 10 }}>
+                              {e.severity}
+                            </span>
+                            <span>{e.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {hiringPanel.optionalEdits?.length > 0 && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Optional edits</div>
+                        {hiringPanel.optionalEdits.map((e: any, i: number) => (
+                          <div key={i} style={{ fontSize: 13, padding: "3px 0" }}>{e.description}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {hiringPanel.formattingIssues?.length > 0 && (
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Formatting issues</div>
+                        {hiringPanel.formattingIssues.map((f: string, i: number) => (
+                          <div key={i} style={{ fontSize: 13, padding: "3px 0" }}>{f}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {finalPolish && (
+                      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                        <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>
+                          What Final Polish fixed
+                          <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 8, fontSize: 10 }}>
+                            {finalPolish.exportReady ? "export ready" : "not export ready"}
+                          </span>
+                        </div>
+                        {finalPolish.appliedIssueIds?.length > 0 && (
+                          <div style={{ fontSize: 13, marginBottom: 4 }}>
+                            Applied: {finalPolish.appliedIssueIds.join(", ")}
+                          </div>
+                        )}
+                        {finalPolish.rejectedIssueIds?.length > 0 && (
+                          <div style={{ fontSize: 13, marginBottom: 4 }}>
+                            {finalPolish.rejectedIssueIds.map((r: any, i: number) => (
+                              <div key={i}>Rejected {r.issueId}: {r.reason}</div>
+                            ))}
+                          </div>
+                        )}
+                        {finalPolish.unresolvedWarnings?.length > 0 && (
+                          <div style={{ fontSize: 13, color: "var(--muted)" }}>
+                            Unresolved: {finalPolish.unresolvedWarnings.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="modal-actions">
+                <button className="btn-outline" onClick={() => setFindingsWorkflowId(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
+  );
+}
+
+/** Small link-styled button that opens the Hiring Panel findings modal. Only
+ *  worth showing once Hiring Panel has actually run (stage index >= 3). */
+function FindingsButton({ item, onShowFindings }: { item: QueueItem; onShowFindings: (item: QueueItem) => void }) {
+  if (!item.workflow_id || (item.workflow_stage ?? 0) < 3) return null;
+  return (
+    <button className="btn-compact btn-sm" onClick={() => onShowFindings(item)}>
+      📋 AI findings
+    </button>
   );
 }
 
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
   item, actionLoading, onStartWorkflow, onFetchDetails, onReview,
-  expandedWorkflow, workflowDetails, workflowStageLabel
+  expandedWorkflow, workflowDetails, workflowStageLabel, onShowFindings
 }: {
   item: QueueItem;
   actionLoading: string | null;
@@ -681,6 +819,7 @@ function PipelineActions({
   expandedWorkflow: string | null;
   workflowDetails: Record<string, any>;
   workflowStageLabel: (stage: number | null | undefined) => string;
+  onShowFindings: (item: QueueItem) => void;
 }) {
   const genStatus = item.resume_generation_status;
   const wfStatus = item.workflow_status;
@@ -697,6 +836,7 @@ function PipelineActions({
           onClick={() => window.open(`/falood/studio/application/${item.workflow_resume_version_id}`, "_blank")}>
           ✏️ Open in Studio
         </button>
+        <FindingsButton item={item} onShowFindings={onShowFindings} />
       </div>
     );
   }
@@ -711,6 +851,7 @@ function PipelineActions({
             View error
           </button>
         )}
+        <FindingsButton item={item} onShowFindings={onShowFindings} />
       </div>
     );
   }
@@ -745,6 +886,7 @@ function PipelineActions({
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
               {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
             </button>
+            <FindingsButton item={item} onShowFindings={onShowFindings} />
           </>
         )}
       </div>
@@ -766,6 +908,7 @@ function PipelineActions({
             {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
           </button>
         )}
+        <FindingsButton item={item} onShowFindings={onShowFindings} />
       </div>
     );
   }
