@@ -98,3 +98,26 @@ describe("callWithUsageTracking error paths", () => {
     expect(sql).toContain("ai_usage_events");
   });
 });
+
+describe("buildProviderFromDbKey — new providers", () => {
+  it("creates a Moonshot provider without throwing", async () => {
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    const provider = actual.buildProviderFromDbKey("moonshot", "test-key-moonshot", "kimi-k2.6");
+    expect(provider).not.toBeNull();
+    expect(provider).toHaveProperty("send");
+    expect(typeof provider!.send).toBe("function");
+  });
+
+  it("returns null for openai_compatible without baseUrl", async () => {
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    const provider = actual.buildProviderFromDbKey("openai_compatible", "test-key", "gpt-4o");
+    expect(provider).toBeNull();
+  });
+
+  it("creates an openai_compatible provider with baseUrl", async () => {
+    const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
+    const provider = actual.buildProviderFromDbKey("openai_compatible", "test-key", "gpt-4o", "https://custom.api.com/v1/chat/completions");
+    expect(provider).not.toBeNull();
+    expect(provider).toHaveProperty("send");
+  });
+});

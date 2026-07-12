@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { PROVIDER_LABELS, PROVIDER_NATIVE_DEFAULTS, PROVIDER_MODEL_PRESETS } from "@/lib/ai/providerPresets";
 
 // ── Types ──
 
@@ -152,23 +153,9 @@ const STATUS_BADGE: Record<string, string> = {
   failing: "badge-danger",
 };
 
-const PROVIDERS: Record<string, string> = {
-  anthropic: "Anthropic", nvidia: "NVIDIA", openai: "OpenAI", glm: "GLM/Zhipu",
-  google: "Google", google_vertex_proxy: "Google Vertex", groq: "Groq",
-  openrouter: "OpenRouter", deepseek: "DeepSeek", opencode: "OpenCode", local: "Local",
-};
-
-const MODEL_OPTIONS: Record<string, string[]> = {
-  anthropic: ["claude-sonnet-4-6", "claude-opus-4-1", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
-  openai: ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-4-turbo", "o1", "o3-mini"],
-  google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-2.0-flash"],
-  google_vertex_proxy: ["gemini-2.5-flash", "gemini-2.5-pro"],
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  opencode: ["opencode-code", "opencode-chat"],
-  nvidia: ["moonshotai/kimi-k2.6", "meta/llama-3.1-405b-instruct"],
-  glm: ["glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4"],
-  groq: [], openrouter: [], local: [],
-};
+// PROVIDER_LABELS imported from @/lib/ai/providerPresets above
+// PROVIDER_MODEL_PRESETS imported from @/lib/ai/providerPresets above
+// PROVIDER_NATIVE_DEFAULTS imported from @/lib/ai/providerPresets above
 
 function statusBadge(status: string): string {
   return STATUS_BADGE[status] || "badge-info";
@@ -313,7 +300,7 @@ function OverviewTab({ onError }: { onError: (e: string) => void }) {
               <tbody>
                 {data.trafficByProvider.map(p => (
                   <tr key={p.provider}>
-                    <td>{PROVIDERS[p.provider] || p.provider}</td>
+                    <td>{PROVIDER_LABELS[p.provider] || p.provider}</td>
                     <td>{formatNumber(p.calls)}</td>
                     <td>{formatCost(p.cost)}</td>
                   </tr>
@@ -483,7 +470,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
           </select>
           <select className="input" value={providerFilter} onChange={e => setProviderFilter(e.target.value)}>
             <option value="">All providers</option>
-            {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {Object.entries(PROVIDER_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </div>
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add API Key</button>
@@ -519,7 +506,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
                     <div style={{ fontWeight: 500 }}>{k.label}</div>
                     {k.notes && <div className="text-muted" style={{ fontSize: 11 }}>{k.notes.slice(0, 60)}</div>}
                   </td>
-                  <td><span className="badge badge-info">{PROVIDERS[k.provider] || k.provider}</span></td>
+                  <td><span className="badge badge-info">{PROVIDER_LABELS[k.provider] || k.provider}</span></td>
                   <td style={{ fontSize: 12 }}>{k.model || "—"}</td>
                   <td style={{ fontFamily: "monospace", fontSize: 11 }}>{k.key_fingerprint?.slice(0, 8) || "—"}</td>
                   <td>
@@ -595,19 +582,70 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
 
 function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: string) => void }) {
   const [provider, setProvider] = useState("anthropic");
+  const [providerMode, setProviderMode] = useState("native");
   const [label, setLabel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [chatEndpoint, setChatEndpoint] = useState("/chat/completions");
+  const [modelsEndpoint, setModelsEndpoint] = useState("");
+  const [authHeaderName, setAuthHeaderName] = useState("Authorization");
+  const [authScheme, setAuthScheme] = useState<"Bearer" | "raw">("Bearer");
   const [notes, setNotes] = useState("");
   const [dailyLimit, setDailyLimit] = useState("");
   const [monthlyBudget, setMonthlyBudget] = useState("");
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState("");
+  const [modelSearch, setModelSearch] = useState("");
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [customModelInput, setCustomModelInput] = useState("");
+  const [supportsModelDiscovery, setSupportsModelDiscovery] = useState(false);
+  const [supportsTools, setSupportsTools] = useState(true);
+  const [supportsJsonMode, setSupportsJsonMode] = useState(true);
+  const [supportsStreaming, setSupportsStreaming] = useState(false);
+
+  const presetModels = (PROVIDER_MODEL_PRESETS[provider] || []).filter(
+    (m) => !modelSearch || m.id.toLowerCase().includes(modelSearch.toLowerCase()) || m.label.toLowerCase().includes(modelSearch.toLowerCase())
+  );
+
+  const opencodeWarning = provider === "opencode" && providerMode !== "native" && !baseUrl.trim();
+
+  function handleProviderChange(p: string) {
+    setProvider(p);
+    setModel("");
+    setModelSearch("");
+    setModelDropdownOpen(false);
+    setCustomModelInput("");
+  }
+
+  function handleProviderModeChange(mode: string) {
+    setProviderMode(mode);
+    if (mode !== "native") {
+      const defs = PROVIDER_NATIVE_DEFAULTS[provider];
+      if (defs) {
+        if (!baseUrl) setBaseUrl(defs.baseUrl);
+        if (!chatEndpoint || chatEndpoint === "/chat/completions") setChatEndpoint(defs.chatEndpoint);
+        if (!authHeaderName || authHeaderName === "Authorization") setAuthHeaderName(defs.authHeaderName);
+        if (!authScheme || authScheme === "Bearer") setAuthScheme(defs.authScheme);
+        if (!modelsEndpoint && defs.modelsEndpoint) setModelsEndpoint(defs.modelsEndpoint);
+      } else {
+        if (!baseUrl) setBaseUrl("");
+        if (providerMode === "openai_compatible" && !chatEndpoint) setChatEndpoint("/chat/completions");
+      }
+    }
+  }
+
+  function selectModel(m: string) {
+    setModel(m);
+    setModelSearch("");
+    setModelDropdownOpen(false);
+    setCustomModelInput("");
+  }
 
   async function submit() {
     if (!label.trim()) { setError("Name is required"); return; }
     if (!apiKey.trim()) { setError("API key is required"); return; }
+    if (opencodeWarning) { setError("OpenCode requires a verified external API base URL"); return; }
     setAdding(true);
     setError("");
     try {
@@ -615,11 +653,25 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider, label: label.trim(), apiKey: apiKey.trim(),
-          model: model || null, base_url: baseUrl || null, notes: notes || null,
+          provider,
+          provider_mode: providerMode !== "native" ? providerMode : undefined,
+          label: label.trim(),
+          apiKey: apiKey.trim(),
+          model: model || null,
+          default_model: model || null,
+          base_url: providerMode !== "native" && baseUrl.trim() ? baseUrl.trim() : null,
+          chat_endpoint: providerMode !== "native" && chatEndpoint.trim() ? chatEndpoint.trim() : null,
+          models_endpoint: providerMode !== "native" && modelsEndpoint.trim() ? modelsEndpoint.trim() : null,
+          auth_header_name: providerMode !== "native" && authHeaderName.trim() ? authHeaderName.trim() : null,
+          auth_scheme: providerMode !== "native" ? authScheme : null,
+          notes: notes || null,
           daily_request_limit: dailyLimit ? parseInt(dailyLimit) : null,
           monthly_budget_limit_usd: monthlyBudget ? parseFloat(monthlyBudget) : null,
           isEnabled: true,
+          supports_model_discovery: supportsModelDiscovery,
+          supports_tools: supportsTools,
+          supports_json_mode: supportsJsonMode,
+          supports_streaming: supportsStreaming,
         }),
       });
       if (!res.ok) {
@@ -635,11 +687,26 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
     <div style={{ background: "var(--surface-1)", borderRadius: 8, padding: 20, marginBottom: 20 }}>
       <h3 style={{ marginTop: 0 }}>Add API Key</h3>
       {error && <div className="alert alert-error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      {opencodeWarning && (
+        <div className="alert alert-warning" style={{ marginBottom: 12, fontSize: 13 }}>
+          OpenCode Go is primarily documented for use inside OpenCode. To use it as a TalentOS backend, provide a verified external API base URL.
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div className="field-group">
           <label>Provider</label>
-          <select className="input" value={provider} onChange={e => setProvider(e.target.value)}>
-            {Object.entries(PROVIDERS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          <select className="input" value={provider} onChange={e => handleProviderChange(e.target.value)}>
+            {Object.entries(PROVIDER_LABELS).filter(([k]) => k !== "openai_compatible").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+        </div>
+        <div className="field-group">
+          <label>Provider Mode</label>
+          <select className="input" value={providerMode} onChange={e => handleProviderModeChange(e.target.value)}>
+            <option value="native">Native</option>
+            <option value="openai_compatible">OpenAI Compatible</option>
+            <option value="custom">Custom</option>
           </select>
         </div>
         <div className="field-group">
@@ -650,18 +717,102 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           <label>API Key</label>
           <input className="input" type="password" placeholder="sk-..." value={apiKey} onChange={e => setApiKey(e.target.value)} />
         </div>
-        <div className="field-group">
+        <div className="field-group" style={{ position: "relative" }}>
           <label>Default Model</label>
-          <select className="input" value={model} onChange={e => setModel(e.target.value)}>
-            <option value="">Provider default</option>
-            {(MODEL_OPTIONS[provider] || []).map(m => <option key={m} value={m}>{m}</option>)}
-            <option value="__custom__">Custom...</option>
-          </select>
+          <div style={{ position: "relative" }}>
+            <input
+              className="input"
+              placeholder="Search or type model name..."
+              value={modelDropdownOpen ? modelSearch : model || ""}
+              onFocus={() => { setModelDropdownOpen(true); setModelSearch(""); }}
+              onChange={e => {
+                setModelSearch(e.target.value);
+                setModelDropdownOpen(true);
+                setCustomModelInput("");
+              }}
+              onBlur={() => setTimeout(() => setModelDropdownOpen(false), 200)}
+            />
+            {modelDropdownOpen && (
+              <div style={{
+                position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+                background: "var(--surface-1)", border: "1px solid var(--border-color, #ccc)",
+                borderRadius: 6, maxHeight: 200, overflowY: "auto", boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+              }}>
+                {presetModels.map(m => (
+                  <div
+                    key={m.id}
+                    onMouseDown={() => selectModel(m.id)}
+                    style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-light, #eee)" }}
+                  >
+                    <span style={{ fontFamily: "monospace", fontSize: 12 }}>{m.id}</span>
+                    <span className="text-muted" style={{ marginLeft: 8, fontSize: 11 }}>{m.label}</span>
+                  </div>
+                ))}
+                <div
+                  onMouseDown={() => {
+                    setModelDropdownOpen(false);
+                    setCustomModelInput(model || modelSearch || "");
+                  }}
+                  style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13, color: "var(--primary, #3b82f6)", fontWeight: 500 }}
+                >
+                  + Custom model
+                </div>
+              </div>
+            )}
+          </div>
+          {customModelInput !== null && customModelInput !== "" && !modelDropdownOpen && (
+            <div style={{ marginTop: 4 }}>
+              <input
+                className="input"
+                placeholder="Type any model string..."
+                value={customModelInput}
+                onChange={e => setCustomModelInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") selectModel(customModelInput); }}
+              />
+              <button className="btn-compact btn-sm" style={{ marginTop: 4 }} onClick={() => selectModel(customModelInput)}>Use "{customModelInput}"</button>
+            </div>
+          )}
+          {model && !modelDropdownOpen && customModelInput === "" && !presetModels.some(p => p.id === model) && (
+            <div style={{ marginTop: 2, fontSize: 11 }}>
+              <span className="badge badge-warning">Custom: {model}</span>
+            </div>
+          )}
         </div>
-        <div className="field-group">
-          <label>Base URL (optional)</label>
-          <input className="input" placeholder="e.g. https://api.custom.com/v1" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} />
+      </div>
+
+      {providerMode !== "native" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+          <div className="field-group">
+            <label>Base URL</label>
+            <input className="input" placeholder="e.g. https://api.custom.com/v1" value={baseUrl}
+              onChange={e => setBaseUrl(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label>Chat Endpoint</label>
+            <input className="input" placeholder="/chat/completions" value={chatEndpoint}
+              onChange={e => setChatEndpoint(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label>Models Endpoint (optional)</label>
+            <input className="input" placeholder="/models" value={modelsEndpoint}
+              onChange={e => setModelsEndpoint(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label>Auth Header Name</label>
+            <input className="input" placeholder="Authorization" value={authHeaderName}
+              onChange={e => setAuthHeaderName(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label>Auth Scheme</label>
+            <select className="input" value={authScheme} onChange={e => setAuthScheme(e.target.value as "Bearer" | "raw")}>
+              <option value="Bearer">Bearer</option>
+              <option value="raw">Raw</option>
+            </select>
+          </div>
         </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
         <div className="field-group">
           <label>Notes</label>
           <input className="input" placeholder="Optional description" value={notes} onChange={e => setNotes(e.target.value)} />
@@ -675,10 +826,127 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           <input className="input" type="number" step="0.01" placeholder="e.g. 100" value={monthlyBudget} onChange={e => setMonthlyBudget(e.target.value)} />
         </div>
       </div>
+
+      <div style={{ marginTop: 16 }}>
+        <label style={{ fontWeight: 600, display: "block", marginBottom: 8 }}>Capabilities</label>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={supportsModelDiscovery} onChange={e => setSupportsModelDiscovery(e.target.checked)} />
+            Model Discovery
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={supportsTools} onChange={e => setSupportsTools(e.target.checked)} />
+            Tool Calling
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={supportsJsonMode} onChange={e => setSupportsJsonMode(e.target.checked)} />
+            JSON Mode
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+            <input type="checkbox" checked={supportsStreaming} onChange={e => setSupportsStreaming(e.target.checked)} />
+            Streaming
+          </label>
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
         <button className="btn-primary" onClick={submit} disabled={adding}>{adding ? "Saving & Testing..." : "Save & Test Key"}</button>
         <button className="btn-outline" onClick={onDone}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+function RouteModelCombobox({ keyId, discovered, presets, value, isCustom, onChange }: {
+  keyId: string;
+  discovered: any[];
+  presets: any[];
+  value: string;
+  isCustom: boolean;
+  onChange: (val: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const allModels = [
+    ...discovered.map((m: any) => ({ ...m, source: "provider" as const })),
+    ...presets.map((m: any) => ({ ...m, source: "preset" as const })),
+  ];
+
+  const filtered = allModels.filter((m: any) =>
+    !search || m.id.toLowerCase().includes(search.toLowerCase()) || (m.label && m.label.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const displayVal = open ? search : (value || "");
+
+  function selectModel(m: { id: string; source: string }) {
+    onChange(m.id);
+    setOpen(false);
+    setSearch("");
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        className="input"
+        placeholder="Search or type model..."
+        value={displayVal}
+        onFocus={() => { setOpen(true); setSearch(""); }}
+        onChange={e => {
+          setSearch(e.target.value);
+          setOpen(true);
+        }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        style={{ width: "100%" }}
+      />
+      {open && (
+        <div style={{
+          position: "absolute", top: "100%", left: 0, right: 0, zIndex: 50,
+          background: "var(--surface-1)", border: "1px solid var(--border-color, #ccc)",
+          borderRadius: 6, maxHeight: 220, overflowY: "auto", boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+        }}>
+          {filtered.length === 0 ? (
+            <div
+              onMouseDown={() => { onChange(search || value); setOpen(false); setSearch(""); }}
+              style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13, color: "var(--primary, #3b82f6)", fontWeight: 500 }}
+            >
+              Use custom: "{search || value}"
+            </div>
+          ) : (
+            filtered.map((m: any) => (
+              <div
+                key={m.id}
+                onMouseDown={() => selectModel(m)}
+                style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13, borderBottom: "1px solid var(--border-light, #eee)", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <span style={{ fontFamily: "monospace", fontSize: 12 }}>{m.id}</span>
+                <span className={`badge ${m.source === "provider" ? "badge-success" : "badge-info"}`} style={{ fontSize: 10 }}>
+                  {m.source === "provider" ? "Discovered" : "Preset"}
+                </span>
+              </div>
+            ))
+          )}
+          <div
+            onMouseDown={() => { onChange(search || ""); setOpen(false); setSearch(""); }}
+            style={{ padding: "6px 10px", cursor: "pointer", fontSize: 13, color: "var(--primary, #3b82f6)", fontWeight: 500 }}
+          >
+            + Custom model
+          </div>
+        </div>
+      )}
+      {value && !open && (
+        <div style={{ marginTop: 2, fontSize: 11 }}>
+          {isCustom ? (
+            <span className="badge badge-warning">Custom: {value}</span>
+          ) : discovered.some((d: any) => d.id === value) ? (
+            <span className="badge badge-success">Discovered</span>
+          ) : presets.some((p: any) => p.id === value) ? (
+            <span className="badge badge-info">Preset</span>
+          ) : (
+            <span className="badge badge-warning">Custom: {value}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -697,6 +965,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [keyModelsMap, setKeyModelsMap] = useState<Record<string, { models: any[]; default_model: string | null }>>({});
 
   useEffect(() => { loadAll(); }, []);
 
@@ -711,6 +980,17 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
       if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
     } catch (e: any) { onError(e.message); }
     finally { setLoading(false); }
+  }
+
+  async function fetchKeyModels(keyId: string) {
+    if (!keyId || keyModelsMap[keyId]) return;
+    try {
+      const res = await fetch(`/api/admin/ai/keys/${keyId}/models`);
+      if (res.ok) {
+        const data = await res.json();
+        setKeyModelsMap(prev => ({ ...prev, [keyId]: data }));
+      }
+    } catch {}
   }
 
   const enabledKeys = keys.filter(k => k.is_enabled);
@@ -861,37 +1141,64 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
             <h2>{agents.find(a => a.id === editingAgent)?.label || "Agent"} Configuration</h2>
 
-            <div style={{ marginBottom: 20 }}>
-              <h4>Routes</h4>
-              {editRoutes.map((r, i) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                  <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center" }}>Rank {i}</span>
-                  <select className="input" style={{ flex: 1 }} value={r.keyId} onChange={e => {
-                    const updated = [...editRoutes];
-                    updated[i].keyId = e.target.value;
-                    setEditRoutes(updated);
-                  }}>
-                    <option value="">— Select key —</option>
-                    {enabledKeys.map(k => (
-                      <option key={k.id} value={k.id}>{k.label} ({PROVIDERS[k.provider] || k.provider})</option>
-                    ))}
-                  </select>
-                  <input className="input" placeholder="Model override (optional)" style={{ flex: 1 }} value={r.modelOverride}
-                    onChange={e => {
+              <div style={{ marginBottom: 20 }}>
+                <h4>Routes</h4>
+                {editRoutes.map((r, i) => {
+                  const routeModelInfo = r.keyId ? keyModelsMap[r.keyId] : null;
+                  const routeDiscovered = routeModelInfo?.models?.filter((m: any) => m.source === "provider") || [];
+                  const routePresets = routeModelInfo?.models?.filter((m: any) => m.source === "preset") || [];
+                  const isRouteModelCustom = r.modelOverride && routeModelInfo &&
+                    !routeModelInfo.models.some((m: any) => m.id === r.modelOverride);
+
+                  return (
+                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
+                    <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i}</span>
+                    <select className="input" style={{ flex: 1, minWidth: 180 }} value={r.keyId} onChange={e => {
+                      const keyId = e.target.value;
                       const updated = [...editRoutes];
-                      updated[i].modelOverride = e.target.value;
+                      updated[i].keyId = keyId;
                       setEditRoutes(updated);
-                    }} />
-                  <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)}>×</button>
+                      if (keyId) fetchKeyModels(keyId);
+                    }}>
+                      <option value="">— Select key —</option>
+                      {enabledKeys.map(k => (
+                        <option key={k.id} value={k.id}>{k.label} ({PROVIDER_LABELS[k.provider] || k.provider})</option>
+                      ))}
+                    </select>
+                    <div style={{ flex: 1, minWidth: 200, position: "relative" }}>
+                      {routeModelInfo ? (
+                        <RouteModelCombobox
+                          keyId={r.keyId}
+                          discovered={routeDiscovered}
+                          presets={routePresets}
+                          value={r.modelOverride}
+                          isCustom={isRouteModelCustom}
+                          onChange={(val) => {
+                            const updated = [...editRoutes];
+                            updated[i].modelOverride = val;
+                            setEditRoutes(updated);
+                          }}
+                        />
+                      ) : (
+                        <input className="input" placeholder="Model override (optional)" value={r.modelOverride}
+                          onChange={e => {
+                            const updated = [...editRoutes];
+                            updated[i].modelOverride = e.target.value;
+                            setEditRoutes(updated);
+                          }} />
+                      )}
+                    </div>
+                    <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)} style={{ marginTop: 6 }}>×</button>
+                  </div>
+                );
+                })}
+                <button className="btn-compact btn-sm" onClick={addRouteRow}>+ Add Route</button>
+                <div style={{ marginTop: 12 }}>
+                  <button className="btn-primary btn-sm" onClick={() => saveRoutes(editingAgent)} disabled={saving}>
+                    {saving ? "Saving..." : "Save Routes"}
+                  </button>
                 </div>
-              ))}
-              <button className="btn-compact btn-sm" onClick={addRouteRow}>+ Add Route</button>
-              <div style={{ marginTop: 12 }}>
-                <button className="btn-primary btn-sm" onClick={() => saveRoutes(editingAgent)} disabled={saving}>
-                  {saving ? "Saving..." : "Save Routes"}
-                </button>
               </div>
-            </div>
 
             <hr />
 
@@ -1079,7 +1386,7 @@ function UsageTab({ onError }: { onError: (e: string) => void }) {
                     <td style={{ fontSize: 11 }}>{new Date(e.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
                     <td style={{ fontSize: 12 }}>{e.automation_label || e.automation_id?.replace(/_/g, " ")}</td>
                     <td style={{ fontSize: 12 }}>{e.key_label || e.ai_key_id?.slice(0, 8) || "—"}</td>
-                    <td style={{ fontSize: 12 }}>{PROVIDERS[e.provider] || e.provider}</td>
+                    <td style={{ fontSize: 12 }}>{PROVIDER_LABELS[e.provider] || e.provider}</td>
                     <td style={{ fontSize: 11 }}>{e.model || "—"}</td>
                     <td>
                       <span className={`badge ${e.outcome === "success" ? "badge-success" : e.outcome === "failure" ? "badge-danger" : "badge-warning"}`}>

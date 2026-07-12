@@ -10,6 +10,7 @@ import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
 import { getGoogleProvider } from "@/lib/ai/googleProvider";
 import { getGoogleVertexProxyProvider, callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
+import { PROVIDER_NATIVE_DEFAULTS } from "@/lib/ai/providerPresets";
 import {
   listEnabledAiKeys,
   getAiKeyWithDecryptedKey,
@@ -58,13 +59,14 @@ export function buildProviderFromDbKey(
       };
     }
     case "anthropic": {
-      const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+      const preset = PROVIDER_NATIVE_DEFAULTS["anthropic"];
+      const apiUrl = baseUrl || (preset ? preset.baseUrl + preset.chatEndpoint : "https://api.anthropic.com/v1/messages");
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const MAX_TOKENS = 256;
       return {
         async send({ system, messages }) {
-          const res = await fetch(ANTHROPIC_API_URL, {
+          const res = await fetch(apiUrl, {
             method: "POST",
             headers: {
               "x-api-key": apiKey,
@@ -95,11 +97,12 @@ export function buildProviderFromDbKey(
       };
     }
     case "nvidia": {
-      const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+      const preset = PROVIDER_NATIVE_DEFAULTS["nvidia"];
+      const apiUrl = baseUrl || (preset ? preset.baseUrl + preset.chatEndpoint : "https://integrate.api.nvidia.com/v1/chat/completions");
       const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
       return {
         async send({ system, messages }) {
-          const res = await fetch(NVIDIA_API_URL, {
+          const res = await fetch(apiUrl, {
             method: "POST",
             headers: {
               Authorization: `Bearer ${apiKey}`,
@@ -128,12 +131,13 @@ export function buildProviderFromDbKey(
       };
     }
     case "google": {
-      const GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+      const preset = PROVIDER_NATIVE_DEFAULTS["google"];
+      const apiBase = baseUrl || (preset ? `${preset.baseUrl}/v1beta/models` : "https://generativelanguage.googleapis.com/v1beta/models");
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
         async send({ system, messages }) {
           const resolvedModel = model || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
-          const url = `${GOOGLE_API_BASE}/${resolvedModel}:generateContent`;
+          const url = `${apiBase}/${resolvedModel}:generateContent`;
 
           const geminiMessages = messages.map((m) => ({
             role: m.role === "assistant" ? "model" : "user",
@@ -181,8 +185,10 @@ export function buildProviderFromDbKey(
       };
     }
     case "openai": {
+      const preset = PROVIDER_NATIVE_DEFAULTS["openai"];
+      const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.openai.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || "https://api.openai.com/v1/chat/completions",
+        apiUrl: baseUrl || defaultUrl,
         apiKey,
         model: model || process.env.OPENAI_MODEL || "gpt-4o",
         errorLabel: "OpenAI API",
@@ -197,14 +203,26 @@ export function buildProviderFromDbKey(
       });
     }
     case "deepseek": {
+      const preset = PROVIDER_NATIVE_DEFAULTS["deepseek"];
+      const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.deepseek.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl || process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com/v1/chat/completions",
+        apiUrl: baseUrl || process.env.DEEPSEEK_API_BASE || defaultUrl,
         apiKey,
         model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
         errorLabel: "DeepSeek API",
         maxTokens: 4096,
         temperature: 0.3,
         extraHeaders: {},
+      });
+    }
+    case "moonshot": {
+      const preset = PROVIDER_NATIVE_DEFAULTS["moonshot"];
+      const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.moonshot.ai/v1/chat/completions";
+      return createOpenAiCompatibleProvider({
+        apiUrl: baseUrl || defaultUrl,
+        apiKey,
+        model: model || process.env.MOONSHOT_MODEL || "kimi-k2.6",
+        errorLabel: "Moonshot API",
       });
     }
     case "opencode": {
@@ -217,6 +235,17 @@ export function buildProviderFromDbKey(
         temperature: 0.3,
         extraHeaders: {},
       });
+    }
+    case "openai_compatible": {
+      if (baseUrl) {
+        return createOpenAiCompatibleProvider({
+          apiUrl: baseUrl,
+          apiKey,
+          model: model || "default",
+          errorLabel: "OpenAI-Compatible API",
+        });
+      }
+      return null;
     }
     case "groq":
     case "openrouter":
