@@ -29,10 +29,28 @@ JOB POSTING:
 Title: ${job?.title ?? "Unknown"}
 Company: ${job?.company ?? "Unknown"}
 Location: ${job?.location ?? "Not specified"}
-Description: ${(job?.description_text || job?.raw_description || job?.description || "No description available").slice(0, 8000)}
+Description: ${resolveJobDescription(job).slice(0, 8000)}
 Employment Type: ${job?.employment_type ?? "Not specified"}
 Seniority: ${job?.seniority_level ?? "Not specified"}
 Salary: ${job?.salary_range ?? "Not specified"}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
+}
+
+// jobs.description_text is only populated for postings that went through the
+// scraper's extraction pipeline (stripHtml(jp.description)) - jobs imported
+// via other paths (e.g. source: "normalized_import") instead carry the full
+// JD text in `notes` or raw_source_payload.description, with description_text
+// left null. Falling back only to description_text/raw_description/description
+// (none of which are real columns on this table besides description_text)
+// silently produced "No description available" for those jobs, causing Job
+// Lens to analyze nothing - confirmed live for a COIL posting during
+// pipeline stress-testing (empty atsKeywords/requiredSkills, hard-failed the
+// Hiring Panel quality gate on ATS score 0).
+function resolveJobDescription(job: any): string {
+  if (job?.description_text) return job.description_text;
+  if (job?.notes) return job.notes;
+  if (job?.raw_source_payload?.description) return String(job.raw_source_payload.description);
+  if (job?.description_html) return String(job.description_html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return "No description available";
 }
