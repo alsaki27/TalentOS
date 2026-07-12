@@ -22,13 +22,33 @@
 -- ============================================================
 
 ALTER TABLE application_packets
-  ADD COLUMN IF NOT EXISTS base_resume_id uuid REFERENCES base_resumes(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS target_job_id uuid REFERENCES target_jobs(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS final_resume_version_id uuid REFERENCES application_resume_versions(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS base_resume_id uuid,
+  ADD COLUMN IF NOT EXISTS target_job_id uuid,
+  ADD COLUMN IF NOT EXISTS final_resume_version_id uuid,
   ADD COLUMN IF NOT EXISTS approved_keyword_ids uuid[],
   ADD COLUMN IF NOT EXISTS rejected_keyword_ids uuid[],
   ADD COLUMN IF NOT EXISTS cover_letter text,
   ADD COLUMN IF NOT EXISTS recruiter_message text,
   ADD COLUMN IF NOT EXISTS hiring_manager_email text,
   ADD COLUMN IF NOT EXISTS interview_prep_notes text,
-  ADD COLUMN IF NOT EXISTS created_by uuid REFERENCES profiles(user_id) ON DELETE SET NULL;
+  ADD COLUMN IF NOT EXISTS created_by uuid;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ap_base_resume_fk') THEN
+    ALTER TABLE application_packets
+      ADD CONSTRAINT ap_base_resume_fk FOREIGN KEY (base_resume_id) REFERENCES base_resumes(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ap_target_job_fk') THEN
+    ALTER TABLE application_packets
+      ADD CONSTRAINT ap_target_job_fk FOREIGN KEY (target_job_id) REFERENCES target_jobs(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ap_final_resume_version_fk') THEN
+    ALTER TABLE application_packets
+      ADD CONSTRAINT ap_final_resume_version_fk FOREIGN KEY (final_resume_version_id) REFERENCES application_resume_versions(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ap_created_by_fk') THEN
+    ALTER TABLE application_packets
+      ADD CONSTRAINT ap_created_by_fk FOREIGN KEY (created_by) REFERENCES profiles(user_id) ON DELETE SET NULL;
+  END IF;
+END $$;

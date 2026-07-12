@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit --incremental false",
     "lint": "next lint",
     "test": "vitest run",
+    "test:network": "RUN_NETWORK_TESTS=true npx vitest run src/test/api/",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "build": "next build",

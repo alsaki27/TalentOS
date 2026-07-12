@@ -9,7 +9,12 @@ alter table if exists ai_digests
 
 -- Backfill: for any existing digest rows that have generated_at but no
 -- last_success_at, treat the generation timestamp as the success time.
-update ai_digests
-  set last_success_at = generated_at
-  where last_success_at is null
-    and generated_at is not null;
+DO $$
+BEGIN
+  IF to_regclass('ai_digests') IS NOT NULL THEN
+    UPDATE ai_digests
+      SET last_success_at = generated_at
+      WHERE last_success_at IS NULL
+        AND generated_at IS NOT NULL;
+  END IF;
+END $$;

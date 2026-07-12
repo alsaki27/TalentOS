@@ -11,9 +11,25 @@ ALTER TABLE applications ADD COLUMN IF NOT EXISTS resume_generation_started_at t
 ALTER TABLE applications ADD COLUMN IF NOT EXISTS resume_generation_completed_at timestamptz;
 
 -- Direct linkage columns on application_resume_versions
-ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS application_id uuid REFERENCES applications(id);
-ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS job_id uuid REFERENCES jobs(id);
-ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS workflow_id uuid REFERENCES application_ai_workflows(id);
+ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS application_id uuid;
+ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS job_id uuid;
+ALTER TABLE application_resume_versions ADD COLUMN IF NOT EXISTS workflow_id uuid;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'arv_application_fk') THEN
+    ALTER TABLE application_resume_versions
+      ADD CONSTRAINT arv_application_fk FOREIGN KEY (application_id) REFERENCES applications(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'arv_job_fk') THEN
+    ALTER TABLE application_resume_versions
+      ADD CONSTRAINT arv_job_fk FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'arv_workflow_fk') THEN
+    ALTER TABLE application_resume_versions
+      ADD CONSTRAINT arv_workflow_fk FOREIGN KEY (workflow_id) REFERENCES application_ai_workflows(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- Indexes for direct lookup
 CREATE INDEX IF NOT EXISTS arv_application_idx ON application_resume_versions (application_id);

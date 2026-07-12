@@ -37,7 +37,15 @@ export async function GET(req: NextRequest) {
           plaintextKeys++;
         }
       }
-    } catch {}
+    } catch (err: any) {
+      console.error("[ai-key-readiness] Query failed:", err.message);
+      return NextResponse.json({
+        encryptionConfigured: isEncryptionAvailable(),
+        totalKeys: 0, encryptedKeys: 0, plaintextKeys: 0, disabledKeys: 0,
+        ready: false,
+        error: "READINESS_QUERY_FAILED",
+      }, { status: 503 });
+    }
   }
 
   return NextResponse.json({

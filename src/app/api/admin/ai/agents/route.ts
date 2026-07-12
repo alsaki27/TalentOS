@@ -1,14 +1,16 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { query } from "@/server/db/neon";
+import { sanitizeApiError } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { context, response } = await requireCurrentUser(["admin"]);
-  if (response) return response;
+  try {
+    const { context, response } = await requireCurrentUser(["admin"]);
+    if (response) return response;
 
-  const automations = await query<{
+    const automations = await query<{
     id: string;
     label: string;
     description: string;
@@ -109,10 +111,21 @@ export async function GET() {
       routes,
       config,
       today_usage: usage,
-      config_status: configStatus,
+      today_calls: usage.calls ?? 0,
+      today_success_rate: usage.success_rate ?? 0,
+      today_cost: usage.total_cost ?? 0,
+      avg_latency: usage.avg_latency ?? 0,
       last_call_at: lastCallByAutomation[auto.id] ?? null,
+      config_status: configStatus,
     };
   });
 
-  return NextResponse.json({ agents });
+    return NextResponse.json({ agents });
+  } catch (err: any) {
+    console.error("[agents] Query failed:", err.message);
+    return NextResponse.json(
+      { error: sanitizeApiError(err) },
+      { status: 500 }
+    );
+  }
 }

@@ -89,7 +89,6 @@ export default function ApplicationQueuePage() {
   const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
   const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
   const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function buildParams(pn: number) {
     const p = new URLSearchParams();
@@ -124,6 +123,10 @@ export default function ApplicationQueuePage() {
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
       setSelected(new Set());
+      setFaloodOpen(null);
+      setExpandedWorkflow(null);
+      setWorkflowDetails({});
+      setFaloodResumes({});
       setPage(pn);
     } catch (err: any) {
       setFeedback({ kind: "error", text: err.message || "Load failed." });
@@ -132,20 +135,19 @@ export default function ApplicationQueuePage() {
 
   useEffect(() => { load(1); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
-  // Auto-poll when visible items have active workflows
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+
+  // Auto-poll when visible items have active workflows (stale-closure safe)
   useEffect(() => {
     const hasActive = items.some(i =>
       i.workflow_status && ["queued", "running"].includes(i.workflow_status)
     );
-    if (hasActive && !pollingRef.current) {
-      pollingRef.current = setInterval(() => load(page, false), 5000);
-    } else if (!hasActive && pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-    return () => {
-      if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
-    };
+    if (!hasActive) return;
+    const id = setInterval(() => loadRef.current(pageRef.current, false), 5000);
+    return () => clearInterval(id);
   }, [items]);
 
   const userMap = new Map(users.map((u) => [u.user_id, u]));

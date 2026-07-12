@@ -420,6 +420,11 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
     setTestingKey(id);
     try {
       const res = await fetch(`/api/admin/ai/keys/${id}/test`, { method: "POST" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setTestResults(p => ({ ...p, [id]: { success: false, error: d.error || `HTTP ${res.status}` } }));
+        return;
+      }
       const data = await res.json();
       setTestResults(p => ({ ...p, [id]: data }));
     } catch (e: any) { onError(e.message); }
@@ -427,10 +432,14 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
   }
 
   async function toggleKey(id: string, enabled: boolean) {
-    await fetch(`/api/admin/ai/keys/${id}`, {
+    const res = await fetch(`/api/admin/ai/keys/${id}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ is_enabled: !enabled }),
     });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      onError(d.error || `Failed to ${!enabled ? "enable" : "disable"} key`);
+    }
     loadKeys();
   }
 

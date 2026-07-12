@@ -19,3 +19,9 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+
+      - name: Build for Cloudflare (OpenNext)
+        run: npm run cf:build
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}

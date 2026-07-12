@@ -142,7 +142,11 @@ jobs:
           # upload total - "Total Upload: 17329.79 KiB / gzip: 3052.37 KiB" - the
           # raw figure is an order of magnitude larger and not the right number to
           # budget against.
-          SIZE_KIB=$(echo "$OUTPUT" | grep -oP 'gzip: \K[0-9.]+' || echo "0")
+          SIZE_KIB=$(echo "$OUTPUT" | grep -oP 'gzip: \K[0-9.]+' || echo "")
+          if [ -z "$SIZE_KIB" ] || [ "$SIZE_KIB" = "0" ]; then
+            echo "::error::Could not parse gzip size from wrangler output. Raw output:" && echo "$OUTPUT"
+            exit 1
+          fi
           echo "Worker gzipped upload size: ${SIZE_KIB} KiB"
           BUDGET_KIB=3072
           if awk -v s="$SIZE_KIB" 'BEGIN { exit !(s > 2800) }'; then

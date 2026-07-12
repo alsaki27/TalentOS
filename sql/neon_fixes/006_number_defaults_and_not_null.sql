@@ -29,6 +29,7 @@ DO $$
 DECLARE
   v_max bigint;
 BEGIN
+  PERFORM pg_advisory_xact_lock(1001);
   SELECT COALESCE(MAX(candidate_number), 10000) INTO v_max FROM candidates;
   PERFORM setval('candidate_number_seq', GREATEST(v_max, 10000));
 

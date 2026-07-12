@@ -501,12 +501,6 @@ export default function OpsPage() {
         )}
       </div>
 
-      <div className="card" style={{ borderColor: "var(--warning)", backgroundColor: "#fff8e1", marginBottom: 16 }}>
-        <p style={{ margin: 0, fontSize: 14 }}>
-          {"\u26A0 "}AI management has moved to the <Link href="/admin/ai" style={{ fontWeight: 600 }}>AI Control Center at /admin/ai</Link>
-        </p>
-      </div>
-
       <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Scheduled job runs</h2>
       <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
         Status of cron-triggered jobs — updated on each run.
@@ -555,6 +549,11 @@ export default function OpsPage() {
           </table>
         </div>
       )}
+      <div className="alert alert-info" style={{ marginBottom: 16 }}>
+        {"\u26A0 "}AI management has moved to the AI Control Center at{" "}
+        <Link href="/admin/ai">/admin/ai</Link>. This page is read-only for reference and will be removed in a future update.
+      </div>
+
       <AiKeyManager />
       <AiTaskRouting />
       <AiAgentManager />

@@ -5,7 +5,7 @@ env:
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # dispatch-workflows – every 5 minutes
+    - cron: '*/5 * * * *'  # dispatch-workflows + email-queue – every 5 minutes
     - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
@@ -27,6 +27,7 @@ on:
           - backup
           - job-categorization
           - ai-usage-rollup
+          - email-queue
           - run-all
 
 jobs:
@@ -144,6 +145,23 @@ jobs:
       - name: Call AI key health
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-key-health")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  email-queue:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'email-queue' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Email queue
+    steps:
+      - name: Call Email queue
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/email-queue")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

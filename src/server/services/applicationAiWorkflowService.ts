@@ -473,6 +473,14 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
 export async function restartWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
+  await query(
+    "DELETE FROM application_ai_stage_runs WHERE workflow_id = $1",
+    [workflowId]
+  );
+  await query(
+    "DELETE FROM application_ai_artifacts WHERE workflow_id = $1",
+    [workflowId]
+  );
   await updateWorkflowStatus(workflowId, "queued", { current_stage: 0 });
   await syncWorkflowToApplication(workflowId, "queued");
 }
