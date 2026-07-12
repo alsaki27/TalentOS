@@ -1590,6 +1590,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           return [...filtered, {
             job_id: job.id,
             candidate_id: candidateId,
+            candidate_name: candidates.find(c => c.id === candidateId)?.name || "",
             score: -1,
             breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${errorReason}` },
           }];
@@ -1601,6 +1602,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         return [...filtered, {
           job_id: job.id,
           candidate_id: candidateId,
+          candidate_name: candidates.find(c => c.id === candidateId)?.name || "",
           score: -1,
           breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${err.message || "Network error"}` },
         }];

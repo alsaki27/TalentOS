@@ -221,8 +221,9 @@ export async function callWithUsageTracking<T>(
     const result = await fn(wrappedProvider);
 
     if (capturedUsage) {
-      inputTokens = capturedUsage.input_tokens;
-      outputTokens = capturedUsage.output_tokens;
+      const usage: { input_tokens: number; output_tokens: number } = capturedUsage;
+      inputTokens = usage.input_tokens;
+      outputTokens = usage.output_tokens;
     }
 
     const latencyMs = Date.now() - start;
@@ -254,8 +255,9 @@ export async function callWithUsageTracking<T>(
     errorCode = classifyErrorCode(err);
 
     if (capturedUsage) {
-      inputTokens = capturedUsage.input_tokens;
-      outputTokens = capturedUsage.output_tokens;
+      const usage: { input_tokens: number; output_tokens: number } = capturedUsage;
+      inputTokens = usage.input_tokens;
+      outputTokens = usage.output_tokens;
     }
 
     await recordUsageEvent({
