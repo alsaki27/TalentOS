@@ -49,6 +49,37 @@ ALTER TABLE candidates ALTER COLUMN candidate_number SET NOT NULL;
 ALTER TABLE jobs ALTER COLUMN job_number SET NOT NULL;
 ALTER TABLE applications ALTER COLUMN app_number SET NOT NULL;
 
+-- De-duplicate candidate_number/job_number before enforcing uniqueness.
+-- sql/migrations/08_phase1_identity.sql (never part of this auto-applied
+-- pipeline, but plausibly run manually/historically against production
+-- before this file existed - see its README note) assigned numbers via
+-- separate logic; combined with retries of the backfill above across
+-- multiple partial deploy attempts, real duplicate values are plausible.
+-- Reassign (not delete - these are real candidates/jobs, unlike the
+-- notification/resume-version dedups elsewhere in this pipeline) every
+-- row but the earliest holder of each duplicate number to a fresh
+-- sequence value before the UNIQUE constraint can reject them.
+DO $$
+BEGIN
+  WITH ranked AS (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY candidate_number ORDER BY created_at ASC, id ASC
+    ) AS rn
+    FROM candidates
+  )
+  UPDATE candidates c SET candidate_number = nextval('candidate_number_seq')
+  FROM ranked WHERE c.id = ranked.id AND ranked.rn > 1;
+
+  WITH ranked AS (
+    SELECT id, ROW_NUMBER() OVER (
+      PARTITION BY job_number ORDER BY created_at ASC, id ASC
+    ) AS rn
+    FROM jobs
+  )
+  UPDATE jobs j SET job_number = nextval('job_number_seq')
+  FROM ranked WHERE j.id = ranked.id AND ranked.rn > 1;
+END $$;
+
 -- Uniqueness, so these can safely serve as human-facing reference numbers.
 DO $$
 BEGIN
