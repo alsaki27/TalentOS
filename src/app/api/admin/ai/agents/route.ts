@@ -124,7 +124,7 @@ export async function GET() {
   } catch (err: any) {
     console.error("[agents] Query failed:", err.message);
     return NextResponse.json(
-      { error: sanitizeApiError(err) },
+      { error: sanitizeApiError(err), _debug: err?.message ?? String(err) },
       { status: 500 }
     );
   }
