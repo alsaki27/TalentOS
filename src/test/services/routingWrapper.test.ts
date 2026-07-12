@@ -3,6 +3,11 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// routing.ts reads this once at module-eval time to gate the global env-based
+// fallback chain (defaults to disabled in production). These tests exercise
+// that fallback path directly, so it must be enabled before routing.ts loads.
+process.env.ALLOW_GLOBAL_AI_FALLBACK = "true";
+
 const mockQuery = vi.fn().mockResolvedValue([]);
 const mockExecute = vi.fn().mockResolvedValue({ rowCount: 1 });
 const mockListEnabledAiKeys = vi.fn().mockResolvedValue([]);
