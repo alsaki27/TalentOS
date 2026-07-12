@@ -5,7 +5,8 @@ env:
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # dispatch-workflows + ai-key-health – every 5 minutes
+    - cron: '*/5 * * * *'  # dispatch-workflows – every 5 minutes
+    - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
@@ -17,7 +18,7 @@ on:
         description: 'Job to run'
         required: true
         type: choice
-        default: 'run-all'
+        default: ''
         options:
           - dispatch-workflows
           - ai-key-health
@@ -134,7 +135,7 @@ jobs:
   ai-key-health:
     if: >
       (github.event_name == 'schedule' &&
-       github.event.schedule == '*/5 * * * *') ||
+       github.event.schedule == '0 * * * *') ||
       github.event.inputs.job == 'ai-key-health' ||
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest

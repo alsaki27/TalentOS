@@ -4,16 +4,14 @@
 // the existing result.
 //
 // Atomicity boundary:
-//   The CTE in this function atomically inserts the resume version AND updates
-//   the application (tailored_resume_version_id + ai_workflow_id + status) in a
-//   single round-trip. ON CONFLICT ensures concurrent finalizers both get the
-//   same version ID. The subsequent workflow status update is idempotent (setting
-//   status='completed' twice is safe). The packet upsert uses ON CONFLICT so it
-//   is also safe to retry. The activity log is best-effort — failure there does
-//   not roll back the core finalization.
+//   The CTE+workflow update+packet upsert run inside a single Neon
+//   sql.transaction(). If any query fails, the entire transaction rolls back,
+//   preventing partial finalization (a stale workflow marked completed without
+//   a version row, or a version row without a packet). The activity log is
+//   best-effort — failure there does not roll back the core finalization.
 
 import { updateWorkflowStatus, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query, queryOne } from "@/server/db/neon";
+import { query, queryOne, sql as getSql } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
@@ -57,55 +55,54 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   );
   if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id}`);
 
-  // ATOMICITY BOUNDARY (critical path): CTE atomically inserts resume version AND updates
-  // application (tailored_resume_version_id + status) in a single round-trip, then immediately
-  // marks the workflow completed and upserts the application packet. All three must succeed
-  // together — a failure at any step throws and prevents the application from appearing ready
-  // with missing data.
+  // ATOMICITY BOUNDARY (critical path): all three operations run inside a single
+  // database transaction via Neon's sql.transaction(). If any query fails, the
+  // entire transaction rolls back, preventing partial finalization.
   const title = "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(finalData);
+  const dbSql = getSql();
   let versionId: string | undefined;
   try {
-    const versionRows = await query<{ id: string }>(
-      `WITH inserted AS (
+    const [versionRows] = await dbSql.transaction([
+      dbSql`WITH inserted AS (
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
             title, content, source_type, status, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
+         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${wf.base_resume_id ?? null},
+                 ${title}, ${contentJson}, 'ai_agent', 'draft', NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
          DO UPDATE SET updated_at = NOW()
          RETURNING id
        )
        UPDATE applications SET
          tailored_resume_version_id = inserted.id,
-         ai_workflow_id = $9,
+         ai_workflow_id = ${workflowId},
          resume_generation_status = 'ready',
          resume_generation_completed_at = NOW()
        FROM inserted
-       WHERE applications.id = $10
+       WHERE applications.id = ${wf.application_id}
        RETURNING inserted.id`,
-      [
-        wf.candidate_id, tj.id, wf.application_id, wf.job_id, workflowId, wf.base_resume_id,
-        title, contentJson, workflowId, wf.application_id,
-      ]
-    );
+
+      dbSql`UPDATE application_ai_workflows
+        SET status = 'completed', completed_at = NOW()
+        WHERE id = ${workflowId}`,
+
+      dbSql`INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
+        VALUES (
+          ${wf.application_id},
+          ${wf.base_resume_id ?? null},
+          ${tj.id},
+          (SELECT id FROM application_resume_versions WHERE workflow_id = ${workflowId} ORDER BY created_at DESC LIMIT 1),
+          NULL
+        )
+        ON CONFLICT (application_id) DO UPDATE SET
+          final_resume_version_id = EXCLUDED.final_resume_version_id,
+          base_resume_id = COALESCE(application_packets.base_resume_id, EXCLUDED.base_resume_id),
+          target_job_id = COALESCE(application_packets.target_job_id, EXCLUDED.target_job_id)`,
+    ]);
     const versionRow = versionRows[0];
     if (!versionRow?.id) throw new Error("Failed to insert resume version — no ID returned");
     versionId = versionRow.id;
-
-    // Mark workflow completed — must succeed as part of the atomic block
-    await updateWorkflowStatus(workflowId, "completed");
-
-    // Upsert application packet — critical for the application to be complete
-    await query(
-      `INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
-       VALUES ($1, $2, $3, $4, NULL)
-       ON CONFLICT (application_id) DO UPDATE SET
-         final_resume_version_id = EXCLUDED.final_resume_version_id,
-         base_resume_id = COALESCE(application_packets.base_resume_id, EXCLUDED.base_resume_id),
-         target_job_id = COALESCE(application_packets.target_job_id, EXCLUDED.target_job_id)`,
-      [wf.application_id, wf.base_resume_id, tj.id, versionId]
-    );
   } catch (err: any) {
     throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);
   }

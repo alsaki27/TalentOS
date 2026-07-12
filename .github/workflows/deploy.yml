@@ -42,7 +42,6 @@ jobs:
 
       - name: Run E2E tests
         run: npm run test:e2e
-        continue-on-error: true  # don't block deploy, but flag failures
 
       - name: Build for Cloudflare (OpenNext)
         # Next.js's "Collecting page data" build phase evaluates route

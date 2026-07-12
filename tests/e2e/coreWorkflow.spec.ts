@@ -295,3 +295,18 @@ test.describe("Page smoke tests", () => {
     });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Full mock-provider pipeline test (requires mock server infra)
+// ---------------------------------------------------------------------------
+
+test("full pipeline with mock providers (requires mock server)", async () => {
+  // TODO: Set up mock AI provider that returns deterministic outputs
+  // 1. Mock Job Lens returns structured job analysis
+  // 2. Mock Resume Forge returns draft resume
+  // 3. Mock Hiring Panel returns passing score + approval
+  // 4. Mock Final Polish returns exportReady resume
+  // 5. Verify: workflow completed, tailored_resume_version_id linked,
+  //    candidate_id, job_id, application_id, workflow_id all correct
+  test.skip();
+});
