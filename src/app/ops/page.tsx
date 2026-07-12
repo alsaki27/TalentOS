@@ -63,6 +63,7 @@ interface Digest {
   generated_at: string;
   last_success_at: string | null;
   last_error: string | null;
+  data_summary: Record<string, number> | null;
 }
 
 interface CategorizationRun {
@@ -107,6 +108,16 @@ interface BackupHealth {
   totalStored: number;
 }
 
+interface SchedJobRun {
+  job_name: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+  last_duration_ms: number | null;
+  last_result_summary: string | null;
+}
+
 export default function OpsPage() {
   const [status, setStatus] = useState<OpsStatus | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
@@ -125,15 +136,17 @@ export default function OpsPage() {
   const [categorizationError, setCategorizationError] = useState("");
   const [reviewChoice, setReviewChoice] = useState<Record<string, string>>({});
   const [backupHealth, setBackupHealth] = useState<BackupHealth | null>(null);
+  const [schedJobs, setSchedJobs] = useState<SchedJobRun[]>([]);
 
   async function load() {
     setLoading(true);
-    const [statusRes, backupsRes, digestsRes, categorizationRes, backupHealthRes] = await Promise.all([
+    const [statusRes, backupsRes, digestsRes, categorizationRes, backupHealthRes, schedRes] = await Promise.all([
       fetch("/api/ops/status"),
       fetch("/api/ops/backups"),
       fetch("/api/ops/digests"),
       fetch("/api/ops/categorize"),
       fetch("/api/ops/backup-status"),
+      fetch("/api/ops/scheduled-job-status"),
     ]);
     if (statusRes.status === 403) { setForbidden(true); setLoading(false); return; }
     setStatus(await statusRes.json());
@@ -141,6 +154,7 @@ export default function OpsPage() {
     setDigests(digestsRes.ok ? await digestsRes.json() : []);
     setCategorization(categorizationRes.ok ? await categorizationRes.json() : null);
     setBackupHealth(backupHealthRes.ok ? await backupHealthRes.json() : null);
+    setSchedJobs(schedRes.ok ? await schedRes.json() : []);
     setLoading(false);
   }
 
@@ -492,6 +506,55 @@ export default function OpsPage() {
           {"\u26A0 "}AI management has moved to the <Link href="/admin/ai" style={{ fontWeight: 600 }}>AI Control Center at /admin/ai</Link>
         </p>
       </div>
+
+      <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Scheduled job runs</h2>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Status of cron-triggered jobs — updated on each run.
+      </p>
+      {schedJobs.length === 0 ? (
+        <div className="empty" style={{ marginBottom: 12 }}>No scheduled jobs have run yet.</div>
+      ) : (
+        <div className="table-shell" style={{ marginBottom: 16 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Last attempt</th>
+                <th>Last success</th>
+                <th>Last failure</th>
+                <th>Duration</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedJobs.map((job) => (
+                <tr key={job.job_name}>
+                  <td><code>{job.job_name}</code></td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_attempt_at ? new Date(job.last_attempt_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_success_at ? new Date(job.last_success_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_failure_at ? new Date(job.last_failure_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_duration_ms != null ? `${job.last_duration_ms}ms` : "—"}
+                  </td>
+                  <td>
+                    {job.last_error ? (
+                      <span style={{ color: "var(--danger)", fontSize: 12 }}>{job.last_error.slice(0, 80)}{job.last_error.length > 80 ? "…" : ""}</span>
+                    ) : (
+                      <span className="muted" style={{ fontSize: 12 }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <AiKeyManager />
       <AiTaskRouting />
       <AiAgentManager />
@@ -537,7 +600,17 @@ export default function OpsPage() {
               {d.last_error ? (
                 <p style={{ margin: 0, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{d.last_error}</p>
               ) : (
-                <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+                <>
+                  <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+                  {d.data_summary && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary className="muted" style={{ fontSize: 11, cursor: "pointer" }}>Raw data</summary>
+                      <pre style={{ fontSize: 11, margin: "4px 0 0", padding: 6, background: "var(--bg)", borderRadius: 4 }}>
+                        {JSON.stringify(d.data_summary, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </>
               )}
             </div>
           ))}

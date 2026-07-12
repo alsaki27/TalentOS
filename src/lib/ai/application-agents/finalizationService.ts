@@ -2,23 +2,21 @@
 // linked explicitly to the workflow, target_job, application, job, and candidate.
 // Verifies export readiness before persisting. Idempotent: calling twice returns
 // the existing result.
+//
+// Atomicity boundary:
+//   The CTE in this function atomically inserts the resume version AND updates
+//   the application (tailored_resume_version_id + ai_workflow_id + status) in a
+//   single round-trip. ON CONFLICT ensures concurrent finalizers both get the
+//   same version ID. The subsequent workflow status update is idempotent (setting
+//   status='completed' twice is safe). The packet upsert uses ON CONFLICT so it
+//   is also safe to retry. The activity log is best-effort — failure there does
+//   not roll back the core finalization.
 
 import { updateWorkflowStatus, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
-  // Idempotency: if already finalized, return the existing version ID.
-  const existingVersion = await queryOne<{ id: string }>(
-    `SELECT id FROM application_resume_versions
-     WHERE workflow_id = $1 AND source_type = 'ai_agent'
-     LIMIT 1`,
-    [workflowId]
-  );
-  if (existingVersion) {
-    return existingVersion.id;
-  }
-
   const artifacts = await listArtifacts(workflowId);
 
   const wf = await queryOne<{
@@ -60,6 +58,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id}`);
 
   // Atomic INSERT + UPDATE via CTE: resume version AND application update succeed or fail together.
+  // ON CONFLICT handles concurrent finalizers — both get the same version ID.
   const title = "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(finalData);
   const versionRows = await query<{ id: string }>(
@@ -68,6 +67,8 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
          (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
           title, content, source_type, status, created_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
+       ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
+       DO UPDATE SET updated_at = NOW()
        RETURNING id
      )
      UPDATE applications SET

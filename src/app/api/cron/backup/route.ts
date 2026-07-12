@@ -8,6 +8,7 @@ import { buildBackupSnapshot, storeBackupSnapshot } from "@/lib/backup";
 import { isNeon } from "@/server/db";
 import { execute } from "@/server/db/neon";
 import { supabase } from "@/lib/supabase";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedMs = Date.now();
   const startedAt = new Date().toISOString();
+  await recordJobAttempt("backup");
 
   try {
     const snapshot = await buildBackupSnapshot();
@@ -50,12 +53,18 @@ export async function GET(req: NextRequest) {
       path,
       counts: snapshot.counts,
     });
+    const durationMs = Date.now() - startedMs;
+    const summary = JSON.stringify({ path, counts: snapshot.counts, startedAt });
+    await recordJobSuccess("backup", durationMs, summary);
     return NextResponse.json({ path, counts: snapshot.counts });
   } catch (err: any) {
+    const durationMs = Date.now() - startedMs;
+    const errMsg = err.message ?? "backup failed";
     await logBackupAttempt("backup.failed", {
       startedAt,
-      error: err.message ?? "backup failed",
+      error: errMsg,
     });
-    return NextResponse.json({ error: err.message ?? "backup failed" }, { status: 500 });
+    await recordJobFailure("backup", errMsg, durationMs);
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }

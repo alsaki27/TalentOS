@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchNextQueuedWorkflow } from "@/server/services/applicationAiWorkflowService";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedMs = Date.now();
+  await recordJobAttempt("dispatch-workflows");
+
   const result = await dispatchNextQueuedWorkflow();
+  const durationMs = Date.now() - startedMs;
+
+  if (result.dispatched) {
+    await recordJobSuccess("dispatch-workflows", durationMs, JSON.stringify(result));
+  } else {
+    await recordJobSuccess("dispatch-workflows", durationMs, "no queued workflows");
+  }
+
   return NextResponse.json(result);
 }

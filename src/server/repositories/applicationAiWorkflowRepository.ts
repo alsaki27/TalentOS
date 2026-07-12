@@ -22,6 +22,7 @@ export interface WorkflowRow {
   claimed_by: string | null;
   heartbeat_at: string | null;
   lock_version: number;
+  recovery_count: number;
 }
 
 export interface StageRunRow {
@@ -140,25 +141,36 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
-// Also recovers abandoned workflows where status='running' but the lease
-// has expired (claim_expires_at IS NULL or claim_expires_at < NOW()).
+// RECOVERY: also reclaims running workflows whose claim lease has expired
+// (claim_expires_at IS NULL or claim_expires_at < NOW()). These are workflows
+// abandoned by a crashed or dead dispatcher. After 3 recoveries the workflow
+// is moved to 'failed' to prevent infinite retry loops on persistently broken stages.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
     `WITH next_workflow AS (
       SELECT id FROM application_ai_workflows
       WHERE (status = 'queued')
          OR (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
-      ORDER BY created_at ASC
+      ORDER BY
+        CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
+        created_at ASC
       LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
     UPDATE application_ai_workflows w
-    SET status = 'running',
+    SET status = CASE WHEN w.recovery_count >= 3 AND w.status = 'running'
+                      THEN 'failed'
+                      ELSE 'running'
+                 END,
         claimed_at = NOW(),
         claim_expires_at = NOW() + INTERVAL '5 minutes',
         claimed_by = 'dispatcher',
         heartbeat_at = NOW(),
-        lock_version = lock_version + 1
+        lock_version = lock_version + 1,
+        recovery_count = CASE WHEN w.status = 'running'
+                              THEN recovery_count + 1
+                              ELSE recovery_count
+                         END
     FROM next_workflow n
     WHERE w.id = n.id
     RETURNING w.*`

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { cancelWorkflow, retryWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
+import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findWorkflowById } from "@/server/repositories/applicationAiWorkflowRepository";
 
 export const dynamic = "force-dynamic";
@@ -35,10 +35,23 @@ export async function POST(
         return NextResponse.json({ error: `Can only retry failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await retryWorkflow(workflowId);
+      // Fire-and-forget: respond immediately so the caller isn't blocked;
+      // the dispatcher handles stage processing asynchronously in the background.
       dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, err);
       });
       return NextResponse.json({ workflowId, status: "queued" });
+    }
+
+    case "restart": {
+      if (wf.status !== "failed" && wf.status !== "cancelled") {
+        return NextResponse.json({ error: `Can only restart failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
+      }
+      await restartWorkflow(workflowId);
+      dispatchWorkflowById(workflowId).catch((err) => {
+        console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
+      });
+      return NextResponse.json({ workflowId, status: "queued", fromStage: 0 });
     }
 
     case "rerun": {
@@ -48,6 +61,7 @@ export async function POST(
         return NextResponse.json({ error: "Invalid stage parameter" }, { status: 400 });
       }
       await rerunFromStage(workflowId, stage);
+      // Fire-and-forget: respond immediately, dispatch runs in background
       dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Rerun dispatch failed:`, err);
       });

@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { query, execute } from "@/server/db/neon";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,9 @@ export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const startedMs = Date.now();
+  await recordJobAttempt("ai-usage-rollup");
 
   const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
 
@@ -71,6 +75,10 @@ export async function GET(req: NextRequest) {
     );
     inserted++;
   }
+
+  const durationMs = Date.now() - startedMs;
+  const summary = JSON.stringify({ date: yesterday, rowsInserted: inserted });
+  await recordJobSuccess("ai-usage-rollup", durationMs, summary);
 
   return NextResponse.json({
     ok: true,

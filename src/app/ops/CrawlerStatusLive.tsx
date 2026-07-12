@@ -64,7 +64,7 @@ export default function CrawlerStatusLive() {
       <div className="card" style={{ marginBottom: 24 }}>
         <label>Job crawler</label>
         <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
-          Not enabled — set <code>CRAWLER_API_KEY</code> to activate crawler ingestion via{" "}
+          Crawler: Not configured — set <code>CRAWLER_API_KEY</code> to activate crawler ingestion via{" "}
           <code>/api/integrations/crawler/heartbeat</code>.
         </p>
       </div>

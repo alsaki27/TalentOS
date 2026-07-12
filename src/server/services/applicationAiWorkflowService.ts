@@ -105,13 +105,71 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
 }
 
 /**
+ * Advance workflow to the next stage and re-queue.
+ * Called after each successful stage completion.
+ * Returns the new stage number.
+ */
+async function continueToNextStage(workflowId: string, nextStage: number): Promise<number> {
+  await updateWorkflowStatus(workflowId, "queued", { current_stage: nextStage });
+  await updateWorkflowHeartbeat(workflowId);
+  return nextStage;
+}
+
+/**
+ * Sync workflow status to the application's resume_generation_status column.
+ * Ensures every workflow status transition is reflected on the application record.
+ *
+ * Status mapping:
+ *   queued → 'queued'
+ *   running → stage-dependent ('job_analysis','resume_drafting','resume_review','finalizing')
+ *   waiting → 'human_review'
+ *   failed  → 'failed'
+ *   cancelled → 'cancelled'
+ *   completed → 'ready'
+ */
+async function syncWorkflowToApplication(
+  workflowId: string,
+  status: string,
+  currentStage?: number,
+  error?: string,
+): Promise<void> {
+  let genStatus: string;
+  switch (status) {
+    case "queued":   genStatus = "queued"; break;
+    case "waiting":  genStatus = "human_review"; break;
+    case "failed":   genStatus = "failed"; break;
+    case "cancelled": genStatus = "cancelled"; break;
+    case "completed": genStatus = "ready"; break;
+    case "running": {
+      switch (currentStage ?? 0) {
+        case 0: genStatus = "job_analysis"; break;
+        case 1: genStatus = "resume_drafting"; break;
+        case 2: genStatus = "resume_review"; break;
+        default: genStatus = "finalizing"; break;
+      }
+      break;
+    }
+    default: return;
+  }
+
+  const wf = await findWorkflowById(workflowId);
+  if (!wf) return;
+
+  await query(
+    `UPDATE applications SET resume_generation_status = $1${error ? ", resume_generation_error = $3" : ""} WHERE id = $2`,
+    error ? [genStatus, wf.application_id, error] : [genStatus, wf.application_id],
+  );
+}
+
+/**
  * Process exactly one stage for a workflow.
  * - Transitions from 'queued' → 'running' automatically.
- * - After successful stage, re-queues for the next stage.
+ * - After successful stage, re-queues for the next stage via continueToNextStage().
  * - Retries on failure up to configured max_attempts.
  * - On final failure, marks workflow as failed.
  * - Implements runtime provider fallback (up to 3 distinct route attempts).
  * - Does NOT recurse — the dispatcher picks up the next stage.
+ * - Checks for cancellation before and after the provider call.
  */
 export async function processWorkflowStage(workflowId: string, _routeAttempt: number = 1): Promise<void> {
   const wf = await findWorkflowById(workflowId);
@@ -121,9 +179,10 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
   if (wf.status === "queued") {
     await updateWorkflowStatus(workflowId, "running", { current_stage: wf.current_stage, last_error: null } as any);
+    await syncWorkflowToApplication(workflowId, "running", wf.current_stage);
     if (wf.current_stage === 0) {
-      await query("UPDATE applications SET resume_generation_status = $1, ai_workflow_id = $2, resume_generation_started_at = NOW() WHERE id = $3",
-        ["job_analysis", workflowId, wf.application_id]);
+      await query("UPDATE applications SET ai_workflow_id = $1, resume_generation_started_at = NOW() WHERE id = $2",
+        [workflowId, wf.application_id]);
     }
   }
 
@@ -178,6 +237,14 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   try {
     await updateStageRun(stageRun.id, { status: "running", started_at: new Date().toISOString() });
     await updateWorkflowHeartbeat(workflowId);
+
+    // Check for cancellation before invoking the provider
+    const currentWf = await findWorkflowById(workflowId);
+    if (currentWf?.status === "cancelled") {
+      await updateStageRun(stageRun.id, { status: "cancelled" });
+      await syncWorkflowToApplication(workflowId, "cancelled");
+      return;
+    }
 
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();
@@ -257,15 +324,14 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Quality gate after Hiring Panel
     if (agentId === "application_hiring_panel") {
-      await query("UPDATE applications SET resume_generation_status = 'resume_review' WHERE id = $1", [wf.application_id]);
+      await syncWorkflowToApplication(workflowId, "running", currentIdx + 1);
       const gateResult = await evaluateQualityGate(
         agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
         wf.application_id
       );
       if (!gateResult.passed) {
         const isHardFail = gateResult.action === "fail";
-        await query("UPDATE applications SET resume_generation_status = $1, resume_generation_error = $2 WHERE id = $3",
-          [isHardFail ? "failed" : "human_review", gateResult.reason ?? null, wf.application_id]);
+        await syncWorkflowToApplication(workflowId, isHardFail ? "failed" : "waiting", undefined, gateResult.reason ?? undefined);
         await updateWorkflowStatus(workflowId, isHardFail ? "failed" : "waiting", {
           current_stage: currentIdx + 1,
           last_error: gateResult.reason ?? undefined,
@@ -276,12 +342,20 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Final polish complete → finalize
     if (agentId === "application_final_polish") {
+      // Check for cancellation before finalizing
+      const currentWf2 = await findWorkflowById(workflowId);
+      if (currentWf2?.status === "cancelled") {
+        await updateStageRun(stageRun.id, { status: "cancelled" });
+        await syncWorkflowToApplication(workflowId, "cancelled");
+        return;
+      }
       await finalizeWorkflow(workflowId);
       return;
     }
 
     // Advance to next stage and re-queue
-    await updateWorkflowStatus(workflowId, "queued", { current_stage: currentIdx + 1 });
+    await continueToNextStage(workflowId, currentIdx + 1);
+    await syncWorkflowToApplication(workflowId, "queued");
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -294,8 +368,10 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         current_stage: currentIdx,
         last_error: err.message,
       });
+      await syncWorkflowToApplication(workflowId, "queued");
     } else {
       await updateWorkflowStatus(workflowId, "failed", { last_error: err.message });
+      await syncWorkflowToApplication(workflowId, "failed", undefined, err.message);
     }
   }
 }
@@ -364,16 +440,28 @@ function getSchemaVersion(id: ApplicationAgentId): string {
 
 export async function cancelWorkflow(workflowId: string): Promise<void> {
   await updateWorkflowStatus(workflowId, "cancelled");
+  await syncWorkflowToApplication(workflowId, "cancelled");
 }
 
+/** Retry a failed/cancelled workflow from its current stage (preserves progress). */
 export async function retryWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
+  await updateWorkflowStatus(workflowId, "queued");
+  await syncWorkflowToApplication(workflowId, "queued");
+}
+
+/** Restart a failed/cancelled workflow from stage 0 (discards all progress). */
+export async function restartWorkflow(workflowId: string): Promise<void> {
+  const wf = await findWorkflowById(workflowId);
+  if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
   await updateWorkflowStatus(workflowId, "queued", { current_stage: 0 });
+  await syncWorkflowToApplication(workflowId, "queued");
 }
 
 export async function rerunFromStage(workflowId: string, stage: number): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf) return;
   await updateWorkflowStatus(workflowId, "queued", { current_stage: Math.max(0, stage) });
+  await syncWorkflowToApplication(workflowId, "queued");
 }

@@ -15,3 +15,4 @@ ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS claim_expires_at t
 ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS claimed_by text;
 ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz;
 ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS lock_version int NOT NULL DEFAULT 0;
+ALTER TABLE application_ai_workflows ADD COLUMN IF NOT EXISTS recovery_count int NOT NULL DEFAULT 0;

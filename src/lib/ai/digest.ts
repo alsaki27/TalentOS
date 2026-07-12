@@ -37,8 +37,58 @@ async function gatherSnapshot() {
   };
 }
 
-export async function generateDailyDigest(): Promise<{ content: string; provider: string } | { error: string }> {
+export interface DigestResult {
+  content: string;
+  provider: string;
+  dataSummary: {
+    newJobs: number;
+    overdueTickets: number;
+    activeWorkflows: number;
+    failedWorkflows: number;
+    pendingReviews: number;
+    completedToday: number;
+  };
+}
+
+export async function generateDailyDigest(): Promise<DigestResult | { error: string }> {
   const snapshot = await gatherSnapshot();
+
+  let activeWorkflows = 0;
+  let failedWorkflows = 0;
+  let completedToday = 0;
+  try {
+    const { query } = await import("@/server/db/neon");
+    const today = new Date().toISOString().slice(0, 10);
+    const wfs = await query<{ status: string }>(
+      `SELECT status FROM application_ai_workflows
+       WHERE created_at >= $1::date AND created_at < ($1::date + interval '1 day')`,
+      [today]
+    );
+    for (const wf of wfs ?? []) {
+      if (wf.status === "completed") completedToday++;
+      else if (wf.status === "failed") failedWorkflows++;
+      else if (wf.status === "queued" || wf.status === "running" || wf.status === "waiting") activeWorkflows++;
+    }
+  } catch {}
+
+  let pendingReviews = 0;
+  try {
+    const { query: q } = await import("@/server/db/neon");
+    const revs = await q<{ count: number }>(
+      `SELECT COUNT(*)::int FROM applications WHERE review_status = 'pending'`,
+      []
+    );
+    pendingReviews = revs?.[0]?.count ?? 0;
+  } catch {}
+
+  const dataSummary = {
+    newJobs: snapshot.newJobsToday,
+    overdueTickets: (snapshot.overdueTickets ?? []).length,
+    activeWorkflows,
+    failedWorkflows,
+    pendingReviews,
+    completedToday,
+  };
 
   const prompt = [
     "Write a short, plain-language daily digest (4-6 sentences, no headers/bullets) for an internal recruiting team based on this data snapshot:",
@@ -55,7 +105,7 @@ export async function generateDailyDigest(): Promise<{ content: string; provider
       });
     });
     const content = textOf(result.content) || "(no content generated)";
-    return { content, provider: providerName };
+    return { content, provider: providerName, dataSummary };
   } catch (err: any) {
     return { error: err.message ?? "digest generation failed" };
   }

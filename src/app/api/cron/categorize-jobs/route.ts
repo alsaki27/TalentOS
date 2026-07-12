@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -23,17 +24,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedMs = Date.now();
+  await recordJobAttempt("categorize-jobs");
+
   let totalProcessed = 0;
   let totalFailed = 0;
   let remainingPending = 0;
 
-  for (let i = 0; i < MAX_BATCHES; i++) {
-    const result = await processPendingCategorization({ limit: 20, triggeredBy: "cron" });
-    totalProcessed += result.processed;
-    totalFailed += result.failed;
-    remainingPending = result.remainingPending;
-    if (remainingPending === 0 || (result.processed === 0 && result.failed === 0)) break;
-  }
+  try {
+    for (let i = 0; i < MAX_BATCHES; i++) {
+      const result = await processPendingCategorization({ limit: 20, triggeredBy: "cron" });
+      totalProcessed += result.processed;
+      totalFailed += result.failed;
+      remainingPending = result.remainingPending;
+      if (remainingPending === 0 || (result.processed === 0 && result.failed === 0)) break;
+    }
 
-  return NextResponse.json({ processed: totalProcessed, failed: totalFailed, remainingPending });
+    const durationMs = Date.now() - startedMs;
+    const summary = JSON.stringify({ totalProcessed, totalFailed, remainingPending });
+    await recordJobSuccess("categorize-jobs", durationMs, summary);
+    return NextResponse.json({ processed: totalProcessed, failed: totalFailed, remainingPending });
+  } catch (err: any) {
+    const durationMs = Date.now() - startedMs;
+    await recordJobFailure("categorize-jobs", err.message ?? "categorization failed", durationMs);
+    return NextResponse.json({ error: err.message ?? "categorization failed" }, { status: 500 });
+  }
 }

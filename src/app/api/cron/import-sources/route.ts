@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { runAndRecord } from "@/lib/importSourceRunner";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,9 @@ export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const startedMs = Date.now();
+  await recordJobAttempt("import-sources");
 
   let sources: any[] = [];
   if (isNeon()) {
@@ -37,9 +41,24 @@ export async function GET(req: NextRequest) {
   }
 
   const results = [];
+  let totalImported = 0;
+  let totalSkipped = 0;
+  let hasErrors = false;
+
   for (const source of sources) {
     const result = await runAndRecord(source);
     results.push({ id: source.id, label: source.label, ...result });
+    totalImported += result.imported ?? 0;
+    totalSkipped += result.skipped ?? 0;
+    if (result.error) hasErrors = true;
+  }
+
+  const durationMs = Date.now() - startedMs;
+  const summary = JSON.stringify({ totalImported, totalSkipped, sourcesRan: results.length });
+  if (hasErrors) {
+    await recordJobFailure("import-sources", "One or more sources had errors", durationMs);
+  } else {
+    await recordJobSuccess("import-sources", durationMs, summary);
   }
 
   return NextResponse.json({ ranSources: results.length, results });

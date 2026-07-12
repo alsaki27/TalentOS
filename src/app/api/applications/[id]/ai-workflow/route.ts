@@ -87,6 +87,8 @@ export async function POST(
   });
 
   // Dispatch the first stage
+  // Fire-and-forget: respond 202 immediately so the UI isn't blocked;
+  // stage processing runs asynchronously via the background dispatcher.
   dispatchWorkflowById(workflowId).catch((err) => {
     console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
   });

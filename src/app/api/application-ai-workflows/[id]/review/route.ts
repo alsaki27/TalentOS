@@ -63,6 +63,7 @@ export async function POST(
         [workflowId, `review_${Date.now()}`, artifactData]
       );
 
+      // Fire-and-forget: respond immediately, dispatch runs in background
       dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Review approval dispatch failed:`, err);
       });
@@ -107,6 +108,7 @@ export async function POST(
         [workflowId, `review_${Date.now()}`, artifactData]
       );
 
+      // Fire-and-forget: respond immediately, dispatch runs in background
       dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
       });

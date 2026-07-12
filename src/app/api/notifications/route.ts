@@ -173,7 +173,16 @@ export async function POST(req: NextRequest) {
   if (isNeon()) {
     const result = await queryOne(
       `INSERT INTO notifications (user_id, type, title, body, link, entity_type, entity_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       SELECT $1, $2, $3, $4, $5, $6, $7
+       WHERE NOT EXISTS (
+         SELECT 1 FROM notifications
+         WHERE user_id = $1
+           AND type = $2
+           AND title = $3
+           AND coalesce(entity_type, '') = coalesce($6, '')
+           AND coalesce(entity_id, '') = coalesce($7, '')
+           AND created_at > NOW() - INTERVAL '24 hours'
+       )
        RETURNING *`,
       [
         body.user_id,
@@ -185,6 +194,18 @@ export async function POST(req: NextRequest) {
         body.entity_id ?? null,
       ]
     );
+    if (!result) {
+      const existing = await queryOne(
+        `SELECT * FROM notifications
+         WHERE user_id = $1 AND type = $2 AND title = $3
+           AND coalesce(entity_type, '') = coalesce($4, '')
+           AND coalesce(entity_id, '') = coalesce($5, '')
+           AND created_at > NOW() - INTERVAL '24 hours'
+         ORDER BY created_at DESC LIMIT 1`,
+        [body.user_id, body.type ?? "info", body.title, body.entity_type ?? null, body.entity_id ?? null]
+      );
+      if (existing) return NextResponse.json(existing, { status: 200 });
+    }
     return NextResponse.json(result, { status: 201 });
   } else {
     const { supabase } = await import("@/lib/supabase");

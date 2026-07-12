@@ -19,7 +19,7 @@ export async function GET() {
 
   if (isNeon()) {
     data = await query(
-      `SELECT id, content, provider, generated_at, last_success_at, last_error FROM ai_digests ORDER BY generated_at DESC LIMIT 10`,
+      `SELECT id, content, provider, generated_at, last_success_at, last_error, data_summary FROM ai_digests ORDER BY generated_at DESC LIMIT 10`,
       []
     );
     error = null;
@@ -27,7 +27,7 @@ export async function GET() {
     const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("ai_digests")
-      .select("id, content, provider, generated_at, last_success_at, last_error")
+      .select("id, content, provider, generated_at, last_success_at, last_error, data_summary")
       .order("generated_at", { ascending: false })
       .limit(10);
     data = res.data ?? [];
@@ -64,15 +64,20 @@ export async function POST() {
 
   if (isNeon()) {
     data = await queryOne(
-      `INSERT INTO ai_digests (content, provider, last_success_at) VALUES ($1, $2, NOW()) RETURNING id, content, provider, generated_at`,
-      [result.content, result.provider]
+      `INSERT INTO ai_digests (content, provider, last_success_at, data_summary) VALUES ($1, $2, NOW(), $3) RETURNING id, content, provider, generated_at`,
+      [result.content, result.provider, JSON.stringify(result.dataSummary)]
     );
     error = data ? null : { message: "Insert failed" };
   } else {
     const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("ai_digests")
-      .insert({ content: result.content, provider: result.provider, last_success_at: new Date().toISOString() })
+      .insert({
+        content: result.content,
+        provider: result.provider,
+        last_success_at: new Date().toISOString(),
+        data_summary: result.dataSummary,
+      })
       .select("id, content, provider, generated_at")
       .single();
     data = res.data;
