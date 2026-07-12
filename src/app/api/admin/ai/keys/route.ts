@@ -28,6 +28,7 @@ export async function GET() {
           ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
           ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
           ak.created_by, ak.created_at, ak.updated_at,
+          ak.supports_tools, ak.supports_json_mode, ak.supports_streaming,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
@@ -125,6 +126,18 @@ export async function POST(req: NextRequest) {
   const authHeaderName = typeof body.auth_header_name === "string" && body.auth_header_name.trim() ? body.auth_header_name.trim() : null;
   const authScheme = typeof body.auth_scheme === "string" && body.auth_scheme.trim() ? body.auth_scheme.trim() : null;
   const customHeaders = body.custom_headers !== null && typeof body.custom_headers === "object" && !Array.isArray(body.custom_headers) ? body.custom_headers : null;
+  if (customHeaders) {
+    const forbiddenHeaders = new Set(["authorization", "x-api-key", "x-goog-api-key", "host", "content-type"]);
+    for (const key of Object.keys(customHeaders)) {
+      const lower = key.toLowerCase();
+      if (forbiddenHeaders.has(lower)) {
+        return NextResponse.json({ error: `custom_headers cannot override "${key}"` }, { status: 400 });
+      }
+      if (lower.startsWith("cf-")) {
+        delete customHeaders[key];
+      }
+    }
+  }
   const availableModels = Array.isArray(body.available_models) ? body.available_models : undefined;
   const defaultModel = typeof body.default_model === "string" && body.default_model.trim() ? body.default_model.trim() : null;
   const supportsModelDiscovery = body.supports_model_discovery === true;

@@ -2,10 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { sanitizeApiError } from "@/lib/utils";
+import { checkRateLimit } from "@/lib/rateLimit";
 import { execute, queryOne } from "@/server/db/neon";
 import { testAiKey } from "@/server/services/aiProvider";
 
 export const dynamic = "force-dynamic";
+
+// Rate limit: max 10 key tests per key per hour.
+// NOTE: For production, configure Cloudflare WAF rate-limiting rules on
+// /api/admin/ai/keys/*/test to enforce this across all edge instances.
+const TEST_RATE_LIMIT = { maxRequests: 10, windowMs: 60 * 60 * 1000 };
 
 export async function POST(
   _req: NextRequest,
@@ -17,6 +23,14 @@ export async function POST(
   const { id } = params;
   if (!id) {
     return NextResponse.json({ error: "Key ID is required" }, { status: 400 });
+  }
+
+  const rl = checkRateLimit(`test:${id}`, TEST_RATE_LIMIT);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      { error: `Too many test requests for this key. Try again later.` },
+      { status: 429 }
+    );
   }
 
   try {

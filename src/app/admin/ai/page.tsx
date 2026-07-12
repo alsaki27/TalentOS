@@ -39,6 +39,9 @@ interface KeyItem {
   notes: string | null;
   created_at: string | null;
   updated_at: string | null;
+  supports_tools: boolean;
+  supports_json_mode: boolean;
+  supports_streaming: boolean;
 }
 
 interface AgentItem {
@@ -156,6 +159,13 @@ const STATUS_BADGE: Record<string, string> = {
 // PROVIDER_LABELS imported from @/lib/ai/providerPresets above
 // PROVIDER_MODEL_PRESETS imported from @/lib/ai/providerPresets above
 // PROVIDER_NATIVE_DEFAULTS imported from @/lib/ai/providerPresets above
+
+const PIPELINE_AGENT_IDS = new Set([
+  "application_job_lens",
+  "application_resume_forge",
+  "application_hiring_panel",
+  "application_final_polish",
+]);
 
 function statusBadge(status: string): string {
   return STATUS_BADGE[status] || "badge-info";
@@ -1147,8 +1157,18 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                   const routeModelInfo = r.keyId ? keyModelsMap[r.keyId] : null;
                   const routeDiscovered = routeModelInfo?.models?.filter((m: any) => m.source === "provider") || [];
                   const routePresets = routeModelInfo?.models?.filter((m: any) => m.source === "preset") || [];
-                  const isRouteModelCustom = r.modelOverride && routeModelInfo &&
-                    !routeModelInfo.models.some((m: any) => m.id === r.modelOverride);
+                  const isRouteModelCustom = !!(r.modelOverride && routeModelInfo &&
+                    !routeModelInfo.models.some((m: any) => m.id === r.modelOverride));
+                  const selectedKey = r.keyId ? enabledKeys.find(k => k.id === r.keyId) : null;
+                  const capabilityWarnings: string[] = [];
+                  if (editingAgent && PIPELINE_AGENT_IDS.has(editingAgent) && selectedKey) {
+                    if (selectedKey.supports_tools === false) {
+                      capabilityWarnings.push("Key does not support tool calling — this agent requires tools.");
+                    }
+                    if (selectedKey.supports_json_mode === false) {
+                      capabilityWarnings.push("Key does not support structured output (JSON mode) — this agent may fail.");
+                    }
+                  }
 
                   return (
                   <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
@@ -1189,6 +1209,15 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                       )}
                     </div>
                     <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)} style={{ marginTop: 6 }}>×</button>
+                    {capabilityWarnings.length > 0 && (
+                      <div style={{ flexBasis: "100%", marginTop: 4 }}>
+                        {capabilityWarnings.map((w, j) => (
+                          <div key={j} className="alert alert-warning" style={{ fontSize: 12, padding: "4px 8px", marginBottom: 2 }}>
+                            {w}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
                 })}
