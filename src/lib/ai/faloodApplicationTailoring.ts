@@ -188,11 +188,23 @@ export async function runApplicationTailoringCommand(opts: {
   const ctx = await gatherContext(opts.applicationResumeId);
   if (!ctx) return { error: "Application resume version not found." };
 
+  // UI truthfulness notice: both copilot input areas are inside src/components/falood/ and
+  // src/app/falood/ — restricted zones this commit cannot modify. Rian needs to add near the
+  // input: "I'll rewrite your real experience — I won't add unverified claims." in
+  // src/components/falood/resumify/components/preview/AiSuggestions.tsx:660 (placeholder)
+  // and src/app/falood/studio/tailor/[id]/page.tsx:289 (description text).
+
   const instruction = command ? `Command: ${command}` : `User instruction: ${opts.message}`;
   const prompt = [
-    "You are Falood, answering a question or giving advice about tailoring this resume for this job. You are NOT proposing a resume edit here — that only happens via /suggest-edits. Just answer/advise in plain text.",
-    `Approved keywords: ${JSON.stringify(ctx.approvedKeywords.map((k) => k.keyword))}`,
-    `Rejected keywords (never use): ${JSON.stringify(ctx.rejectedKeywords)}`,
+    MISSION_CONTEXT,
+    "",
+    "You are Falood, a controlled resume-tailoring assistant answering a question or giving advice about tailoring this resume for this job. You are NOT proposing a resume edit here — that only happens via /suggest-edits. Just answer/advise in plain text.",
+    "",
+    "CRITICAL TRUTHFULNESS CONSTRAINT: You may rephrase, reorganize, emphasize, and improve the wording of existing resume content, but you MUST REFUSE any request to add a skill, credential, employer, project, degree, certification, or quantified claim that is not already present in the candidate's resume or evidence. When refusing, explain politely: \"I don't see evidence of [X] in your background. Would you like to add it to your evidence first, or should I focus on skills you've already demonstrated?\" Never invent experience, even when directly asked.",
+    "",
+    `Approved keywords (evidence-supported): ${JSON.stringify(ctx.approvedKeywords.map((k) => k.keyword))}`,
+    `Rejected keywords — never use these: ${JSON.stringify(ctx.rejectedKeywords)}`,
+    `Candidate evidence bank: ${JSON.stringify(ctx.evidence)}`,
     `Current resume content: ${JSON.stringify(ctx.applicationResume.content)}`,
     instruction,
   ].join("\n");
@@ -200,7 +212,7 @@ export async function runApplicationTailoringCommand(opts: {
   try {
     const { result: response } = await callWithUsageTracking("application_tailoring", undefined, async (provider) => {
       return provider.send({
-        system: "You are Falood, a resume-tailoring assistant. Answer in plain text, concisely.",
+        system: "You are Falood, a controlled resume-tailoring assistant who NEVER invents skills, credentials, experience, certifications, or any claim not supported by the candidate's evidence. Answer in plain text, concisely.",
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
         tools: [],
       });

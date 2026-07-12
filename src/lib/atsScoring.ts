@@ -35,6 +35,60 @@ export interface AtsNarrative {
   improvementSuggestions: string[];
 }
 
+function normalizeSkill(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9+#.]/g, "");
+}
+
+export function fuzzyMatch(skill: string, against: string[]): boolean {
+  const a = normalizeSkill(skill);
+  if (!a || a.length < 3) return false;
+  for (const b of against) {
+    const normB = normalizeSkill(b);
+    if (!normB || normB.length < 3) continue;
+    if (a === normB) return true;
+    if (a.includes(normB) || normB.includes(a)) return true;
+    if (levenshteinRatio(a, normB) >= 0.85) return true;
+  }
+  return false;
+}
+
+function levenshteinRatio(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0 && n === 0) return 1;
+  if (m === 0 || n === 0) return 0;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return 1 - dp[m][n] / Math.max(m, n);
+}
+
+/**
+ * Cross-check the AI's missing-keyword list against the actual candidate skills
+ * extracted from the resume. Filters out any keyword that fuzzy-matches a skill
+ * already present in the candidate's data, preventing false "missing" reports
+ * caused by AI hallucination or inconsistent text vs. structured-data sourcing.
+ */
+export function filterMissingKeywords(
+  narrative: AtsNarrative,
+  candidateSkills: string[]
+): AtsNarrative {
+  if (!narrative.missingKeywords || narrative.missingKeywords.length === 0) {
+    return narrative;
+  }
+  const genuinelyMissing = narrative.missingKeywords.filter(
+    (kw) => !fuzzyMatch(kw, candidateSkills)
+  );
+  return { ...narrative, missingKeywords: genuinelyMissing };
+}
+
 export function computeDeterministicScore(
   extraction: AtsExtractionResult,
   parseabilityScore: number

@@ -28,6 +28,12 @@ export default function AtsScorePage() {
   const [latestResult, setLatestResult] = useState<any>(null);
   const [viewingResult, setViewingResult] = useState<any>(null);
 
+  const [jobSearchOpen, setJobSearchOpen] = useState(false);
+  const [jobSearchQuery, setJobSearchQuery] = useState("");
+  const [jobSearchResults, setJobSearchResults] = useState<any[]>([]);
+  const [jobSearching, setJobSearching] = useState(false);
+  const [linkingJob, setLinkingJob] = useState(false);
+
   useEffect(() => {
     fetch("/api/candidates?pageSize=100")
       .then(r => r.json())
@@ -103,6 +109,51 @@ export default function AtsScorePage() {
     }
   }
 
+  async function searchJobs(query: string) {
+    setJobSearchQuery(query);
+    if (query.length < 2) { setJobSearchResults([]); return; }
+    setJobSearching(true);
+    try {
+      const res = await fetch(`/api/jobs?search=${encodeURIComponent(query)}&pageSize=10`);
+      const data = await res.json();
+      setJobSearchResults(data.jobs || []);
+    } catch {
+      setJobSearchResults([]);
+    } finally {
+      setJobSearching(false);
+    }
+  }
+
+  async function linkJobToCandidate(job: any) {
+    setLinkingJob(true);
+    try {
+      const res = await fetch("/api/target-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: selectedCandidateId,
+          jobId: job.id,
+          rawDescription: job.description_text || job.title || "",
+          sourceUrl: job.source_url || null,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to link job");
+      const data = await res.json();
+      setJobs((prev) => {
+        const exists = prev.some((j) => j.id === job.id);
+        return exists ? prev : [...prev, { id: job.id, title: job.title, company: job.company }];
+      });
+      setSelectedJobId(job.id);
+      setJobSearchOpen(false);
+      setJobSearchQuery("");
+      setJobSearchResults([]);
+    } catch (err: any) {
+      alert("Could not link job: " + (err.message || "unknown error"));
+    } finally {
+      setLinkingJob(false);
+    }
+  }
+
   return (
     <div className="page">
       <div className="page-header">
@@ -165,15 +216,67 @@ export default function AtsScorePage() {
             <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 500 }}>Target Job (Optional)</label>
             <select 
               value={selectedJobId} 
-              onChange={e => setSelectedJobId(e.target.value)}
+              onChange={e => {
+                if (e.target.value === "__search__") {
+                  setJobSearchOpen(true);
+                  return;
+                }
+                setSelectedJobId(e.target.value);
+              }}
               style={{ width: "100%", padding: 8, borderRadius: 4, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)" }}
             >
               <option value="">-- No Job (General Analysis) --</option>
               {jobs.map(j => <option key={j.id} value={j.id}>{j.title} at {j.company}</option>)}
+              <option value="__search__" style={{ color: "var(--accent)", fontWeight: 600 }}>+ Search jobs...</option>
             </select>
             <div style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>
               Leaving this blank will score formatting and general best practices only.
             </div>
+
+            {jobSearchOpen && (
+              <div style={{ marginTop: 10, padding: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <input
+                    placeholder="Search jobs by title or company..."
+                    value={jobSearchQuery}
+                    onChange={(e) => searchJobs(e.target.value)}
+                    style={{ flex: 1, padding: "6px 10px", fontSize: 12, borderRadius: 4, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)" }}
+                    autoFocus
+                  />
+                  <button onClick={() => { setJobSearchOpen(false); setJobSearchQuery(""); }} style={{ fontSize: 11, padding: "4px 8px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, cursor: "pointer", color: "var(--ink)" }}>Close</button>
+                </div>
+                {jobSearching && <p className="muted" style={{ fontSize: 11 }}>Searching...</p>}
+                {!jobSearching && jobSearchQuery.length >= 2 && jobSearchResults.length === 0 && (
+                  <p className="muted" style={{ fontSize: 11 }}>No jobs found.</p>
+                )}
+                {jobSearchResults.length > 0 && (
+                  <div style={{ maxHeight: 180, overflowY: "auto" }}>
+                    {jobSearchResults.map((job: any) => (
+                      <div
+                        key={job.id}
+                        onClick={() => !linkingJob && linkJobToCandidate(job)}
+                        style={{
+                          padding: "6px 8px",
+                          cursor: linkingJob ? "wait" : "pointer",
+                          fontSize: 12,
+                          borderBottom: "1px solid var(--border)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          opacity: linkingJob ? 0.5 : 1,
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 500 }}>{job.title}</div>
+                          <div style={{ fontSize: 10, color: "var(--ink-soft)" }}>{job.company} {job.location ? `· ${job.location}` : ""}</div>
+                        </div>
+                        <span style={{ fontSize: 10, color: "var(--accent)" }}>+ Add</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <button 

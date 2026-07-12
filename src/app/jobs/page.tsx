@@ -979,6 +979,7 @@ export default function JobsPage() {
       )}
       {showApplyFor && (
         <LogApplicationModal
+          key={showApplyFor.id}
           job={showApplyFor}
           onClose={() => setShowApplyFor(null)}
           onLogged={() => { setShowApplyFor(null); load(page); }}
@@ -1826,7 +1827,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
         <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
           <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving ? 0.7 : 1 }}>
+          <button className="btn-primary" onClick={submit} disabled={saving || candidateIds.size === 0} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving || candidateIds.size === 0 ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving || candidateIds.size === 0 ? 0.7 : 1 }}>
             {saving ? "Saving..." : `Create ${candidateIds.size} ticket${candidateIds.size !== 1 ? "s" : ""}`}
           </button>
         </div>

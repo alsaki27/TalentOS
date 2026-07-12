@@ -148,6 +148,7 @@ export default function CandidateProfilePage() {
   const [parseModalResumeId, setParseModalResumeId] = useState("");
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
   const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
+  const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
 
   async function load() {
     if (!id) return;
@@ -158,6 +159,13 @@ export default function CandidateProfilePage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  useEffect(() => {
+    fetch("/api/markitdown/parse")
+      .then(r => r.json())
+      .then(d => setMarkitdownAvailable(d.available ?? false))
+      .catch(() => setMarkitdownAvailable(false));
+  }, []);
 
   useEffect(() => {
     if (activeTab === "Evidence Bank" && id) {
@@ -603,11 +611,17 @@ export default function CandidateProfilePage() {
                 <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
                   <button
                     onClick={() => parseWithMarkitdown(primaryResume.id)}
-                    disabled={parsingMarkitdown}
+                    disabled={parsingMarkitdown || markitdownAvailable === false}
                     className="btn-primary"
-                    title="Requires markitdown service to be deployed"
+                    title={
+                      markitdownAvailable === null
+                        ? "Checking markitdown service status..."
+                        : markitdownAvailable
+                          ? "Parse resume via markitdown service (higher accuracy)"
+                          : "Markitdown service not deployed — parsing will use AI fallback. See docs/cloudflare-known-limitations.md for deployment instructions."
+                    }
                   >
-                    {parsingMarkitdown ? "Parsing…" : "Parse with markitdown & Create Base Resume"}
+                    {parsingMarkitdown ? "Parsing…" : markitdownAvailable === false ? "Parse with AI & Create Base Resume" : "Parse with markitdown & Create Base Resume"}
                   </button>
                   <button onClick={() => setShowCreateBaseResume(true)}>
                     + Create blank base resume

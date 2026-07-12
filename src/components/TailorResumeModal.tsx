@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, type ResumeData } from "@/components/falood/resumify/types/resume";
 
@@ -27,6 +27,52 @@ interface JobOption {
   title: string;
   company: string | null;
   applicationId?: string;
+}
+
+function normalizeSkillsForFalood(skills: any): ResumeData["skills"] {
+  if (!skills) {
+    return { mode: "categorized", simple: [], categorized: [] };
+  }
+
+  if (Array.isArray(skills)) {
+    const allStrings = skills.every((s: any) => typeof s === "string");
+    if (allStrings) {
+      const validSkills = skills.filter((s: any) => typeof s === "string" && s.trim());
+      return {
+        mode: "categorized",
+        simple: [],
+        categorized: validSkills.length > 0
+          ? [{ id: "skills-technical", name: "Technical Skills", skills: validSkills }]
+          : [],
+      };
+    }
+    const categorized = skills
+      .filter((s: any) => s && typeof s === "object" && !Array.isArray(s))
+      .map((s: any) => ({
+        id: s.id || Math.random().toString(),
+        name: s.title || s.name || "",
+        skills: Array.isArray(s.skills) ? s.skills : [],
+      }))
+      .filter((c) => c.name && c.skills.length > 0);
+    return { mode: "categorized", simple: [], categorized };
+  }
+
+  if (typeof skills === "object" && skills !== null) {
+    if (skills.mode === "simple" || skills.mode === "categorized") {
+      return skills as ResumeData["skills"];
+    }
+    const categorized = Object.entries(skills)
+      .filter(([, value]) => Array.isArray(value))
+      .map(([key, value]) => ({
+        id: `skills-${key}`,
+        name: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        skills: (value as any[]).filter((v: any) => typeof v === "string" && v.trim()),
+      }))
+      .filter((c) => c.skills.length > 0);
+    return { mode: "categorized", simple: [], categorized };
+  }
+
+  return { mode: "categorized", simple: [], categorized: [] };
 }
 
 function buildCustomSectionsForBuilder(old: any): ResumeData["customSections"] {
@@ -100,6 +146,11 @@ export function TailorResumeModal({
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
+  const [showJobSearch, setShowJobSearch] = useState(false);
+  const [jobSearchQuery, setJobSearchQuery] = useState("");
+  const [jobSearchResults, setJobSearchResults] = useState<any[]>([]);
+  const [jobSearching, setJobSearching] = useState(false);
+  const [linkingJob, setLinkingJob] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -231,17 +282,7 @@ export function TailorResumeModal({
             graduationYear: e.graduationDate || "",
           }))
         : [],
-      skills: {
-        mode: "categorized",
-        simple: [],
-        categorized: Array.isArray(old.skills)
-          ? old.skills.map((s: any) => ({
-              id: s.id || Math.random().toString(),
-              name: s.title || "",
-              skills: Array.isArray(s.skills) ? s.skills : [],
-            }))
-          : [],
-      },
+      skills: normalizeSkillsForFalood(old.skills),
       projects: Array.isArray(old.projects)
         ? old.projects.map((p: any) => ({
             id: p.id || Math.random().toString(),
@@ -268,9 +309,61 @@ export function TailorResumeModal({
     };
   }
 
+  const jobSelectRef = useRef<HTMLSelectElement>(null);
+
+  async function linkJobToCandidate(job: any) {
+    setLinkingJob(true);
+    setError("");
+    try {
+      const res = await fetch("/api/target-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId,
+          jobId: job.id,
+          rawDescription: job.description_text || job.title || "",
+          sourceUrl: job.source_url || null,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to link job to candidate");
+      const data = await res.json();
+      const newOption: JobOption = { id: job.id, title: job.title, company: job.company ?? null };
+      setExtraJob(newOption);
+      setJobId(job.id);
+      setShowJobSearch(false);
+      setJobSearchQuery("");
+      setJobSearchResults([]);
+    } catch (e: any) {
+      setError(e?.message || "Could not link job");
+    } finally {
+      setLinkingJob(false);
+    }
+  }
+
+  async function searchJobs(query: string) {
+    setJobSearchQuery(query);
+    if (query.length < 2) { setJobSearchResults([]); return; }
+    setJobSearching(true);
+    try {
+      const res = await fetch(`/api/jobs?search=${encodeURIComponent(query)}&pageSize=10`);
+      const data = await res.json();
+      setJobSearchResults(data.jobs || []);
+    } catch {
+      setJobSearchResults([]);
+    } finally {
+      setJobSearching(false);
+    }
+  }
+
   async function startTailoring() {
-    if (!baseResumeId || !jobId) {
-      setError("Choose a source resume and target job first.");
+    if (!jobId) {
+      setError("Select a target job first.");
+      jobSelectRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      jobSelectRef.current?.focus();
+      return;
+    }
+    if (!baseResumeId) {
+      setError("Choose a source resume first.");
       return;
     }
     setGenerating(true);
@@ -381,14 +474,66 @@ export function TailorResumeModal({
               </div>
               <div className="field-group">
                 <label>Target job</label>
-                <select value={jobId} onChange={(e) => setJobId(e.target.value)}>
+                <select value={jobId} onChange={(e) => {
+                  if (e.target.value === "__search__") {
+                    setShowJobSearch(true);
+                    return;
+                  }
+                  setJobId(e.target.value);
+                }}>
                   <option value="">Choose a job...</option>
                   {jobOptions.map((job) => (
                     <option key={job.id} value={job.id}>{job.title}{job.company ? ` - ${job.company}` : ""}</option>
                   ))}
+                  <option value="__search__" style={{ color: "var(--accent)", fontWeight: 600 }}>+ Search jobs...</option>
                 </select>
               </div>
             </div>
+
+            {showJobSearch && (
+              <div style={{ marginTop: 12, padding: 12, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                  <input
+                    placeholder="Search jobs by title or company..."
+                    value={jobSearchQuery}
+                    onChange={(e) => searchJobs(e.target.value)}
+                    style={{ flex: 1, padding: "6px 10px", fontSize: 13 }}
+                    autoFocus
+                  />
+                  <button onClick={() => setShowJobSearch(false)} style={{ fontSize: 12, padding: "4px 8px" }}>Cancel</button>
+                </div>
+                {jobSearching && <p className="muted" style={{ fontSize: 12 }}>Searching...</p>}
+                {!jobSearching && jobSearchQuery.length >= 2 && jobSearchResults.length === 0 && (
+                  <p className="muted" style={{ fontSize: 12 }}>No jobs found.</p>
+                )}
+                {jobSearchResults.length > 0 && (
+                  <div style={{ maxHeight: 200, overflowY: "auto" }}>
+                    {jobSearchResults.map((job: any) => (
+                      <div
+                        key={job.id}
+                        onClick={() => linkJobToCandidate(job)}
+                        style={{
+                          padding: "8px 10px",
+                          cursor: linkingJob ? "wait" : "pointer",
+                          fontSize: 13,
+                          borderBottom: "1px solid var(--border)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          opacity: linkingJob ? 0.6 : 1,
+                        }}
+                      >
+                        <div>
+                          <div style={{ fontWeight: 500 }}>{job.title}</div>
+                          <div style={{ fontSize: 11, color: "var(--ink-soft)" }}>{job.company} {job.location ? `· ${job.location}` : ""}</div>
+                        </div>
+                        <span style={{ fontSize: 11, color: "var(--accent)" }}>+ Link</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12 }}>
               <button className="btn-primary" onClick={startTailoring} disabled={generating || !baseResumeId || !jobId}>

@@ -190,38 +190,35 @@ The TalentOS role-based access control system includes a `manager` role between 
 
 ## External Service Architecture (Recommended for Full Production)
 
-For a production setup that handles all features:
+### Markitdown PDF Parsing Service
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Cloudflare Workers                    │
-│  (Main app: Next.js, all routes, all DB queries)       │
-│  - Neon DB for business data                             │
-│  - Supabase Auth for authentication                      │
-│  - Supabase Storage for file uploads                     │
-│  - R2 for CDN assets (optional)                        │
-└──────────────────┬──────────────────────────────────────┘
-                   │
-                   │ PDF/DOCX generation request
-                   ▼
-┌─────────────────────────────────────────────────────────┐
-│              Vercel / Railway (Node.js)                 │
-│  (Microservice: only PDF/DOCX export)                  │
-│  - @react-pdf/renderer for PDFs                         │
-│  - docx for DOCX files                                  │
-│  - Called via HTTP API from Cloudflare Worker           │
-└─────────────────────────────────────────────────────────┘
-                   │
-                   │ Cron trigger
-                   ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Cron-job.org (Free)                      │
-│  - Calls /api/cron/digest daily                         │
-│  - Calls /api/cron/backup weekly                        │
-└─────────────────────────────────────────────────────────┘
-```
+The "Parse with markitdown & Create Base Resume" button relies on an external **Markitdown** microservice for high-accuracy PDF-to-markdown conversion. Without it, parsing falls back to basic AI text extraction (less accurate).
 
-This architecture keeps the main app on the free Cloudflare Workers tier while externalizing only the Node.js-only features to cheap/paid services.
+**What is Markitdown:**
+- Microsoft's [`markitdown`](https://github.com/microsoft/markitdown) Python library
+- Converts PDFs (and other formats) to clean Markdown text
+- Must be deployed as a separate HTTP service (e.g., FastAPI server)
+
+**Deployment steps:**
+1. Clone `https://github.com/microsoft/markitdown`
+2. Deploy as a simple FastAPI server on Vercel, Railway, or any Node-capable host:
+   ```python
+   # server.py
+   from fastapi import FastAPI, UploadFile, File
+   from markitdown import MarkItDown
+   
+   app = FastAPI()
+   md = MarkItDown()
+   
+   @app.post("/parse")
+   async def parse(file: UploadFile = File(...)):
+       result = md.convert(file.file)
+       return {"success": True, "markdown": result.text_content}
+   ```
+3. Set `MARKITDOWN_SERVICE_URL` env var in TalentOS to point to the deployed service URL
+4. Restart TalentOS — the button will activate and show "Parse with markitdown & Create Base Resume"
+
+**Without the service:** The button shows "Parse with AI & Create Base Resume" and uses the AI fallback parser — less accurate but functional.
 
 ---
 

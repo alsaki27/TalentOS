@@ -3,7 +3,8 @@ import { execute, queryOne } from "@/server/db/neon";
 import { 
   extractStructuredData, 
   computeDeterministicScore, 
-  generateNarrative 
+  generateNarrative,
+  filterMissingKeywords
 } from "@/lib/atsScoring";
 
 function stripPII(text: string): string {
@@ -71,7 +72,13 @@ export async function POST(req: NextRequest) {
     const breakdown = computeDeterministicScore(extraction, parseabilityScore);
 
     // 6. Narrative Generation
-    const narrative = await generateNarrative(extraction, breakdown);
+    const rawNarrative = await generateNarrative(extraction, breakdown);
+
+    // 6b. Post-process: cross-check AI missing-keyword list against the actual skills
+    // extracted from the resume source data. Any keyword that fuzzy-matches a skill
+    // already present in the candidate's data is removed — this prevents the AI from
+    // falsely reporting keywords as "missing" when they actually exist in the resume.
+    const narrative = filterMissingKeywords(rawNarrative, extraction.candidate.skills);
 
     // 7. Save to ats_score_evaluations
     const insertSql = `

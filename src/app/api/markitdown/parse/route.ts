@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { convertPdfToMarkdown } from "@/lib/markitdown";
+import { convertPdfToMarkdown, isMarkitdownAvailable } from "@/lib/markitdown";
+
+export async function GET() {
+  return NextResponse.json({ available: isMarkitdownAvailable() });
+}
 
 export async function POST(req: NextRequest) {
   const formData = await req.formData();
