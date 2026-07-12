@@ -58,43 +58,45 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   if (!tj) throw new Error(`No target_job found for candidate ${wf.candidate_id}`);
 
   // ATOMICITY BOUNDARY (critical path): CTE atomically inserts resume version AND updates
-  // application (tailored_resume_version_id + status) in a single round-trip. If this fails,
-  // the entire finalization fails — nothing is persisted. ON CONFLICT handles concurrent
-  // finalizers — both get the same version ID.
+  // application (tailored_resume_version_id + status) in a single round-trip, then immediately
+  // marks the workflow completed and upserts the application packet. All three must succeed
+  // together — a failure at any step throws and prevents the application from appearing ready
+  // with missing data.
   const title = "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(finalData);
-  const versionRows = await query<{ id: string }>(
-    `WITH inserted AS (
-       INSERT INTO application_resume_versions
-         (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
-          title, content, source_type, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
-       ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
-       DO UPDATE SET updated_at = NOW()
-       RETURNING id
-     )
-     UPDATE applications SET
-       tailored_resume_version_id = inserted.id,
-       ai_workflow_id = $9,
-       resume_generation_status = 'ready',
-       resume_generation_completed_at = NOW()
-     FROM inserted
-     WHERE applications.id = $10
-     RETURNING inserted.id`,
-    [
-      wf.candidate_id, tj.id, wf.application_id, wf.job_id, workflowId, wf.base_resume_id,
-      title, contentJson, workflowId, wf.application_id,
-    ]
-  );
-  const versionId = versionRows[0]?.id;
-  if (!versionId) throw new Error("Failed to insert resume version — no ID returned");
-
-  // Mark workflow completed
-  await updateWorkflowStatus(workflowId, "completed");
-
-  // Upsert application packet — separate try/catch so packet failure
-  // does not roll back the core finalization.
+  let versionId: string | undefined;
   try {
+    const versionRows = await query<{ id: string }>(
+      `WITH inserted AS (
+         INSERT INTO application_resume_versions
+           (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
+            title, content, source_type, status, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ai_agent', 'draft', NOW())
+         ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
+         DO UPDATE SET updated_at = NOW()
+         RETURNING id
+       )
+       UPDATE applications SET
+         tailored_resume_version_id = inserted.id,
+         ai_workflow_id = $9,
+         resume_generation_status = 'ready',
+         resume_generation_completed_at = NOW()
+       FROM inserted
+       WHERE applications.id = $10
+       RETURNING inserted.id`,
+      [
+        wf.candidate_id, tj.id, wf.application_id, wf.job_id, workflowId, wf.base_resume_id,
+        title, contentJson, workflowId, wf.application_id,
+      ]
+    );
+    const versionRow = versionRows[0];
+    if (!versionRow?.id) throw new Error("Failed to insert resume version — no ID returned");
+    versionId = versionRow.id;
+
+    // Mark workflow completed — must succeed as part of the atomic block
+    await updateWorkflowStatus(workflowId, "completed");
+
+    // Upsert application packet — critical for the application to be complete
     await query(
       `INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
        VALUES ($1, $2, $3, $4, NULL)
@@ -105,10 +107,10 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       [wf.application_id, wf.base_resume_id, tj.id, versionId]
     );
   } catch (err: any) {
-    console.error("[finalizeWorkflow] Failed to upsert application_packet:", err.message || err);
+    throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);
   }
 
-  // Log activity (non-critical — failure here does not roll back)
+  // Log activity (best-effort — failure here does not roll back)
   await logActivity({
     userId: undefined,
     actorName: "AI Agent Pipeline",
@@ -118,6 +120,8 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     entityId: wf.application_id,
     entityName: `Workflow ${workflowId}`,
     metadata: { workflowId, versionId, artifactCount: artifacts.length },
+  }).catch((err: any) => {
+    console.error("[finalizeWorkflow] Activity log failed (non-critical):", err.message || err);
   });
 
   return versionId;

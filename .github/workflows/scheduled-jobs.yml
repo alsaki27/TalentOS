@@ -1,27 +1,40 @@
 name: Scheduled Jobs
 
 env:
-  TALENTOS_BASE_URL: https://skarion-talent-os.skarion-talentos.workers.dev
+  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # Workflow dispatcher – every 5 minutes
+    - cron: '*/5 * * * *'  # dispatch-workflows + ai-key-health – every 5 minutes
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
     - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
-    - cron: '0 2 * * *'    # AI key health – daily at 02:00 UTC
   workflow_dispatch:
     inputs:
       job:
-        description: 'Job to run (leave blank for all)'
-        required: false
-        type: string
+        description: 'Job to run'
+        required: true
+        type: choice
+        default: 'run-all'
+        options:
+          - dispatch-workflows
+          - ai-key-health
+          - ai-digest
+          - import-sources
+          - backup
+          - job-categorization
+          - ai-usage-rollup
+          - run-all
 
 jobs:
   dispatch-workflows:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'dispatch-workflows' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'dispatch-workflows' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Workflow dispatcher
     steps:
@@ -34,7 +47,11 @@ jobs:
           fi
 
   ai-digest:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-digest' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 8 * * *') ||
+      github.event.inputs.job == 'ai-digest' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI digest
     steps:
@@ -47,7 +64,11 @@ jobs:
           fi
 
   import-sources:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'import-sources' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 6 * * *') ||
+      github.event.inputs.job == 'import-sources' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Import sources
     steps:
@@ -60,7 +81,11 @@ jobs:
           fi
 
   backup:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'backup' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 4 * * *') ||
+      github.event.inputs.job == 'backup' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Backup
     steps:
@@ -73,7 +98,11 @@ jobs:
           fi
 
   job-categorization:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'job-categorization' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 7 * * *') ||
+      github.event.inputs.job == 'job-categorization' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Job categorization
     steps:
@@ -86,7 +115,11 @@ jobs:
           fi
 
   ai-usage-rollup:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-usage-rollup' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 3 * * *') ||
+      github.event.inputs.job == 'ai-usage-rollup' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI usage rollup
     steps:
@@ -99,7 +132,11 @@ jobs:
           fi
 
   ai-key-health:
-    if: github.event_name == 'schedule' || github.event.inputs.job == 'ai-key-health' || github.event.inputs.job == ''
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'ai-key-health' ||
+      github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI key health
     steps:

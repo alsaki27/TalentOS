@@ -2,13 +2,22 @@
  * TalentOS End-to-End Tests
  *
  * Required secrets (test FAILS if any are missing — no silent skip):
- *   TALENTOS_DATABASE_URL  – database connection string
- *   CRON_SECRET            – cron/auth secret for dispatch endpoint
+ *   CRON_SECRET  – cron/auth secret for dispatch endpoint
  *
  * Optional env vars:
  *   TEST_BASE_URL          – base URL of the TalentOS instance (default http://localhost:3000)
- *   TEST_ADMIN_EMAIL       – seeded admin email
- *   TEST_ADMIN_PASSWORD    – seeded admin password
+ *   TEST_ADMIN_EMAIL       – seeded admin email (required for page smoke tests)
+ *   TEST_ADMIN_PASSWORD    – seeded admin password (required for page smoke tests)
+ *
+ * Verifiable in CI (without AI models):
+ *   - Workflow creation + dispatch triggering
+ *   - At least one stage run created
+ *   - Application status transitions from "not_started"
+ *
+ * NOT verifiable in CI (requires live AI model inference):
+ *   - Workflow reaching "completed" state
+ *   - Tailored resume generation
+ *   - Final Polish artifact production
  */
 
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
@@ -16,7 +25,7 @@ import { test, expect, type Page, type APIRequestContext } from "@playwright/tes
 // ---------------------------------------------------------------------------
 // Required secrets — tests MUST fail if these are missing
 // ---------------------------------------------------------------------------
-const REQUIRED_SECRETS = ["TALENTOS_DATABASE_URL", "CRON_SECRET"];
+const REQUIRED_SECRETS = ["CRON_SECRET"];
 for (const secret of REQUIRED_SECRETS) {
   if (!process.env[secret]) {
     throw new Error(
@@ -88,7 +97,9 @@ async function poll<T>(
 // ---------------------------------------------------------------------------
 
 test.describe("Core hiring workflow (API-driven)", () => {
-  test("create candidate → base resume → apply → pipeline → verify tailored resume", async ({
+  test.describe.configure({ mode: "serial" });
+
+  test("create candidate → base resume → apply → pipeline → verify infra", async ({
     request,
   }) => {
     // 0. Authenticate via API
@@ -145,79 +156,79 @@ test.describe("Core hiring workflow (API-driven)", () => {
     const pipelineRes = await request.post(
       `${BASE_URL}/api/applications/${applicationId}/ai-workflow`,
     );
-    // 202 (accepted, fire-and-forget) or 201
     expect([200, 201, 202]).toContain(pipelineRes.status());
     const pipelineBody = await pipelineRes.json();
     const workflowId: string = pipelineBody.workflowId;
     expect(workflowId).toBeDefined();
 
-    // 6. Poll the dispatch endpoint (via CRON_SECRET) until the workflow progresses
-    //    We call GET /api/application-ai-workflows/dispatch which processes queued
-    //    workflow stages. In CI, AI models won't actually run, but the dispatch
-    //    loop + state transitions should exercise the pipeline infra.
-    const dispatchUrl = `${BASE_URL}/api/application-ai-workflows/dispatch`;
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const dispatchRes = await request.get(dispatchUrl, {
-        headers: { Authorization: `Bearer ${CRON_SECRET}` },
-      });
-      expect(dispatchRes.status()).toBe(200);
-      const dBody = await dispatchRes.json();
-
-      // Check workflow status
-      const statusRes = await request.get(
-        `${BASE_URL}/api/applications/${applicationId}/ai-workflow`,
-      );
-      expect(statusRes.status()).toBe(200);
-      const statusBody = await statusRes.json();
-
-      if (
-        statusBody.workflow?.status === "completed" ||
-        statusBody.workflow?.status === "failed" ||
-        statusBody.workflow?.status === "waiting"
-      ) {
-        break;
-      }
-
-      // Also try the dedicated workflow status endpoint
-      const wfRes = await request.get(
-        `${BASE_URL}/api/application-ai-workflows/${workflowId}`,
-      );
-      expect(wfRes.status()).toBe(200);
-
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-
-    // 7. Verify that the workflow reached a terminal state (or at least started)
-    const finalStatusRes = await request.get(
-      `${BASE_URL}/api/applications/${applicationId}/ai-workflow`,
+    // ─── CI-verifiable assertion #1: workflow exists in the DB ───
+    const wfCheckRes = await request.get(
+      `${BASE_URL}/api/application-ai-workflows/${workflowId}`,
     );
-    expect(finalStatusRes.status()).toBe(200);
-    const finalStatusBody = await finalStatusRes.json();
-    const terminalStates = ["queued", "running", "waiting", "completed", "failed"];
-    expect(terminalStates).toContain(finalStatusBody.workflow?.status);
+    expect(wfCheckRes.status()).toBe(200);
+    const wfCheck = await wfCheckRes.json();
+    expect(wfCheck.workflow?.id).toBe(workflowId);
+    expect(wfCheck.workflow?.application_id).toBe(applicationId);
 
-    // 8. Verify state transitions occurred: the workflow exists and has stages/artifacts
-    expect(finalStatusBody.workflow?.id).toBe(workflowId);
-    expect(Array.isArray(finalStatusBody.stages)).toBe(true);
-    expect(Array.isArray(finalStatusBody.artifacts)).toBe(true);
+    // ─── CI-verifiable assertion #2: dispatch endpoint is reachable ───
+    const dispatchUrl = `${BASE_URL}/api/application-ai-workflows/dispatch`;
+    const dispatchRes = await request.get(dispatchUrl, {
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+    });
+    expect(dispatchRes.status()).toBe(200);
 
-    // If stages ran far enough, a tailored resume version should be linked
-    if (finalStatusBody.artifacts?.length > 0) {
-      const tailoredArtifact = finalStatusBody.artifacts.find(
-        (a: any) => a.artifact_type === "tailored_resume" || a.type === "tailored_resume",
-      );
-      if (tailoredArtifact) {
-        // Verify it references a valid resume version
-        const resumeVersionRes = await request.get(
-          `${BASE_URL}/api/application-resume-versions/${tailoredArtifact.resource_id || tailoredArtifact.application_resume_version_id}`,
+    // ─── CI-verifiable assertion #3: at least one stage run was created ───
+    await poll(
+      async () => {
+        const r = await request.get(
+          `${BASE_URL}/api/application-ai-workflows/${workflowId}`,
         );
-        // May 404 if AI didn't actually generate (CI env), which is fine
-        // but we assert it was at least linked
-        expect(tailoredArtifact.resource_id || tailoredArtifact.application_resume_version_id).toBeDefined();
-      }
-    }
+        const body = await r.json();
+        const stages = body.stages || body.workflow?.stages || [];
+        return Array.isArray(stages) && stages.length > 0 ? stages : null;
+      },
+      1000,
+      30000,
+      "workflow stages created",
+    );
+    const stageCheckRes = await request.get(
+      `${BASE_URL}/api/application-ai-workflows/${workflowId}`,
+    );
+    const stageCheck = await stageCheckRes.json();
+    const stages = stageCheck.stages || [];
+    expect(stages.length).toBeGreaterThan(0);
 
-    // 9. Verify the candidate still exists and has the base resume attached
+    // ─── CI-verifiable assertion #4: application status changed from initial ───
+    await poll(
+      async () => {
+        const r = await request.get(
+          `${BASE_URL}/api/applications/${applicationId}`,
+        );
+        const body = await r.json();
+        const resumeStatus =
+          body.resume_generation_status ||
+          body.application?.resume_generation_status;
+        // Must have progressed beyond the initial state
+        if (resumeStatus && resumeStatus !== "not_started") {
+          return resumeStatus;
+        }
+        // Also check if a workflow status indicates progress
+        const wfR = await request.get(
+          `${BASE_URL}/api/application-ai-workflows/${workflowId}`,
+        );
+        const wfB = await wfR.json();
+        const wfStatus = wfB.workflow?.status;
+        if (wfStatus && wfStatus !== "queued") {
+          return wfStatus;
+        }
+        return null;
+      },
+      2000,
+      60000,
+      "application status progressed past not_started",
+    );
+
+    // 6. Verify the candidate still exists and has the base resume attached
     const candidateCheckRes = await request.get(
       `${BASE_URL}/api/candidates/${candidateId}`,
     );
@@ -225,7 +236,7 @@ test.describe("Core hiring workflow (API-driven)", () => {
     const candidateCheck = await candidateCheckRes.json();
     expect(candidateCheck.name || candidateCheck.id).toBeDefined();
 
-    // 10. Verify the application exists and references the correct job + candidate
+    // 7. Verify the application exists and references the correct job + candidate
     const appCheckRes = await request.get(
       `${BASE_URL}/api/applications/${applicationId}`,
     );
@@ -240,11 +251,10 @@ test.describe("Core hiring workflow (API-driven)", () => {
 // ---------------------------------------------------------------------------
 
 test.describe("Page smoke tests", () => {
-  test.beforeEach(async ({}, testInfo) => {
+  test.beforeEach(async () => {
     if (!HAS_BROWSER_CREDENTIALS) {
-      testInfo.skip(
-        true,
-        "Skipping: TEST_ADMIN_EMAIL and TEST_ADMIN_PASSWORD not set (page tests require browser login)",
+      throw new Error(
+        "Missing browser credentials (TEST_ADMIN_EMAIL + TEST_ADMIN_PASSWORD). Cannot run UI smoke tests.",
       );
     }
   });

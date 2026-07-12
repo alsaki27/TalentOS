@@ -9,7 +9,7 @@ import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiPro
 import { buildProviderFromDbKey } from "@/server/services/aiProvider";
 import { getProviderByName, getActiveProviderAsync } from "@/lib/ai/index";
 
-const ALLOW_GLOBAL_FALLBACK = process.env.ALLOW_GLOBAL_AI_FALLBACK !== 'false';
+const ALLOW_GLOBAL_FALLBACK = process.env.ALLOW_GLOBAL_AI_FALLBACK === 'true'; // default false for production
 
 export interface AutomationRouteResult {
   provider: AiProvider;
