@@ -183,9 +183,8 @@ export async function PUT(
       await sql.transaction(queries);
     } catch (insertErr: any) {
       console.error("[routes:PUT] transaction failed:", insertErr?.message);
-      // TEMP DIAGNOSTIC — remove once root-caused.
       return NextResponse.json(
-        { error: `DIAG transaction: ${insertErr?.message ?? insertErr}`, stack: insertErr?.stack },
+        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr) },
         { status: 500 }
       );
     }
@@ -200,26 +199,33 @@ export async function PUT(
       [params.id]
     );
 
-    await logActivity({
-      userId: context?.profile.user_id,
-      actorName: context?.profile.display_name || context?.profile.email || "Admin",
-      type: "update",
-      description: `Updated routing for ${params.id}: ${oldRoutes.length} → ${updated.length} routes`,
-      entityType: "ai_automation_route",
-      entityId: params.id,
-      entityName: `Routes for ${params.id}`,
-      metadata: {
-        before: oldRoutes.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
-        after: updated.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
-      },
-    });
+    // Best-effort: the route change above already committed. A logging
+    // failure here must not make an already-successful save report as a
+    // 500 to the client (this is exactly how the entity_id uuid/text
+    // mismatch bug, sql/neon_fixes/020, masked working saves as failures).
+    try {
+      await logActivity({
+        userId: context?.profile.user_id,
+        actorName: context?.profile.display_name || context?.profile.email || "Admin",
+        type: "update",
+        description: `Updated routing for ${params.id}: ${oldRoutes.length} → ${updated.length} routes`,
+        entityType: "ai_automation_route",
+        entityId: params.id,
+        entityName: `Routes for ${params.id}`,
+        metadata: {
+          before: oldRoutes.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
+          after: updated.map((r: any) => ({ key: r.ai_key_id, rank: r.rank, model: r.model_override })),
+        },
+      });
+    } catch (logErr: any) {
+      console.error("[routes:PUT] logActivity failed (non-fatal):", logErr?.message);
+    }
 
     return NextResponse.json({ routes: updated, routeVersion: newVersion, warnings });
   } catch (err: any) {
     console.error("[routes:PUT] Validation failed:", err.message);
-    // TEMP DIAGNOSTIC — remove once root-caused.
     return NextResponse.json(
-      { error: `DIAG outer: ${err?.message ?? err}`, stack: err?.stack },
+      { error: sanitizeApiError(err) },
       { status: 500 }
     );
   }

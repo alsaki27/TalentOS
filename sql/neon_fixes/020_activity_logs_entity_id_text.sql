@@ -1,0 +1,11 @@
+-- activity_logs.entity_id is used polymorphically across every entity type
+-- logActivity() is called for (src/lib/activity.ts): candidates, jobs,
+-- ai_api_keys (real UUIDs) but also ai_automations (text IDs like
+-- "chat_assistant", "application_hiring_panel"). A uuid column rejects any
+-- non-UUID entityId at insert time - confirmed live via
+-- PUT /api/admin/ai/agents/[id]/routes: the route save itself succeeds, but
+-- the logActivity() call right after (entityId = the automation's text id)
+-- throws "invalid input syntax for type uuid" and the whole request 500s,
+-- even though the actual route change was already committed. Converting
+-- existing uuid values to text is lossless (same string representation).
+ALTER TABLE activity_logs ALTER COLUMN entity_id TYPE text;
