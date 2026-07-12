@@ -320,15 +320,24 @@ test.describe("Page smoke tests", () => {
       });
       expect(response?.status()).toBe(200);
 
-      // Check no visible error banner
+      // Check no visible error banner. [role="alert"] alone is too broad -
+      // Next.js App Router injects its own accessibility route-announcer
+      // with role="alert" on every page (visually hidden via CSS clipping,
+      // not display:none, so Playwright's :visible still matches it) -
+      // confirmed live: the "error banner" had empty text on every single
+      // page. Require actual non-empty text so the announcer's empty div
+      // can't false-positive this check.
       const errorBanner = page.locator(
         '[role="alert"]:visible, .error-banner:visible',
       );
       const hasError = await errorBanner.isVisible().catch(() => false);
-      if (hasError) {
-        console.log(`${path}: error banner text: ${await errorBanner.first().textContent().catch(() => "<unreadable>")}`);
+      const errorText = hasError
+        ? (await errorBanner.first().textContent().catch(() => "")) ?? ""
+        : "";
+      if (hasError && errorText.trim()) {
+        console.log(`${path}: error banner text: ${errorText}`);
       }
-      expect(hasError).toBe(false);
+      expect(errorText.trim()).toBe("");
 
       // Check at least one heading or meaningful content
       const heading = page.locator("h1, h2");
