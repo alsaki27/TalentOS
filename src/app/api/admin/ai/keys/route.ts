@@ -162,7 +162,7 @@ export async function POST(req: NextRequest) {
 
   const validProviders: AiProvider[] = [
     "anthropic", "nvidia", "openai", "glm", "google", "google_vertex_proxy",
-    "groq", "openrouter", "deepseek", "local", "opencode",
+    "groq", "openrouter", "deepseek", "local", "opencode", "moonshot", "openai_compatible",
   ];
   if (!validProviders.includes(provider)) {
     return NextResponse.json({ error: `Invalid provider: ${provider}` }, { status: 400 });
