@@ -85,9 +85,9 @@ export function buildProviderFromDbKey(
       const apiUrl = resolveApiUrl(baseUrl, chatEndpoint, defaultUrl);
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
-      const MAX_TOKENS = 256;
+      const DEFAULT_MAX_TOKENS = 4096;
       return {
-        async send({ system, messages }) {
+        async send({ system, messages, temperature, maxTokens }) {
           const res = await fetch(apiUrl, {
             method: "POST",
             headers: {
@@ -97,7 +97,8 @@ export function buildProviderFromDbKey(
             },
             body: JSON.stringify({
               model: model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-              max_tokens: MAX_TOKENS,
+              max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+              temperature,
               system,
               messages: messages.map((m) => ({
                 role: m.role,
@@ -123,7 +124,7 @@ export function buildProviderFromDbKey(
       const apiUrl = baseUrl || (preset ? preset.baseUrl + preset.chatEndpoint : "https://integrate.api.nvidia.com/v1/chat/completions");
       const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
       return {
-        async send({ system, messages }) {
+        async send({ system, messages, temperature, maxTokens }) {
           const res = await fetch(apiUrl, {
             method: "POST",
             headers: {
@@ -133,8 +134,8 @@ export function buildProviderFromDbKey(
             body: JSON.stringify({
               model: model || process.env.NVIDIA_MODEL || DEFAULT_MODEL,
               messages: [{ role: "system", content: system }, ...messages.map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n") }))],
-              max_tokens: 128,
-              temperature: 0.4,
+              max_tokens: maxTokens ?? 4096,
+              temperature: temperature ?? 0.4,
               stream: false,
             }),
           });
@@ -157,7 +158,7 @@ export function buildProviderFromDbKey(
       const apiBase = baseUrl || (preset ? `${preset.baseUrl}/v1beta/models` : "https://generativelanguage.googleapis.com/v1beta/models");
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
-        async send({ system, messages }) {
+        async send({ system, messages, temperature, maxTokens }) {
           const resolvedModel = model || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
           const url = `${apiBase}/${resolvedModel}:generateContent`;
 
@@ -173,8 +174,8 @@ export function buildProviderFromDbKey(
           const body: Record<string, any> = {
             contents: geminiMessages,
             generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 64,
+              temperature: temperature ?? 0.2,
+              maxOutputTokens: maxTokens ?? 4096,
             },
           };
 
