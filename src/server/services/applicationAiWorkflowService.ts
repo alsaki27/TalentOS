@@ -324,22 +324,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       completed_at: new Date().toISOString(),
     });
 
-    // Quality gate after Hiring Panel
+    // Hiring Panel = AI quality review, not a human gate.
+    // Always proceed to Final Polish. Human review happens in Falood Studio
+    // after the pipeline completes.
     if (agentId === "application_hiring_panel") {
       await syncWorkflowToApplication(workflowId, "running", currentIdx + 1);
-      const gateResult = await evaluateQualityGate(
-        agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
-        wf.application_id
-      );
-      if (!gateResult.passed) {
-        const isHardFail = gateResult.action === "fail";
-        await syncWorkflowToApplication(workflowId, isHardFail ? "failed" : "waiting", undefined, gateResult.reason ?? undefined);
-        await updateWorkflowStatus(workflowId, isHardFail ? "failed" : "waiting", {
-          current_stage: currentIdx + 1,
-          last_error: gateResult.reason ?? undefined,
-        });
-        return;
-      }
     }
 
     // Final polish complete → finalize
@@ -358,6 +347,12 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     // Advance to next stage and re-queue
     await continueToNextStage(workflowId, currentIdx + 1);
     await syncWorkflowToApplication(workflowId, "queued");
+
+    // Immediately dispatch the next stage so the pipeline doesn't stall
+    // between stages waiting for the 5-minute cron dispatcher.
+    dispatchWorkflowById(workflowId).catch((err) => {
+      console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} failed:`, err);
+    });
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -371,6 +366,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         last_error: err.message,
       });
       await syncWorkflowToApplication(workflowId, "queued");
+
+      // Continue retry immediately — don't wait for cron
+      dispatchWorkflowById(workflowId).catch((retryErr) => {
+        console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, retryErr);
+      });
     } else {
       await updateWorkflowStatus(workflowId, "failed", { last_error: err.message });
       await syncWorkflowToApplication(workflowId, "failed", undefined, err.message);
