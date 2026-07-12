@@ -45,17 +45,16 @@ jobs:
         # browsers - "Run E2E tests" would fail immediately (browserType.launch:
         # Executable doesn't exist) on any test using the `page` fixture
         # (the whole "Page smoke tests" suite), independent of any secret.
-        if: false # SKIPPED (user-requested) - see "Run E2E tests" below
         run: npx playwright install --with-deps chromium
 
       - name: Run E2E tests
-        # TEMPORARY (skipped, user-requested): the AI-pipeline poll in this
-        # suite burns its full timeout every run since AI completion isn't
-        # expected to finish in CI (per the test file's own docstring) - each
-        # deploy was losing ~10 minutes to a step already set to
-        # continue-on-error, i.e. non-blocking. Remove `if: false` to
-        # re-enable once faster or no longer needed for every push.
-        if: false
+        # Re-enabled for one real run: deploy just succeeded for the first
+        # time (schema fixes + Worker deploy + live health all passed), so
+        # this is the first point where E2E actually tests the NEW code
+        # instead of stale production. Re-disable with `if: false` again
+        # after reading this run's result if it's still too slow to run on
+        # every push (continue-on-error below already makes it non-blocking
+        # either way).
         # tests/e2e/coreWorkflow.spec.ts hard-fails (no silent skip) if CRON_SECRET
         # is missing from its environment - that secret already exists in this repo
         # (see the "Verify AI key encryption readiness" step below) but was never
