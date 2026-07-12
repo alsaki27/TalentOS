@@ -453,7 +453,10 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
     setExpandedKey(id);
     try {
       const res = await fetch(`/api/admin/ai/keys/${id}/assignments`);
-      if (res.ok) setKeyAssignments(p => ({ ...p, [id]: await res.json() }));
+      if (res.ok) {
+        const data = await res.json();
+        setKeyAssignments(p => ({ ...p, [id]: data }));
+      }
     } catch {}
   }
 

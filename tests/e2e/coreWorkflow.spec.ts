@@ -9,7 +9,7 @@
  * Without these env vars, all tests skip gracefully with test.skip().
  */
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 const BASE_URL = process.env.TEST_BASE_URL || "http://localhost:3000";
 const ADMIN_EMAIL = process.env.TEST_ADMIN_EMAIL || "";
@@ -17,8 +17,7 @@ const ADMIN_PASSWORD = process.env.TEST_ADMIN_PASSWORD || "";
 const TEST_JOB_ID = process.env.TEST_JOB_ID || "";
 const HAS_CREDENTIALS = Boolean(ADMIN_EMAIL && ADMIN_PASSWORD);
 
-async function loginAsAdmin(page: ReturnType<typeof test["info"] extends () => infer I ? never : any>) {
-  // actually just return page after login
+async function loginAsAdmin(page: Page): Promise<Page> {
   await page.goto(`${BASE_URL}/login`);
   await page.fill('input[name="email"]', ADMIN_EMAIL);
   await page.fill('input[name="password"]', ADMIN_PASSWORD);
