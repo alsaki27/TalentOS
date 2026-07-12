@@ -118,10 +118,13 @@ export async function upsertTargetJobByCandidateAndJob(
     }) as (string | number | boolean | object | Date | null)[];
     const placeholders = allCols.map((_, i) => `$${i + 1}`).join(", ");
     const updateCols = allCols.filter((c) => c !== "candidate_id" && c !== "job_id");
+    // target_jobs has no updated_at column (unlike most other tables in this schema) —
+    // don't append it here, it breaks the DO UPDATE SET clause at parse time even on
+    // a fresh insert (Postgres validates the target list regardless of conflict path).
     const updateClause =
       updateCols.length > 0
-        ? updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ") + ", updated_at = NOW()"
-        : "updated_at = NOW()";
+        ? updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ")
+        : "candidate_id = EXCLUDED.candidate_id";
     const sql = `
       INSERT INTO target_jobs (${allCols.join(", ")}) VALUES (${placeholders})
       ON CONFLICT (candidate_id, job_id) DO UPDATE SET ${updateClause}
@@ -145,7 +148,8 @@ export async function updateTargetJob(id: string, updates: Record<string, unknow
     const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
     const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
     values.push(id);
-    const sql = `UPDATE target_jobs SET ${setClause}, updated_at = NOW() WHERE id = $${keys.length + 1} RETURNING *`;
+    // target_jobs has no updated_at column — see upsertTargetJobByCandidateAndJob above.
+    const sql = `UPDATE target_jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`;
     return queryOne<any>(sql, values);
   }
   const { data, error } = await supabase.from("target_jobs").update(updates).eq("id", id).select().single();

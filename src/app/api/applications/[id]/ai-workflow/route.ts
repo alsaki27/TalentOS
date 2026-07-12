@@ -126,18 +126,13 @@ export async function POST(
     );
   }
   if (!resumeRow && appRow.job_id) {
-    try {
-      resumeRow = await materializeFromBaseResume(
-        appRow.candidate_id,
-        appRow.job_id,
-        applicationId,
-        job,
-        context?.profile.user_id,
-      );
-    } catch (diagErr: any) {
-      // TEMP DIAGNOSTIC — remove once the 500 here is root-caused.
-      return NextResponse.json({ error: `DIAG materializeFromBaseResume: ${diagErr?.message ?? diagErr}`, stack: diagErr?.stack }, { status: 500 });
-    }
+    resumeRow = await materializeFromBaseResume(
+      appRow.candidate_id,
+      appRow.job_id,
+      applicationId,
+      job,
+      context?.profile.user_id,
+    );
   }
   if (!resumeRow) {
     return NextResponse.json({
