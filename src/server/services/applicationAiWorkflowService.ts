@@ -214,9 +214,17 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     return;
   }
 
+  // ai_agent_configs.temperature is a Postgres `numeric` column - the driver
+  // returns it as a string (e.g. "0.20"), not a JS number. Providers like
+  // OpenAI reject a string temperature outright ("Invalid type for
+  // 'temperature': expected a decimal, but got a string instead").
+  const rawTemperature = agentConfig?.temperature;
+  const parsedTemperature =
+    rawTemperature == null ? undefined : Number(rawTemperature);
+
   const agentOptions: AgentOptions = {
     system_prompt: agentConfig?.system_prompt ?? undefined,
-    temperature: agentConfig?.temperature ?? undefined,
+    temperature: Number.isFinite(parsedTemperature) ? parsedTemperature : undefined,
     max_output_tokens: agentConfig?.max_output_tokens ?? undefined,
     timeout_ms: agentConfig?.timeout_ms ?? undefined,
   };
