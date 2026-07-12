@@ -171,19 +171,33 @@ function statusBadge(status: string): string {
   return STATUS_BADGE[status] || "badge-info";
 }
 
-function formatCost(cost: number | null | undefined): string {
-  if (cost == null || isNaN(cost)) return "—";
-  return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
+// Postgres `numeric`/`decimal` columns (estimated_cost_usd, etc.) are
+// serialized as strings by the Neon driver to preserve precision, not
+// numbers - isNaN("0.05") coerces and returns false, so a `typeof number`
+// guard is required before .toFixed(), not just an isNaN check (confirmed
+// live: "TypeError: e.toFixed is not a function" crashed this whole page).
+function toNumberOrNull(v: number | string | null | undefined): number | null {
+  if (v == null) return null;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return isNaN(n) ? null : n;
 }
 
-function formatNumber(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
-  return n.toLocaleString();
+function formatCost(cost: number | string | null | undefined): string {
+  const n = toNumberOrNull(cost);
+  if (n == null) return "—";
+  return `$${n.toFixed(n < 0.01 ? 4 : 2)}`;
 }
 
-function formatPercent(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
-  return `${n.toFixed(1)}%`;
+function formatNumber(n: number | string | null | undefined): string {
+  const num = toNumberOrNull(n);
+  if (num == null) return "—";
+  return num.toLocaleString();
+}
+
+function formatPercent(n: number | string | null | undefined): string {
+  const num = toNumberOrNull(n);
+  if (num == null) return "—";
+  return `${num.toFixed(1)}%`;
 }
 
 function relativeTime(ts: string | null): string {
