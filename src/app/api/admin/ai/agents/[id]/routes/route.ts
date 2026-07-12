@@ -182,8 +182,9 @@ export async function PUT(
 
       await sql.transaction(queries);
     } catch (insertErr: any) {
+      console.error("[routes:PUT] transaction failed:", insertErr?.message);
       return NextResponse.json(
-        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr) },
+        { error: "Failed to update routes.", detail: sanitizeApiError(insertErr), _debug: insertErr?.message ?? String(insertErr) },
         { status: 500 }
       );
     }
