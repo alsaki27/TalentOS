@@ -41,7 +41,29 @@ jobs:
       - run: npm test
 
       - name: Run E2E tests
+        # tests/e2e/coreWorkflow.spec.ts hard-fails (no silent skip) if CRON_SECRET
+        # is missing from its environment - that secret already exists in this repo
+        # (see the "Verify AI key encryption readiness" step below) but was never
+        # wired into this step, so every deploy failed here unconditionally. Points
+        # TEST_BASE_URL at the live Worker, same as the post-deploy checks below -
+        # this step only exercises workflow creation/dispatch via the API (per the
+        # test file's own docstring, it does not wait on live AI model inference).
+        #
+        # TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD are also required (the "Page smoke
+        # tests" suite throws instead of skipping without them, same hardening as
+        # CRON_SECRET above) but no secret by that name appears to exist yet in
+        # this repo - nothing else in .github/workflows/ references it. If unset,
+        # this step will now fail with an explicit "Missing browser credentials"
+        # error instead of the previous opaque failure - add
+        # TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD repo secrets, pointing at a
+        # dedicated test/service account rather than a real admin's personal
+        # login, to make this suite pass.
         run: npm run test:e2e
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TEST_BASE_URL: https://skarion-talent-os.skarion-talentos.workers.dev
+          TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
 
       - name: Build for Cloudflare (OpenNext)
         # Next.js's "Collecting page data" build phase evaluates route
