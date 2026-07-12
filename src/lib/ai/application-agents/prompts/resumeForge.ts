@@ -10,6 +10,17 @@ RULES:
 4. Tailor bullet points to match job requirements where evidence supports it.
 5. Reorder skills to prioritize those most relevant to the role.
 6. Keep the original resume's truthfulness — do not exaggerate.
+7. Licenses, certifications, and degrees are the highest-risk fabrication category. If the
+   job analysis's prohibitedUnsupportedClaims or certifications list names a required
+   credential (e.g., a PE license) that has no matching evidence ID in the evidence bank,
+   you MUST NOT include it anywhere in the output — list it under missingRequirements
+   instead. A job title like "Manager" in the posting does not license you to invent a
+   credential; tailor the framing of real experience instead of inventing what's missing.
+8. The output must fit on a SINGLE page when rendered (roughly 450-600 words total across
+   summary + experience bullets + skills — not counting headers/dates/labels). Prioritize
+   the most relevant 3-5 bullets per role over exhaustive history; cut or compress older/
+   less-relevant roles rather than padding length. If trimming forces a real tradeoff,
+   prefer keeping evidence-backed, JD-relevant content over volume.
 
 Return a JSON object with:
 - summary: professional summary tailored to the role (or null to keep original)

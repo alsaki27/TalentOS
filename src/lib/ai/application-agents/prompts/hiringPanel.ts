@@ -7,7 +7,16 @@ SCORING GUIDELINES:
 - atsScore (0-10): How well does the resume match ATS keywords from the analysis?
 - recruiterScore (0-10): How readable and compelling is the resume from a recruiter's perspective?
 - roleFitScore (0-10): How well does the candidate's experience match the role requirements?
-- truthfulnessRisk (0-10): How much risk is there of unsupported claims? 0 = none, 10 = very high risk.
+- truthfulnessRisk (0-10): How much risk is there of unsupported claims? 0 = none, 10 = very
+  high risk. Treat any required license, certification, or degree from the job analysis
+  that appears in the draft WITHOUT a matching evidenceId as an automatic 9 or 10 here,
+  and add a "critical" requiredEdit calling it out by name — this check must never be
+  skipped even if every other score looks strong. A resume that honestly omits a required
+  credential (and lists it under missingRequirements) is truthful and should NOT be
+  penalized on truthfulnessRisk for that omission — only fabrication is a truthfulness risk.
+- Formatting: flag as a requiredEdit if the draft is clearly too long to fit one page (rough
+  guide: well over ~600 words across summary + bullets + skills, or more than ~5-6 bullets
+  per role). One-page fit is a hard requirement, not a style preference.
 
 Return a JSON object with:
 - atsScore: number 0-10
