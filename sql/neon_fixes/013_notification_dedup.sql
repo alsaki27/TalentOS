@@ -14,7 +14,7 @@ BEGIN
   IF EXISTS (
     WITH ranked AS (
       SELECT id, ROW_NUMBER() OVER (
-        PARTITION BY user_id, type, COALESCE(entity_type, ''), COALESCE(entity_id, ''), title
+        PARTITION BY user_id, type, COALESCE(entity_type, ''), COALESCE(entity_id::text, ''), title
         ORDER BY created_at ASC, id ASC
       ) AS rn
       FROM notifications
@@ -25,7 +25,7 @@ BEGIN
     DELETE FROM notifications n
     USING (
       SELECT id, ROW_NUMBER() OVER (
-        PARTITION BY user_id, type, COALESCE(entity_type, ''), COALESCE(entity_id, ''), title
+        PARTITION BY user_id, type, COALESCE(entity_type, ''), COALESCE(entity_id::text, ''), title
         ORDER BY created_at ASC, id ASC
       ) AS rn
       FROM notifications
@@ -36,5 +36,5 @@ BEGIN
 END $$;
 
 create unique index if not exists idx_notifications_dedup
-  on notifications (user_id, type, coalesce(entity_type, ''), coalesce(entity_id, ''), title)
+  on notifications (user_id, type, coalesce(entity_type, ''), coalesce(entity_id::text, ''), title)
   where created_at > now() - interval '48 hours';
