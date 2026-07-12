@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { execute } from "@/server/db/neon";
+import { sanitizeApiError } from "@/lib/utils";
+import { execute, queryOne } from "@/server/db/neon";
 import { testAiKey } from "@/server/services/aiProvider";
 
 export const dynamic = "force-dynamic";
@@ -50,12 +51,18 @@ export async function POST(
       metadata: { success: result.success, latencyMs: result.latencyMs },
     });
 
+    const keyMeta = await queryOne<{ supports_model_discovery: boolean; available_models: any; models_last_synced_at: string | null }>(
+      `SELECT supports_model_discovery, available_models, models_last_synced_at FROM ai_api_keys WHERE id = $1`,
+      [id]
+    );
+
     return NextResponse.json({
       success: result.success,
       latencyMs: result.latencyMs,
       error: result.error ?? null,
+      modelDiscovery: keyMeta?.supports_model_discovery ? { available: true, modelsLastSyncedAt: keyMeta.models_last_synced_at } : { available: false },
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });
   }
 }

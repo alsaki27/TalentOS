@@ -10,6 +10,7 @@ import {
   type AiApiKeyRow,
 } from "@/server/repositories/aiKeyRepository";
 import { testAiKey } from "@/server/services/aiProvider";
+import { discoverModelsForKey } from "@/server/services/aiModelDiscoveryService";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,30 @@ export async function GET() {
   }
 }
 
+function isSsrfTarget(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  if (lower === "localhost" || lower === "127.0.0.1" || lower === "::1" || lower === "0.0.0.0") return true;
+  const ipv4 = lower.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (ipv4) {
+    const [, a, b] = ipv4.map(Number);
+    if (a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return true;
+  }
+  return false;
+}
+
+function validateBaseUrl(url: string): string | null {
+  const isProd = process.env.NODE_ENV === "production" || !!process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (!isProd) return null;
+  if (process.env.ALLOW_LOCAL_AI_ENDPOINTS === "true") return null;
+  try {
+    const hostname = new URL(url).hostname;
+    if (isSsrfTarget(hostname)) return `base_url targets a private/internal host: ${hostname}`;
+    return null;
+  } catch {
+    return "base_url is not a valid URL";
+  }
+}
+
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
@@ -93,6 +118,25 @@ export async function POST(req: NextRequest) {
   const monthlyBudgetWarningUsd = typeof body.monthly_budget_warning_usd === "number" && body.monthly_budget_warning_usd > 0 ? body.monthly_budget_warning_usd : null;
   const dailyRequestWarning = typeof body.daily_request_warning === "number" && body.daily_request_warning > 0 ? body.daily_request_warning : null;
 
+  const providerMode = typeof body.provider_mode === "string" && body.provider_mode.trim() ? body.provider_mode.trim() : undefined;
+  const apiStyleValue = typeof body.api_style === "string" && body.api_style.trim() ? body.api_style.trim() : null;
+  const modelsEndpoint = typeof body.models_endpoint === "string" && body.models_endpoint.trim() ? body.models_endpoint.trim() : null;
+  const chatEndpoint = typeof body.chat_endpoint === "string" && body.chat_endpoint.trim() ? body.chat_endpoint.trim() : null;
+  const authHeaderName = typeof body.auth_header_name === "string" && body.auth_header_name.trim() ? body.auth_header_name.trim() : null;
+  const authScheme = typeof body.auth_scheme === "string" && body.auth_scheme.trim() ? body.auth_scheme.trim() : null;
+  const customHeaders = body.custom_headers !== null && typeof body.custom_headers === "object" && !Array.isArray(body.custom_headers) ? body.custom_headers : null;
+  const availableModels = Array.isArray(body.available_models) ? body.available_models : undefined;
+  const defaultModel = typeof body.default_model === "string" && body.default_model.trim() ? body.default_model.trim() : null;
+  const supportsModelDiscovery = body.supports_model_discovery === true;
+  const supportsTools = body.supports_tools !== undefined ? body.supports_tools === true : undefined;
+  const supportsJsonMode = body.supports_json_mode !== undefined ? body.supports_json_mode === true : undefined;
+  const supportsStreaming = body.supports_streaming !== undefined ? body.supports_streaming === true : undefined;
+
+  if (baseUrl) {
+    const ssrfError = validateBaseUrl(baseUrl);
+    if (ssrfError) return NextResponse.json({ error: ssrfError }, { status: 400 });
+  }
+
   if (!provider) {
     return NextResponse.json({ error: "provider is required" }, { status: 400 });
   }
@@ -120,6 +164,19 @@ export async function POST(req: NextRequest) {
       priority,
       isEnabled,
       createdBy: context?.profile.user_id,
+      providerMode,
+      apiStyle: apiStyleValue,
+      modelsEndpoint,
+      chatEndpoint,
+      authHeaderName,
+      authScheme,
+      customHeaders,
+      availableModels,
+      defaultModel,
+      supportsModelDiscovery,
+      supportsTools,
+      supportsJsonMode,
+      supportsStreaming,
     });
 
     if (
@@ -143,6 +200,10 @@ export async function POST(req: NextRequest) {
          WHERE id = $8`,
         [baseUrl, notes, dailyRequestLimit, monthlyRequestLimit, monthlyBudgetLimitUsd, monthlyBudgetWarningUsd, dailyRequestWarning, key.id]
       );
+    }
+
+    if (body.supports_model_discovery === true && baseUrl) {
+      discoverModelsForKey(key.id).catch(() => {});
     }
 
     await logActivity({
