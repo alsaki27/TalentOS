@@ -132,6 +132,7 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
 
   // Step 4: Application
   const [sourceType, setSourceType] = useState("base_resume");
+  const sourceTypeTouchedRef = useRef(false);
   const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
   const [status, setStatus] = useState("stacked");
   const [notes, setNotes] = useState("");
@@ -190,6 +191,7 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     setCandidateBaseResumes([]);
     setCandidateResumes([]);
     setSelectedBaseResumeId("");
+    sourceTypeTouchedRef.current = false;
     fetchCandidateAssets(c.id);
   }
 
@@ -462,14 +464,19 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     { value: "manual", label: "Manual", enabled: true },
   ];
 
-  // Auto-switch source type if current one becomes unavailable
+  // Pick the best available source type once candidate assets finish loading
+  // (base resume > uploaded resume > blank), unless the user already picked
+  // one themselves. Runs after assetsLoading flips false so it doesn't act
+  // on the momentarily-empty state right after a candidate is selected and
+  // downgrade to "blank" before candidateBaseResumes has actually loaded.
   useEffect(() => {
+    if (!selectedCandidate || assetsLoading || sourceTypeTouchedRef.current) return;
     const current = availableSourceTypes.find((s) => s.value === sourceType);
-    if (current && !current.enabled) {
-      const fallback = availableSourceTypes.find((s) => s.enabled);
-      if (fallback) setSourceType(fallback.value);
+    if (!current?.enabled) {
+      const best = availableSourceTypes.find((s) => s.enabled);
+      if (best) setSourceType(best.value);
     }
-  }, [hasBaseResumes, hasOriginalResume]);
+  }, [selectedCandidate, assetsLoading, hasBaseResumes, hasOriginalResume]);
 
   function stepClass(s: number) {
     return s === step ? "badge" : s < step ? "muted" : "muted";
@@ -844,7 +851,10 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                   <label>Resume Source</label>
                   <select
                     value={sourceType}
-                    onChange={(e) => setSourceType(e.target.value)}
+                    onChange={(e) => {
+                      sourceTypeTouchedRef.current = true;
+                      setSourceType(e.target.value);
+                    }}
                   >
                     {availableSourceTypes.map((s) => (
                       <option key={s.value} value={s.value} disabled={!s.enabled}>
