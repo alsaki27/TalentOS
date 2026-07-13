@@ -12,6 +12,7 @@ on:
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
     - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
+    - cron: '0 0 * * *'    # Job agent scrape – daily at 00:00 UTC
   workflow_dispatch:
     inputs:
       job:
@@ -27,6 +28,7 @@ on:
           - backup
           - job-categorization
           - ai-usage-rollup
+          - job-agent
           - email-queue
           - run-all
 
@@ -137,6 +139,23 @@ jobs:
       - name: Call Job categorization
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  job-agent:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 0 * * *') ||
+      github.event.inputs.job == 'job-agent' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Job agent scrape
+    steps:
+      - name: Call Job agent scrape
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/job-agent")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

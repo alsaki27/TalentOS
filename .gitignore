@@ -55,3 +55,6 @@ dataset_linkedin-jobs-scraper_*.json
 .trae/
 .wrangler-dryrun/
 tmp/
+
+# apify token files (never commit)
+apify_tokens.txt
