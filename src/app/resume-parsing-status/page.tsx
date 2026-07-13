@@ -27,12 +27,20 @@ interface ColumnDef {
   getStage: (wf: WorkflowCard) => boolean;
 }
 
+// current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens=0,
+// resume_forge=1, hiring_panel=2, final_polish=3) - it names the stage
+// currently running/about to run. Confirmed live: this board previously
+// shifted every column by one (a workflow whose stage_run was already
+// application_resume_forge still showed in the "Job Lens" column), making
+// an entire in-progress batch look stuck a step earlier than it really was.
+// "Queued" means status === "queued", regardless of which stage it's queued
+// for - not "stage 0", which is also what a *running* Job Lens looks like.
 const COLUMNS: ColumnDef[] = [
-  { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 0 },
-  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 1 },
-  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 2 },
-  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 3 },
-  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 4 },
+  { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status === "queued" },
+  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => w.status === "running" && w.current_stage === 0 },
+  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.status === "running" && w.current_stage === 1 },
+  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.status === "running" && w.current_stage === 2 },
+  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.status === "running" && w.current_stage === 3 },
   { id: "completed", label: "Completed", color: "var(--success)", getStage: (w) => w.status === "completed" },
   { id: "failed", label: "Failed", color: "var(--danger)", getStage: (w) => w.status === "failed" },
 ];

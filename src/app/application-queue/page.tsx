@@ -57,12 +57,18 @@ const STATUS_ICONS: Record<string, string> = {
   applied: "✅",
 };
 
+// current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens, resume_forge,
+// hiring_panel, final_polish) - it names the stage currently running/about to
+// run, not a count of completed stages. Confirmed live: this table previously
+// shifted every label by one (stage 1 shown as "Job Lens" while the actual
+// stage_run row was already application_resume_forge), making the whole batch
+// look stuck a step earlier than it actually was. "Queued" isn't a stage at
+// all - that's conveyed by the separate wfStatus badge next to this label.
 const WORKFLOW_LABELS: Record<number, string> = {
-  0: "Queued",
-  1: "🔍 Job Lens",
-  2: "📝 Resume Forge",
-  3: "👥 Hiring Panel",
-  4: "✨ Final Polish",
+  0: "🔍 Job Lens",
+  1: "📝 Resume Forge",
+  2: "👥 Hiring Panel",
+  3: "✨ Final Polish",
 };
 
 function IdCell({ value }: { value: string | null | undefined }) {
