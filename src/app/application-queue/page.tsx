@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import Link from "next/link";
 
 interface QueueItem {
@@ -118,7 +118,11 @@ export default function ApplicationQueuePage() {
     return p;
   }
 
-  async function load(pn: number = page, clearFeedback = true) {
+  // isBackgroundPoll = true means this load was triggered by the silent
+  // auto-poll below, not a real filter change or user action - it must not
+  // clobber whatever the user currently has open (selections, expanded
+  // workflow row, Falood panel), or every poll tick collapses their UI.
+  async function load(pn: number = page, clearFeedback = true, isBackgroundPoll = false) {
     setLoading(true);
     if (clearFeedback) setFeedback(null);
     try {
@@ -137,11 +141,13 @@ export default function ApplicationQueuePage() {
       setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
-      setSelected(new Set());
-      setFaloodOpen(null);
-      setExpandedWorkflow(null);
-      setWorkflowDetails({});
-      setFaloodResumes({});
+      if (!isBackgroundPoll) {
+        setSelected(new Set());
+        setFaloodOpen(null);
+        setExpandedWorkflow(null);
+        setWorkflowDetails({});
+        setFaloodResumes({});
+      }
       setPage(pn);
     } catch (err: any) {
       setFeedback({ kind: "error", text: err.message || "Load failed." });
@@ -155,15 +161,20 @@ export default function ApplicationQueuePage() {
   const pageRef = useRef(page);
   pageRef.current = page;
 
+  // Stable across re-renders unless it actually flips, so the poll timer
+  // isn't torn down and recreated on every single load (each load produces
+  // a new `items` array reference even when workflow activity is unchanged).
+  const hasActiveWorkflow = useMemo(
+    () => items.some(i => i.workflow_status && ["queued", "running"].includes(i.workflow_status)),
+    [items]
+  );
+
   // Auto-poll when visible items have active workflows (stale-closure safe)
   useEffect(() => {
-    const hasActive = items.some(i =>
-      i.workflow_status && ["queued", "running"].includes(i.workflow_status)
-    );
-    if (!hasActive) return;
-    const id = setInterval(() => loadRef.current(pageRef.current, false), 5000);
+    if (!hasActiveWorkflow) return;
+    const id = setInterval(() => loadRef.current(pageRef.current, false, true), 5000);
     return () => clearInterval(id);
-  }, [items]);
+  }, [hasActiveWorkflow]);
 
   const userMap = new Map(users.map((u) => [u.user_id, u]));
   const ownerLabel = (item: QueueItem) => {
