@@ -220,6 +220,23 @@ export async function triggerAiWorkflowForApplication(
     return { started: false, reason: "No base resume found for this candidate yet" };
   }
 
+  // The fallback resume-resolution path above (any prior base_resume
+  // version for this candidate, regardless of job) can return a version
+  // whose target_job_id points at a DIFFERENT job than this application's -
+  // e.g. a candidate applying to a 2nd, 3rd, 5th job reuses their existing
+  // base resume version rather than re-materializing one. Confirmed live:
+  // finalizeWorkflow() looks up target_jobs by (candidate_id, THIS job_id)
+  // and throws "No target_job found" when that row doesn't exist yet - so
+  // a candidate's 2nd+ application could run all 4 AI stages successfully
+  // and then fail at the very last step, after the AI cost was already
+  // spent. Upserting here (idempotent - materializeFromBaseResume may have
+  // already created this exact row) guarantees it exists before the
+  // pipeline ever starts, regardless of which resume-resolution path fired.
+  await upsertTargetJobByCandidateAndJob(appRow.candidate_id, appRow.job_id, {
+    raw_description: jobDescriptionForTargetJob(job),
+    created_by: startedBy,
+  });
+
   const evidence = await query(
     "SELECT * FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
     [appRow.candidate_id]
