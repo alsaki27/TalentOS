@@ -19,9 +19,14 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 4. Maintain professional formatting throughout.
 5. The final output MUST fit on a single page (roughly 450-600 words total across summary +
    experience bullets + skills). If the draft or reviewer feedback pushes it over that, trim
-   least-relevant bullets/older roles first — do not shrink font/spacing conceptually or pad
-   whitespace to "cheat" the limit; the trimmed content itself must be shorter. Only set
-   exportReady to true once the result genuinely fits one page.
+   least-relevant bullets or entire older/less-relevant roles first — do not shrink
+   font/spacing conceptually or pad whitespace to "cheat" the limit; the trimmed content
+   itself must be shorter. Only set exportReady to true once the result genuinely fits one
+   page.
+6. NEVER leave a role you keep with zero bullets. Trimming means cutting the weakest bullets
+   within a role down to its strongest 2-4, or removing the entire role if it's not worth
+   including — a kept role with an empty bullets array is not a trimmed resume, it's a
+   broken one, and exportReady must never be true if that happens.
 
 Return a JSON object with:
 - summary: final professional summary (or null)

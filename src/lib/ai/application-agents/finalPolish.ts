@@ -39,5 +39,20 @@ export async function runFinalPolish(
   const parsed = JSON.parse(stripped);
   const validated = FinalResumeSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Final Polish output validation failed: ${validated.error}`);
+
+  // Defense in depth against the exact failure the prompt now explicitly
+  // forbids: confirmed live, the model can satisfy the single-page word
+  // count by wiping every bullet from a kept role (empty bullets array)
+  // while still setting exportReady: true and a high finalQaScore - a
+  // schema-valid but practically broken resume. Force a retry rather than
+  // let a gutted resume through, since the prompt instruction alone isn't
+  // a guarantee.
+  const emptyBulletRoles = validated.experience.filter((e) => e.bullets.length === 0);
+  if (emptyBulletRoles.length > 0 && validated.exportReady) {
+    throw new Error(
+      `Final Polish left ${emptyBulletRoles.length} kept role(s) with zero bullets while marking exportReady - rejecting: ${emptyBulletRoles.map((e) => e.title).join(", ")}`
+    );
+  }
+
   return validated;
 }
