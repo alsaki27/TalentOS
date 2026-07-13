@@ -157,3 +157,5 @@ describe("buildProviderFromDbKey — google_vertex_proxy authenticates via Cloud
     expect(provider).toHaveProperty("send");
   });
 });
+
+
