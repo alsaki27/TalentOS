@@ -587,13 +587,26 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   }
 }
 
-/** Claim and process up to 3 queued workflows per invocation to clear backlogs.
+// Each stage involves ~15-20 DB round-trips (findWorkflowById, agent config
+// lookup, stage_run/artifact reads and writes, heartbeat, usage recording,
+// continueToNextStage's status updates, etc.) plus the AI provider call
+// itself - all counted as subrequests against a single Cloudflare Workers
+// invocation's limit. Confirmed live: processing 3 workflows in one
+// dispatch call hit "Too many subrequests by single Worker invocation" once
+// several workflows were in flight together. Dropped to 1 per invocation -
+// the cron loop's ~15s polling cadence (scheduled-jobs.yml) more than makes
+// up for the smaller batch, without risking a whole dispatch call dying
+// mid-batch and leaving later workflows in that batch untouched.
+const WORKFLOWS_PER_DISPATCH_CALL = 1;
+
+/** Claim and process up to WORKFLOWS_PER_DISPATCH_CALL queued workflows per
+ *  invocation, staying under Cloudflare's per-invocation subrequest limit.
  *  Returns dispatch result metadata with the count of workflows processed. */
 export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
   let count = 0;
   let lastDispatched: { id: string; current_stage: number } | null = null;
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < WORKFLOWS_PER_DISPATCH_CALL; i++) {
     const wf = await claimNextPendingWorkflow();
     if (!wf) break;
     lastDispatched = wf;
