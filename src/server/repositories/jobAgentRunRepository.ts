@@ -123,6 +123,16 @@ export async function listRuns(
 }
 
 /**
+ * List all runs currently in 'running' state.
+ */
+export async function listRunningRuns(): Promise<JobAgentRunRow[]> {
+  const rows = await query<JobAgentRunRow>(
+    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE status = 'running'`
+  );
+  return rows;
+}
+
+/**
  * Get a single run with tier-count summary.
  */
 export async function getRunById(id: string): Promise<JobAgentRunSummary | null> {

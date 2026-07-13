@@ -32,13 +32,16 @@ async function decryptTokenSafe(encrypted: string): Promise<string> {
   return await decryptSecret(encrypted);
 }
 
-async function getTodaySpendForToken(tokenId: string): Promise<number> {
-  const row = await queryOne<{ total: number }>(
-    `SELECT COALESCE(SUM(estimated_cost_usd), 0) as total
-     FROM job_agent_runs WHERE token_id = $1 AND started_at >= CURRENT_DATE`,
-    [tokenId]
+async function getTodaySpendForAllTokens(): Promise<Record<string, number>> {
+  const rows = await query<{ token_id: string; total: number }>(
+    `SELECT token_id, COALESCE(SUM(estimated_cost_usd), 0) as total
+     FROM job_agent_runs 
+     WHERE started_at >= CURRENT_DATE 
+     GROUP BY token_id`
   );
-  return Number(row?.total ?? 0);
+  const map: Record<string, number> = {};
+  for (const r of rows) map[r.token_id] = Number(r.total ?? 0);
+  return map;
 }
 
 /**
@@ -49,6 +52,16 @@ export async function listTokens(): Promise<{ id: string; label: string | null; 
     `SELECT id, label, priority, is_active, last_error, last_error_at FROM job_agent_apify_tokens ORDER BY priority ASC, created_at ASC`
   );
   return rows.map((r) => ({ id: r.id, label: r.label, priority: r.priority, is_active: r.is_active, last_error: r.last_error, last_error_at: r.last_error_at }));
+}
+
+/**
+ * Get a decrypted token string by ID.
+ */
+export async function getTokenById(id: string): Promise<string | null> {
+  const row = await queryOne<{ token_encrypted: string }>(`SELECT token_encrypted FROM job_agent_apify_tokens WHERE id = $1`, [id]);
+  const encrypted = row?.token_encrypted;
+  if (!encrypted) return null;
+  return await decryptTokenSafe(encrypted);
 }
 
 /**
@@ -73,6 +86,8 @@ export async function rotateToken(): Promise<{ id: string; token: string; label:
     `SELECT * FROM job_agent_apify_tokens WHERE is_active = true ORDER BY priority ASC, created_at ASC`
   );
 
+  const spends = await getTodaySpendForAllTokens();
+
   for (const row of rows) {
     // Skip tokens errored today (quota/limit) — they reset tomorrow
     if (row.last_error_at) {
@@ -80,7 +95,7 @@ export async function rotateToken(): Promise<{ id: string; token: string; label:
       const today = new Date().toDateString();
       if (errDate === today) continue;
     }
-    const spend = await getTodaySpendForToken(row.id);
+    const spend = spends[row.id] || 0;
     if (spend >= DAILY_SPEND_LIMIT) continue;
     try {
       const token = await decryptTokenSafe(row.token_encrypted);

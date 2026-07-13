@@ -31,6 +31,7 @@ export default function JobAgentPage() {
 
   const [selectedRoleGroups, setSelectedRoleGroups] = useState<Set<string>>(new Set());
   const [selectedKeywordGroups, setSelectedKeywordGroups] = useState<Set<string>>(new Set());
+  const [dateInterval, setDateInterval] = useState("today");
   const [running, setRunning] = useState(false);
 
   const [expandedRoleBrowser, setExpandedRoleBrowser] = useState(false);
@@ -73,7 +74,7 @@ export default function JobAgentPage() {
       return;
     }
     try {
-      const res = await fetch("/api/job-agent/runs", { method: "POST", headers: { "Content-Type": "application/json" },         body: JSON.stringify({ roleGroups: groups, customKeywords })  });
+      const res = await fetch("/api/job-agent/runs", { method: "POST", headers: { "Content-Type": "application/json" },         body: JSON.stringify({ roleGroups: groups, customKeywords, dateInterval })  });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "Run failed");
       setMessage(`Run started: ${d.runId}`);
@@ -162,6 +163,17 @@ export default function JobAgentPage() {
           </div>
         </div>
       )}
+
+      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <h3 style={{ fontSize: 14, margin: 0 }}>Date Posted</h3>
+        <select value={dateInterval} onChange={(e) => setDateInterval(e.target.value)} className="input" style={{ width: "auto", padding: "4px 8px" }}>
+          <option value="today">Today</option>
+          <option value="2 days">2 Days</option>
+          <option value="7 days">7 Days</option>
+          <option value="30 days">30 Days</option>
+          <option value="any">Any Time</option>
+        </select>
+      </div>
 
       <button className="btn-primary" onClick={runNow} disabled={running}>{running ? "Running…" : "Run Now"}</button>
     </div>

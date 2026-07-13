@@ -21,6 +21,7 @@ export interface ExecuteRunOptions {
   useAi?: boolean;
   roleGroups?: string[];
   customKeywords?: string[];
+  dateInterval?: string;
 }
 
 export interface ExecuteRunResult {
@@ -73,8 +74,9 @@ export async function createPendingRun(
 }
 
 /**
- * Run the full pipeline for an already-created run record. Call this in the background.
- * Retries with the next token in the pool if the current one hits a quota/limit error.
+ * Starts the Apify run for a pending run record. Call this in the background.
+ * Because Cloudflare limits execution time to 30s, this function only STARTS the run on Apify.
+ * A separate polling mechanism (e.g. cron) must check status and call processApifyRunData().
  */
 export async function executeRunFromRecord(
   runId: string,
@@ -98,7 +100,7 @@ export async function executeRunFromRecord(
       const apifyInput = {
         searchQueries,
         maxResults,
-        datePosted: "today",
+        datePosted: options.dateInterval ?? "today",
         employmentType: "any",
         proxyCountry: "US",
       };
@@ -106,36 +108,9 @@ export async function executeRunFromRecord(
       const { runId: apifyRunId, datasetId } = await startApifyRun(ACTOR_ID, currentToken.token, apifyInput);
       await updateRunStatus(runId, { apify_run_id: apifyRunId, apify_dataset_id: datasetId, token_id: currentToken.id });
 
-      const finalStatus = await pollApifyRun(apifyRunId, currentToken.token);
-      if (finalStatus !== "SUCCEEDED") {
-        throw new Error(`Apify run finished with status: ${finalStatus}`);
-      }
-
-      const items = await fetchApifyDataset(datasetId, currentToken.token);
-      const rawCount = items.length;
-      await updateRunStatus(runId, { raw_count: rawCount });
-
-      const { deduped, duplicateCount: inRunDups } = dedupeInRun(items);
-      const { uniqueJobs, duplicateCount: crossRunDups } = await dedupeAcrossRunsAndJobs(deduped);
-      const totalDupes = inRunDups + crossRunDups;
-
-      const classifiedJobs = await classifyJobs(uniqueJobs, options.useAi ?? true);
-      const stagedRows = classifiedJobs.map((j) => toStagedJobRow(runId, j));
-      await insertStagedJobs(runId, stagedRows);
-
-      const classifiedCount = stagedRows.filter((j) => !j.is_duplicate).length;
-      const estimatedCostUsd = rawCount * COST_PER_RESULT_USD;
-
-      await updateRunStatus(runId, {
-        status: "succeeded",
-        deduped_count: deduped.length,
-        skipped_count: totalDupes,
-        classified_count: classifiedCount,
-        estimated_cost_usd: estimatedCostUsd,
-        completed_at: new Date().toISOString(),
-      });
-
-      return { runId, status: "succeeded", rawCount, dedupedCount: deduped.length, classifiedCount, duplicateCount: totalDupes, estimatedCostUsd, tokenLabel: currentToken.label };
+      // Run successfully started! We exit now so Cloudflare doesn't kill us.
+      // Cron will poll Apify and call processApifyRunData.
+      return { runId, status: "running", rawCount: 0, dedupedCount: 0, classifiedCount: 0, duplicateCount: 0, estimatedCostUsd: 0, tokenLabel: currentToken.label };
     } catch (err: any) {
       const message = err.message ?? "Run failed";
       const msgLower = message.toLowerCase();
@@ -158,7 +133,56 @@ export async function executeRunFromRecord(
   }
 }
 
-/** Convenience: create + execute synchronously (for cron). */
+/**
+ * Called by a cron job or webhook when an Apify run finishes successfully.
+ * Downloads the dataset, dedupes, classifies, and inserts into staged jobs.
+ */
+export async function processApifyRunData(
+  runId: string,
+  datasetId: string,
+  token: string,
+  options: { useAi?: boolean } = {}
+): Promise<void> {
+  try {
+    const items = await fetchApifyDataset(datasetId, token);
+    const rawCount = items.length;
+    await updateRunStatus(runId, { raw_count: rawCount });
+
+    const { deduped, duplicateCount: inRunDups } = dedupeInRun(items);
+    const { uniqueJobs, duplicateCount: crossRunDups } = await dedupeAcrossRunsAndJobs(deduped);
+    const totalDupes = inRunDups + crossRunDups;
+
+    const classifiedJobs = await classifyJobs(uniqueJobs, options.useAi ?? true);
+    const stagedRows = classifiedJobs.map((j) => toStagedJobRow(runId, j));
+    await insertStagedJobs(runId, stagedRows);
+
+    const classifiedCount = stagedRows.filter((j) => !j.is_duplicate).length;
+    const estimatedCostUsd = rawCount * COST_PER_RESULT_USD;
+
+    await updateRunStatus(runId, {
+      status: "succeeded",
+      deduped_count: deduped.length,
+      skipped_count: totalDupes,
+      classified_count: classifiedCount,
+      estimated_cost_usd: estimatedCostUsd,
+      completed_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    const message = err.message ?? "Processing failed";
+    await updateRunStatus(runId, { status: "failed", error: message, completed_at: new Date().toISOString() });
+    throw err;
+  }
+}
+
+export async function checkApifyRunStatus(apifyRunId: string, token: string): Promise<string> {
+  const url = `${APIFY_BASE_URL}/actor-runs/${apifyRunId}?token=${encodeURIComponent(token)}`;
+  const res = await fetch(url);
+  if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Status check failed (${res.status}): ${text}`); }
+  const data = await res.json();
+  return data?.data?.status;
+}
+
+/** Convenience: create + execute synchronously (for cron). Note: Cron must now poll later! */
 export async function executeRun(options: ExecuteRunOptions = {}): Promise<ExecuteRunResult> {
   const { runId, config, roleGroups, token } = await createPendingRun(options);
   return executeRunFromRecord(runId, config, roleGroups, token, options);
@@ -186,19 +210,7 @@ async function startApifyRun(actorId: string, token: string, input: Record<strin
   return { runId, datasetId };
 }
 
-async function pollApifyRun(runId: string, token: string): Promise<string> {
-  const startedAt = Date.now();
-  const url = `${APIFY_BASE_URL}/actor-runs/${runId}?token=${encodeURIComponent(token)}`;
-  while (Date.now() - startedAt < POLL_TIMEOUT_MS) {
-    const res = await fetch(url);
-    if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Poll failed (${res.status}): ${text}`); }
-    const data = await res.json();
-    const status = data?.data?.status;
-    if (["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"].includes(status)) return status;
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-  }
-  throw new Error(`Apify run polling timed out after ${POLL_TIMEOUT_MS / 60_000} minutes`);
-}
+// (Removed pollApifyRun)
 
 async function fetchApifyDataset(datasetId: string, token: string): Promise<ApifyDatasetItem[]> {
   const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true`;

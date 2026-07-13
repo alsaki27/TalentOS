@@ -6,7 +6,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { listRuns } from "@/server/repositories/jobAgentRunRepository";
 import { createPendingRun, executeRunFromRecord } from "@/server/services/jobAgentService";
-import { runInBackground } from "@/lib/backgroundExecution";
 
 export const dynamic = "force-dynamic";
 
@@ -33,19 +32,17 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const testMode = body.testMode === true;
   const useAi = body.useAi !== false;
+  const dateInterval = typeof body.dateInterval === "string" ? body.dateInterval : "today";
   const roleGroups: string[] = Array.isArray(body.roleGroups) ? body.roleGroups.filter(Boolean) : [];
   const customKeywords: string[] = Array.isArray(body.customKeywords) ? body.customKeywords.filter(Boolean) : [];
 
   let result: { runId: string; config: any; roleGroups: string[]; token: any };
   try {
-    result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords });
+    result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords, dateInterval });
+    await executeRunFromRecord(result.runId, result.config, result.roleGroups, result.token, { testMode, useAi, customKeywords, dateInterval });
   } catch (err: any) {
     return NextResponse.json({ error: err.message ?? "Run failed" }, { status: 500 });
   }
-
-  runInBackground(req, async () => {
-    await executeRunFromRecord(result.runId, result.config, result.roleGroups, result.token, { testMode, useAi, customKeywords });
-  });
 
   return NextResponse.json({ runId: result.runId, status: "pending" });
 }
