@@ -104,11 +104,20 @@ export default function A4Preview({
 
   useEffect(() => { setInternalZoom(zoom); }, [zoom]);
 
+  useEffect(() => {
+    if (paperRef.current) {
+      setMeasuredHeight(paperRef.current.scrollHeight);
+    }
+  }, [content, internalZoom]);
+
   // Defensive guard: legacy AI workflows stored raw FinalResumeV1 (no header,
   // flat skills[]) as content. The caller should normalize before passing,
   // but never trust that — if content.header is missing, bail safely instead
-  // of crashing on content.header.fullName. Placed AFTER all hooks so React's
-  // rules-of-hooks aren't violated.
+  // of crashing on content.header.fullName. Genuinely placed after all hooks
+  // this time - both useEffects above are unconditional every render; only
+  // the JSX output differs. (The previous version of this guard sat between
+  // the two useEffect calls, which is still a rules-of-hooks violation
+  // despite its own comment claiming otherwise - confirmed by CI's lint step.)
   if (!content || typeof content !== "object" || !content.header) {
     return (
       <div className="a4-preview-wrapper">
@@ -126,12 +135,6 @@ export default function A4Preview({
   const A4_WIDTH_PX = 794;
   const A4_HEIGHT_PX = 1123;
   const MARGIN_PX = 56; // ~0.5 inch
-
-  useEffect(() => {
-    if (paperRef.current) {
-      setMeasuredHeight(paperRef.current.scrollHeight);
-    }
-  }, [content, internalZoom]);
 
   const isActive = (section: string) => activeSection === section;
 
