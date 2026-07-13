@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { analyzeFile } from "@/lib/normalizer";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 
 function normalizeHeader(h: string): string {
@@ -48,19 +47,9 @@ export async function POST(req: NextRequest) {
   }
 
   let profiles: ImportProfile[] = [];
-  if (isNeon()) {
-    profiles = await query<ImportProfile>(
-      'SELECT id, label, column_map FROM import_profiles ORDER BY created_at DESC'
-    );
-  } else {
-    // Fallback for Supabase (legacy)
-    const { supabase } = await import("@/lib/supabase");
-    const { data } = await supabase
-      .from("import_profiles")
-      .select("id, label, column_map")
-      .order("created_at", { ascending: false });
-    profiles = (data ?? []) as ImportProfile[];
-  }
+  profiles = await query<ImportProfile>(
+    'SELECT id, label, column_map FROM import_profiles ORDER BY created_at DESC'
+  );
 
   const matchingProfiles = profiles
     .map((profile) => ({

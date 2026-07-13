@@ -10,7 +10,6 @@
 //   - Skips suggestions that cannot be safely matched.
 //   - Only applies suggestions with status='accepted' and truth_status !== 'fabrication_risk'.
 
-import { supabase } from "@/lib/supabase";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import {
   findResumeVersionById,
@@ -24,6 +23,9 @@ import {
   updateSuggestion,
   ApplicationResumeSuggestionRow,
 } from "@/server/repositories/applicationResumeSuggestionsRepository";
+import { findLatestOriginalResume } from "@/server/repositories/candidateEvidenceRepository";
+import { findLatestBaseResumeFull } from "@/server/repositories/baseResumesRepository";
+import { query, queryOne } from "@/server/db/neon";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import type { ResumeDocument } from "@/lib/falood/types";
 
@@ -196,13 +198,7 @@ async function loadSourceContent(
   switch (sourceType) {
     case "base_resume": {
       // Load latest base resume for candidate
-      const { data: baseResume } = await supabase
-        .from("base_resumes")
-        .select("id, content, name")
-        .eq("candidate_id", candidateId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const baseResume = await findLatestBaseResumeFull(candidateId);
       if (baseResume) {
         return {
           content: structuredClone(baseResume.content as Record<string, unknown>),
@@ -216,14 +212,7 @@ async function loadSourceContent(
 
     case "original_resume": {
       // Load latest uploaded resume parsed content
-      const { data: resume } = await supabase
-        .from("resumes")
-        .select("parsed_json")
-        .eq("candidate_id", candidateId)
-        .eq("is_original_upload", true)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const resume = await findLatestOriginalResume(candidateId);
       if (resume?.parsed_json) {
         return {
           content: parsedJsonToResumeDocument(resume.parsed_json as Record<string, unknown>) as unknown as Record<string, unknown>,
@@ -239,42 +228,28 @@ async function loadSourceContent(
     }
 
     case "manual": {
-      // Load latest draft for this candidate's applications
-      const { data: apps } = await supabase
-        .from("applications")
-        .select("id")
-        .eq("candidate_id", candidateId);
-      const appIds = (apps ?? []).map((a: any) => a.id);
-      // Try to find an existing draft version
-      if (appIds.length > 0) {
-        const { data: versions } = await supabase
-          .from("application_resume_versions")
-          .select("id, content, title, base_resume_id")
-          .eq("candidate_id", candidateId)
-          .eq("status", "draft")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (versions) {
-          return {
-            content: structuredClone(versions.content as Record<string, unknown>),
-            baseResumeId: versions.base_resume_id,
-            title: versions.title ?? "Draft from Manual",
-          };
-        }
+      // Try to find an existing draft version for this candidate
+      const version = await queryOne<{ id: string; content: unknown; title: string | null; base_resume_id: string | null }>(
+        `SELECT id, content, title, base_resume_id
+         FROM application_resume_versions
+         WHERE candidate_id = $1 AND status = 'draft'
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [candidateId]
+      );
+      if (version) {
+        return {
+          content: structuredClone(version.content as Record<string, unknown>),
+          baseResumeId: version.base_resume_id,
+          title: version.title ?? "Draft from Manual",
+        };
       }
       return createBlankContent();
     }
 
     default: {
       // Try base resume first, then blank
-      const { data: baseResume } = await supabase
-        .from("base_resumes")
-        .select("id, content, name")
-        .eq("candidate_id", candidateId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const baseResume = await findLatestBaseResumeFull(candidateId);
       if (baseResume) {
         return {
           content: structuredClone(baseResume.content as Record<string, unknown>),
@@ -439,22 +414,18 @@ async function resolveTargetJobId(
 ): Promise<string | null> {
   if (jobId) {
     // Find the target_jobs row for this candidate + job
-    const { data } = await supabase
-      .from("target_jobs")
-      .select("id")
-      .eq("candidate_id", candidateId)
-      .eq("job_id", jobId)
-      .maybeSingle();
-    if (data?.id) return data.id;
+    const row = await queryOne<{ id: string }>(
+      `SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2 LIMIT 1`,
+      [candidateId, jobId]
+    );
+    if (row?.id) return row.id;
   }
   // Try to find any target_job for this candidate
-  const { data } = await supabase
-    .from("target_jobs")
-    .select("id")
-    .eq("candidate_id", candidateId)
-    .limit(1)
-    .maybeSingle();
-  return data?.id ?? null;
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM target_jobs WHERE candidate_id = $1 LIMIT 1`,
+    [candidateId]
+  );
+  return row?.id ?? null;
 }
 
 // ───────────────────────────────────────────────────────────────

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
 import { findApplicationById, updateApplication, deleteApplication, createApplicationEvent } from "@/server/repositories/applicationsRepository";
 
@@ -23,30 +22,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const { response } = await requirePublicApiScope(req, "applications:read");
   if (response) return response;
 
-  if (isNeon()) {
-    const data = await queryOne<any>(`
-      SELECT a.*,
-        jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email) as candidates,
-        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location) as jobs
-      FROM applications a
-      LEFT JOIN candidates c ON c.id = a.candidate_id
-      LEFT JOIN jobs j ON j.id = a.job_id
-      WHERE a.id = $1
-    `, [params.id]);
+  const data = await queryOne<any>(`
+    SELECT a.*,
+      jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email) as candidates,
+      jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location) as jobs
+    FROM applications a
+    LEFT JOIN candidates c ON c.id = a.candidate_id
+    LEFT JOIN jobs j ON j.id = a.job_id
+    WHERE a.id = $1
+  `, [params.id]);
 
-    if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    return NextResponse.json(data);
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data, error } = await supabase
-      .from("applications")
-      .select("*, candidates(id, name, email), jobs(id, title, company, location)")
-      .eq("id", params.id)
-      .single();
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 404 });
-    return NextResponse.json(data);
-  }
+  if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json(data);
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
@@ -87,36 +74,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
-  if (isNeon()) {
-    try {
-      const data = await updateApplication(params.id, updates);
-      if ("status" in updates && updates.status !== previousStatus) {
-        await createApplicationEvent({
-          application_id: params.id,
-          from_status: previousStatus,
-          to_status: updates.status as string,
-          note: body.event_note ?? null,
-        });
-      }
-      return NextResponse.json(data);
-    } catch (err: any) {
-      return NextResponse.json({ error: err.message }, { status: 500 });
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data, error } = await supabase.from("applications").update(updates).eq("id", params.id).select().single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
+  try {
+    const data = await updateApplication(params.id, updates);
     if ("status" in updates && updates.status !== previousStatus) {
-      await supabase.from("application_events").insert({
+      await createApplicationEvent({
         application_id: params.id,
         from_status: previousStatus,
-        to_status: updates.status,
+        to_status: updates.status as string,
         note: body.event_note ?? null,
       });
     }
-
     return NextResponse.json(data);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
 
@@ -124,17 +94,10 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   const { response } = await requirePublicApiScope(req, "applications:delete");
   if (response) return response;
 
-  if (isNeon()) {
-    try {
-      await deleteApplication(params.id);
-      return NextResponse.json({ ok: true });
-    } catch (err: any) {
-      return NextResponse.json({ error: err.message }, { status: 500 });
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { error } = await supabase.from("applications").delete().eq("id", params.id);
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    await deleteApplication(params.id);
     return NextResponse.json({ ok: true });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

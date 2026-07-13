@@ -5,7 +5,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 
 export async function GET(req: NextRequest) {
@@ -18,41 +17,30 @@ export async function GET(req: NextRequest) {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    const rows = await query(
-      `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
-      [candidateId]
-    );
-    data = (rows ?? []).map((row: any) => {
-      const { target_job_job_id, job_title, job_company, application_status, application_proof_url, application_proof_filename, application_applied_at, ...rest } = row;
-      return {
-        ...rest,
-        target_jobs: {
-          job_id: target_job_job_id,
-          jobs: {
-            title: job_title,
-            company: job_company,
-          },
+  const rows = await query(
+    `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
+    [candidateId]
+  );
+  data = (rows ?? []).map((row: any) => {
+    const { target_job_job_id, job_title, job_company, application_status, application_proof_url, application_proof_filename, application_applied_at, ...rest } = row;
+    return {
+      ...rest,
+      target_jobs: {
+        job_id: target_job_job_id,
+        jobs: {
+          title: job_title,
+          company: job_company,
         },
-        applications: rest.application_id ? {
-          status: application_status,
-          proof_url: application_proof_url,
-          proof_filename: application_proof_filename,
-          applied_at: application_applied_at,
-        } : null,
-      };
-    });
-    error = null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_resume_versions")
-      .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, application_id, target_jobs(job_id, jobs(title, company)), applications(status, proof_url, proof_filename, applied_at)")
-      .eq("candidate_id", candidateId)
-      .order("created_at", { ascending: false });
-    data = res.data;
-    error = res.error;
-  }
+      },
+      applications: rest.application_id ? {
+        status: application_status,
+        proof_url: application_proof_url,
+        proof_filename: application_proof_filename,
+        applied_at: application_applied_at,
+      } : null,
+    };
+  });
+  error = null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -88,22 +76,11 @@ export async function POST(req: NextRequest) {
     let baseResume: any;
     let baseError: any;
 
-    if (isNeon()) {
       baseResume = await queryOne(
         `SELECT content, candidate_id FROM base_resumes WHERE id = $1`,
         [baseResumeId]
       );
       baseError = baseResume ? null : { message: "Base resume not found" };
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      const res = await supabase
-        .from("base_resumes")
-        .select("content, candidate_id")
-        .eq("id", baseResumeId)
-        .single();
-      baseResume = res.data;
-      baseError = res.error;
-    }
 
     if (baseError || !baseResume) {
       return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
@@ -167,22 +144,11 @@ export async function POST(req: NextRequest) {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    data = await queryOne(
-      `INSERT INTO application_resume_versions (target_job_id, status, source_type, created_by, candidate_id, base_resume_id, content, title, version_label, generated_text, source_resume_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [targetJobId, "draft", sourceType, context!.profile.user_id, insertData.candidate_id, insertData.base_resume_id, resolvedContent, title || null, versionLabel || null, generatedText || null, baseResumeId ?? null]
-    );
-    error = data ? null : { message: "Insert failed" };
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_resume_versions")
-      .insert(insertData)
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
-  }
+  data = await queryOne(
+    `INSERT INTO application_resume_versions (target_job_id, status, source_type, created_by, candidate_id, base_resume_id, content, title, version_label, generated_text, source_resume_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [targetJobId, "draft", sourceType, context!.profile.user_id, insertData.candidate_id, insertData.base_resume_id, resolvedContent, title || null, versionLabel || null, generatedText || null, baseResumeId ?? null]
+  );
+  error = data ? null : { message: "Insert failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

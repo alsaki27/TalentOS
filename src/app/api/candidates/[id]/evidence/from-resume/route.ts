@@ -4,8 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 import { parsedResumeToEvidence } from "@/lib/resumeParsing";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -20,24 +19,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   let resume;
-  if (isNeon()) {
-    resume = await queryOne<{ parsed_json: any }>(
-      'SELECT parsed_json FROM resumes WHERE id = $1 AND candidate_id = $2',
-      [resumeId, params.id]
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data: r, error: resErr } = await supabase
-      .from("resumes")
-      .select("parsed_json")
-      .eq("id", resumeId)
-      .eq("candidate_id", params.id)
-      .single();
-    if (resErr) {
-      return NextResponse.json({ error: "Resume not found or does not belong to this candidate" }, { status: 404 });
-    }
-    resume = r;
-  }
+  resume = await queryOne<{ parsed_json: any }>(
+    'SELECT parsed_json FROM resumes WHERE id = $1 AND candidate_id = $2',
+    [resumeId, params.id]
+  );
 
   if (!resume) {
     return NextResponse.json({ error: "Resume not found or does not belong to this candidate" }, { status: 404 });
@@ -63,35 +48,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }));
 
   let data;
-  if (isNeon()) {
-    const valuesClause = insertData.map((_, i) => {
-      const base = i * 7;
-      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
-    }).join(", ");
-    const params = insertData.flatMap((row) => [
-      row.candidate_id,
-      row.source_type,
-      row.title,
-      row.description,
-      row.related_skills,
-      row.confidence_score,
-      row.created_by,
-    ]);
-    data = await query<Record<string, any>>(
-      `INSERT INTO candidate_evidence (candidate_id, source_type, title, description, related_skills, confidence_score, created_by)
-       VALUES ${valuesClause} RETURNING *`,
-      params
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data: d, error } = await supabase
-      .from("candidate_evidence")
-      .insert(insertData)
-      .select();
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    data = d;
-  }
+  const valuesClause = insertData.map((_, i) => {
+    const base = i * 7;
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
+  }).join(", ");
+  const params = insertData.flatMap((row) => [
+    row.candidate_id,
+    row.source_type,
+    row.title,
+    row.description,
+    row.related_skills,
+    row.confidence_score,
+    row.created_by,
+  ]);
+  data = await query<Record<string, any>>(
+    `INSERT INTO candidate_evidence (candidate_id, source_type, title, description, related_skills, confidence_score, created_by)
+     VALUES ${valuesClause} RETURNING *`,
+    params
+  );
 
   await logActivity({
     userId: context!.profile.user_id,

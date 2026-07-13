@@ -5,7 +5,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -20,51 +19,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    data = await queryOne(
-      `INSERT INTO interview_scorecards (schedule_id, panel_member_id, overall_rating, recommendation, competencies, overall_notes, verdict_notes, submitted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-      [
-        params.id,
-        body.panelMemberId,
-        body.overallRating ?? null,
-        body.recommendation ?? null,
-        body.competencies ?? [],
-        body.overallNotes ?? null,
-        body.verdictNotes ?? null,
-        new Date().toISOString(),
-      ]
+  data = await queryOne(
+    `INSERT INTO interview_scorecards (schedule_id, panel_member_id, overall_rating, recommendation, competencies, overall_notes, verdict_notes, submitted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [
+      params.id,
+      body.panelMemberId,
+      body.overallRating ?? null,
+      body.recommendation ?? null,
+      body.competencies ?? [],
+      body.overallNotes ?? null,
+      body.verdictNotes ?? null,
+      new Date().toISOString(),
+    ]
+  );
+  error = data ? null : { message: "Insert failed" };
+  if (!error) {
+    await execute(
+      `UPDATE interview_panel_members SET feedback_submitted = true WHERE id = $1`,
+      [body.panelMemberId]
     );
-    error = data ? null : { message: "Insert failed" };
-    if (!error) {
-      await execute(
-        `UPDATE interview_panel_members SET feedback_submitted = true WHERE id = $1`,
-        [body.panelMemberId]
-      );
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("interview_scorecards")
-      .insert({
-        schedule_id: params.id,
-        panel_member_id: body.panelMemberId,
-        overall_rating: body.overallRating ?? null,
-        recommendation: body.recommendation ?? null,
-        competencies: body.competencies ?? [],
-        overall_notes: body.overallNotes ?? null,
-        verdict_notes: body.verdictNotes ?? null,
-        submitted_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
-    if (!error) {
-      await supabase
-        .from("interview_panel_members")
-        .update({ feedback_submitted: true })
-        .eq("id", body.panelMemberId);
-    }
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -92,22 +65,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   let scorecards: any[];
   let error: any;
 
-  if (isNeon()) {
-    scorecards = await query(
-      `SELECT * FROM interview_scorecards WHERE schedule_id = $1 ORDER BY submitted_at ASC`,
-      [params.id]
-    );
-    error = null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("interview_scorecards")
-      .select("*")
-      .eq("schedule_id", params.id)
-      .order("submitted_at", { ascending: true });
-    scorecards = res.data ?? [];
-    error = res.error;
-  }
+  scorecards = await query(
+    `SELECT * FROM interview_scorecards WHERE schedule_id = $1 ORDER BY submitted_at ASC`,
+    [params.id]
+  );
+  error = null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

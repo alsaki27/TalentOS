@@ -4,7 +4,6 @@
 
 import { NextRequest } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -28,23 +27,21 @@ export async function GET(req: NextRequest) {
 
       async function poll() {
         try {
-          if (isNeon()) {
-            // Poll crawler status
-            const statusRows = await query(`SELECT * FROM job_crawler_status ORDER BY updated_at DESC LIMIT 1`, []);
-            const currentStatus = statusRows[0] ?? null;
-            if (currentStatus && JSON.stringify(currentStatus) !== JSON.stringify(lastStatus)) {
-              lastStatus = currentStatus;
-              send("crawler_status", currentStatus);
-            }
+          // Poll crawler status
+          const statusRows = await query(`SELECT * FROM job_crawler_status ORDER BY updated_at DESC LIMIT 1`, []);
+          const currentStatus = statusRows[0] ?? null;
+          if (currentStatus && JSON.stringify(currentStatus) !== JSON.stringify(lastStatus)) {
+            lastStatus = currentStatus;
+            send("crawler_status", currentStatus);
+          }
 
-            // Poll for new crawler jobs
-            const newJobs = await query(`SELECT * FROM jobs WHERE source = 'crawler' ORDER BY created_at DESC LIMIT 10`, []);
-            if (newJobs.length > lastJobCount) {
-              for (const job of newJobs.slice(0, newJobs.length - lastJobCount)) {
-                send("job_inserted", job);
-              }
-              lastJobCount = newJobs.length;
+          // Poll for new crawler jobs
+          const newJobs = await query(`SELECT * FROM jobs WHERE source = 'crawler' ORDER BY created_at DESC LIMIT 10`, []);
+          if (newJobs.length > lastJobCount) {
+            for (const job of newJobs.slice(0, newJobs.length - lastJobCount)) {
+              send("job_inserted", job);
             }
+            lastJobCount = newJobs.length;
           }
         } catch (e) {
           // Silently skip poll errors to keep stream alive

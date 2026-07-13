@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
-import { supabase } from "@/lib/supabase";
 import OpenAI from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build" });
@@ -12,13 +10,7 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   if (response) return response;
 
   try {
-    let job: any;
-    if (isNeon()) {
-      job = await queryOne(`SELECT id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization FROM jobs WHERE id = $1`, [params.id]);
-    } else {
-      const res = await supabase.from("jobs").select("id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization").eq("id", params.id).single();
-      job = res.data;
-    }
+    const job = await queryOne(`SELECT id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization FROM jobs WHERE id = $1`, [params.id]);
 
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
@@ -71,16 +63,11 @@ Do not hallucinate data. If a field is not mentioned, return null or an empty ar
     }
 
     let updatedJob: any;
-    if (isNeon()) {
-      const keys = Object.keys(updates);
-      const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-      const values = Object.values(updates);
-      values.push(params.id);
-      updatedJob = await queryOne(`UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`, values);
-    } else {
-      const res = await supabase.from("jobs").update(updates).eq("id", params.id).select().single();
-      updatedJob = res.data;
-    }
+    const keys = Object.keys(updates);
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const values = Object.values(updates);
+    values.push(params.id);
+    updatedJob = await queryOne(`UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`, values);
 
     return NextResponse.json(updatedJob);
   } catch (error: any) {

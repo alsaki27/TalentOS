@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 
 function tokens(value: string | null | undefined) {
@@ -16,25 +15,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   let job: any;
   let jobError: any;
 
-  if (isNeon()) {
-    try {
-      job = await queryOne(
-        `SELECT id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries FROM jobs WHERE id = $1`,
-        [params.id]
-      );
-      jobError = job ? null : { message: "Not found" };
-    } catch (err: any) {
-      jobError = { message: err.message };
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("jobs")
-      .select("id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries")
-      .eq("id", params.id)
-      .single();
-    job = res.data;
-    jobError = res.error;
+  try {
+    job = await queryOne(
+      `SELECT id, title, company, location, role_tier, job_category, category_tags, description_text, job_function, industries FROM jobs WHERE id = $1`,
+      [params.id]
+    );
+    jobError = job ? null : { message: "Not found" };
+  } catch (err: any) {
+    jobError = { message: err.message };
   }
 
   if (jobError) return NextResponse.json({ error: jobError.message }, { status: 404 });
@@ -43,37 +31,19 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   let candidateError: any;
   let existingApplications: any;
 
-  if (isNeon()) {
-    try {
-      [candidates, existingApplications] = await Promise.all([
-        query(
-          `SELECT id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url FROM candidates ORDER BY created_at DESC LIMIT 500`
-        ),
-        query(
-          `SELECT candidate_id FROM applications WHERE job_id = $1`,
-          [params.id]
-        ),
-      ]);
-      candidateError = null;
-    } catch (err: any) {
-      candidateError = { message: err.message };
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const [candidatesRes, applicationsRes] = await Promise.all([
-      supabase
-        .from("candidates")
-        .select("id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url")
-        .order("created_at", { ascending: false })
-        .limit(500),
-      supabase
-        .from("applications")
-        .select("candidate_id")
-        .eq("job_id", params.id),
+  try {
+    [candidates, existingApplications] = await Promise.all([
+      query(
+        `SELECT id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url FROM candidates ORDER BY created_at DESC LIMIT 500`
+      ),
+      query(
+        `SELECT candidate_id FROM applications WHERE job_id = $1`,
+        [params.id]
+      ),
     ]);
-    candidates = candidatesRes.data;
-    candidateError = candidatesRes.error;
-    existingApplications = applicationsRes.data;
+    candidateError = null;
+  } catch (err: any) {
+    candidateError = { message: err.message };
   }
 
   if (candidateError) return NextResponse.json({ error: candidateError.message }, { status: 500 });

@@ -5,8 +5,6 @@
 // this is the ingestion + heartbeat-tracking side only, mapped onto this app's existing
 // `jobs` table instead of a separate one.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { findJobByExternalIdAndSource, updateJob, createJob } from "@/server/repositories/jobsRepository";
 
@@ -62,24 +60,12 @@ export async function upsertCrawlerJob(payload: CrawlerJobPayload) {
 }
 
 export async function recordHeartbeat(crawlerName: string, isActive: boolean, message?: string) {
-  if (isNeon()) {
-    const data = await queryOne<any>(
-      `INSERT INTO job_crawler_status (crawler_name, is_active, message, last_heartbeat_at, updated_at) VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (crawler_name) DO UPDATE SET is_active = EXCLUDED.is_active, message = EXCLUDED.message, last_heartbeat_at = EXCLUDED.last_heartbeat_at, updated_at = EXCLUDED.updated_at
-       RETURNING *`,
-      [crawlerName, isActive, message ?? null, new Date().toISOString(), new Date().toISOString()]
-    );
-    return data;
-  }
-  const { data, error } = await supabase
-    .from("job_crawler_status")
-    .upsert(
-      { crawler_name: crawlerName, is_active: isActive, message: message ?? null, last_heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { onConflict: "crawler_name" },
-    )
-    .select()
-    .single();
-  if (error) throw error;
+  const data = await queryOne<any>(
+    `INSERT INTO job_crawler_status (crawler_name, is_active, message, last_heartbeat_at, updated_at) VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (crawler_name) DO UPDATE SET is_active = EXCLUDED.is_active, message = EXCLUDED.message, last_heartbeat_at = EXCLUDED.last_heartbeat_at, updated_at = EXCLUDED.updated_at
+     RETURNING *`,
+    [crawlerName, isActive, message ?? null, new Date().toISOString(), new Date().toISOString()]
+  );
   return data;
 }
 
@@ -92,15 +78,7 @@ export function computeIsOnline(lastHeartbeatAt: string | null, offlineThreshold
 }
 
 export async function getCrawlerStatuses() {
-  if (isNeon()) {
-    const data = await query<any>("SELECT * FROM job_crawler_status ORDER BY crawler_name ASC");
-    return (data ?? []).map((row: any) => ({
-      ...row,
-      isOnline: row.is_active && computeIsOnline(row.last_heartbeat_at, row.offline_threshold_minutes),
-    }));
-  }
-  const { data, error } = await supabase.from("job_crawler_status").select("*").order("crawler_name", { ascending: true });
-  if (error) throw error;
+  const data = await query<any>("SELECT * FROM job_crawler_status ORDER BY crawler_name ASC");
   return (data ?? []).map((row: any) => ({
     ...row,
     isOnline: row.is_active && computeIsOnline(row.last_heartbeat_at, row.offline_threshold_minutes),

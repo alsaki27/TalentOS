@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { findJobById } from "@/server/repositories/jobsRepository";
@@ -41,16 +39,12 @@ export async function POST(req: NextRequest) {
 
   const [candidate, baseResume, job, evidence] = await Promise.all([
     findCandidateById(candidateId),
-    isNeon()
-      ? queryOne<any>("SELECT * FROM base_resumes WHERE id = $1 AND candidate_id = $2", [baseResumeId, candidateId])
-      : supabase.from("base_resumes").select("*").eq("id", baseResumeId).eq("candidate_id", candidateId).single().then((r: { data: any }) => r.data ?? null),
+    queryOne<any>("SELECT * FROM base_resumes WHERE id = $1 AND candidate_id = $2", [baseResumeId, candidateId]),
     findJobById(jobId),
-    isNeon()
-      ? query<{ title: string; description: string | null; related_skills: string[] | null; confidence_score: number | null }>(
-          "SELECT title, description, related_skills, confidence_score FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
-          [candidateId]
-        )
-      : supabase.from("candidate_evidence").select("title, description, related_skills, confidence_score").eq("candidate_id", candidateId).order("created_at", { ascending: false }).limit(50).then((r: { data: any }) => r.data ?? []),
+    query<{ title: string; description: string | null; related_skills: string[] | null; confidence_score: number | null }>(
+        "SELECT title, description, related_skills, confidence_score FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
+        [candidateId]
+      ),
   ]);
 
   if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });

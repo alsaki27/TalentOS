@@ -13,8 +13,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
 
@@ -24,46 +22,26 @@ export async function GET() {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
-  let pendingCount: number;
-  let needsReview: any[];
-  let recentRuns: any[];
-  let categories: any[];
+  const pendingRes = await queryOne<{ count: string }>(
+    'SELECT COUNT(*) as count FROM jobs WHERE category_status = $1 OR category_status IS NULL',
+    ['pending']
+  );
+  const pendingCount = parseInt(pendingRes?.count ?? '0', 10);
 
-  if (isNeon()) {
-    const pendingRes = await queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM jobs WHERE category_status = $1 OR category_status IS NULL',
-      ['pending']
-    );
-    pendingCount = parseInt(pendingRes?.count ?? '0', 10);
+  const needsReview = await query(
+    'SELECT id, title, company, ai_suggested_category, category_relevance_score FROM jobs WHERE category_status = $1 ORDER BY categorized_at DESC LIMIT $2',
+    ['needs_review', 50]
+  );
 
-    needsReview = await query(
-      'SELECT id, title, company, ai_suggested_category, category_relevance_score FROM jobs WHERE category_status = $1 ORDER BY categorized_at DESC LIMIT $2',
-      ['needs_review', 50]
-    );
+  const recentRuns = await query(
+    'SELECT * FROM categorization_runs ORDER BY started_at DESC LIMIT $1',
+    [10]
+  );
 
-    recentRuns = await query(
-      'SELECT * FROM categorization_runs ORDER BY started_at DESC LIMIT $1',
-      [10]
-    );
-
-    categories = await query(
-      'SELECT id, label, description, is_active FROM job_categories ORDER BY label ASC',
-      []
-    );
-  } else {
-    const [{ count: pendingCountRes }, needsReviewRes, recentRunsRes, categoriesRes] = await Promise.all([
-      supabase.from("jobs").select("id", { count: "exact", head: true }).or('category_status.eq.pending,category_status.is.null'),
-      supabase.from("jobs").select("id, title, company, ai_suggested_category, category_relevance_score")
-        .eq("category_status", "needs_review").order("categorized_at", { ascending: false }).limit(50),
-      supabase.from("categorization_runs").select("*").order("started_at", { ascending: false }).limit(10),
-      supabase.from("job_categories").select("id, label, description, is_active").order("label", { ascending: true }),
-    ]);
-
-    pendingCount = pendingCountRes ?? 0;
-    needsReview = needsReviewRes.data ?? [];
-    recentRuns = recentRunsRes.data ?? [];
-    categories = categoriesRes.data ?? [];
-  }
+  const categories = await query(
+    'SELECT id, label, description, is_active FROM job_categories ORDER BY label ASC',
+    []
+  );
 
   return NextResponse.json({
     pendingCount,
@@ -91,20 +69,11 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === "requeue_all") {
-    if (isNeon()) {
-      const res = await execute(
-        "UPDATE jobs SET category_status = $1, job_category = NULL, ai_suggested_category = NULL WHERE category_status = ANY($2) OR category_status IS NULL",
-        ["pending", ["done", "needs_review"]]
-      );
-      return NextResponse.json({ requeued: res.rowCount });
-    } else {
-      const { error, count } = await supabase
-        .from("jobs")
-        .update({ category_status: "pending", job_category: null, ai_suggested_category: null }, { count: "exact" })
-        .or('category_status.in.("done","needs_review"),category_status.is.null');
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json({ requeued: count ?? 0 });
-    }
+    const res = await execute(
+      "UPDATE jobs SET category_status = $1, job_category = NULL, ai_suggested_category = NULL WHERE category_status = ANY($2) OR category_status IS NULL",
+      ["pending", ["done", "needs_review"]]
+    );
+    return NextResponse.json({ requeued: res.rowCount });
   }
 
   if (action === "approve_category" || action === "assign_category") {
@@ -115,48 +84,24 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === "approve_category") {
-      if (isNeon()) {
-        try {
-          await execute(
-            'INSERT INTO job_categories (label) VALUES ($1)',
-            [label]
-          );
-        } catch (err: any) {
-          // Ignore unique-violation (category already exists) — assigning still proceeds.
-          if (err.code !== '23505') {
-            return NextResponse.json({ error: err.message }, { status: 500 });
-          }
-        }
-      } else {
-        const { error: insertError } = await supabase
-          .from("job_categories")
-          .insert({ label })
-          .select()
-          .single();
-        // Ignore unique-violation (category already exists) — assigning still proceeds.
-        if (insertError && insertError.code !== "23505") {
-          return NextResponse.json({ error: insertError.message }, { status: 500 });
+      try {
+        await execute(
+          'INSERT INTO job_categories (label) VALUES ($1)',
+          [label]
+        );
+      } catch (err: any) {
+        if (err.code !== '23505') {
+          return NextResponse.json({ error: err.message }, { status: 500 });
         }
       }
     }
 
-    if (isNeon()) {
-      const data = await queryOne(
-        'UPDATE jobs SET job_category = $1, ai_suggested_category = NULL, category_status = $2 WHERE id = $3 RETURNING *',
-        [label, 'done', jobId]
-      );
-      if (!data) return NextResponse.json({ error: 'Update failed' }, { status: 500 });
-      return NextResponse.json(data);
-    } else {
-      const { data, error } = await supabase
-        .from("jobs")
-        .update({ job_category: label, ai_suggested_category: null, category_status: "done" })
-        .eq("id", jobId)
-        .select()
-        .single();
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      return NextResponse.json(data);
-    }
+    const data = await queryOne(
+      'UPDATE jobs SET job_category = $1, ai_suggested_category = NULL, category_status = $2 WHERE id = $3 RETURNING *',
+      [label, 'done', jobId]
+    );
+    if (!data) return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+    return NextResponse.json(data);
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });

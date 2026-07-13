@@ -7,13 +7,13 @@ import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { execute } from "@/server/db/neon";
 import {
   listApplications,
   findExistingCandidateIdsForJob,
   createApplications,
 } from "@/server/repositories/applicationsRepository";
+import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
@@ -108,52 +108,23 @@ export async function POST(req: NextRequest) {
       source_type: body.source_type ?? "base_resume",
     })));
 
-    if (isNeon()) {
-      for (const application of data) {
-        await execute(
-          'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
-          [application.id, null, status, body.event_note ?? body.assignment_note ?? null]
-        );
-      }
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      await supabase.from("application_events").insert((data ?? []).map((application: any) => ({
-        application_id: application.id,
-        from_status: null,
-        to_status: status,
-        note: body.event_note ?? body.assignment_note ?? null,
-      })));
+    for (const application of data) {
+      await execute(
+        'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
+        [application.id, null, status, body.event_note ?? body.assignment_note ?? null]
+      );
     }
 
     if (currentUser && data?.length) {
-      if (isNeon()) {
-        for (const application of data) {
-          await execute(
-            'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-            [
-              currentUser.profile.user_id,
-              currentUser.profile.email,
-              'application.created',
-              'application',
-              application.id,
-              JSON.stringify({ job_id: body.job_id, candidate_id: application.candidate_id, status }),
-            ]
-          );
-        }
-      } else {
-        const { supabase } = await import("@/lib/supabase");
-        await supabase.from("audit_logs").insert(data.map((application: any) => ({
+      for (const application of data) {
+        await recordAuditEvent({
           actor_user_id: currentUser.profile.user_id,
           actor_email: currentUser.profile.email,
           action: "application.created",
           entity_type: "application",
           entity_id: application.id,
-          metadata: {
-            job_id: body.job_id,
-            candidate_id: application.candidate_id,
-            status,
-          },
-        })));
+          metadata: { job_id: body.job_id, candidate_id: application.candidate_id, status },
+        });
       }
 
       for (const application of data) {
@@ -180,13 +151,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // A job "logged" for a candidate (an application ticket with a real
-    // job_id) automatically kicks off the 4-agent pipeline - no separate
-    // manual Generate click required. Fire-and-forget, registered with the
-    // Workers execution context so it survives past this response; if the
-    // candidate has no base resume yet, triggerAiWorkflowForApplication
-    // just returns started:false and the ticket still gets created
-    // normally (Generate remains available to retry manually later).
     if (body.job_id) {
       for (const application of data ?? []) {
         await backgroundDispatch(

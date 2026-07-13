@@ -4,7 +4,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 
@@ -20,22 +19,11 @@ export async function GET(req: NextRequest) {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    data = await query(
-      `SELECT * FROM resume_suggestions WHERE application_resume_id = $1 ORDER BY created_at DESC`,
-      [applicationResumeId]
-    );
-    error = null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("resume_suggestions")
-      .select("*")
-      .eq("application_resume_id", applicationResumeId)
-      .order("created_at", { ascending: false });
-    data = res.data;
-    error = res.error;
-  }
+  data = await query(
+    `SELECT * FROM resume_suggestions WHERE application_resume_id = $1 ORDER BY created_at DESC`,
+    [applicationResumeId]
+  );
+  error = null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -66,35 +54,11 @@ export async function POST(req: NextRequest) {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    data = await queryOne(
-      `INSERT INTO resume_suggestions (application_resume_id, section_type, target_block_id, original_text, suggested_text, reason, jd_keyword_ids, evidence_ids, confidence_score, truth_risk, ats_impact, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-      [applicationResumeId, sectionType ?? null, targetBlockId ?? null, originalText, suggestedText, reason ?? null, jdKeywordIds ?? null, evidenceIds ?? null, confidenceScore ?? null, truthRisk ?? null, atsImpact ?? null, createdBy]
-    );
-    error = data ? null : { message: "Insert failed" };
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("resume_suggestions")
-      .insert({
-        application_resume_id: applicationResumeId,
-        section_type: sectionType ?? null,
-        target_block_id: targetBlockId ?? null,
-        original_text: originalText,
-        suggested_text: suggestedText,
-        reason: reason ?? null,
-        jd_keyword_ids: jdKeywordIds ?? null,
-        evidence_ids: evidenceIds ?? null,
-        confidence_score: confidenceScore ?? null,
-        truth_risk: truthRisk ?? null,
-        ats_impact: atsImpact ?? null,
-        created_by: createdBy,
-      })
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
-  }
+  data = await queryOne(
+    `INSERT INTO resume_suggestions (application_resume_id, section_type, target_block_id, original_text, suggested_text, reason, jd_keyword_ids, evidence_ids, confidence_score, truth_risk, ats_impact, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+    [applicationResumeId, sectionType ?? null, targetBlockId ?? null, originalText, suggestedText, reason ?? null, jdKeywordIds ?? null, evidenceIds ?? null, confidenceScore ?? null, truthRisk ?? null, atsImpact ?? null, createdBy]
+  );
+  error = data ? null : { message: "Insert failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

@@ -4,8 +4,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { detectFormat } from "@/lib/normalizer/detect";
 import { parseTable } from "@/lib/normalizer/parse";
@@ -23,19 +21,11 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 
 async function findExistingUrls(urls: string[]): Promise<Set<string>> {
   if (urls.length === 0) return new Set();
-  if (isNeon()) {
-    const rows = await query<{ source_url: string }>(
-      "SELECT source_url FROM jobs WHERE source_url = ANY($1)",
-      [urls]
-    );
-    return new Set((rows ?? []).map((r) => r.source_url));
-  }
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("source_url")
-    .in("source_url", urls);
-  if (error) throw error;
-  return new Set((data ?? []).map((r: any) => r.source_url));
+  const rows = await query<{ source_url: string }>(
+    "SELECT source_url FROM jobs WHERE source_url = ANY($1)",
+    [urls]
+  );
+  return new Set((rows ?? []).map((r) => r.source_url));
 }
 
 export async function POST(req: NextRequest) {
@@ -84,7 +74,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "rows array or (filename + content + mapping) is required" }, { status: 400 });
     }
 
-    // Process in batches — only 2 DB calls per batch (find URLs + insert)
     const batches = chunkArray(rowsToInsert, BATCH_SIZE);
     let totalImported = 0;
     let totalSkipped = 0;
@@ -98,7 +87,7 @@ export async function POST(req: NextRequest) {
       const existingUrls = await findExistingUrls(urls);
 
       const newRows = validRows.filter((r) => {
-        if (!r.source_url) return true; // no URL → assume new (rare for LinkedIn)
+        if (!r.source_url) return true;
         return !existingUrls.has(r.source_url);
       });
 
@@ -106,10 +95,6 @@ export async function POST(req: NextRequest) {
 
       if (newRows.length === 0) continue;
 
-      // Columns stored as jsonb in PostgreSQL — their JS object/array values
-      // must be JSON.stringify'd for parameterised queries.  Native PG array
-      // columns (e.g. category_tags text[]) must NOT be stringified; the pg
-      // driver handles them natively.
       const JSONB_COLS = new Set([
         "benefits",
         "company_address",
@@ -122,40 +107,26 @@ export async function POST(req: NextRequest) {
         "warnings",
       ]);
 
-      let data: any[];
-      let error: any;
-
-      if (isNeon()) {
-        const cols = Object.keys(newRows[0]);
-        const values: any[] = [];
-        const placeholders: string[] = [];
-        let paramIdx = 1;
-        for (const row of newRows) {
-          const rowPlaceholders: string[] = [];
-          for (const col of cols) {
-            rowPlaceholders.push(`$${paramIdx++}`);
-            const val = (row as any)[col];
-            // Only stringify objects destined for jsonb columns
-            if (val !== null && val !== undefined && typeof val === "object" && JSONB_COLS.has(col)) {
-              values.push(JSON.stringify(val));
-            } else {
-              values.push(val);
-            }
+      const cols = Object.keys(newRows[0]);
+      const values: any[] = [];
+      const placeholders: string[] = [];
+      let paramIdx = 1;
+      for (const row of newRows) {
+        const rowPlaceholders: string[] = [];
+        for (const col of cols) {
+          rowPlaceholders.push(`$${paramIdx++}`);
+          const val = (row as any)[col];
+          if (val !== null && val !== undefined && typeof val === "object" && JSONB_COLS.has(col)) {
+            values.push(JSON.stringify(val));
+          } else {
+            values.push(val);
           }
-          placeholders.push(`(${rowPlaceholders.join(", ")})`);
         }
-        const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-        data = await query(sql, values);
-        error = null;
-      } else {
-        const res = await supabase.from("jobs").insert(newRows).select("*");
-        data = res.data ?? [];
-        error = res.error;
+        placeholders.push(`(${rowPlaceholders.join(", ")})`);
       }
+      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
+      const data = await query(sql, values);
 
-      if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
       totalImported += data.length;
     }
 

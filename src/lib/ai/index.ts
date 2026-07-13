@@ -21,9 +21,7 @@ import { createMockProvider } from "@/lib/ai/mockProvider";
 import { AiProvider } from "@/lib/ai/provider";
 import { getActiveProviderWithFallback, buildProviderFromDbKey } from "@/server/services/aiProvider";
 import { getAiKeyWithDecryptedKey, listEnabledAiKeys } from "@/server/repositories/aiKeyRepository";
-import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
-import { supabase } from "@/lib/supabase";
 
 export interface ActiveProvider {
   provider: AiProvider;
@@ -183,19 +181,10 @@ export async function getProviderForCategory(
   // 1. Look up ai_task_category_config for this category
   let row: { provider: string | null; ai_key_id: string | null } | null = null;
 
-  if (isNeon()) {
-    row = await queryOne<{ provider: string | null; ai_key_id: string | null }>(
-      `SELECT provider, ai_key_id FROM ai_task_category_config WHERE category = $1`,
-      [category]
-    );
-  } else {
-    const { data } = await supabase
-      .from("ai_task_category_config")
-      .select("provider, ai_key_id")
-      .eq("category", category)
-      .single();
-    if (data) row = data as any;
-  }
+  row = await queryOne<{ provider: string | null; ai_key_id: string | null }>(
+    `SELECT provider, ai_key_id FROM ai_task_category_config WHERE category = $1`,
+    [category]
+  );
 
   if (!row) {
     // No override configured — fall back to global default chain

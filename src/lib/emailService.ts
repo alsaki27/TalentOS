@@ -2,8 +2,6 @@
 // Mock email service — logs to DB but does not actually send.
 // Replace with Resend/SendGrid integration when ready.
 
-import { supabase } from "./supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface SendEmailOptions {
@@ -45,38 +43,14 @@ export function renderTemplate(templateBody: string, mergeData: Record<string, s
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   try {
     // Mock: just log to DB. Replace with Resend/SendGrid integration.
-    if (isNeon()) {
-      const data = await queryOne<{ id: string }>(
-        `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-        [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, "sent", opts.sentBy ?? null, new Date().toISOString()]
-      );
-      if (!data) {
-        return { success: false, error: "Insert failed" };
-      }
-      return { success: true, logId: data.id };
+    const data = await queryOne<{ id: string }>(
+      `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, "sent", opts.sentBy ?? null, new Date().toISOString()]
+    );
+    if (!data) {
+      return { success: false, error: "Insert failed" };
     }
-
-    const { data, error } = await supabase
-      .from("email_logs")
-      .insert({
-        candidate_id: opts.candidateId ?? null,
-        template_id: opts.templateId ?? null,
-        sequence_id: opts.sequenceId ?? null,
-        step_number: opts.stepNumber ?? null,
-        subject: opts.subject,
-        body: opts.body,
-        status: "sent",
-        sent_by: opts.sentBy ?? null,
-        sent_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
-
-    if (error) {
-      return { success: false, error: error.message };
-    }
-
-    return { success: true, logId: data?.id };
+    return { success: true, logId: data.id };
   } catch (err: any) {
     return { success: false, error: err?.message ?? "Unknown error" };
   }
@@ -90,19 +64,10 @@ export async function triggerSequence(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     let sequence: any;
-    if (isNeon()) {
-      sequence = await queryOne(
-        "SELECT id, trigger_event, is_active FROM email_sequences WHERE id = $1",
-        [sequenceId]
-      );
-    } else {
-      const { data } = await supabase
-        .from("email_sequences")
-        .select("id, trigger_event, is_active")
-        .eq("id", sequenceId)
-        .maybeSingle();
-      sequence = data;
-    }
+    sequence = await queryOne(
+      "SELECT id, trigger_event, is_active FROM email_sequences WHERE id = $1",
+      [sequenceId]
+    );
 
     if (!sequence) return { success: false, error: "Sequence not found" };
     if (!sequence.is_active) return { success: false, error: "Sequence is paused" };
@@ -111,26 +76,17 @@ export async function triggerSequence(
     }
 
     let steps: any[];
-    if (isNeon()) {
-      steps = await query(
-        `
-        SELECT s.*,
-          CASE WHEN t.id IS NOT NULL THEN jsonb_build_object('id', t.id, 'name', t.name, 'subject', t.subject, 'body', t.body) END as templates
-        FROM email_sequence_steps s
-        LEFT JOIN email_templates t ON s.template_id = t.id
-        WHERE s.sequence_id = $1
-        ORDER BY s.step_number ASC
-        `,
-        [sequenceId]
-      );
-    } else {
-      const { data } = await supabase
-        .from("email_sequence_steps")
-        .select("*, templates:email_templates(*)")
-        .eq("sequence_id", sequenceId)
-        .order("step_number", { ascending: true });
-      steps = data ?? [];
-    }
+    steps = await query(
+      `
+      SELECT s.*,
+        CASE WHEN t.id IS NOT NULL THEN jsonb_build_object('id', t.id, 'name', t.name, 'subject', t.subject, 'body', t.body) END as templates
+      FROM email_sequence_steps s
+      LEFT JOIN email_templates t ON s.template_id = t.id
+      WHERE s.sequence_id = $1
+      ORDER BY s.step_number ASC
+      `,
+      [sequenceId]
+    );
 
     if (!steps || steps.length === 0) {
       return { success: false, error: "No steps in sequence" };
@@ -158,27 +114,12 @@ export async function triggerSequence(
     }
 
     // Log remaining steps as pending for the email queue processor
-    if (isNeon()) {
-      for (let i = 1; i < steps.length; i++) {
-        const step = steps[i];
-        await execute(
-          "INSERT INTO email_queue (candidate_id, sequence_id, step_number, template_id, delay_hours, trigger_at, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-          [candidateId, sequenceId, step.step_number, step.template_id, step.delay_hours, new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(), "pending"]
-        );
-      }
-    } else {
-      for (let i = 1; i < steps.length; i++) {
-        const step = steps[i];
-        await supabase.from("email_queue").insert({
-          candidate_id: candidateId,
-          sequence_id: sequenceId,
-          step_number: step.step_number,
-          template_id: step.template_id,
-          delay_hours: step.delay_hours,
-          trigger_at: new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(),
-          status: "pending",
-        });
-      }
+    for (let i = 1; i < steps.length; i++) {
+      const step = steps[i];
+      await execute(
+        "INSERT INTO email_queue (candidate_id, sequence_id, step_number, template_id, delay_hours, trigger_at, status) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        [candidateId, sequenceId, step.step_number, step.template_id, step.delay_hours, new Date(Date.now() + step.delay_hours * 60 * 60 * 1000).toISOString(), "pending"]
+      );
     }
 
     return { success: true };

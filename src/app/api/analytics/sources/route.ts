@@ -3,7 +3,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -28,27 +27,12 @@ export async function GET(req: NextRequest) {
   const dateTo = url.searchParams.get("dateTo") || null;
 
   let apps: any[] = [];
-  if (isNeon()) {
-    const whereClauses: string[] = [];
-    const params: (string | null)[] = [];
-    if (dateFrom) { whereClauses.push(`applied_at >= $${params.length + 1}`); params.push(dateFrom); }
-    if (dateTo) { whereClauses.push(`applied_at <= $${params.length + 1}`); params.push(dateTo); }
-    const where = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
-    apps = await query<any>(`SELECT source, status, applied_at, job_id FROM applications ${where}`, params);
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    let query = supabase
-      .from("applications")
-      .select("source, status, applied_at, job_id");
-    if (dateFrom) query = query.gte("applied_at", dateFrom);
-    if (dateTo) query = query.lte("applied_at", dateTo);
-    const { data, error } = await query;
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    apps = data ?? [];
-  }
+  const whereClauses: string[] = [];
+  const params: (string | null)[] = [];
+  if (dateFrom) { whereClauses.push(`applied_at >= $${params.length + 1}`); params.push(dateFrom); }
+  if (dateTo) { whereClauses.push(`applied_at <= $${params.length + 1}`); params.push(dateTo); }
+  const where = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
+  apps = await query<any>(`SELECT source, status, applied_at, job_id FROM applications ${where}`, params);
 
   // Fetch job creation dates for placed apps to compute time-to-hire
   const placedJobIds = [
@@ -61,16 +45,7 @@ export async function GET(req: NextRequest) {
   const jobCreatedMap = new Map<string, string>();
   if (placedJobIds.length > 0) {
     let jobs: any[] = [];
-    if (isNeon()) {
       jobs = await query<any>(`SELECT id, created_at FROM jobs WHERE id::text = ANY($1)`, [placedJobIds]);
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      const { data } = await supabase
-        .from("jobs")
-        .select("id, created_at")
-        .in("id", placedJobIds);
-      jobs = data ?? [];
-    }
     for (const j of jobs) {
       const job = j as any;
       jobCreatedMap.set(job.id as string, job.created_at as string);

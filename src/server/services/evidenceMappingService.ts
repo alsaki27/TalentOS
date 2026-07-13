@@ -4,7 +4,6 @@
 // AI-assisted only if provider is available and failure degrades cleanly.
 // NEVER invents experience. If evidence is not found, marks missing.
 
-import { supabase } from "@/lib/supabase";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import {
@@ -12,6 +11,17 @@ import {
   UpdateApplicationKeywordInput,
   updateApplicationKeyword,
 } from "@/server/repositories/applicationKeywordsRepository";
+import {
+  findCandidateEvidenceProfile,
+  listCandidateEvidence,
+  findLatestOriginalResume,
+  findLatestBaseResumeContent,
+  findApplicationKeywords,
+  CandidateProfileRow,
+  CandidateEvidenceRow,
+  ResumeRow,
+  BaseResumeRow,
+} from "@/server/repositories/candidateEvidenceRepository";
 
 export interface EvidenceMappingResult {
   keywordId: string;
@@ -39,10 +49,7 @@ export async function mapEvidenceForApplication(
   applicationId: string,
   candidateId: string
 ): Promise<EvidenceMappingResult[]> {
-  const { data: keywords } = await supabase
-    .from("application_job_keywords")
-    .select("*")
-    .eq("application_id", applicationId);
+  const keywords = await findApplicationKeywords(applicationId);
 
   if (!keywords || keywords.length === 0) return [];
 
@@ -78,44 +85,24 @@ export async function mapEvidenceForKeyword(
 async function gatherCandidateEvidenceSources(candidateId: string): Promise<CandidateEvidenceSource> {
   // Parallel fetch of all evidence sources
   const [
-    candidateRes,
-    evidenceRes,
-    resumeRes,
-    baseResumeRes,
+    candidateRow,
+    evidenceRows,
+    resumeRow,
+    baseResumeRow,
   ] = await Promise.all([
-    supabase
-      .from("candidates")
-      .select("target_roles, target_industries, work_authorization, visa_status, notes, skills")
-      .eq("id", candidateId)
-      .single(),
-    supabase
-      .from("candidate_evidence")
-      .select("title, description, related_skills")
-      .eq("candidate_id", candidateId),
-    supabase
-      .from("resumes")
-      .select("parsed_json")
-      .eq("candidate_id", candidateId)
-      .eq("is_original_upload", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("base_resumes")
-      .select("content")
-      .eq("candidate_id", candidateId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    findCandidateEvidenceProfile(candidateId),
+    listCandidateEvidence(candidateId),
+    findLatestOriginalResume(candidateId),
+    findLatestBaseResumeContent(candidateId),
   ]);
 
-  const candidate = candidateRes.data ?? {};
+  const candidate = candidateRow ?? {};
 
   // Extract evidence skills
   const evidenceSkills: string[] = [];
   const evidenceTitles: string[] = [];
   const evidenceDescriptions: string[] = [];
-  for (const ev of (evidenceRes.data ?? []) as any[]) {
+  for (const ev of evidenceRows) {
     if (ev.related_skills) evidenceSkills.push(...ev.related_skills);
     if (ev.title) evidenceTitles.push(ev.title);
     if (ev.description) evidenceDescriptions.push(ev.description);
@@ -124,7 +111,7 @@ async function gatherCandidateEvidenceSources(candidateId: string): Promise<Cand
   // Extract resume skills from parsed_json
   const resumeSkills: string[] = [];
   const resumeExperience: string[] = [];
-  const parsed = resumeRes.data?.parsed_json as Record<string, unknown> | null;
+  const parsed = resumeRow?.parsed_json as Record<string, unknown> | null;
   if (parsed) {
     if (Array.isArray(parsed.skills)) {
       for (const s of parsed.skills) {
@@ -152,7 +139,7 @@ async function gatherCandidateEvidenceSources(candidateId: string): Promise<Cand
   // Extract base resume skills
   const baseResumeSkills: string[] = [];
   const baseResumeExperience: string[] = [];
-  const baseContent = baseResumeRes.data?.content as Record<string, unknown> | null;
+  const baseContent = baseResumeRow?.content as Record<string, unknown> | null;
   if (baseContent) {
     if (Array.isArray(baseContent.skills)) {
       for (const s of baseContent.skills) {

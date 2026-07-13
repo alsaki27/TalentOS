@@ -4,7 +4,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -24,29 +23,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     return NextResponse.json({ error: "No fields to update" }, { status: 400 });
   }
 
-  let data: any;
-  let error: any;
-
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-    const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
-    data = await queryOne(
-      `UPDATE webhook_endpoints SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
-      values
-    );
-    error = data ? null : { message: 'Update failed' };
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("webhook_endpoints")
-      .update(updates)
-      .eq("id", params.id)
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
-  }
+  const keys = Object.keys(updates);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
+  const data = await queryOne(
+    `UPDATE webhook_endpoints SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  const error = data ? null : { message: 'Update failed' };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
@@ -56,16 +40,8 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
   const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
   if (response) return response;
 
-  let error: any;
-
-  if (isNeon()) {
-    const res = await execute('DELETE FROM webhook_endpoints WHERE id = $1', [params.id]);
-    error = res.rowCount === 0 ? { message: 'Not found' } : null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase.from("webhook_endpoints").delete().eq("id", params.id);
-    error = res.error;
-  }
+  const res = await execute('DELETE FROM webhook_endpoints WHERE id = $1', [params.id]);
+  const error = res.rowCount === 0 ? { message: 'Not found' } : null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

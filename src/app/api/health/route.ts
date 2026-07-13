@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { testConnection } from "@/server/db/neon";
-import { isNeon } from "@/server/db";
 
 export async function GET(req: NextRequest) {
   const checks: Record<string, any> = {};
@@ -9,20 +8,16 @@ export async function GET(req: NextRequest) {
   // Check DB_PROVIDER
   checks.config = {
     db_provider: process.env.DB_PROVIDER ?? "not set",
-    is_neon: isNeon(),
+    is_neon: true,
     has_database_url: !!process.env.DATABASE_URL,
   };
 
   // Check DB connectivity
-  if (isNeon()) {
-    try {
-      const dbResult = await testConnection();
-      checks.database = dbResult;
-    } catch (e: any) {
-      checks.database = { ok: false, error: e.message || String(e) };
-    }
-  } else {
-    checks.database = { ok: false, error: "DB_PROVIDER is not neon" };
+  try {
+    const dbResult = await testConnection();
+    checks.database = dbResult;
+  } catch (e: any) {
+    checks.database = { ok: false, error: e.message || String(e) };
   }
 
   // Check auth config

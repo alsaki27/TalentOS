@@ -5,7 +5,6 @@
 // secret instead. src/middleware.ts has a matching bypass for this exact path.
 
 import { NextRequest, NextResponse } from "next/server";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { runAndRecord } from "@/lib/importSourceRunner";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
@@ -27,18 +26,7 @@ export async function GET(req: NextRequest) {
   await recordJobAttempt("import-sources");
 
   let sources: any[] = [];
-  if (isNeon()) {
-    sources = await query<any>(`SELECT * FROM import_sources WHERE is_active = true`);
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data, error } = await supabase
-      .from("import_sources")
-      .select("*")
-      .eq("is_active", true);
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    sources = data ?? [];
-  }
+  sources = await query<any>(`SELECT * FROM import_sources WHERE is_active = true`);
 
   const results = [];
   let totalImported = 0;

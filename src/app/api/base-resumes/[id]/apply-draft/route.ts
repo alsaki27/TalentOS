@@ -7,7 +7,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -18,19 +17,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const newContent = body.newContent;
   if (!newContent) return NextResponse.json({ error: "newContent is required" }, { status: 400 });
 
-  if (isNeon()) {
-    const data = await queryOne<any>(`UPDATE base_resumes SET content = $1, updated_by = $2, updated_at = $3 WHERE id = $4 RETURNING *`, [newContent, context!.profile.user_id, new Date().toISOString(), params.id]);
-    return NextResponse.json(data);
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data, error } = await supabase
-      .from("base_resumes")
-      .update({ content: newContent, updated_by: context!.profile.user_id, updated_at: new Date().toISOString() })
-      .eq("id", params.id)
-      .select()
-      .single();
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json(data);
-  }
+  const data = await queryOne<any>(`UPDATE base_resumes SET content = $1, updated_by = $2, updated_at = $3 WHERE id = $4 RETURNING *`, [newContent, context!.profile.user_id, new Date().toISOString(), params.id]);
+  return NextResponse.json(data);
 }

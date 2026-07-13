@@ -3,7 +3,6 @@
 // Uses the existing AI provider abstraction if no parsed data is available.
 // Never writes directly to tables — delegates to repository.
 
-import { supabase } from "@/lib/supabase";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { MISSION_CONTEXT } from "@/lib/ai/missionContext";

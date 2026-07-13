@@ -4,8 +4,6 @@
 // generic /api/cron bypass already covers this path.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { generateDailyDigest } from "@/lib/ai/digest";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
@@ -31,32 +29,18 @@ export async function GET(req: NextRequest) {
 
   if ("error" in result) {
     const errMsg = result.error;
-    if (isNeon()) {
-      await query(
-        "INSERT INTO ai_digests (content, provider, last_error) VALUES ($1, $2, $3)",
-        ["(generation failed)", "unknown", errMsg]
-      );
-    } else {
-      await supabase.from("ai_digests").insert({ content: "(generation failed)", provider: "unknown", last_error: errMsg });
-    }
+    await query(
+      "INSERT INTO ai_digests (content, provider, last_error) VALUES ($1, $2, $3)",
+      ["(generation failed)", "unknown", errMsg]
+    );
     await recordJobFailure("digest", errMsg, durationMs);
     return NextResponse.json(result, { status: 502 });
   }
 
-  if (isNeon()) {
-    await query(
-      "INSERT INTO ai_digests (content, provider, last_success_at, data_summary) VALUES ($1, $2, NOW(), $3)",
-      [result.content, result.provider, JSON.stringify(result.dataSummary)]
-    );
-  } else {
-    const { error } = await supabase.from("ai_digests").insert({
-      content: result.content,
-      provider: result.provider,
-      last_success_at: new Date().toISOString(),
-      data_summary: result.dataSummary,
-    });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await query(
+    "INSERT INTO ai_digests (content, provider, last_success_at, data_summary) VALUES ($1, $2, NOW(), $3)",
+    [result.content, result.provider, JSON.stringify(result.dataSummary)]
+  );
 
   await recordJobSuccess("digest", durationMs, JSON.stringify(result.dataSummary));
   return NextResponse.json({ ok: true, provider: result.provider });

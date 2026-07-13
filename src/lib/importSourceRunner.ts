@@ -2,8 +2,6 @@
 // Shared run logic for one saved import source — used by both the scheduled cron
 // route and the manual "Run now" trigger, so they can't drift apart.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, execute } from "@/server/db/neon";
 import { createJobs } from "@/server/repositories/jobsRepository";
 import { fetchAtsJobs } from "@/lib/atsFetchers";
@@ -42,18 +40,14 @@ export async function runAndRecord(source: ImportSource): Promise<ImportRunResul
   const ranAt = new Date().toISOString();
 
   await Promise.all([
-    isNeon()
-      ? execute(
-          "UPDATE import_sources SET last_run_at = $1, last_result = $2 WHERE id = $3",
-          [ranAt, JSON.stringify(result), source.id]
-        )
-      : supabase.from("import_sources").update({ last_run_at: ranAt, last_result: result }).eq("id", source.id),
-    isNeon()
-      ? execute(
-          "INSERT INTO import_runs (import_source_id, ran_at, imported, skipped, error) VALUES ($1, $2, $3, $4, $5)",
-          [source.id, ranAt, "imported" in result ? result.imported : 0, "imported" in result ? result.skipped : 0, "error" in result ? result.error : null]
-        )
-      : supabase.from("import_runs").insert({ import_source_id: source.id, ran_at: ranAt, ...result }),
+    execute(
+      "UPDATE import_sources SET last_run_at = $1, last_result = $2 WHERE id = $3",
+      [ranAt, JSON.stringify(result), source.id]
+    ),
+    execute(
+      "INSERT INTO import_runs (import_source_id, ran_at, imported, skipped, error) VALUES ($1, $2, $3, $4, $5)",
+      [source.id, ranAt, "imported" in result ? result.imported : 0, "imported" in result ? result.skipped : 0, "error" in result ? result.error : null]
+    ),
   ]);
 
   return result;

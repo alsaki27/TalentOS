@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { runAndRecord } from "@/lib/importSourceRunner";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 
 export async function POST() {
@@ -11,22 +10,11 @@ export async function POST() {
   let sources: any;
   let error: any;
 
-  if (isNeon()) {
-    try {
-      sources = await query(`SELECT * FROM import_sources WHERE is_active = true ORDER BY created_at ASC`);
-      error = null;
-    } catch (err: any) {
-      error = { message: err.message };
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("import_sources")
-      .select("*")
-      .eq("is_active", true)
-      .order("created_at", { ascending: true });
-    sources = res.data;
-    error = res.error;
+  try {
+    sources = await query(`SELECT * FROM import_sources WHERE is_active = true ORDER BY created_at ASC`);
+    error = null;
+  } catch (err: any) {
+    error = { message: err.message };
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
