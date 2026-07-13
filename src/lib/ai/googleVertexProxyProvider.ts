@@ -92,14 +92,13 @@ function fromGeminiParts(parts: GeminiPart[]): AiContentBlock[] {
   return blocks;
 }
 
-// Gemini 2.5 Flash/Flash-Lite support up to 65536 output tokens, but nothing
-// in this pipeline needs anywhere near that - 8192 is generous headroom
-// (2x the largest ai_agent_configs.max_output_tokens, 4096) without inviting
-// runaway cost/latency on a stuck generation. Was hardcoded to 2048 before,
-// well under what Resume Forge/Final Polish actually need (4096 configured)
-// - confirmed live as the cause of "Unterminated string in JSON" truncation
-// failures, the same bug class fixed for the native providers in aiProvider.ts.
-const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+// Gemini 2.5 Flash/Flash-Lite support up to 65536 output tokens. Truncation
+// mid-generation ("Unterminated string in JSON") has hit this pipeline twice
+// now from ceilings that were too conservative (2048, then 8192) - cost is
+// not a concern here, so this is set well above anything any stage actually
+// produces, leaving real margin below the documented 65536 max in case a
+// specific model variant (3.1 Pro preview vs. 2.5 Flash) caps slightly lower.
+const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 
 export async function callVertexProxy(opts: {
   proxyUrl: string;

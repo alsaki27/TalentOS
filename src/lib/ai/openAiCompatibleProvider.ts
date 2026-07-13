@@ -98,7 +98,14 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: "system", content: system }, ...toOpenAiMessages(messages)],
-          max_tokens: maxTokens ?? config.maxTokens ?? 4096,
+          // 8192 (not higher, unlike the Gemini path) - this fallback covers
+          // whatever provider is configured behind "OpenAI-compatible" (self-
+          // hosted models, Groq, OpenRouter, etc.), whose real output ceilings
+          // vary and aren't documented here the way Gemini's 65536 is; 8192 is
+          // the broadly-safe value already proven to work across every other
+          // provider in this app, without risking a hard 400 on a backend
+          // with a genuinely smaller max.
+          max_tokens: maxTokens ?? config.maxTokens ?? 8192,
           temperature: temperature ?? config.temperature ?? 0.4,
           stream: false,
           ...config.extraBody,

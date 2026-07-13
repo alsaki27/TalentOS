@@ -4,7 +4,7 @@ export const AGENT_CONFIG_DEFAULTS = {
   application_job_lens: {
     displayName: "Job Lens",
     temperature: 0.2,
-    maxOutputTokens: 2048,
+    maxOutputTokens: 32768,
     timeoutMs: 30000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
@@ -13,7 +13,7 @@ export const AGENT_CONFIG_DEFAULTS = {
   application_resume_forge: {
     displayName: "Resume Forge",
     temperature: 0.3,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 32768,
     timeoutMs: 60000,
     maxAttempts: 2,
     approvalPolicy: "risk_based" as const,
@@ -22,7 +22,7 @@ export const AGENT_CONFIG_DEFAULTS = {
   application_hiring_panel: {
     displayName: "Hiring Panel",
     temperature: 0.1,
-    maxOutputTokens: 2048,
+    maxOutputTokens: 32768,
     timeoutMs: 30000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
@@ -31,7 +31,7 @@ export const AGENT_CONFIG_DEFAULTS = {
   application_final_polish: {
     displayName: "Final Polish",
     temperature: 0.2,
-    maxOutputTokens: 4096,
+    maxOutputTokens: 32768,
     timeoutMs: 60000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
