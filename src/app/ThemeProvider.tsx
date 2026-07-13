@@ -22,7 +22,7 @@ export function useTheme() {
 }
 
 export default function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system");
+  const [theme, setThemeState] = useState<Theme>("dark");
   const [resolved, setResolved] = useState<"light" | "dark">("light");
   const [mounted, setMounted] = useState(false);
 

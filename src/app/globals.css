@@ -8,35 +8,35 @@
 /* Internal ops tool — optimized for scanability, not marketing polish. */
 
 :root {
-  --ink: #1a1d23;
-  --ink-soft: #5a5f6b;
-  --bg: #f7f7f8;
-  --surface: #ffffff;
-  --border: #e2e4e8;
-  --accent: #2a6f4f;
-  /* deep green — calm, not corporate-blue */
-  --accent-soft: #e7f2ec;
-  --warn: #b3541e;
-  --danger: #b3261e;
+  /* Core Brand Colors (Dark Mode) */
+  --ink: #f4f4f5; /* zinc-100 */
+  --ink-soft: #a1a1aa; /* zinc-400 */
+  --bg: #09090b; /* zinc-950 - true black */
+  --surface: #18181b; /* zinc-900 - cards and panels */
+  --border: #27272a; /* zinc-800 - thin subtle borders */
+  --accent: #818cf8; /* indigo-400 - subtle slate blue/indigo */
+  --accent-soft: rgba(129, 140, 248, 0.1);
+  --warn: #fb923c; /* orange-400 */
+  --danger: #f87171; /* red-400 */
   --radius: 8px;
 
-  /* shadcn/ui CSS variables (used by falood builder UI components) */
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 222.2 84% 4.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 222.2 84% 4.9%;
-  --primary: 152 45% 30%;
-  --primary-foreground: 210 40% 98%;
-  --secondary: 210 40% 96.1%;
-  --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96.1%;
-  --muted-foreground: 215.4 16.3% 46.9%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 210 40% 98%;
-  --input: 214.3 31.8% 91.4%;
-  --ring: 152 45% 30%;
+  /* shadcn/ui CSS variables (Dark Mode) */
+  --background: 240 10% 3.9%; /* zinc-950 */
+  --foreground: 0 0% 98%;
+  --card: 240 10% 3.9%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 10% 3.9%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 226 70% 65%; /* indigo-400 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 3.7% 15.9%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;
+  --muted-foreground: 240 5% 64.9%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 0 0% 98%;
+  --input: 240 3.7% 15.9%;
+  --ring: 226 70% 65%;
 }
 
 * {
