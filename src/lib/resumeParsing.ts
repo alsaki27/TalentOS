@@ -192,6 +192,7 @@ export interface ParsedResume {
   }>;
   certifications: string[];
   raw_text: string;
+  parse_error?: string;
 }
 
 function uniqStrings(values: string[]): string[] {
@@ -810,7 +811,7 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
       markdown,
       error: serializeDebugError(err),
     });
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown, parse_error: err?.message ?? serializeDebugError(err) };
   }
 }
 
@@ -981,7 +982,7 @@ export async function parseResumeTextWithProvider(rawText: string, provider: AiP
       rawText,
       error: serializeDebugError(err),
     });
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText, parse_error: err?.message ?? serializeDebugError(err) };
   }
 }
 
@@ -1018,8 +1019,8 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
       return parseResumeTextWithProvider(rawText, provider);
     });
     return result;
-  } catch {
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+  } catch (err: any) {
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText, parse_error: err?.message ?? String(err) };
   }
 }
 
