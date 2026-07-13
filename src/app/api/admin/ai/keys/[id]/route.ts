@@ -8,6 +8,7 @@ import {
   updateAiKey,
 } from "@/server/repositories/aiKeyRepository";
 import { testAiKey } from "@/server/services/aiProvider";
+import { guardedSafetyCheck } from "@/lib/safetyCheck";
 
 export const dynamic = "force-dynamic";
 
@@ -301,6 +302,17 @@ export async function DELETE(
         { status: 409 }
       );
     }
+
+    // Safety audit log — tracks who deleted what and when
+    await guardedSafetyCheck({
+      operation: "delete",
+      resource: "ai_api_keys",
+      confirm: true,
+      bulkCount: 1,
+      hasFilters: true, // specific ID
+      userId: context?.profile?.user_id,
+      detail: `Delete key "${key.label}" (${key.provider})`,
+    });
 
     const assignments = await query<any>(
       `SELECT ar.*, a.label as automation_label, a.description as automation_description
