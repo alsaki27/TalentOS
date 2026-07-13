@@ -9,6 +9,15 @@ import { query as neonQuery } from "@/server/db/neon";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
+// Every other route in this family (dispatch, [id], overview, review) sets
+// this explicitly - this was the one exception. Without it, Next.js/OpenNext
+// can serve a cached/static response on Cloudflare instead of re-running the
+// handler on each poll, which would mean the opportunistic self-dispatch
+// fetch below silently never re-fires: confirmed live, a freshly queued
+// workflow sat untouched (status/updated_at unchanged) for 5+ minutes despite
+// this endpoint being polled repeatedly during that window.
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
