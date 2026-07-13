@@ -7,16 +7,16 @@ import { describe, test, expect } from "vitest";
 // Derived from a full codebase scan of callWithUsageTracking() call sites
 // across src/ on 2026-07-11:
 //
-//   src/lib/resumeParsing.ts:742,1017          -> resume_parsing
+//   src/lib/resumeParsing.ts:764,1039          -> application_resume_forge
 //   src/app/api/candidates/[id]/parse-markitdown/route.ts:167 -> candidate_markitdown
 //   src/lib/ai/falood/jdAnalyzer.ts:216        -> jd_analysis
 //   src/lib/ai/jobCategorization.ts:100         -> job_categorization
 //   src/server/services/applicationKeywordService.ts:214 -> keyword_extraction
 //   src/server/services/evidenceMappingService.ts:337   -> evidence_mapping
 //   src/app/api/target-jobs/route.ts:73         -> target_jobs_matching
-//   src/app/api/resume-tailoring/generate/route.ts:112  -> base_resume_studio
-//   src/lib/ai/faloodBaseResume.ts:165          -> base_resume_studio
-//   src/lib/ai/faloodApplicationTailoring.ts:116,201    -> application_tailoring
+//   src/app/api/resume-tailoring/generate/route.ts:112  -> application_resume_forge
+//   src/lib/ai/faloodBaseResume.ts:165          -> application_resume_forge
+//   src/lib/ai/faloodApplicationTailoring.ts:116,213    -> application_resume_forge
 //   src/server/services/resumeSuggestionService.ts:99   -> resume_suggestions
 //   src/server/services/applicationPacketAiService.ts:89,216 -> cover_letter_gen
 //   src/server/services/applicationPacketAiService.ts:166     -> recruiter_message_gen
@@ -32,15 +32,12 @@ const AUTOMATION_IDS_FROM_CODE = [
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
-  "resume_parsing",
   "candidate_markitdown",
   "jd_analysis",
   "job_categorization",
   "keyword_extraction",
   "evidence_mapping",
   "target_jobs_matching",
-  "base_resume_studio",
-  "application_tailoring",
   "resume_suggestions",
   "cover_letter_gen",
   "recruiter_message_gen",
@@ -51,15 +48,12 @@ const AUTOMATION_IDS_FROM_CODE = [
 // These must match exactly what's in ai_automations (06_ai_key_manager_v2.sql
 // + neon_fixes/008_automation_coverage.sql).
 const SEEDED_AUTOMATIONS = new Set([
-  "resume_parsing",
   "candidate_markitdown",
   "jd_analysis",
   "job_categorization",
   "keyword_extraction",
   "evidence_mapping",
   "target_jobs_matching",
-  "base_resume_studio",
-  "application_tailoring",
   "resume_suggestions",
   "cover_letter_gen",
   "recruiter_message_gen",

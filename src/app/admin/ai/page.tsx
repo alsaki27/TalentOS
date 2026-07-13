@@ -174,18 +174,21 @@ function statusBadge(status: string): string {
   return STATUS_BADGE[status] || "badge-info";
 }
 
-function formatCost(cost: number | null | undefined): string {
-  if (cost == null || isNaN(cost)) return "—";
-  return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
+function formatCost(rawCost: number | null | undefined | string): string {
+  const cost = Number(rawCost);
+  if (rawCost == null || isNaN(cost)) return "—";
+  return `$${cost.toFixed(cost < 0.01 && cost > 0 ? 4 : 2)}`;
 }
 
-function formatNumber(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
+function formatNumber(raw: number | null | undefined | string): string {
+  const n = Number(raw);
+  if (raw == null || isNaN(n)) return "—";
   return n.toLocaleString();
 }
 
-function formatPercent(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
+function formatPercent(raw: number | null | undefined | string): string {
+  const n = Number(raw);
+  if (raw == null || isNaN(n)) return "—";
   return `${n.toFixed(1)}%`;
 }
 

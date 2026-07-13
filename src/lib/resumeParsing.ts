@@ -159,6 +159,28 @@ async function extractTextFromPdfBuffer(buffer: Uint8Array): Promise<string> {
   return allText.join(" ").replace(/\s+/g, " ").trim();
 }
 
+function extractJsonRobust(text: string): string {
+  let t = text.trim();
+  t = t.replace(/^```(?:json|javascript|js)\s*/i, "");
+  t = t.replace(/\s*```$/i, "");
+  t = t.trim();
+  const firstBrace = t.indexOf("{");
+  const firstBracket = t.indexOf("[");
+  let firstIdx = -1;
+  let lastIdx = -1;
+  if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+    firstIdx = firstBrace;
+    lastIdx = t.lastIndexOf("}");
+  } else if (firstBracket !== -1) {
+    firstIdx = firstBracket;
+    lastIdx = t.lastIndexOf("]");
+  }
+  if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
+    return t.substring(firstIdx, lastIdx + 1).trim();
+  }
+  return t.trim();
+}
+
 export interface ParsedResume {
   name?: string;
   email?: string;
@@ -739,7 +761,7 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
   ];
 
   try {
-    const { result } = await callWithUsageTracking("resume_parsing", undefined, async (provider) => {
+    const { result } = await callWithUsageTracking("application_resume_forge", undefined, async (provider) => {
       const response = await provider.send({
         system: "You are a resume parser. Extract structured data from markdown and return ONLY raw JSON.",
         messages,
@@ -757,7 +779,7 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
       responseLength: text.length,
       rawProviderText: text,
     });
-    const clean = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "").trim();
+    const clean = extractJsonRobust(text);
     const parsed = JSON.parse(clean) as any;
 
     if (Array.isArray(parsed.skills)) {
@@ -810,7 +832,7 @@ export async function parseResumeFromMarkdown(markdown: string, rawTextForNormal
       markdown,
       error: serializeDebugError(err),
     });
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: markdown };
+    throw err;
   }
 }
 
@@ -937,7 +959,7 @@ export async function parseResumeTextWithProvider(rawText: string, provider: AiP
       responseLength: text.length,
       rawProviderText: text,
     });
-    const clean = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "").trim();
+    const clean = extractJsonRobust(text);
     const parsed = JSON.parse(clean) as any;
     
     if (Array.isArray(parsed.skills)) {
@@ -981,7 +1003,7 @@ export async function parseResumeTextWithProvider(rawText: string, provider: AiP
       rawText,
       error: serializeDebugError(err),
     });
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+    throw err;
   }
 }
 
@@ -1014,12 +1036,12 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
     rawTextLength: rawText.length,
   });
   try {
-    const { result } = await callWithUsageTracking("resume_parsing", undefined, async (provider) => {
+    const { result } = await callWithUsageTracking("application_resume_forge", undefined, async (provider) => {
       return parseResumeTextWithProvider(rawText, provider);
     });
     return result;
-  } catch {
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+  } catch (err: any) {
+    throw err;
   }
 }
 

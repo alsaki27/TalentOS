@@ -113,7 +113,7 @@ export async function generateResumeSuggestions(applicationResumeId: string): Pr
 
   let suggestions: any[];
   try {
-    const { result: response } = await callWithUsageTracking("application_tailoring", undefined, async (provider) => {
+    const { result: response } = await callWithUsageTracking("application_resume_forge", undefined, async (provider) => {
       return provider.send({
         system: "You are Falood, a controlled resume-tailoring assistant. Respond with a raw JSON array only.",
         messages: [{ role: "user", content: [{ type: "text", text: buildSuggestPrompt(ctx) }] }],
@@ -210,7 +210,7 @@ export async function runApplicationTailoringCommand(opts: {
   ].join("\n");
 
   try {
-    const { result: response } = await callWithUsageTracking("application_tailoring", undefined, async (provider) => {
+    const { result: response } = await callWithUsageTracking("application_resume_forge", undefined, async (provider) => {
       return provider.send({
         system: "You are Falood, a controlled resume-tailoring assistant who NEVER invents skills, credentials, experience, certifications, or any claim not supported by the candidate's evidence. Answer in plain text, concisely.",
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],

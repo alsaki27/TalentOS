@@ -88,6 +88,7 @@ export async function POST(req: NextRequest) {
       resume_url: body.resume_url ?? null,
       resume_filename: body.resume_filename ?? null,
       resume_id: body.resume_id ?? null,
+      base_resume_id: (body.candidate_base_resumes ?? {})[candidateId] ?? null,
       follow_up_at: followUpAt,
       next_action: nextAction,
       follow_up_source: followUpSource,

@@ -17,8 +17,7 @@ import { ResumeDocument } from "@/lib/falood/types";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
-import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText, extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
-import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
+import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText, extractText, parseResumeFields } from "@/lib/resumeParsing";
 
 // #region debug-point A:base-resume-seeding-debug
 function reportBaseResumeSeedingDebug(
@@ -235,16 +234,11 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     throw new Error("We found an uploaded resume, but couldn't extract enough readable text. Please upload a text-based PDF/DOCX or paste the resume text first.");
   }
 
-  const openAiProvider = getOpenAiProvider();
   logBaseResumeCreateConsole("starting structured parsing for uploaded resume", {
     resumeId: resume.id,
-    provider: openAiProvider ? "openaiProvider" : "categoryProvider",
+    provider: "application_resume_forge",
   });
-  const parsed = markdown
-    ? await parseResumeFields(rawText, markdown)
-    : openAiProvider
-      ? await parseResumeTextWithProvider(rawText, openAiProvider)
-      : await parseResumeFields(rawText);
+  const parsed = await parseResumeFields(rawText, markdown);
 
   if (!parsed.linkedin_url && mimeType.toLowerCase().includes("pdf")) {
     parsed.linkedin_url = extractLinkedInUrlFromBinary(buffer) ?? undefined;

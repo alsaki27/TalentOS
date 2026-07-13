@@ -249,6 +249,17 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();
 
+    console.log(`\n━━━ [Pipeline] Stage ${currentIdx}: ${agentId} ━━━`);
+    console.log(`[Pipeline] ${agentId} INPUT:`, JSON.stringify({
+      job: { title: ctx.job?.title, company: ctx.job?.company },
+      baseResumeKeys: Object.keys(ctx.baseResume ?? {}),
+      evidenceCount: ctx.evidence?.length ?? 0,
+      previousOutputs: Object.keys(ctx.previousOutputs),
+      previousDataKeys: Object.fromEntries(
+        Object.entries(ctx.previousOutputs).map(([k, v]) => [k, Object.keys(v?.data ?? {})])
+      ),
+    }, null, 2));
+
     // Provider fallback: try up to 3 distinct routes, tracking failed key IDs.
     let lastError: Error | null = null;
     let agentOutput: any = null;
@@ -293,8 +304,12 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     }
 
     if (lastError || !agentOutput) {
+      console.log(`[Pipeline] ${agentId} FAILED:`, lastError?.message);
       throw lastError ?? new Error("No output from agent");
     }
+
+    console.log(`[Pipeline] ${agentId} OUTPUT:`, JSON.stringify(agentOutput).slice(0, 2000));
+    console.log(`[Pipeline] ${agentId} latency: ${Date.now() - startMs}ms`);
 
     const latencyMs = Date.now() - startMs;
 
@@ -355,9 +370,10 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       return;
     }
 
-    // Advance to next stage and re-queue
+    // Advance to next stage and continue the cascade
     await continueToNextStage(workflowId, currentIdx + 1);
     await syncWorkflowToApplication(workflowId, "queued");
+    await processWorkflowStage(workflowId);
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -431,9 +447,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher" };
   }
 
-  processWorkflowStage(workflowId).catch(err => {
-    console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
-  });
+  await processWorkflowStage(workflowId);
 
   return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
 }

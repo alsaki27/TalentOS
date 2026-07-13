@@ -21,12 +21,7 @@ CREATE TABLE IF NOT EXISTS ai_api_keys (
   failure_count integer NOT NULL DEFAULT 0,
   created_by uuid REFERENCES profiles(user_id) ON DELETE SET NULL,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now(),
-
-  -- Status constraint
-  CONSTRAINT ai_api_keys_status_check CHECK (
-    status IN ('unknown', 'working', 'failing', 'disabled')
-  )
+  updated_at timestamptz DEFAULT now()
 );
 
 -- Provider values documented: anthropic, nvidia, openai, google, groq, openrouter, deepseek, local

@@ -131,7 +131,7 @@ export function buildProviderFromDbKey(
       const GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
-        async send({ system, messages }) {
+        async send({ system, messages, maxTokens }) {
           const resolvedModel = model || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
           const url = `${GOOGLE_API_BASE}/${resolvedModel}:generateContent`;
 
@@ -148,7 +148,7 @@ export function buildProviderFromDbKey(
             contents: geminiMessages,
             generationConfig: {
               temperature: 0.2,
-              maxOutputTokens: 64,
+              maxOutputTokens: maxTokens ?? 8192,
             },
           };
 

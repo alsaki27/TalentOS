@@ -172,10 +172,15 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
       [id]
     );
     if (!row) return null;
-    return {
-      ...row,
-      decrypted_key: await decryptSecret(row.encrypted_key),
-    };
+    try {
+      return {
+        ...row,
+        decrypted_key: await decryptSecret(row.encrypted_key),
+      };
+    } catch (err) {
+      console.error(`[aiKeyRepository] Failed to decrypt key ${id}. Corrupt or invalid secret.`, err);
+      return null;
+    }
   } else {
     const { data, error } = await supabase
       .from("ai_api_keys")
@@ -184,10 +189,15 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
       .single();
     if (error || !data) return null;
     const row = data as AiApiKeyRow;
-    return {
-      ...row,
-      decrypted_key: await decryptSecret(row.encrypted_key),
-    };
+    try {
+      return {
+        ...row,
+        decrypted_key: await decryptSecret(row.encrypted_key),
+      };
+    } catch (err) {
+      console.error(`[aiKeyRepository] Failed to decrypt key ${id}. Corrupt or invalid secret.`, err);
+      return null;
+    }
   }
 }
 

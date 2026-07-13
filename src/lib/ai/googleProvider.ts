@@ -49,7 +49,7 @@ export function getGoogleProvider(): AiProvider | null {
   if (!apiKey) return null;
 
   return {
-    async send({ system, messages }) {
+    async send({ system, messages, maxTokens }) {
       const model = process.env.GOOGLE_MODEL || DEFAULT_MODEL;
       const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
 
@@ -59,7 +59,7 @@ export function getGoogleProvider(): AiProvider | null {
         contents: geminiMessages,
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 2048,
+          maxOutputTokens: maxTokens ?? 8192,
         },
       };
 
@@ -95,7 +95,7 @@ export function getGoogleFallbackProvider(): AiProvider | null {
   if (!apiKey || !fallbackModel) return null;
 
   return {
-    async send({ system, messages }) {
+    async send({ system, messages, maxTokens }) {
       const url = `${GOOGLE_API_BASE}/${fallbackModel}:generateContent`;
 
       const geminiMessages = toGeminiMessages(messages);
@@ -104,7 +104,7 @@ export function getGoogleFallbackProvider(): AiProvider | null {
         contents: geminiMessages,
         generationConfig: {
           temperature: 0.2,
-          maxOutputTokens: 2048,
+          maxOutputTokens: maxTokens ?? 8192,
         },
       };
 

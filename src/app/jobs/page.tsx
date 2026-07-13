@@ -1520,8 +1520,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("assigned");
-  const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
-  const [resumeId, setResumeId] = useState("");
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<Record<string, { id: string; name: string; status: string }[]>>({});
+  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState<Record<string, string>>({});
   const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
@@ -1553,10 +1553,17 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   }, []);
 
   useEffect(() => {
-    setResumeId("");
-    if (candidateIds.size !== 1) { setResumeVariants([]); return; }
-    const [candidateId] = Array.from(candidateIds);
-    fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    const newIds = Array.from(candidateIds).filter(id => !candidateBaseResumes[id]);
+    if (newIds.length === 0) return;
+    newIds.forEach(async (candidateId) => {
+      try {
+        const res = await fetch(`/api/base-resumes?candidateId=${candidateId}`, { cache: "no-store" });
+        const data = res.ok ? await res.json() : [];
+        setCandidateBaseResumes(prev => ({ ...prev, [candidateId]: Array.isArray(data) ? data : [] }));
+      } catch {
+        setCandidateBaseResumes(prev => ({ ...prev, [candidateId]: [] }));
+      }
+    });
   }, [candidateIds]);
 
   function toggleCandidate(id: string) {
@@ -1617,14 +1624,18 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     setSaving(true);
     setError("");
     const selectedIds = Array.from(candidateIds);
-    const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
-    const variant = resumeVariants.find((r) => r.id === resumeId);
     const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
     const assignmentStatus = status === "assigned" || status === "stacked";
     if (assignmentStatus && !assignedToUserId) {
       setSaving(false);
       setError("Choose an application owner for assigned or stacked tickets.");
       return;
+    }
+    const candidateBaseResumesMap: Record<string, string> = {};
+    for (const id of selectedIds) {
+      if (selectedBaseResumeId[id]) {
+        candidateBaseResumesMap[id] = selectedBaseResumeId[id];
+      }
     }
     const res = await fetch("/api/applications", {
       method: "POST",
@@ -1633,9 +1644,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         candidate_ids: selectedIds,
         job_id: job.id,
         status,
-        resume_id: variant?.id ?? null,
-        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
-        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        candidate_base_resumes: candidateBaseResumesMap,
         assigned_by: currentUser?.display_name || currentUser?.email || null,
         assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
         assigned_by_user_id: currentUser?.user_id ?? null,
@@ -1689,7 +1698,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
               }
 
               const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
-              const noResume = !c.resume_filename;
+              const noResume = !c.resume_filename && !c.has_base_resume;
               const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : "";
               const isExpanded = expandedScoreError === c.id;
 
@@ -1758,6 +1767,21 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                       <p style={{ margin: 0, lineHeight: 1.4 }}>{errorReason}</p>
                     </div>
                   )}
+                  {candidateIds.has(c.id) && (candidateBaseResumes[c.id] ?? []).length > 0 && (
+                    <div style={{ marginTop: "10px", padding: "8px 10px", backgroundColor: "var(--bg)", borderRadius: "6px", border: "1px solid var(--border)" }}>
+                      <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink-soft)", marginBottom: "4px", display: "block" }}>Base resume for {c.name}</label>
+                      <select
+                        value={selectedBaseResumeId[c.id] ?? ""}
+                        onChange={(e) => setSelectedBaseResumeId(prev => ({ ...prev, [c.id]: e.target.value }))}
+                        style={{ width: "100%", padding: "6px 10px", borderRadius: "4px", border: "1px solid var(--border)", fontSize: "13px" }}
+                      >
+                        <option value="">-- Select base resume --</option>
+                        {(candidateBaseResumes[c.id] ?? []).map(br => (
+                          <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1769,18 +1793,6 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
             </div>
           )}
         </div>
-
-        {candidateIds.size === 1 && resumeVariants.length > 0 && (
-          <div className="field-group" style={{ marginTop: "16px" }}>
-            <label>Resume version</label>
-            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
-              <option value="">Uploaded Resume (default)</option>
-              {resumeVariants.map((r) => (
-                <option key={r.id} value={r.id}>{r.label}</option>
-              ))}
-            </select>
-          </div>
-        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "20px" }}>
           <div className="field-group">

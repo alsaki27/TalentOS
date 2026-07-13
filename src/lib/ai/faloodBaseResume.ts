@@ -162,7 +162,7 @@ export async function runBaseResumeCommand(opts: {
   const prompt = buildPrompt(ctx, opts.command, opts.message);
 
   try {
-    const { result: response } = await callWithUsageTracking("base_resume_studio", undefined, async (provider) => {
+    const { result: response } = await callWithUsageTracking("application_resume_forge", undefined, async (provider) => {
       return provider.send({
         system: "You are Falood, a controlled resume assistant. Respond with raw JSON only, exactly matching the requested schema.",
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],

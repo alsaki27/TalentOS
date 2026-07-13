@@ -136,6 +136,7 @@ create table if not exists applications (
   resume_url    text,                          -- snapshot of which resume was used for THIS application
   resume_filename text,
   resume_id     uuid references resumes(id) on delete set null,
+  base_resume_id uuid references base_resumes(id) on delete set null,
   follow_up_at  date,
   next_action   text,
   assigned_by   text,
@@ -163,6 +164,7 @@ create index if not exists applications_assigned_by_user_idx on applications (as
 create index if not exists applications_assigned_to_user_idx on applications (assigned_to_user_id);
 create index if not exists applications_assignment_due_idx on applications (assignment_due_at);
 create index if not exists applications_proof_uploaded_by_idx on applications (proof_uploaded_by_user_id);
+create index if not exists applications_base_resume_idx on applications (base_resume_id);
 
 -- ----- APPLICATION_EVENTS (status-change timeline) -----
 create table if not exists application_events (

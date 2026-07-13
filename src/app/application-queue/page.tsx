@@ -166,44 +166,72 @@ export default function ApplicationQueuePage() {
     setSelected(p => p.size === items.length ? new Set() : new Set(items.map(i => i.id)));
   }
 
+  function updateItemOptimistic(id: string, patch: Partial<QueueItem>) {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
+  }
+
   async function setStatus(id: string, s: string) {
     setActionLoading(`${id}:${s}`);
+    const original = items.find(i => i.id === id);
     setFeedback(null);
+    updateItemOptimistic(id, { status: s });
     try {
       const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
       setActionLoading(null);
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      if (!res.ok) {
+        if (original) updateItemOptimistic(id, { status: original.status });
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Update failed." });
+        return;
+      }
       setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
-      load(page, false);
-    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
+    } catch (err: any) {
+      if (original) updateItemOptimistic(id, { status: original.status });
+      setActionLoading(null);
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    }
   }
 
   async function requestReview(item: QueueItem) {
     setActionLoading(`${item.id}:review`);
+    const originalStatus = item.review_status;
+    updateItemOptimistic(item.id, { review_status: "pending" });
     try {
       const res = await fetch(`/api/applications/${item.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_status: "pending", review_note: item.review_note ?? "Ready for review.", event_note: "Sent for review." }) });
       setActionLoading(null);
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Review request failed." }); return; }
+      if (!res.ok) {
+        updateItemOptimistic(item.id, { review_status: originalStatus });
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Review request failed." });
+        return;
+      }
       setFeedback({ kind: "success", text: "Sent for review." });
-      load(page, false);
-    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message }); }
+    } catch (err: any) {
+      updateItemOptimistic(item.id, { review_status: originalStatus });
+      setActionLoading(null);
+      setFeedback({ kind: "error", text: err.message });
+    }
   }
 
   async function startWorkflow(item: QueueItem) {
     setActionLoading(`${item.id}:workflow`);
     setFeedback(null);
+    updateItemOptimistic(item.id, { workflow_status: "queued" });
     try {
       const res = await fetch(`/api/applications/${item.id}/ai-workflow`, { method: "POST", credentials: "include" });
       if (!res.ok) {
+        updateItemOptimistic(item.id, { workflow_status: item.workflow_status });
         const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
         setFeedback({ kind: "error", text: d.error || "Workflow start failed." });
         return;
       }
       const data = await res.json();
+      updateItemOptimistic(item.id, { workflow_id: data.workflowId, workflow_status: data.status ?? "queued", workflow_stage: 0 });
       setFeedback({ kind: "success", text: `AI pipeline started: ${data.workflowId}` });
-      load(page, false);
-    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
-    finally { setActionLoading(null); }
+    } catch (err: any) {
+      updateItemOptimistic(item.id, { workflow_status: item.workflow_status });
+      setFeedback({ kind: "error", text: err.message || "Network error" });
+    } finally { setActionLoading(null); }
   }
 
   async function fetchWorkflowDetails(item: QueueItem) {
@@ -232,35 +260,77 @@ export default function ApplicationQueuePage() {
       setActionLoading(`${item.id}:proof`);
       const fd = new FormData();
       fd.append("file", file);
-      const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: fd });
-      setActionLoading(null);
-      if (res.ok) { setFeedback({ kind: "success", text: "Proof uploaded." }); load(page, false); }
-      else { setFeedback({ kind: "error", text: "Upload failed." }); }
+      try {
+        const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: fd });
+        setActionLoading(null);
+        if (res.ok) {
+          const data = await res.json().catch(() => ({}));
+          updateItemOptimistic(item.id, { proof_filename: data.filename ?? file.name, proof_uploaded_at: new Date().toISOString() });
+          setFeedback({ kind: "success", text: "Proof uploaded." });
+        } else {
+          setFeedback({ kind: "error", text: "Upload failed." });
+        }
+      } catch {
+        setActionLoading(null);
+        setFeedback({ kind: "error", text: "Upload failed." });
+      }
     };
     input.click();
   }
 
   async function bulkStatus(s: string) {
     setFeedback(null);
-    await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, completed_at: s === "applied" ? new Date().toISOString() : null }) })));
-    setFeedback({ kind: "success", text: "Bulk update done." });
-    load(page, false);
+    const selectedIds = new Set(selectedItems.map(i => i.id));
+    const originals = new Map(selectedItems.map(i => [i.id, i.status]));
+    setItems(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, status: s } : i));
+    try {
+      await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, completed_at: s === "applied" ? new Date().toISOString() : null }) })));
+      setFeedback({ kind: "success", text: "Bulk update done." });
+    } catch {
+      setItems(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, status: originals.get(i.id) ?? i.status } : i));
+      setFeedback({ kind: "error", text: "Bulk update failed." });
+    }
+    setSelected(new Set());
   }
 
   async function bulkReassign() {
     if (!bulkOwnerId) return;
     const owner = users.find(u => u.user_id === bulkOwnerId);
-    await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }) })));
+    const selectedIds = new Set(selectedItems.map(i => i.id));
+    const originalMap = new Map(selectedItems.map(i => [i.id, { assigned_to_user_id: i.assigned_to_user_id, assigned_to: i.assigned_to }]));
+    setItems(prev => prev.map(i => selectedIds.has(i.id) ? { ...i, assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null } : i));
     setBulkOwnerId("");
-    setFeedback({ kind: "success", text: "Reassigned." });
-    load(page, false);
+    try {
+      await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }) })));
+      setFeedback({ kind: "success", text: "Reassigned." });
+    } catch {
+      setItems(prev => {
+        return prev.map(i => {
+          const orig = originalMap.get(i.id);
+          if (!orig) return i;
+          return { ...i, assigned_to_user_id: orig.assigned_to_user_id, assigned_to: orig.assigned_to };
+        });
+      });
+      setFeedback({ kind: "error", text: "Reassign failed." });
+    }
+    setSelected(new Set());
   }
 
   async function removeTicket(item: QueueItem) {
     if (!confirm(`Remove ${item.candidates?.name ?? "this ticket"}?`)) return;
-    const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
-    if (res.ok) { setFeedback({ kind: "success", text: "Removed." }); load(page, false); }
-    else { setFeedback({ kind: "error", text: "Remove failed." }); }
+    setItems(prev => prev.filter(i => i.id !== item.id));
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
+      if (res.ok) {
+        setFeedback({ kind: "success", text: "Removed." });
+      } else {
+        setItems(prev => [...prev, item]);
+        setFeedback({ kind: "error", text: "Remove failed." });
+      }
+    } catch {
+      setItems(prev => [...prev, item]);
+      setFeedback({ kind: "error", text: "Remove failed." });
+    }
   }
 
   function openFaloodDropdown(item: QueueItem) {
@@ -631,9 +701,18 @@ export default function ApplicationQueuePage() {
             <div className="modal-actions">
               <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
               <button className="btn-primary" onClick={async () => {
-                const res = await fetch(`/api/applications/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assigned_to_user_id: editing.assigned_to_user_id || null, assigned_to: editing.assigned_to || null, assignment_due_at: editing.assignment_due_at || null, priority: editing.priority, review_status: editing.review_status, assignment_note: editing.assignment_note || null }) });
-                if (res.ok) { setEditing(null); load(page, false); setFeedback({ kind: "success", text: "Saved." }); }
-                else { setFeedback({ kind: "error", text: "Save failed." }); }
+                const patch = { assigned_to_user_id: editing.assigned_to_user_id || null, assigned_to: editing.assigned_to || null, assignment_due_at: editing.assignment_due_at || null, priority: editing.priority, review_status: editing.review_status, assignment_note: editing.assignment_note || null };
+                const editingId = editing.id;
+                const prev = items.find(i => i.id === editingId);
+                updateItemOptimistic(editingId, patch as any);
+                setEditing(null);
+                const res = await fetch(`/api/applications/${editingId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
+                if (res.ok) {
+                  setFeedback({ kind: "success", text: "Saved." });
+                } else {
+                  if (prev) setItems(prevItems => prevItems.map(i => i.id === editingId ? prev : i));
+                  setFeedback({ kind: "error", text: "Save failed." });
+                }
               }}>Save</button>
             </div>
           </div>

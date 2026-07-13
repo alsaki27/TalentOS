@@ -109,7 +109,7 @@ Target job:
 ${rawDescription}`;
 
   try {
-    const { result: aiResponse, providerName } = await callWithUsageTracking("base_resume_studio", { userId: context!.profile.user_id }, async (provider) => {
+    const { result: aiResponse, providerName } = await callWithUsageTracking("application_resume_forge", { userId: context!.profile.user_id }, async (provider) => {
       return provider.send({
         system: "You are a careful resume editor. You tailor resumes without inventing facts.",
         messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
