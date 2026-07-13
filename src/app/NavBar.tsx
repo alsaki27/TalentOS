@@ -83,6 +83,7 @@ export default function NavBar() {
     { href: "/job-agent/review", label: "Job Agent Review", show: canManageSources },
     { href: "/job-agent/tokens", label: "Job Agent Tokens", show: isAdmin },
     { href: "/admin/ai", label: "AI Control Center", show: isAdmin },
+    { href: "/admin/extension-keys", label: "Extension API Keys", show: isAdmin },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team", label: "Team", show: isAdmin },
     { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
