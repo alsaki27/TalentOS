@@ -4,11 +4,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne, execute } from "@/server/db/neon";
 import { guardedSafetyCheck } from "@/lib/safetyCheck";
+import { requireCurrentUser } from "@/lib/auth";
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const { response } = await requireCurrentUser(["admin"]);
+  if (response) return response;
   try {
     const body = await request.json().catch(() => ({}));
     const confirm = body.confirm === true;

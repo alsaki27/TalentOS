@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../../Skeleton";
 
@@ -32,10 +32,7 @@ export default function JobAgentReviewPage() {
   const [statusF, setStatusF] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => { fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); }); }, []);
-  useEffect(() => { if (runId) loadJobs(1); }, [runId, tierF, statusF]);
-
-  async function loadJobs(pg: number) {
+  const loadJobs = useCallback(async (pg: number) => {
     setLoading(true); setError("");
     const p = new URLSearchParams(); p.set("page", String(pg)); p.set("pageSize", String(PAGE_SIZE));
     if (tierF) p.set("tier", tierF);
@@ -44,7 +41,10 @@ export default function JobAgentReviewPage() {
     const r = await fetch(`/api/job-agent/runs/${runId}/staged-jobs?${p}`);
     const d = await r.json().catch(() => ({ items: [], total: 0 }));
     setJobs(d.items ?? []); setTotal(d.total ?? 0); setPage(pg); setLoading(false);
-  }
+  }, [runId, tierF, statusF]);
+
+  useEffect(() => { fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); }); }, []);
+  useEffect(() => { if (runId) loadJobs(1); }, [runId, loadJobs]);
 
   async function bulkApprove(tier?: string) {
     setBusy(true);
