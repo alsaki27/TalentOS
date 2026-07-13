@@ -77,10 +77,11 @@ export interface AiApiKeyRow {
   supports_tools: boolean;
   supports_json_mode: boolean;
   supports_streaming: boolean;
-  // Code-enforced deletion protection (migration 019) — for keys whose real
-  // secret material lives outside this table (e.g. google_vertex_proxy reads
-  // GOOGLE_VERTEX_PROXY_SECRET from Cloudflare env), where deleting the row
-  // would silently break every automation routed to it with no recovery path.
+  // Code-enforced deletion protection (migration 019) — for keys where
+  // deleting the row would silently break every automation routed to it
+  // with no recovery path (e.g. the google_vertex_proxy row, which is the
+  // only "Google Vertex (Proxy)" handle assignable in the Control Center,
+  // even though its actual secret normally comes from Cloudflare env).
   is_protected: boolean;
 }
 

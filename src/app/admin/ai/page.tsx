@@ -658,11 +658,9 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
     setModelDropdownOpen(false);
     setCustomModelInput("");
     if (p === "google_vertex_proxy") {
-      // This provider reads GOOGLE_VERTEX_PROXY_URL / _SECRET / GOOGLE_VERTEX_MODEL
-      // directly from Cloudflare Worker env at call time — the API Key field below
-      // is never used for authentication, it just needs a non-empty placeholder to
-      // satisfy the form/API's required-field validation.
-      if (!apiKey.trim()) setApiKey("env-managed (see GOOGLE_VERTEX_PROXY_SECRET in Cloudflare)");
+      // The proxy URL comes from the Worker's GOOGLE_VERTEX_PROXY_URL env var,
+      // but the API Key field below IS the real proxy secret sent on every
+      // call - protect this row from accidental deletion by default.
       setIsProtected(true);
     }
   }
@@ -746,10 +744,9 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
 
       {isVertexProxy && (
         <div className="alert alert-info" style={{ marginBottom: 12, fontSize: 13 }}>
-          Google Vertex (Proxy) authenticates using the Worker's own <code>GOOGLE_VERTEX_PROXY_URL</code>,{" "}
-          <code>GOOGLE_VERTEX_PROXY_SECRET</code>, and <code>GOOGLE_VERTEX_MODEL</code> Cloudflare secrets — not the
-          value below. The API Key field is a required placeholder only; it's never sent anywhere. This key row just
-          makes "Google Vertex (Proxy)" assignable to automations in Agents &amp; Routing.
+          Google Vertex (Proxy) authenticates with the Worker's <code>GOOGLE_VERTEX_PROXY_URL</code> /{" "}
+          <code>GOOGLE_VERTEX_PROXY_SECRET</code> Cloudflare secrets when they're set — the API Key field below is only
+          used as a fallback if that secret is ever removed, so any placeholder value is fine here.
         </div>
       )}
 
@@ -773,8 +770,8 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           <input className="input" placeholder="e.g. Production OpenAI" value={label} onChange={e => setLabel(e.target.value)} />
         </div>
         <div className="field-group">
-          <label>API Key{isVertexProxy ? " (placeholder, unused)" : ""}</label>
-          <input className="input" type={isVertexProxy ? "text" : "password"} placeholder="sk-..." value={apiKey} onChange={e => setApiKey(e.target.value)} />
+          <label>API Key</label>
+          <input className="input" type="password" placeholder="sk-..." value={apiKey} onChange={e => setApiKey(e.target.value)} />
         </div>
         <div className="field-group">
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
