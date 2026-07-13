@@ -28,17 +28,14 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   );
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
 
-  // application_ai_workflows.base_resume_id's FK actually references
-  // application_resume_versions(id), not base_resumes(id), despite the
-  // column name (see startWorkflow() in applicationAiWorkflowService.ts).
-  // The rows below need a real base_resumes.id, so resolve it via the
-  // version row's own base_resume_id FK.
-  const realBaseResumeId = wf.base_resume_id
-    ? (await queryOne<{ base_resume_id: string | null }>(
-        "SELECT base_resume_id FROM application_resume_versions WHERE id = $1",
-        [wf.base_resume_id]
-      ))?.base_resume_id ?? null
-    : null;
+  // application_ai_workflows.base_resume_id's FK references base_resumes(id)
+  // directly (confirmed live via pg_constraint) - startWorkflow() now stores
+  // the real base_resumes.id there, so no extra indirection is needed here.
+  // An earlier version of this comment/code assumed the opposite (that the
+  // FK referenced application_resume_versions(id)) and resolved it via a
+  // second lookup that - now that startWorkflow is fixed - would look up
+  // application_resume_versions using a base_resumes id, finding nothing.
+  const realBaseResumeId = wf.base_resume_id ?? null;
 
   const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
   const finalData = finalArtifact?.data;

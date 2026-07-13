@@ -81,14 +81,17 @@ export async function startWorkflow(input: {
     verifiedSkills: input.verifiedSkills ?? [],
   };
 
-  // Despite its name, application_ai_workflows.base_resume_id's FK actually
-  // references application_resume_versions(id), not base_resumes(id) - so
-  // input.baseResume.id (an application_resume_versions row's own primary
-  // key) is the correct value here. finalizationService resolves the real
-  // base_resumes.id separately via a join when it needs one.
+  // application_ai_workflows.base_resume_id's FK references base_resumes(id)
+  // (confirmed live via pg_constraint - an earlier fix in this file assumed
+  // the opposite, that it referenced application_resume_versions(id), and
+  // was wrong: passing input.baseResume.id there hard-failed every workflow
+  // creation with a real base resume, "violates foreign key constraint
+  // application_ai_workflows_base_resume_id_fkey"). input.baseResume is
+  // always an application_resume_versions row, whose own base_resume_id
+  // column is the real base_resumes.id - that's what belongs here.
   const wf = await createWorkflow({
     applicationId: input.applicationId,
-    baseResumeId: input.baseResume?.id,
+    baseResumeId: input.baseResume?.base_resume_id ?? null,
     idempotencyKey: input.idempotencyKey,
     configSnapshot,
     startedBy: input.startedBy,

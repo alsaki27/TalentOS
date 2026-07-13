@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
 import { listStageRuns, listArtifacts, findActiveWorkflowByApplicationId } from "@/server/repositories/applicationAiWorkflowRepository";
-import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -22,16 +21,10 @@ export async function POST(
   try {
     result = await triggerAiWorkflowForApplication(applicationId, context?.profile.user_id);
   } catch (err: any) {
-    let fkTarget: unknown = null;
-    try {
-      fkTarget = await query(
-        `SELECT conname, confrelid::regclass::text AS references_table
-         FROM pg_constraint WHERE conname = 'application_ai_workflows_base_resume_id_fkey'`
-      );
-    } catch (fkErr: any) {
-      fkTarget = { fkQueryError: fkErr.message };
-    }
-    return NextResponse.json({ error: err.message ?? String(err), fkTarget }, { status: 500 });
+    // Previously unguarded - any exception here (e.g. the base_resume_id FK
+    // violation this surfaced) propagated as an empty-body 500 with zero
+    // diagnostic trail.
+    return NextResponse.json({ error: err.message ?? String(err) }, { status: 500 });
   }
 
   if (!result.started) {
