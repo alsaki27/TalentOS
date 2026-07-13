@@ -426,30 +426,44 @@ interface UsageEventInput {
 async function recordUsageEvent(input: UsageEventInput): Promise<void> {
   const cost = estimateCost(input.provider, input.model, input.inputTokens, input.outputTokens);
 
-  await execute(
-    `INSERT INTO ai_usage_events
-      (automation_id, ai_key_id, provider, model, outcome,
-       latency_ms, input_tokens, output_tokens, estimated_cost_usd,
-       error_message, error_code, triggered_by_user_id,
-       route_rank, attempt_number, workflow_id, application_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-    [
-      input.automationId,
-      input.aiKeyId,
-      input.provider,
-      input.model,
-      input.outcome,
-      input.latencyMs,
-      input.inputTokens,
-      input.outputTokens,
-      cost,
-      input.errorMessage,
-      input.errorCode,
-      input.userId,
-      input.routeRank,
-      input.attemptNumber,
-      input.workflowId,
-      input.applicationId,
-    ]
-  );
+  // This is analytics/usage tracking, not business-critical data - it must
+  // never be allowed to break the actual AI call flow it's just observing.
+  // Confirmed live: outcome: "skipped" violated ai_usage_events'
+  // outcome CHECK constraint (fixed in sql/neon_fixes/022, which now
+  // allows it), and because this insert wasn't guarded, that DB error
+  // propagated all the way out of getProviderForAutomation - surfacing as
+  // "All configured routes failed and global fallback is disabled" even
+  // when a working route existed later in the chain. A future schema drift
+  // of the same kind should degrade to a missing usage record, not a
+  // broken pipeline.
+  try {
+    await execute(
+      `INSERT INTO ai_usage_events
+        (automation_id, ai_key_id, provider, model, outcome,
+         latency_ms, input_tokens, output_tokens, estimated_cost_usd,
+         error_message, error_code, triggered_by_user_id,
+         route_rank, attempt_number, workflow_id, application_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        input.automationId,
+        input.aiKeyId,
+        input.provider,
+        input.model,
+        input.outcome,
+        input.latencyMs,
+        input.inputTokens,
+        input.outputTokens,
+        cost,
+        input.errorMessage,
+        input.errorCode,
+        input.userId,
+        input.routeRank,
+        input.attemptNumber,
+        input.workflowId,
+        input.applicationId,
+      ]
+    );
+  } catch (err) {
+    console.error("[recordUsageEvent] Failed to record usage event (non-fatal):", err);
+  }
 }
