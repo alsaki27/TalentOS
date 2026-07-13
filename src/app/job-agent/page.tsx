@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../Skeleton";
+import { LiveFeedBoard } from "./LiveFeedBoard";
 
 interface Run { id: string; config_id: string; status: string; raw_count: number; deduped_count: number; imported_count: number; skipped_count: number; classified_count: number; estimated_cost_usd: number; error: string | null; role_groups_ran: string[] | null; started_at: string; completed_at: string | null; best_count: number; medium_count: number; worthy_count: number; skip_count: number; staged_count: number; }
 interface RoleGroup { id: string; label: string; resumeFamily: string; titles: string[]; }
@@ -198,13 +199,21 @@ export default function JobAgentPage() {
       )}
     </div>
 
-    {/* ── Run Dashboard (summary only, no expand) ── */}
+    {/* ── Run Dashboard ── */}
     <div className="card" style={{ marginBottom: 16 }}>
       <h2 className="section-title">Run Dashboard</h2>
+      
+      {runs.find(r => r.status === "running") && (
+        <LiveFeedBoard 
+          runId={runs.find(r => r.status === "running")!.id} 
+          onComplete={() => load()} 
+        />
+      )}
+
       {loading ? <TableSkeleton cols={10} /> : runs.length === 0 ? (
         <p className="muted">No runs yet. Select groups and click Run Now.</p>
       ) : (
-        <table className="table">
+        <table className="table" style={{ marginTop: runs.find(r => r.status === "running") ? 32 : 0 }}>
           <thead><tr><th>Date</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
           <tbody>
             {runs.map((run) => (
@@ -221,7 +230,7 @@ export default function JobAgentPage() {
                 <td>
                   <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" ? "badge-warning" : "badge-danger"}`}
                     style={run.status === "running" ? { animation: "pulse 1.5s infinite" } : undefined}>
-                    {run.status === "running" ? "⏳ running" : run.status}
+                    {run.status === "running" ? "⏳ scraping..." : run.status}
                   </span>
                   {run.error && <div className="form-error" style={{ fontSize: 11 }}>{run.error}</div>}
                 </td>

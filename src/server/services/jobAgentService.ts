@@ -219,6 +219,13 @@ async function fetchApifyDataset(datasetId: string, token: string): Promise<Apif
   return (await res.json()) as ApifyDatasetItem[];
 }
 
+export async function fetchLiveApifyDatasetItems(datasetId: string, token: string, limit: number = 50): Promise<ApifyDatasetItem[]> {
+  const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true&limit=${limit}&desc=true`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Live dataset fetch failed (${res.status})`);
+  return (await res.json()) as ApifyDatasetItem[];
+}
+
 interface NormalizedJob { hash: string; job_title: string; company_name: string | null; location: string | null; salary_range: string | null; salary_min: number | null; salary_max: number | null; date_posted: string | null; via_platform: string | null; source_url: string | null; apply_link: string | null; is_remote: boolean | null; employment_type: string | null; search_query_used: string | null; raw: ApifyDatasetItem; }
 
 function normalizeItem(item: ApifyDatasetItem): NormalizedJob {
