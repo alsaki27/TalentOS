@@ -1069,6 +1069,14 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     setEditRouteVersion(agent.route_version ?? 0);
     setEditConfig(agent.config || { is_active: agent.is_active } as any);
     setMessage(null);
+    // fetchKeyModels is otherwise only wired to the key <select>'s onChange,
+    // which never fires for routes that already had a key assigned before
+    // this modal opened - without this, routeModelInfo stays undefined and
+    // the model-override field silently falls back to a plain text input
+    // instead of the dropdown, for every pre-existing route.
+    for (const r of agent.routes) {
+      if (r.ai_key_id) fetchKeyModels(r.ai_key_id);
+    }
   }
 
   async function saveRoutes(agentId: string) {
