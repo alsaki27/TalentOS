@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
-import { findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
+import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } from "@/server/repositories/applicationAiWorkflowRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
@@ -100,6 +100,34 @@ export async function POST(
         })
       );
       return NextResponse.json({ workflowId, status: "queued", fromStage: stage });
+    }
+
+    case "move": {
+      // Manual override — drag-and-drop a card to a different Kanban column.
+      // Updates current_stage and adjusts status. Optionally re-dispatches
+      // if the user dragged forward past the current stage (re-runs from
+      // the new stage). If dragged to "completed", marks done without AI.
+      const body = await req.json().catch(() => ({}));
+      const targetStage = typeof body.stage === "number" ? body.stage : null;
+      if (targetStage === null || targetStage < 0 || targetStage > 5) {
+        return NextResponse.json({ error: "stage must be an integer 0-5" }, { status: 400 });
+      }
+
+      const isCompleted = targetStage === 5;
+
+      const updates: Record<string, unknown> = {
+        current_stage: targetStage,
+        last_error: null,
+      };
+      if (isCompleted) {
+        updates.status = "completed";
+        updates.completed_at = new Date().toISOString();
+      } else {
+        updates.status = "waiting";
+      }
+
+      await updateWorkflowStatus(workflowId, isCompleted ? "completed" : "waiting", updates);
+      return NextResponse.json({ workflowId, current_stage: targetStage, status: isCompleted ? "completed" : "waiting" });
     }
 
     default:

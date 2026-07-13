@@ -20,12 +20,29 @@ interface WorkflowCard {
   tailored_resume_version_id: string | null;
 }
 
-const STAGE_LABELS = ["Queued", "Job Lens", "Resume Forge", "Hiring Panel", "Final Polish", "Complete"];
-const STAGE_COUNT = 6;
+interface ColumnDef {
+  id: string;
+  label: string;
+  color: string;
+  getStage: (wf: WorkflowCard) => boolean;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 0 },
+  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 1 },
+  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 2 },
+  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 3 },
+  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.status !== "failed" && w.status !== "completed" && w.current_stage === 4 },
+  { id: "completed", label: "Completed", color: "var(--success)", getStage: (w) => w.status === "completed" },
+  { id: "failed", label: "Failed", color: "var(--danger)", getStage: (w) => w.status === "failed" },
+];
+
+const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "job_lens", 2: "resume_forge", 3: "hiring_panel", 4: "final_polish", 5: "completed" };
+const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, job_lens: 1, resume_forge: 2, hiring_panel: 3, final_polish: 4, completed: 5 };
 
 function StatusBadge({ status }: { status: string }) {
   const cls = status === "completed" ? "badge-success" : status === "failed" ? "badge-danger" : status === "running" ? "badge-info" : "badge-warning";
-  return <span className={`badge ${cls}`} style={{ fontSize: 11 }}>{status}</span>;
+  return <span className={`badge ${cls}`} style={{ fontSize: 10 }}>{status}</span>;
 }
 
 export default function ResumeParsingStatusPage() {
@@ -34,6 +51,9 @@ export default function ResumeParsingStatusPage() {
   const [findingsOpen, setFindingsOpen] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const [moving, setMoving] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fetchedIds = useRef<Set<string>>(new Set());
 
@@ -50,7 +70,6 @@ export default function ResumeParsingStatusPage() {
       const data = await res.json();
       const incoming: WorkflowCard[] = data.workflows ?? [];
       setWorkflows((prev) => {
-        // Diff by id+updated_at — only update changed rows
         const prevMap = new Map(prev.map((w) => [w.id, w]));
         const updated: WorkflowCard[] = [];
         for (const w of incoming) {
@@ -62,14 +81,13 @@ export default function ResumeParsingStatusPage() {
           }
         }
         if (updated.length !== prev.length) return updated;
-        // Check if any changed
         for (let i = 0; i < updated.length; i++) {
           if (updated[i].updated_at !== prev[i]?.updated_at) return updated;
         }
         return prev;
       });
       setLoading(false);
-    } catch { /* poll quietly fails */ }
+    } catch { /* */ }
   }
 
   const ensureDetails = useCallback((id: string) => {
@@ -91,11 +109,61 @@ export default function ResumeParsingStatusPage() {
     ensureDetails(id);
   }, [ensureDetails]);
 
+  // Manual override — drag-drop a card to a new column
+  async function handleDrop(targetColumnId: string) {
+    const wfId = draggingId;
+    setDragOverCol(null);
+    setDraggingId(null);
+    if (!wfId) return;
+
+    const wf = workflows.find((w) => w.id === wfId);
+    if (!wf) return;
+
+    // No-op if dropping back on same column
+    const currentColId = wf.status === "failed" ? "failed"
+      : wf.status === "completed" ? "completed"
+      : STAGE_TO_COLUMN[wf.current_stage ?? 0] ?? "queued";
+    if (currentColId === targetColumnId) return;
+
+    // "failed" is a terminal state — can't move INTO it manually
+    if (targetColumnId === "failed") return;
+
+    const targetStage = COLUMN_TO_STAGE[targetColumnId] ?? 0;
+    setMoving(wfId);
+
+    // Optimistic update
+    setWorkflows((prev) => prev.map((w) =>
+      w.id === wfId
+        ? { ...w, current_stage: targetStage, status: targetStage === 5 ? "completed" : "waiting" }
+        : w
+    ));
+
+    try {
+      const res = await fetch(`/api/application-ai-workflows/${wfId}?action=move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: targetStage }),
+      });
+      if (!res.ok) {
+        await res.json().catch(() => ({}));
+        // Rollback
+        setWorkflows((prev) => prev.map((w) => w.id === wfId ? { ...w, current_stage: wf.current_stage, status: wf.status } : w));
+      }
+    } catch {
+      // Rollback
+      setWorkflows((prev) => prev.map((w) => w.id === wfId ? { ...w, current_stage: wf.current_stage, status: wf.status } : w));
+    } finally {
+      setMoving(null);
+    }
+  }
+
   return (
-    <div style={{ maxWidth: 1000, margin: "0 auto", padding: "24px 16px" }}>
-      <div className="page-header" style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 20, margin: 0 }}>AI Resume Parsing Status</h1>
-        <span className="muted" style={{ fontSize: 13 }}>Live pipeline tracker — auto-refreshes every 6s</span>
+    <div style={{ padding: "16px 12px", maxWidth: 1600, margin: "0 auto" }}>
+      <div className="page-header" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div>
+          <h1 style={{ fontSize: 20, margin: 0 }}>AI Resume Parsing Status</h1>
+          <span className="muted" style={{ fontSize: 13 }}>Kanban board — drag cards to manually override stage · auto-refresh every 6s</span>
+        </div>
       </div>
 
       {loading && <p className="muted">Loading...</p>}
@@ -106,102 +174,148 @@ export default function ResumeParsingStatusPage() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
-        {workflows.map((wf) => (
-          <WorkflowCardView
-            key={wf.id}
-            wf={wf}
-            isExpanded={expanded === wf.id}
-            isFindingsOpen={findingsOpen === wf.id}
-            detail={details[wf.id]}
-            onToggleExpand={toggleExpand}
-            onToggleFindings={toggleFindings}
-          />
-        ))}
+      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
+        {COLUMNS.map((col) => {
+          const colCards = workflows.filter(col.getStage);
+          return (
+            <div
+              key={col.id}
+              onDragOver={(e) => { e.preventDefault(); setDragOverCol(col.id); }}
+              onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverCol(null); }}
+              onDrop={() => handleDrop(col.id)}
+              style={{
+                flex: "0 0 230px",
+                minHeight: 200,
+                background: "var(--surface-1)",
+                borderRadius: 8,
+                border: `1px solid ${dragOverCol === col.id ? col.color : "var(--border)"}`,
+                boxShadow: dragOverCol === col.id ? `0 0 0 2px ${col.color}33` : "none",
+                display: "flex",
+                flexDirection: "column",
+                transition: "border-color 0.15s, box-shadow 0.15s",
+              }}
+            >
+              <div style={{
+                padding: "10px 12px",
+                borderBottom: "1px solid var(--border)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                borderRadius: "8px 8px 0 0",
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: col.color }}>{col.label}</span>
+                <span className="badge" style={{ fontSize: 10, background: "var(--surface-3)" }}>{colCards.length}</span>
+              </div>
+              <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", flex: 1, maxHeight: "calc(100vh - 220px)" }}>
+                {colCards.length === 0 && (
+                  <div className="muted" style={{ fontSize: 11, textAlign: "center", padding: "20px 0" }}>Empty</div>
+                )}
+                {colCards.map((wf) => (
+                  <BoardCard
+                    key={wf.id}
+                    wf={wf}
+                    isExpanded={expanded === wf.id}
+                    isFindingsOpen={findingsOpen === wf.id}
+                    detail={details[wf.id]}
+                    isDragging={draggingId === wf.id}
+                    isMoving={moving === wf.id}
+                    onToggleExpand={toggleExpand}
+                    onToggleFindings={toggleFindings}
+                    onDragStart={() => setDraggingId(wf.id)}
+                    onDragEnd={() => { setDraggingId(null); setDragOverCol(null); }}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
 
-/** Memoized so a poll tick that only changes one workflow's `updated_at`
- *  (see fetchActive's diff-by-id above) only re-renders that one card —
- *  props are unchanged for every other card, so React.memo skips them. */
-const WorkflowCardView = memo(function WorkflowCardView({
-  wf, isExpanded, isFindingsOpen, detail, onToggleExpand, onToggleFindings,
+const BoardCard = memo(function BoardCard({
+  wf, isExpanded, isFindingsOpen, detail, isDragging, isMoving, onToggleExpand, onToggleFindings, onDragStart, onDragEnd,
 }: {
   wf: WorkflowCard;
   isExpanded: boolean;
   isFindingsOpen: boolean;
   detail: any;
+  isDragging: boolean;
+  isMoving: boolean;
   onToggleExpand: (id: string) => void;
   onToggleFindings: (id: string) => void;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
-  const active = wf.status === "completed" ? 5 : wf.current_stage ?? 0;
-  const failed = wf.status === "failed";
-
   return (
-    <div className="card" style={{ padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-        <div>
-          <div style={{ fontWeight: 600, fontSize: 14 }}>{wf.candidate_name ?? `Workflow ${wf.id.slice(0, 8)}`}</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {wf.job_title ?? "—"} {wf.job_company ? `· ${wf.job_company}` : ""}
+    <div
+      draggable={!isMoving}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", wf.id);
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+      style={{
+        padding: 10,
+        borderRadius: 6,
+        background: "var(--surface-2)",
+        border: "1px solid var(--border)",
+        cursor: isMoving ? "wait" : "grab",
+        opacity: isDragging ? 0.4 : isMoving ? 0.6 : 1,
+        borderLeft: wf.status === "failed" ? "3px solid var(--danger)" : wf.status === "completed" ? "3px solid var(--success)" : wf.status === "running" ? "3px solid var(--info)" : "3px solid transparent",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {wf.candidate_name ?? `WF ${wf.id.slice(0, 8)}`}
+          </div>
+          <div className="muted" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {wf.job_title ?? "—"} {wf.job_company ? ` · ${wf.job_company}` : ""}
           </div>
         </div>
         <StatusBadge status={wf.status} />
       </div>
 
-      <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
-        {Array.from({ length: STAGE_COUNT }).map((_, i) => {
-          let bg = "var(--surface-3)";
-          if (failed && i === active) bg = "var(--danger)";
-          else if (wf.status === "completed" || i < active || (wf.status === "waiting" && i < active)) bg = "var(--success)";
-          else if (i === active && wf.status === "running") bg = "var(--info)";
-          return <div key={i} style={{ flex: 1, height: 6, borderRadius: 3, background: bg, transition: "background 0.3s" }} title={STAGE_LABELS[i]} />;
-        })}
-      </div>
-
       {wf.match_reason && (
-        <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-          Match: {wf.match_reason} {wf.match_score != null && `(score: ${wf.match_score})`}
+        <div className="muted" style={{ fontSize: 10, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {wf.match_score != null ? `Score ${wf.match_score}: ` : ""}{wf.match_reason}
         </div>
       )}
 
       {wf.last_error && (
-        <div style={{ padding: 6, borderRadius: 4, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 11, marginBottom: 6 }}>
+        <div style={{ padding: "4px 6px", borderRadius: 4, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 10, marginBottom: 4, lineHeight: 1.3 }}>
           {wf.last_error}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button className="btn-compact btn-sm" onClick={() => onToggleExpand(wf.id)}>
-          {isExpanded ? "Hide details" : "Details"}
+      <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+        <button className="btn-compact btn-sm" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => onToggleExpand(wf.id)}>
+          {isExpanded ? "▼" : "▶"}
         </button>
         {(wf.current_stage ?? 0) >= 3 && (
-          <button className="btn-compact btn-sm" onClick={() => onToggleFindings(wf.id)}>
-            📋 AI findings
+          <button className="btn-compact btn-sm" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => onToggleFindings(wf.id)}>
+            Findings
           </button>
         )}
         {wf.status === "completed" && wf.tailored_resume_version_id && (
           <button
             className="btn-compact btn-sm"
+            style={{ fontSize: 10, padding: "2px 6px" }}
             onClick={() => window.open(`/falood/studio/application/${wf.tailored_resume_version_id}`, "_blank")}
           >
-            Open in Studio
+            Studio
           </button>
-        )}
-        {wf.application_id && (
-          <Link href={`/application-queue`} className="btn-compact btn-sm" style={{ textDecoration: "none" }}>
-            Queue
-          </Link>
         )}
       </div>
 
       {isFindingsOpen && <FindingsPanel details={detail} />}
 
       {isExpanded && detail && (
-        <div className="workflow-detail" style={{ marginTop: 10, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>Pipeline Stages</div>
+        <div style={{ marginTop: 8, padding: 6, background: "var(--surface-3)", borderRadius: 4, fontSize: 11 }}>
+          {(detail.stages || []).length === 0 && <div className="muted">No stage runs yet.</div>}
           {(() => {
             const stages = detail.stages || [];
             const deduped = new Map<number, any>();
@@ -214,127 +328,75 @@ const WorkflowCardView = memo(function WorkflowCardView({
             return Array.from(deduped.values()).map((s: any, i: number) => {
               const meta = APPLICATION_AGENT_METAS[s.automation_id as keyof typeof APPLICATION_AGENT_METAS];
               const label = meta?.displayName ?? `Stage ${s.sequence_number}`;
-              const retried = s.attempt_number > 1 ? ` (retry ${s.attempt_number - 1})` : "";
               return (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
-                  <span>{label}{retried}</span>
-                  <span className={`badge badge-${s.status === "success" ? "success" : s.status === "failed" ? "danger" : "warning"}`}>{s.status}</span>
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                  <span>{label}{s.attempt_number > 1 ? ` (${s.attempt_number})` : ""}</span>
+                  <span style={{ color: s.status === "success" ? "var(--success)" : s.status === "failed" ? "var(--danger)" : "var(--muted)" }}>{s.status}</span>
                 </div>
               );
             });
           })()}
-          {(detail.stages || []).filter((s: any) => s.status === "failed" && s.error_message).length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              {(detail.stages || []).filter((s: any) => s.status === "failed" && s.error_message).map((s: any, i: number) => (
-                <div key={`err-${i}`} style={{ padding: "4px 6px", background: "rgba(211, 38, 30, 0.08)", borderRadius: 4, fontSize: 11, marginTop: 2 }}>
-                  <strong>Stage {s.sequence_number}:</strong> {s.error_message}
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       )}
     </div>
   );
 });
 
-/** Hiring Panel score breakdown + Final Polish outcome — the canonical place
- *  for AI pipeline findings (previously duplicated as a modal on the
- *  Application Queue page; that page now links here instead). */
 function FindingsPanel({ details }: { details: any }) {
   const artifacts: any[] = details?.artifacts ?? [];
   const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
   const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
 
   return (
-    <div style={{ marginTop: 10, padding: 10, background: "var(--surface-2)", borderRadius: 6, fontSize: 12, display: "grid", gap: 12 }}>
+    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
       {!details ? (
         <div className="muted">Loading…</div>
       ) : !hiringPanel ? (
-        <div className="muted">Hiring Panel hasn't run for this workflow yet.</div>
+        <div className="muted">Hiring Panel hasn't run yet.</div>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>ATS</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.atsScore}/10</div>
+              <div style={{ fontSize: 9, color: "var(--muted)" }}>ATS</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.atsScore}/10</div>
             </div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>Recruiter</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.recruiterScore}/10</div>
+              <div style={{ fontSize: 9, color: "var(--muted)" }}>Recruiter</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.recruiterScore}/10</div>
             </div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>Role fit</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.roleFitScore}/10</div>
+              <div style={{ fontSize: 9, color: "var(--muted)" }}>Role fit</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.roleFitScore}/10</div>
             </div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>Truth risk</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{hiringPanel.truthfulnessRisk}/10</div>
+              <div style={{ fontSize: 9, color: "var(--muted)" }}>Truth</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.truthfulnessRisk}/10</div>
             </div>
           </div>
-
           {hiringPanel.overallComment && (
-            <div style={{ fontSize: 13, fontStyle: "italic", color: "var(--muted)" }}>
-              "{hiringPanel.overallComment}"
-            </div>
+            <div style={{ fontStyle: "italic", color: "var(--muted)" }}>"{hiringPanel.overallComment}"</div>
           )}
-
           {hiringPanel.requiredEdits?.length > 0 && (
             <div>
-              <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Required edits</div>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
               {hiringPanel.requiredEdits.map((e: any, i: number) => (
-                <div key={i} style={{ display: "flex", gap: 8, alignItems: "baseline", padding: "3px 0", fontSize: 13 }}>
-                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 10 }}>
-                    {e.severity}
-                  </span>
+                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
+                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
                   <span>{e.description}</span>
                 </div>
               ))}
             </div>
           )}
-
-          {hiringPanel.optionalEdits?.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Optional edits</div>
-              {hiringPanel.optionalEdits.map((e: any, i: number) => (
-                <div key={i} style={{ fontSize: 13, padding: "3px 0" }}>{e.description}</div>
-              ))}
-            </div>
-          )}
-
-          {hiringPanel.formattingIssues?.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Formatting issues</div>
-              {hiringPanel.formattingIssues.map((f: string, i: number) => (
-                <div key={i} style={{ fontSize: 13, padding: "3px 0" }}>{f}</div>
-              ))}
-            </div>
-          )}
-
           {finalPolish && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-              <div style={{ fontWeight: 600, marginBottom: 6, fontSize: 13 }}>
-                What Final Polish fixed
-                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 8, fontSize: 10 }}>
-                  {finalPolish.exportReady ? "export ready" : "not export ready"}
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                Final Polish
+                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
+                  {finalPolish.exportReady ? "ready" : "not ready"}
                 </span>
               </div>
-              {finalPolish.appliedIssueIds?.length > 0 && (
-                <div style={{ fontSize: 13, marginBottom: 4 }}>
-                  Applied: {finalPolish.appliedIssueIds.join(", ")}
-                </div>
-              )}
-              {finalPolish.rejectedIssueIds?.length > 0 && (
-                <div style={{ fontSize: 13, marginBottom: 4 }}>
-                  {finalPolish.rejectedIssueIds.map((r: any, i: number) => (
-                    <div key={i}>Rejected {r.issueId}: {r.reason}</div>
-                  ))}
-                </div>
-              )}
               {finalPolish.unresolvedWarnings?.length > 0 && (
-                <div style={{ fontSize: 13, color: "var(--muted)" }}>
-                  Unresolved: {finalPolish.unresolvedWarnings.join(", ")}
-                </div>
+                <div style={{ color: "var(--muted)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>
               )}
             </div>
           )}
