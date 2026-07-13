@@ -172,6 +172,7 @@ export default function ImportSourcesPage() {
       ) : sources.length === 0 ? (
         <div className="empty">No saved import sources yet.</div>
       ) : (
+        <div className="table-shell">
         <table className="table">
           <thead>
             <tr>
@@ -214,6 +215,7 @@ export default function ImportSourcesPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       <div className="card" style={{ marginTop: 16 }}>
@@ -221,6 +223,7 @@ export default function ImportSourcesPage() {
         {runs.length === 0 ? (
           <p className="muted">No import runs recorded yet.</p>
         ) : (
+          <div className="table-shell">
           <table className="table">
             <thead>
               <tr>
@@ -247,6 +250,7 @@ export default function ImportSourcesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>

@@ -114,6 +114,11 @@ interface TailoredResumeEntry {
   studioLink?: string; // overrides the default /falood/studio/tailor/[id] link
   sourceType?: string | null;
   atsScore?: number | null;
+  applicationId?: string | null;
+  applicationStatus?: string | null;
+  proofUrl?: string | null;
+  proofFilename?: string | null;
+  appliedAt?: string | null;
 }
 
 function initials(name: string): string {
@@ -148,6 +153,7 @@ export default function CandidateProfilePage() {
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeEntry[]>([]);
   const [tailoredResumesLoading, setTailoredResumesLoading] = useState(false);
+  const [resumeActionLoading, setResumeActionLoading] = useState<string | null>(null);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
   const [showParseModal, setShowParseModal] = useState(false);
   const [parseModalText, setParseModalText] = useState("");
@@ -270,6 +276,11 @@ export default function CandidateProfilePage() {
           studioLink: `/falood/studio/application/${v.id}`,
           sourceType: v.source_type,
           atsScore: v.ats_score,
+          applicationId: v.application_id ?? null,
+          applicationStatus: v.applications?.status ?? null,
+          proofUrl: v.applications?.proof_url ?? null,
+          proofFilename: v.applications?.proof_filename ?? null,
+          appliedAt: v.applications?.applied_at ?? null,
         }));
 
       const merged = [...faloodTailored, ...aiTailored]
@@ -281,6 +292,42 @@ export default function CandidateProfilePage() {
     } finally {
       setTailoredResumesLoading(false);
     }
+  }
+
+  async function markResumeApplied(t: TailoredResumeEntry) {
+    if (!t.applicationId) return;
+    setResumeActionLoading(`${t.id}:applied`);
+    try {
+      const res = await fetch(`/api/applications/${t.applicationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "applied", applied_at: new Date().toISOString() }),
+      });
+      if (res.ok) await loadTailoredResumes();
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  function uploadProofForResume(t: TailoredResumeEntry) {
+    if (!t.applicationId) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setResumeActionLoading(`${t.id}:proof`);
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(`/api/applications/${t.applicationId}/proof`, { method: "POST", body: fd });
+        if (res.ok) await loadTailoredResumes();
+      } finally {
+        setResumeActionLoading(null);
+      }
+    };
+    input.click();
   }
 
   async function parseWithMarkitdown(resumeId: string) {
@@ -737,26 +784,28 @@ export default function CandidateProfilePage() {
               No tailored resumes or cover letters yet.
             </div>
           ) : (
-            <table className="table" style={{ marginBottom: 20 }}>
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>Kind</th>
-                  <th>File</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {candidate.resumes.map((r) => (
-                  <tr key={r.id}>
-                    <td><strong>{r.label}</strong></td>
-                    <td><span className="badge">{r.kind}</span></td>
-                    <td><a href={r.file_url} target="_blank" rel="noreferrer">{r.filename}</a></td>
-                    <td><button onClick={() => deleteVariant(r.id)}>Delete</button></td>
+            <div className="table-shell" style={{ marginBottom: 20 }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Kind</th>
+                    <th>File</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {candidate.resumes.map((r) => (
+                    <tr key={r.id}>
+                      <td><strong>{r.label}</strong></td>
+                      <td><span className="badge">{r.kind}</span></td>
+                      <td><a href={r.file_url} target="_blank" rel="noreferrer">{r.filename}</a></td>
+                      <td><button onClick={() => deleteVariant(r.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
       )}
@@ -835,42 +884,44 @@ export default function CandidateProfilePage() {
               </div>
             </div>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Target industry</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {baseResumes.map((b) => (
-                  <tr key={b.id}>
-                    <td><strong>{b.name}</strong></td>
-                    <td className="muted">{b.target_industry ?? "—"}</td>
-                    <td>
-                      {isManager ? (
-                        <select
-                          className="input"
-                          style={{ padding: "2px 6px", fontSize: 12, width: "auto" }}
-                          value={b.status}
-                          onChange={(e) => setBaseResumeStatus(b.id, e.target.value)}
-                        >
-                          <option value="draft">draft</option>
-                          <option value="approved">approved</option>
-                        </select>
-                      ) : (
-                        <span className="badge">{b.status}</span>
-                      )}
-                    </td>
-                    <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
-                    <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
+            <div className="table-shell">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Target industry</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {baseResumes.map((b) => (
+                    <tr key={b.id}>
+                      <td><strong>{b.name}</strong></td>
+                      <td className="muted">{b.target_industry ?? "—"}</td>
+                      <td>
+                        {isManager ? (
+                          <select
+                            className="input"
+                            style={{ padding: "2px 6px", fontSize: 12, width: "auto" }}
+                            value={b.status}
+                            onChange={(e) => setBaseResumeStatus(b.id, e.target.value)}
+                          >
+                            <option value="draft">draft</option>
+                            <option value="approved">approved</option>
+                          </select>
+                        ) : (
+                          <span className="badge">{b.status}</span>
+                        )}
+                      </td>
+                      <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
+                      <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -894,44 +945,79 @@ export default function CandidateProfilePage() {
               No tailored resumes found for this candidate yet. Create one from the Base Resumes tab.
             </div>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Target job</th>
-                  <th>Company</th>
-                  <th>Updated</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {tailoredResumes.map((t) => {
-                  const jd = (t.jobDescription || "").trim();
-                  const firstLine = jd.split("\n")[0] || "";
-                  const title = firstLine.toLowerCase().startsWith("title:")
-                    ? firstLine.replace(/^title:\s*/i, "").trim()
-                    : t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
-                  const company = t.companyName || "—";
-                  return (
-                    <tr key={t.id}>
-                      <td>
-                        <strong>{title || "Tailored resume"}</strong>
-                        {t.isAiGenerated && (
-                          <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent)", color: "var(--surface)" }}>AI</span>
-                        )}
-                        {t.atsScore != null && (
-                          <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}/10</span>
-                        )}
-                      </td>
-                      <td className="muted">{company}</td>
-                      <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
-                      <td>
-                        <Link className="row-link" href={t.studioLink ?? `/falood/studio/tailor/${t.id}`}>Open in studio</Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="table-shell">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Target job</th>
+                    <th>Company</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tailoredResumes.map((t) => {
+                    const jd = (t.jobDescription || "").trim();
+                    const firstLine = jd.split("\n")[0] || "";
+                    const title = firstLine.toLowerCase().startsWith("title:")
+                      ? firstLine.replace(/^title:\s*/i, "").trim()
+                      : t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
+                    const company = t.companyName || "—";
+                    return (
+                      <tr key={t.id}>
+                        <td>
+                          <strong>{title || "Tailored resume"}</strong>
+                          {t.isAiGenerated && (
+                            <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent)", color: "var(--surface)" }}>AI</span>
+                          )}
+                          {t.atsScore != null && (
+                            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}/10</span>
+                          )}
+                        </td>
+                        <td className="muted">{company}</td>
+                        <td>
+                          {t.applicationId ? (
+                            <>
+                              <span className={`badge badge-${t.applicationStatus}`}>{t.applicationStatus ?? "assigned"}</span>
+                              {t.proofUrl && (
+                                <a href={t.proofUrl} target="_blank" rel="noreferrer" className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                                  📎 {t.proofFilename || "proof"}
+                                </a>
+                              )}
+                            </>
+                          ) : (
+                            <span className="muted" style={{ fontSize: 11 }}>Not linked to an application</span>
+                          )}
+                        </td>
+                        <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
+                        <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          <Link className="row-link" href={t.studioLink ?? `/falood/studio/tailor/${t.id}`}>Open in studio</Link>
+                          {t.applicationId && (
+                            <>
+                              <button
+                                className="btn-compact btn-sm"
+                                onClick={() => uploadProofForResume(t)}
+                                disabled={resumeActionLoading === `${t.id}:proof`}
+                              >
+                                {resumeActionLoading === `${t.id}:proof` ? "⟳" : "📎 Proof"}
+                              </button>
+                              <button
+                                className="btn-primary btn-sm"
+                                onClick={() => markResumeApplied(t)}
+                                disabled={resumeActionLoading === `${t.id}:applied` || t.applicationStatus === "applied"}
+                              >
+                                {resumeActionLoading === `${t.id}:applied` ? "⟳" : t.applicationStatus === "applied" ? "✅ Applied" : "Mark Applied"}
+                              </button>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -970,6 +1056,7 @@ export default function CandidateProfilePage() {
             return filteredApps.length === 0 ? (
               <div className="empty">No applications match this filter.</div>
             ) : (
+            <div className="table-shell">
             <table className="table">
               <thead>
                 <tr>
@@ -1054,6 +1141,7 @@ export default function CandidateProfilePage() {
                 ))}
               </tbody>
             </table>
+            </div>
             );
           })()}
         </div>

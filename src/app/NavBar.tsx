@@ -29,6 +29,7 @@ export default function NavBar() {
   const [notifications, setNotifications] = useState<Notifications | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const currentRole = me?.profile.role ?? "";
   const canViewJobs = ["admin", "manager"].includes(currentRole);
@@ -54,8 +55,8 @@ export default function NavBar() {
     return () => clearInterval(interval);
   }, [pathname]);
 
-  // Close the "More" dropdown on outside click or navigation.
-  useEffect(() => { setMoreOpen(false); }, [pathname]);
+  // Close the "More" dropdown and the mobile menu on outside click or navigation.
+  useEffect(() => { setMoreOpen(false); setMobileOpen(false); }, [pathname]);
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
       if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
@@ -90,9 +91,24 @@ export default function NavBar() {
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
   return (<>
-    <nav className="topnav flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
+    <nav className="topnav relative flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
       <span className="brand font-semibold text-[15px] text-ink tracking-tight">Skarion Tracker</span>
-      <div className="navlinks flex items-center gap-5">
+
+      <button
+        className="nav-mobile-toggle lg:hidden text-ink-soft"
+        aria-label="Toggle navigation menu"
+        aria-expanded={mobileOpen}
+        onClick={() => setMobileOpen((v) => !v)}
+      >
+        {mobileOpen ? "✕" : "☰"}
+      </button>
+
+      <div
+        className={`navlinks ${mobileOpen ? "flex" : "hidden"} lg:flex flex-col lg:flex-row items-start lg:items-center gap-3 lg:gap-5
+          absolute lg:static left-0 right-0 top-full lg:top-auto
+          bg-surface lg:bg-transparent border-b lg:border-0 border-border
+          px-6 py-4 lg:p-0 z-40 shadow-lg lg:shadow-none`}
+      >
         <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
         {canViewJobs && <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>}
         <Link href="/ats-score" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">ATS Score Analysis</Link>
@@ -127,8 +143,25 @@ export default function NavBar() {
           )}
         </div>
         <Link href="/account" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Account</Link>
+
+        {/* On mobile the collapsible panel also carries the user actions, since nav-user is hidden below lg. */}
+        <div className="flex lg:hidden items-center gap-3 text-xs text-ink-soft pt-2 mt-2 border-t border-border w-full">
+          {canQuickApply && (
+            <button
+              className="text-sm font-medium text-ink hover:text-accent transition-colors"
+              onClick={() => setShowModal(true)}
+              style={{ color: "var(--accent)" }}
+            >
+              + New Application
+            </button>
+          )}
+          <NotificationBell />
+          <ThemeToggle />
+          <button onClick={logout} className="text-xs">Sign out</button>
+        </div>
       </div>
-      <div className="nav-user flex items-center gap-3 text-xs text-ink-soft">
+
+      <div className="nav-user hidden lg:flex items-center gap-3 text-xs text-ink-soft">
         {canQuickApply && (
           <button
             className="text-sm font-medium text-ink hover:text-accent transition-colors"

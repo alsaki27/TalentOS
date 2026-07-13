@@ -20,11 +20,11 @@ export async function GET(req: NextRequest) {
 
   if (isNeon()) {
     const rows = await query(
-      `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
+      `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
       [candidateId]
     );
     data = (rows ?? []).map((row: any) => {
-      const { target_job_job_id, job_title, job_company, ...rest } = row;
+      const { target_job_job_id, job_title, job_company, application_status, application_proof_url, application_proof_filename, application_applied_at, ...rest } = row;
       return {
         ...rest,
         target_jobs: {
@@ -34,6 +34,12 @@ export async function GET(req: NextRequest) {
             company: job_company,
           },
         },
+        applications: rest.application_id ? {
+          status: application_status,
+          proof_url: application_proof_url,
+          proof_filename: application_proof_filename,
+          applied_at: application_applied_at,
+        } : null,
       };
     });
     error = null;
@@ -41,7 +47,7 @@ export async function GET(req: NextRequest) {
     const { supabase } = await import("@/lib/supabase");
     const res = await supabase
       .from("application_resume_versions")
-      .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, target_jobs(job_id, jobs(title, company))")
+      .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, application_id, target_jobs(job_id, jobs(title, company)), applications(status, proof_url, proof_filename, applied_at)")
       .eq("candidate_id", candidateId)
       .order("created_at", { ascending: false });
     data = res.data;

@@ -427,6 +427,7 @@ export default function JobDetailPage() {
         {shortlist.length === 0 ? (
           <p className="muted" style={{ margin: 0 }}>Score candidates to see who best fits this job.</p>
         ) : (
+          <div className="table-shell">
           <table className="table">
             <thead>
               <tr>
@@ -459,6 +460,7 @@ export default function JobDetailPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -467,6 +469,7 @@ export default function JobDetailPage() {
       {job.applicants.length === 0 ? (
         <div className="empty">No one has applied to this job yet.</div>
       ) : (
+        <div className="table-shell">
         <table className="table">
           <thead>
             <tr>
@@ -489,6 +492,7 @@ export default function JobDetailPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {showEdit && (

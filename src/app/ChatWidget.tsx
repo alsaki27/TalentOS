@@ -32,6 +32,35 @@ export default function ChatWidget() {
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [size, setSize] = useState({ width: 340, height: 460 });
+
+  useEffect(() => {
+    const saved = localStorage.getItem("skarion_widget_size");
+    if (saved) {
+      try { setSize(JSON.parse(saved)); } catch {}
+    }
+  }, []);
+
+  function startResize(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startSize = size;
+    let current = startSize;
+    function onMove(moveEvent: MouseEvent) {
+      const width = Math.min(720, Math.max(300, startSize.width + (startX - moveEvent.clientX)));
+      const height = Math.min(800, Math.max(360, startSize.height + (startY - moveEvent.clientY)));
+      current = { width, height };
+      setSize(current);
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      localStorage.setItem("skarion_widget_size", JSON.stringify(current));
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") { setAuthed(false); return; }
@@ -126,12 +155,20 @@ export default function ChatWidget() {
   return (
     <div
       style={{
-        position: "fixed", bottom: 24, right: 24, width: 340, height: 460,
+        position: "fixed", bottom: 24, right: 24, width: size.width, height: size.height,
         background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius)",
         boxShadow: "0 8px 30px rgba(0,0,0,0.25)", display: "flex", flexDirection: "column",
         zIndex: 100, overflow: "hidden",
       }}
     >
+      <div
+        onMouseDown={startResize}
+        title="Drag to resize"
+        style={{
+          position: "absolute", top: 0, left: 0, width: 16, height: 16,
+          cursor: "nwse-resize", zIndex: 101,
+        }}
+      />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
         <strong style={{ fontSize: 13 }}>Assistant</strong>
         <div style={{ display: "flex", gap: 10 }}>

@@ -76,6 +76,7 @@ export default function AuditLogPage() {
       ) : logs.length === 0 ? (
         <div className="empty">No activity recorded yet.</div>
       ) : (
+        <div className="table-shell">
         <table className="table">
           <thead>
             <tr>
@@ -100,6 +101,7 @@ export default function AuditLogPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {total > 0 && (

@@ -207,6 +207,39 @@ export default function ApplicationResumeStudioPage() {
   /* core data */
   const [appResume, setAppResume] = useState<ApplicationResumeVersion | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
+  const [applicationStatus, setApplicationStatus] = useState<string | null>(null);
+  const [applicationProof, setApplicationProof] = useState<{ url: string | null; filename: string | null } | null>(null);
+  const [appActionLoading, setAppActionLoading] = useState<string | null>(null);
+
+  /* resizable pane widths, persisted so users can widen the Falood chat panel */
+  const [leftPaneWidth, setLeftPaneWidth] = useState(320);
+  const [rightPaneWidth, setRightPaneWidth] = useState(380);
+  useEffect(() => {
+    const storedLeft = Number(localStorage.getItem("studio_left_pane_width"));
+    const storedRight = Number(localStorage.getItem("studio_right_pane_width"));
+    if (storedLeft) setLeftPaneWidth(storedLeft);
+    if (storedRight) setRightPaneWidth(storedRight);
+  }, []);
+
+  function startPaneResize(pane: "left" | "right", e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = pane === "left" ? leftPaneWidth : rightPaneWidth;
+    let currentWidth = startWidth;
+    function onMove(moveEvent: MouseEvent) {
+      const delta = pane === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+      currentWidth = Math.min(600, Math.max(220, startWidth + delta));
+      if (pane === "left") setLeftPaneWidth(currentWidth);
+      else setRightPaneWidth(currentWidth);
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      localStorage.setItem(pane === "left" ? "studio_left_pane_width" : "studio_right_pane_width", String(currentWidth));
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
   const [targetJob, setTargetJob] = useState<TargetJob | null>(null);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
@@ -383,6 +416,54 @@ export default function ApplicationResumeStudioPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => { if (applicationId) loadPacket(); }, [applicationId]);
+
+  const loadApplicationStatus = useCallback(async () => {
+    if (!applicationId) return;
+    const res = await fetch(`/api/applications/${applicationId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setApplicationStatus(data.status ?? null);
+      setApplicationProof({ url: data.proof_url ?? null, filename: data.proof_filename ?? null });
+    }
+  }, [applicationId]);
+
+  useEffect(() => { if (applicationId) loadApplicationStatus(); }, [applicationId, loadApplicationStatus]);
+
+  async function markApplicationApplied() {
+    if (!applicationId) return;
+    setAppActionLoading("applied");
+    try {
+      const res = await fetch(`/api/applications/${applicationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "applied", applied_at: new Date().toISOString() }),
+      });
+      if (res.ok) await loadApplicationStatus();
+    } finally {
+      setAppActionLoading(null);
+    }
+  }
+
+  function uploadApplicationProof() {
+    if (!applicationId) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setAppActionLoading("proof");
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(`/api/applications/${applicationId}/proof`, { method: "POST", body: fd });
+        if (res.ok) await loadApplicationStatus();
+      } finally {
+        setAppActionLoading(null);
+      }
+    };
+    input.click();
+  }
 
   async function refreshSuggestions() {
     if (!applicationResumeId) return;
@@ -1330,6 +1411,26 @@ export default function ApplicationResumeStudioPage() {
           {saveStatus === "saving" && <span className="muted" style={{ fontSize: 12 }}>Saving…</span>}
           {saveStatus === "saved" && <span className="form-success" style={{ fontSize: 12 }}>Saved</span>}
           {saveStatus === "error" && <span className="form-error" style={{ fontSize: 12 }}>Error</span>}
+          {applicationId && (
+            <>
+              <span className={`badge badge-${applicationStatus}`}>{applicationStatus ?? "assigned"}</span>
+              {applicationProof?.url && (
+                <a href={applicationProof.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 11 }}>
+                  📎 {applicationProof.filename || "proof"}
+                </a>
+              )}
+              <button className="btn" onClick={uploadApplicationProof} disabled={appActionLoading === "proof"}>
+                {appActionLoading === "proof" ? "⟳" : "📎 Proof"}
+              </button>
+              <button
+                className="btn-primary"
+                onClick={markApplicationApplied}
+                disabled={appActionLoading === "applied" || applicationStatus === "applied"}
+              >
+                {appActionLoading === "applied" ? "⟳" : applicationStatus === "applied" ? "✅ Applied" : "Mark Applied"}
+              </button>
+            </>
+          )}
           <button className="btn" onClick={() => router.push(`/candidates/${candidateId}`)}>Save & Exit</button>
           <Link className="btn" href={`/falood/cli-editor?type=application&id=${appResume.id}`}>CLI Editor</Link>
           <button
@@ -1362,9 +1463,9 @@ export default function ApplicationResumeStudioPage() {
         className="studio-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "320px 1fr 380px",
+          gridTemplateColumns: `${leftPaneWidth}px 6px 1fr 6px ${rightPaneWidth}px`,
           gridTemplateRows: "calc(100vh - 140px)",
-          gap: 16,
+          gap: 10,
           alignItems: "start",
         }}
       >
@@ -1380,6 +1481,14 @@ export default function ApplicationResumeStudioPage() {
             suggestionsBySection={suggestionsBySection}
           />
         </div>
+
+        {/* Drag handle: left ↔ center */}
+        <div
+          className="pane-resize-handle"
+          onMouseDown={(e) => startPaneResize("left", e)}
+          style={{ height: "100%", cursor: "col-resize", background: "var(--border)", borderRadius: 3 }}
+          title="Drag to resize"
+        />
 
         {/* ═══════ CENTER PANE: A4 Preview ═══════ */}
         <div className="center-pane card" style={{ position: "relative", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
@@ -1413,6 +1522,14 @@ export default function ApplicationResumeStudioPage() {
             />
           </div>
         </div>
+
+        {/* Drag handle: center ↔ right (widen this to see more of the Falood chat) */}
+        <div
+          className="pane-resize-handle"
+          onMouseDown={(e) => startPaneResize("right", e)}
+          style={{ height: "100%", cursor: "col-resize", background: "var(--border)", borderRadius: 3 }}
+          title="Drag to resize"
+        />
 
         {/* ═══════ RIGHT PANE: Tabs ═══════ */}
         <div className="right-pane card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
@@ -2090,9 +2207,15 @@ export default function ApplicationResumeStudioPage() {
           }
           .studio-grid .left-pane,
           .studio-grid .center-pane,
-          .studio-grid .right-pane {
+          .studio-grid .right-pane,
+          .studio-grid .pane-resize-handle {
             display: none !important;
           }
+        }
+      `}</style>
+      <style>{`
+        .pane-resize-handle:hover, .pane-resize-handle:active {
+          background: var(--accent) !important;
         }
       `}</style>
       <style>{`

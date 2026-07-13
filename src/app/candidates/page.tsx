@@ -141,41 +141,43 @@ export default function CandidatesPage() {
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
-              </th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Target tier</th>
-              <th>Status</th>
-              <th>Resume</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => (
-              <tr key={c.id}>
-                <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
-                <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {c.avatar_url ? (
-                    <img className="avatar-circle" src={c.avatar_url} alt={c.name} />
-                  ) : (
-                    <span className="avatar-circle">{initials(c.name)}</span>
-                  )}
-                  <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
-                </td>
-                <td className="muted">{c.email || "—"}</td>
-                <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
-                <td className="muted">{c.status}</td>
-                <td className="muted">{c.resume_filename || "Not uploaded"}</td>
-                <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
+                </th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Target tier</th>
+                <th>Status</th>
+                <th>Resume</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((c) => (
+                <tr key={c.id}>
+                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
+                  <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {c.avatar_url ? (
+                      <img className="avatar-circle" src={c.avatar_url} alt={c.name} />
+                    ) : (
+                      <span className="avatar-circle">{initials(c.name)}</span>
+                    )}
+                    <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
+                  </td>
+                  <td className="muted">{c.email || "—"}</td>
+                  <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
+                  <td className="muted">{c.status}</td>
+                  <td className="muted">{c.resume_filename || "Not uploaded"}</td>
+                  <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {total > 0 && (

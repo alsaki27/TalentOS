@@ -332,6 +332,7 @@ export default function AiKeyManager() {
       ) : keys.length === 0 ? (
         <div className="empty">No DB-managed AI keys yet. Add a key above to enable fallback providers.</div>
       ) : (
+        <div className="table-shell">
         <table className="table">
           <thead>
             <tr>
@@ -461,6 +462,7 @@ export default function AiKeyManager() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
