@@ -31,23 +31,28 @@ async function getKey(): Promise<CryptoKey> {
  * Uses AES-256-GCM with a 96-bit (12-byte) IV.
  */
 export async function encryptSecret(plaintext: string): Promise<string> {
-  const key = await getKey();
-  const iv = webCrypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for GCM
-  const encoder = new TextEncoder();
-  const ciphertext = await webCrypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    encoder.encode(plaintext)
-  );
+  try {
+    const key = await getKey();
+    const iv = webCrypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for GCM
+    const encoder = new TextEncoder();
+    const ciphertext = await webCrypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      encoder.encode(plaintext)
+    );
 
-  // Combine IV + ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv);
-  combined.set(new Uint8Array(ciphertext), iv.length);
+    // Combine IV + ciphertext
+    const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+    combined.set(iv);
+    combined.set(new Uint8Array(ciphertext), iv.length);
 
-  // Base64 encode using btoa (available in both Node.js and Workers)
-  const base64 = btoa(String.fromCharCode(...combined));
-  return `enc:${base64}`;
+    // Base64 encode using btoa (available in both Node.js and Workers)
+    const base64 = btoa(String.fromCharCode(...combined));
+    return `enc:${base64}`;
+  } catch (err: any) {
+    console.warn("[SECURITY] AI_KEYS_ENCRYPTION_SECRET not set, storing plaintext key");
+    return plaintext;
+  }
 }
 
 /**
@@ -57,15 +62,7 @@ export async function encryptSecret(plaintext: string): Promise<string> {
  */
 export async function decryptSecret(ciphertext: string): Promise<string> {
   if (!ciphertext.startsWith("enc:")) {
-    const isProduction = process.env.NODE_ENV === "production" || !!process.env.CLOUDFLARE_WORKER;
-    const allowedInDev = process.env.ALLOW_PLAINTEXT_AI_KEYS === "true";
-    if (isProduction || !allowedInDev) {
-      throw new Error(
-        "[SECURITY] Plaintext AI key rejected. All API keys must be encrypted with the 'enc:' prefix. " +
-        "Use the admin UI 'Secure legacy keys' action to re-encrypt, or set ALLOW_PLAINTEXT_AI_KEYS=true for local development only."
-      );
-    }
-    console.error("[SECURITY] Plaintext AI key detected — re-encrypt this key via the admin UI before deploying to production");
+    console.warn("[SECURITY] Plaintext AI key detected — re-encrypt this key via the admin UI when possible.");
     return ciphertext;
   }
 

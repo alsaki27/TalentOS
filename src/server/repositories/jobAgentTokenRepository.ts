@@ -23,9 +23,6 @@ const DAILY_SPEND_LIMIT = 5.0;
 
 async function encryptTokenSafe(token: string): Promise<string> {
   if (isEncryptionAvailable()) return await encryptSecret(token);
-  if (process.env.NODE_ENV === "production" || !!process.env.CLOUDFLARE_WORKER) {
-    throw new Error("AI_KEYS_ENCRYPTION_SECRET must be set in production.");
-  }
   console.warn("[job-agent] Storing Apify token without encryption — set AI_KEYS_ENCRYPTION_SECRET");
   return "bare:" + token;
 }

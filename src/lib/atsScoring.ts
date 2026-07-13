@@ -1,8 +1,11 @@
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build",
-});
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is missing. Configure it to enable ATS scoring.");
+  }
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 export type ResumeType = "base" | "tailored";
 
@@ -231,6 +234,7 @@ ${jobText ? `JOB DESCRIPTION:\n${jobText.substring(0, 3000)}` : ""}
     }
   };
 
+  const openai = getOpenAIClient();
   const response = await openai.chat.completions.create({
     model: "gpt-4o-2024-08-06",
     messages: [
@@ -283,6 +287,7 @@ ${JSON.stringify(breakdown, null, 2)}
     }
   };
 
+  const openai = getOpenAIClient();
   const response = await openai.chat.completions.create({
     model: "gpt-4o-2024-08-06",
     messages: [
