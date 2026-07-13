@@ -572,7 +572,19 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
     try {
       await processWorkflowStage(wf.id);
     } catch (err: any) {
+      // processWorkflowStage has its own internal try/catch around the
+      // actual agent call (with retry/max_attempts handling) - an exception
+      // reaching all the way out here means something crashed OUTSIDE that
+      // guarded section (e.g. before the stage_run row is even created).
+      // Previously this was only console.error'd: no stage_run, no
+      // last_error, nothing - the workflow just sat at 'running' forever
+      // with zero diagnostic trail. Confirmed live: a workflow stuck at
+      // current_stage 3 (Final Polish) for 10+ minutes with last_error still
+      // null and no way to tell why. Persisting the error here at least
+      // makes the next stall debuggable via GET .../ai-workflow.
+      const message = err?.message ?? String(err);
       console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
+      await updateWorkflowStatus(wf.id, "running", { last_error: message } as any).catch(() => {});
     }
   }
 
