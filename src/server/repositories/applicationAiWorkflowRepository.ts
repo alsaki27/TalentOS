@@ -139,6 +139,17 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
   );
 }
 
+// Caps how many workflows can be genuinely in-flight (actively claimed,
+// non-expired) at once. Bulk-creating hundreds of application tickets each
+// auto-triggers its own workflow; without this, every one of them would try
+// to claim+dispatch simultaneously and fire its own AI provider call at the
+// same instant. With the cap, only MAX_CONCURRENT_AI_WORKFLOWS run at a
+// time - the rest sit 'queued' and get pulled in as capacity frees up
+// (checked here and in dispatchWorkflowById's claim), i.e. processed in
+// buckets rather than all at once. Reclaiming an expired/stale 'running'
+// workflow is exempt - that's recovering dead work, not adding new load.
+export const MAX_CONCURRENT_AI_WORKFLOWS = Number(process.env.AI_WORKFLOW_MAX_CONCURRENCY) || 8;
+
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
 // RECOVERY: also reclaims running workflows whose claim lease has expired
@@ -155,10 +166,14 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 // avoids reclaiming a call that's genuinely still in flight.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
-    `WITH next_workflow AS (
+    `WITH active_count AS (
+      SELECT COUNT(*)::int AS n FROM application_ai_workflows
+      WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+    ),
+    next_workflow AS (
       SELECT id FROM application_ai_workflows
-      WHERE (status = 'queued')
-         OR (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
+      WHERE (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
+         OR (status = 'queued' AND (SELECT n FROM active_count) < $1)
       ORDER BY
         CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
         created_at ASC
@@ -181,7 +196,8 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
                          END
     FROM next_workflow n
     WHERE w.id = n.id
-    RETURNING w.*`
+    RETURNING w.*`,
+    [MAX_CONCURRENT_AI_WORKFLOWS]
   );
   return rows[0] ?? null;
 }

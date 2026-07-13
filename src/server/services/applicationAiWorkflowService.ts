@@ -25,6 +25,7 @@ import {
   listArtifacts,
   claimNextPendingWorkflow,
   updateWorkflowHeartbeat,
+  MAX_CONCURRENT_AI_WORKFLOWS,
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -622,16 +623,29 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: `Workflow is not queued (status: ${wf.status})` };
   }
 
+  // Same concurrency cap as claimNextPendingWorkflow (see that function's
+  // comment): a queued workflow only gets claimed here if we're under the
+  // limit on genuinely active workflows. Bulk-created tickets each call this
+  // via their own auto-trigger, so without this check hundreds of them would
+  // all claim+dispatch (and fire an AI provider call) at the same instant.
+  // Over the cap, the workflow just stays 'queued' - the periodic dispatcher
+  // picks it up in its turn once capacity frees up.
   const claimed = await queryOne(
     `UPDATE application_ai_workflows
      SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes',
          claimed_by = 'dispatcher', heartbeat_at = NOW(), lock_version = lock_version + 1
-     WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
+     WHERE id = $1
+       AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
+       AND (
+         status != 'queued'
+         OR (SELECT COUNT(*)::int FROM application_ai_workflows
+             WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()) < $2
+       )
      RETURNING id`,
-    [workflowId]
+    [workflowId, MAX_CONCURRENT_AI_WORKFLOWS]
   );
   if (!claimed) {
-    return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher" };
+    return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher, or at concurrency capacity" };
   }
 
   // MUST be awaited here, not fire-and-forget: dispatchWorkflowById's own
