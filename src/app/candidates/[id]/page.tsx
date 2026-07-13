@@ -76,6 +76,7 @@ interface CandidateDetail {
   portfolio_url: string | null;
   visa_status: string | null;
   target_industries: string[] | null;
+  verified_skills: string[] | null;
   location_preference: string | null;
   work_mode_preference: string | null;
   available_start_date: string | null;
@@ -575,6 +576,10 @@ export default function CandidateProfilePage() {
               <div>
                 <label>Target industries</label>
                 <p>{candidate.target_industries?.length ? candidate.target_industries.join(", ") : "—"}</p>
+              </div>
+              <div>
+                <label>Verified skills</label>
+                <p>{candidate.verified_skills?.length ? candidate.verified_skills.join(", ") : "—"}</p>
               </div>
               <div>
                 <label>Location preference</label>
@@ -1219,6 +1224,7 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
   const [portfolioUrl, setPortfolioUrl] = useState(candidate.portfolio_url ?? "");
   const [visaStatus, setVisaStatus] = useState(candidate.visa_status ?? "");
   const [targetIndustries, setTargetIndustries] = useState(candidate.target_industries?.join(", ") ?? "");
+  const [verifiedSkills, setVerifiedSkills] = useState(candidate.verified_skills?.join(", ") ?? "");
   const [locationPreference, setLocationPreference] = useState(candidate.location_preference ?? "");
   const [workModePreference, setWorkModePreference] = useState(candidate.work_mode_preference ?? "");
   const [availableStartDate, setAvailableStartDate] = useState(candidate.available_start_date ?? "");
@@ -1241,6 +1247,7 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
         portfolio_url: portfolioUrl || null,
         visa_status: visaStatus || null,
         target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
+        verified_skills: verifiedSkills ? verifiedSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
         location_preference: locationPreference || null,
         work_mode_preference: workModePreference || null,
         available_start_date: availableStartDate || null,
@@ -1294,6 +1301,13 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
         <div className="field-group">
           <label>Target industries (comma-separated)</label>
           <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. Telecom, SaaS, Finance" />
+        </div>
+        <div className="field-group">
+          <label>Verified skills (comma-separated)</label>
+          <input value={verifiedSkills} onChange={(e) => setVerifiedSkills(e.target.value)} placeholder="e.g. Vetro FiberMap, Katapult, PE License" />
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+            Recruiter-confirmed skills the AI resume pipeline can use even if the base resume text doesn't mention them.
+          </p>
         </div>
         <div className="field-group">
           <label>Location preference</label>

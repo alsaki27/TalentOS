@@ -74,6 +74,11 @@ export interface AgentContext {
   job: AgentJobData;
   baseResume: AgentResumeData;
   evidence: AgentEvidenceItem[];
+  // Candidate Truth Ledger: recruiter-confirmed skills (candidates.verified_skills)
+  // that supplement candidate_evidence's narrative entries - a fast-path source
+  // of truth for skills that are real but weren't written into the base resume
+  // text or documented as a full evidence entry.
+  verifiedSkills: string[];
   previousOutputs: Record<string, ArtifactRecord>;
 }
 

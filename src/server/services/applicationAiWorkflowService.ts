@@ -69,6 +69,7 @@ export async function startWorkflow(input: {
   job: any;
   baseResume: any;
   evidence: any[];
+  verifiedSkills?: string[];
   idempotencyKey?: string;
   startedBy?: string;
 }): Promise<{ workflowId: string }> {
@@ -77,6 +78,7 @@ export async function startWorkflow(input: {
     job: input.job,
     baseResume: input.baseResume,
     evidence: input.evidence,
+    verifiedSkills: input.verifiedSkills ?? [],
   };
 
   // Despite its name, application_ai_workflows.base_resume_id's FK actually
@@ -218,6 +220,10 @@ export async function triggerAiWorkflowForApplication(
     "SELECT * FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
     [appRow.candidate_id]
   );
+  const candidateRow = await queryOne<{ verified_skills: string[] | null }>(
+    "SELECT verified_skills FROM candidates WHERE id = $1",
+    [appRow.candidate_id]
+  );
 
   const { workflowId } = await startWorkflow({
     applicationId,
@@ -225,6 +231,7 @@ export async function triggerAiWorkflowForApplication(
     job,
     baseResume: resumeRow,
     evidence: evidence ?? [],
+    verifiedSkills: candidateRow?.verified_skills ?? [],
     startedBy,
   });
 
@@ -250,6 +257,7 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
     job: snapshot.job ?? {},
     baseResume: snapshot.baseResume ?? {},
     evidence: snapshot.evidence ?? [],
+    verifiedSkills: snapshot.verifiedSkills ?? [],
     previousOutputs: outputsMap,
   };
 }

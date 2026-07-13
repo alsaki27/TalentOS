@@ -21,7 +21,7 @@ export async function runResumeForge(
         content: [
           {
             type: "text",
-            text: buildResumeForgePrompt(ctx.job, ctx.baseResume, ctx.evidence, jobAnalysis),
+            text: buildResumeForgePrompt(ctx.job, ctx.baseResume, ctx.evidence, jobAnalysis, ctx.verifiedSkills),
           },
         ],
       },

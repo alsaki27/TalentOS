@@ -22,6 +22,7 @@ function makeContext(overrides: Partial<AgentContext> = {}): AgentContext {
     job: { id: "job-1", title: "Engineer", company: "Acme", description: "Engineering role", rawDescription: null, employmentType: null, seniorityLevel: null, salaryRange: null, location: null },
     baseResume: { id: "res-1", title: null, content: {}, skills: [], experience: [], education: [], certifications: [] },
     evidence: [],
+    verifiedSkills: [],
     previousOutputs: {},
     ...overrides,
   };

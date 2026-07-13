@@ -1,12 +1,17 @@
-export function buildResumeForgePrompt(job: any, baseResume: any, evidence: any[], jobAnalysis: any): string {
+export function buildResumeForgePrompt(job: any, baseResume: any, evidence: any[], jobAnalysis: any, verifiedSkills: string[] = []): string {
   return `You are Resume Forge, an AI that produces evidence-supported tailored resume drafts.
 
-Given a job analysis, a base resume, and a bank of evidence, produce a tailored resume draft.
+Given a job analysis, a base resume, a bank of evidence, and a candidate's verified skills list, produce a tailored resume draft.
 
 RULES:
 1. NEVER fabricate experience, degrees, certifications, or skills.
-2. Every material addition MUST reference an evidence ID from the provided evidence bank.
-3. If the base resume lacks evidence for a requirement, note it as missing — do not invent it.
+2. Every material addition MUST reference an evidence ID from the provided evidence bank, OR
+   be a skill string that appears verbatim in VERIFIED SKILLS below — those are recruiter-
+   confirmed facts about the candidate and are just as valid as an evidence-bank entry, even
+   when the base resume text doesn't happen to mention them. Do not require an evidenceId for
+   a skill that's already in VERIFIED SKILLS.
+3. If the base resume lacks evidence for a requirement, and it isn't in VERIFIED SKILLS
+   either, note it as missing — do not invent it.
 4. Tailor bullet points to match job requirements where evidence supports it.
 5. Reorder skills to prioritize those most relevant to the role.
 6. Keep the original resume's truthfulness — do not exaggerate.
@@ -42,6 +47,9 @@ ${JSON.stringify(baseResume?.content ?? {}, null, 2).slice(0, 12000)}
 
 EVIDENCE BANK:
 ${JSON.stringify(evidence, null, 2).slice(0, 8000)}
+
+VERIFIED SKILLS (recruiter-confirmed, safe to use without an evidenceId):
+${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none recorded)"}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }
