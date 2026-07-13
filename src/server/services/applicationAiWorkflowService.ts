@@ -431,15 +431,29 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
           applicationId: wf.application_id,
           attemptNumber,
         };
-        const callResult = await callWithUsageTracking(
-          agentId,
-          callCtx,
-          async (provider: AiProvider) => {
-            const agentFn = getAgentFn(agentId);
-            return agentFn(agentOptions, provider, ctx);
-          },
-          failedKeyIds.size > 0 ? failedKeyIds : undefined,
-        );
+        // ai_agent_configs.timeout_ms was threaded through to AgentOptions
+        // but never actually enforced anywhere - a hung upstream fetch (no
+        // AbortController on any provider's fetch call) could block a claim
+        // slot indefinitely instead of failing and freeing it up for retry.
+        // Racing against a timeout here doesn't cancel the underlying fetch
+        // (providers don't accept an abort signal), but it does let the
+        // pipeline move on, record a clear timeout error, and retry/fail
+        // cleanly instead of hanging past the claim TTL with no diagnostic.
+        const timeoutMs = agentOptions.timeout_ms ?? 90_000;
+        const callResult = await Promise.race([
+          callWithUsageTracking(
+            agentId,
+            callCtx,
+            async (provider: AiProvider) => {
+              const agentFn = getAgentFn(agentId);
+              return agentFn(agentOptions, provider, ctx);
+            },
+            failedKeyIds.size > 0 ? failedKeyIds : undefined,
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`Agent call timed out after ${timeoutMs}ms`)), timeoutMs)
+          ),
+        ]);
         agentOutput = callResult.result;
         resolvedProviderName = callResult.providerName;
         resolvedKeyId = callResult.aiKeyId;
@@ -606,8 +620,8 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   }
 
   const claimed = await queryOne(
-    `UPDATE application_ai_workflows 
-     SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '5 minutes',
+    `UPDATE application_ai_workflows
+     SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes',
          claimed_by = 'dispatcher', heartbeat_at = NOW(), lock_version = lock_version + 1
      WHERE id = $1 AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
      RETURNING id`,

@@ -163,7 +163,16 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
                       ELSE 'running'
                  END,
         claimed_at = NOW(),
-        claim_expires_at = NOW() + INTERVAL '5 minutes',
+        // 2 minutes, not 5: the immediate in-process next-stage dispatch
+        // (nested ctx.waitUntil chaining in dispatchWorkflowById) has been
+        // observed live to sometimes die silently mid-stage without
+        // completing or erroring - a 5-minute TTL meant an orphaned stage
+        // sat unrecoverable for up to 5 minutes even with the cron loop
+        // polling every ~15s. Every observed real stage latency (job_lens
+        // ~5s, resume_forge ~5-25s, hiring_panel ~3s, final_polish similar)
+        // is well under 2 minutes, so this still comfortably avoids
+        // reclaiming a call that's genuinely still in flight.
+        claim_expires_at = NOW() + INTERVAL '2 minutes',
         claimed_by = 'dispatcher',
         heartbeat_at = NOW(),
         lock_version = lock_version + 1,
@@ -180,7 +189,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
 
 export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
   await execute(
-    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '5 minutes' WHERE id = $1`,
+    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes' WHERE id = $1`,
     [workflowId]
   );
 }
