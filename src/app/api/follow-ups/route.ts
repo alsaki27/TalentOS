@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.follow_up_at IS NOT NULL
-        AND ($1 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $2 OR ($3 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3) OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4))
+        AND ($1 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $2::text OR ($3::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3::text) OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text))
         AND ($5 = '' OR c.name ILIKE $6 OR j.title ILIKE $6 OR j.company ILIKE $6)
         AND ($7 = '' OR a.status = $7)
         AND ($8 = '' OR a.follow_up_at <= $8::date)
@@ -53,7 +53,7 @@ export async function GET(req: NextRequest) {
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.follow_up_at IS NOT NULL
-        AND ($1 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $2 OR ($3 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3) OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4))
+        AND ($1 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $2::text OR ($3::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3::text) OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text))
         AND ($5 = '' OR c.name ILIKE $6 OR j.title ILIKE $6 OR j.company ILIKE $6)
         AND ($7 = '' OR a.status = $7)
         AND ($8 = '' OR a.follow_up_at <= $8::date)
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
 
     const statsBaseWhere = `
       a.follow_up_at IS NOT NULL
-      AND ($1 <> 'application_engineer' OR a.assigned_to_user_id IS NOT DISTINCT FROM $2 OR ($3 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3) OR ($4 IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4))
+      AND ($1 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $2::text OR ($3::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $3::text) OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text))
     `;
     const statsBaseParams = [userRole, userId, userEmail, userDisplayName];
 
