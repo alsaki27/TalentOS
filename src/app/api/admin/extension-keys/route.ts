@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { guardedSafetyCheck } from "@/lib/safetyCheck";
+import { requireCurrentUser } from "@/lib/auth";
 
 const VALID_SCOPES = [
   "extension:job:capture",
@@ -27,6 +28,8 @@ function generateKey(): string {
 }
 
 export async function GET(request: NextRequest) {
+  const { response } = await requireCurrentUser(["admin"]);
+  if (response) return response;
   try {
     const rows = await query(
       `SELECT id, label, scopes, candidate_id, created_at, revoked_at
@@ -40,6 +43,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const { response } = await requireCurrentUser(["admin"]);
+  if (response) return response;
   try {
     const body = await request.json();
     const { label, scopes, candidateId } = body;

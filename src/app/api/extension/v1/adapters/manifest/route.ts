@@ -1,6 +1,10 @@
 // GET /api/extension/v1/adapters/manifest
 // Scope: extension:adapters:read
-// Returns the ATS adapter manifest (Greenhouse, Lever, Ashby real; Workday/iCIMS stubs).
+// Returns the ATS adapter manifest. NOTE: this is placeholder/stub data, NOT a
+// working set of per-site field-mapping rules. All adapters carry maturity: "draft";
+// greenhouse/lever/ashby have provisional checksums ("*-v1") and workday/icims carry
+// checksum: "stub". No table or config file backs this yet — until real adapter
+// configs are wired in, treat every entry as unverified.
 
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES } from "@/lib/extensionAuth";

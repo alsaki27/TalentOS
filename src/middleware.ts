@@ -46,6 +46,18 @@ function isCronAuthorized(req: NextRequest, pathname: string) {
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
+// The A4 Extension API (/api/extension/v1/*) is called by an external browser
+// extension / MCP server with no session cookie — it authenticates via a bearer
+// "tos_..." token hashed (SHA-256) against extension_api_keys, done inside each
+// route handler by authenticateExtension(). Let these paths reach the handler so
+// that auth gate can run instead of middleware's generic session-cookie check
+// short-circuiting them with a 401 before they ever get there. Admin key
+// management (/api/admin/extension-keys) is deliberately NOT bypassed — that stays
+// staff-session-gated.
+function isExtensionApiPath(pathname: string) {
+  return pathname.startsWith("/api/extension/v1/");
+}
+
 // An external job-crawler bot has no session cookie either — same bearer-secret
 // pattern as cron, scoped to only the two endpoints it actually calls (not /status or
 // /stream, which stay behind normal staff auth). Route itself re-checks the key too.
@@ -64,6 +76,7 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
+  if (isExtensionApiPath(pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
 
