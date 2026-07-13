@@ -150,6 +150,8 @@ export default function CandidateProfilePage() {
   const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
   const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
   const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
+  const [me, setMe] = useState<{ profile?: { role?: string } } | null>(null);
+  const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
 
   async function load() {
     if (!id) return;
@@ -160,6 +162,10 @@ export default function CandidateProfilePage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  useEffect(() => {
+    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+  }, []);
 
   useEffect(() => {
     fetch("/api/markitdown/parse")
@@ -194,6 +200,15 @@ export default function CandidateProfilePage() {
     const res = await fetch(`/api/base-resumes?candidateId=${id}`);
     setBaseResumes(res.ok ? await res.json() : []);
     setBaseResumesLoading(false);
+  }
+
+  async function setBaseResumeStatus(baseResumeId: string, status: string) {
+    const res = await fetch(`/api/base-resumes/${baseResumeId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (res.ok) loadBaseResumes();
   }
 
   async function loadTailoredResumes() {
@@ -796,7 +811,21 @@ export default function CandidateProfilePage() {
                   <tr key={b.id}>
                     <td><strong>{b.name}</strong></td>
                     <td className="muted">{b.target_industry ?? "—"}</td>
-                    <td><span className="badge">{b.status}</span></td>
+                    <td>
+                      {isManager ? (
+                        <select
+                          className="input"
+                          style={{ padding: "2px 6px", fontSize: 12, width: "auto" }}
+                          value={b.status}
+                          onChange={(e) => setBaseResumeStatus(b.id, e.target.value)}
+                        >
+                          <option value="draft">draft</option>
+                          <option value="approved">approved</option>
+                        </select>
+                      ) : (
+                        <span className="badge">{b.status}</span>
+                      )}
+                    </td>
                     <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
                     <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
                   </tr>
