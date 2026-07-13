@@ -145,6 +145,14 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 // (claim_expires_at IS NULL or claim_expires_at < NOW()). These are workflows
 // abandoned by a crashed or dead dispatcher. After 3 recoveries the workflow
 // is moved to 'failed' to prevent infinite retry loops on persistently broken stages.
+// 2-minute claim TTL, not 5: the immediate in-process next-stage dispatch
+// (nested ctx.waitUntil chaining in dispatchWorkflowById) has been observed
+// live to sometimes die silently mid-stage without completing or erroring -
+// a 5-minute TTL meant an orphaned stage sat unrecoverable for up to 5
+// minutes even with the cron loop polling every ~15s. Every observed real
+// stage latency (job_lens ~5s, resume_forge ~5-25s, hiring_panel ~3s,
+// final_polish similar) is well under 2 minutes, so this still comfortably
+// avoids reclaiming a call that's genuinely still in flight.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
     `WITH next_workflow AS (
@@ -163,15 +171,6 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
                       ELSE 'running'
                  END,
         claimed_at = NOW(),
-        // 2 minutes, not 5: the immediate in-process next-stage dispatch
-        // (nested ctx.waitUntil chaining in dispatchWorkflowById) has been
-        // observed live to sometimes die silently mid-stage without
-        // completing or erroring - a 5-minute TTL meant an orphaned stage
-        // sat unrecoverable for up to 5 minutes even with the cron loop
-        // polling every ~15s. Every observed real stage latency (job_lens
-        // ~5s, resume_forge ~5-25s, hiring_panel ~3s, final_polish similar)
-        // is well under 2 minutes, so this still comfortably avoids
-        // reclaiming a call that's genuinely still in flight.
         claim_expires_at = NOW() + INTERVAL '2 minutes',
         claimed_by = 'dispatcher',
         heartbeat_at = NOW(),
