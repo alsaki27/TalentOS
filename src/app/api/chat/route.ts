@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
   // On failure, persist a visible error turn instead of leaving the transcript looking
   // like it silently dropped the user's message (which was already saved above).
   async function failWithVisibleError(message: string, status: number) {
-    await insertAssistantMessage(conversationId, `(error) ${message}`);
+    await insertAssistantMessage(conversationId!, `(error) ${message}`);
     return NextResponse.json({ conversation_id: conversationId, error: message }, { status });
   }
 

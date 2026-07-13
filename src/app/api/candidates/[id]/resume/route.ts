@@ -15,7 +15,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "no file provided" }, { status: 400 });
   }
 
-  existing = await queryOne<{ resume_url: string | null }>(
+  const existing = await queryOne<{ resume_url: string | null }>(
     'SELECT resume_url FROM candidates WHERE id = $1',
     [params.id]
   );

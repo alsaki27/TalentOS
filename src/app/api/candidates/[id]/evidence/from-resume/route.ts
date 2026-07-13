@@ -52,7 +52,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const base = i * 7;
     return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7})`;
   }).join(", ");
-  const params = insertData.flatMap((row) => [
+  const sqlParams = insertData.flatMap((row) => [
     row.candidate_id,
     row.source_type,
     row.title,
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   data = await query<Record<string, any>>(
     `INSERT INTO candidate_evidence (candidate_id, source_type, title, description, related_skills, confidence_score, created_by)
      VALUES ${valuesClause} RETURNING *`,
-    params
+    sqlParams
   );
 
   await logActivity({

@@ -30,8 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: "title and source_type are required" }, { status: 400 });
   }
 
-  let data;
-  data = await queryOne<Record<string, any>>(
+  const data = await queryOne<Record<string, any>>(
     `INSERT INTO candidate_evidence (candidate_id, source_type, title, description, related_skills, proof_url, confidence_score, created_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
     [
@@ -45,6 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       context!.profile.user_id,
     ]
   );
+  if (!data) return NextResponse.json({ error: "Failed to create evidence." }, { status: 500 });
 
   await logActivity({
     userId: context!.profile.user_id,

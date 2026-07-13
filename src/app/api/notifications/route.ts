@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   }
 
   // New notification list mode
-  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const pageNum = Math.max(1, parseInt(page ?? "1", 10) || 1);
   const pageSize = Math.min(50, Math.max(1, parseInt(url.searchParams.get("pageSize") || "20", 10) || 20));
   const type = url.searchParams.get("type") || "";
   const unreadOnly = url.searchParams.get("unread") === "1";

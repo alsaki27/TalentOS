@@ -55,7 +55,7 @@ export async function processEmailQueue(): Promise<ProcessResult> {
         const renderedSubject = renderTemplate(subject, mergeData);
 
         const sendResult = await sendEmail({
-          to: candidate.data.email,
+          to: candidate.email,
           subject: renderedSubject,
           body: renderedBody,
           candidateId: item.candidate_id,

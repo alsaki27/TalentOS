@@ -27,12 +27,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { url: proofUrl } = await uploadFile(path, buffer, file.type || "application/octet-stream");
 
-  let data;
-  data = await queryOne<Record<string, any>>(
+  const data = await queryOne<Record<string, any>>(
     `INSERT INTO application_proofs (application_id, file_url, file_type, uploaded_by)
      VALUES ($1, $2, $3, $4) RETURNING *`,
     [params.id, proofUrl, file.type || "application/octet-stream", context!.profile.user_id]
   );
+  if (!data) return NextResponse.json({ error: "Failed to record proof upload." }, { status: 500 });
 
   await execute(
     `UPDATE applications SET proof_url = $1, proof_filename = $2, proof_uploaded_at = $3, proof_uploaded_by_user_id = $4 WHERE id = $5`,
