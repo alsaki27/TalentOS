@@ -9,15 +9,15 @@ module.exports = {
     extend: {
       colors: {
         // Original TalentOS colors
-        ink: '#1a1d23',
-        'ink-soft': '#5a5f6b',
-        bg: '#f7f7f8',
-        surface: '#ffffff',
-        border: 'hsl(var(--border))',
-        accent: '#2a6f4f',
-        'accent-soft': '#e7f2ec',
-        warn: '#b3541e',
-        danger: '#b3261e',
+        ink: 'var(--ink)',
+        'ink-soft': 'var(--ink-soft)',
+        bg: 'var(--bg)',
+        surface: 'var(--surface)',
+        border: 'var(--border)',
+        accent: 'var(--accent)',
+        'accent-soft': 'var(--accent-soft)',
+        warn: 'var(--warn)',
+        danger: 'var(--danger)',
 
         // shadcn/ui CSS variable colors (required by copied UI components)
         input: 'hsl(var(--input))',
