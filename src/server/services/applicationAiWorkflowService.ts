@@ -279,9 +279,12 @@ export async function triggerAiWorkflowForApplication(
     matchReason: matchReason ?? undefined,
   });
 
+  const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
   await backgroundDispatch(
-    dispatchWorkflowById(workflowId).catch((err) => {
-      console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
+    fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
+      method: 'POST'
+    }).catch((err) => {
+      console.error(`[Workflow ${workflowId}] Initial dispatch fetch failed:`, err);
     })
   );
 
@@ -583,9 +586,14 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Immediately dispatch the next stage so the pipeline doesn't stall
     // between stages waiting for the 5-minute cron dispatcher.
+    // Making an HTTP fetch to ourselves guarantees a fresh Cloudflare invocation
+    // with a reset 50-subrequest limit.
+    const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
     await backgroundDispatch(
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} failed:`, err);
+      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
+        method: 'POST'
+      }).catch((err) => {
+        console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} fetch failed:`, err);
       })
     );
   } catch (err: any) {
@@ -603,9 +611,12 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       await syncWorkflowToApplication(workflowId, "queued");
 
       // Continue retry immediately — don't wait for cron
+      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
       await backgroundDispatch(
-        dispatchWorkflowById(workflowId).catch((retryErr) => {
-          console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, retryErr);
+        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
+          method: 'POST'
+        }).catch((retryErr) => {
+          console.error(`[Workflow ${workflowId}] Retry dispatch fetch failed:`, retryErr);
         })
       );
     } else {
