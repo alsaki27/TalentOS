@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
+import { APPLICATION_AGENT_METAS } from "@/lib/ai/application-agents/types";
 
 interface QueueItem {
   id: string;
@@ -531,19 +532,37 @@ export default function ApplicationQueuePage() {
                     {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Pipeline Stages</div>
-                        {Object.values((workflowDetails[item.workflow_id!].stages || []).reduce((acc: any, s: any) => { acc[s.sequence_number] = s; return acc; }, {})).map((s: any, i: number) => {
-                          let label = s.automation_id?.replaceAll("_", " ") || `Stage ${s.sequence_number}`;
-                          if (s.automation_id === "application_job_lens") label = "Job Lens";
-                          if (s.automation_id === "application_resume_forge") label = "Resume Forge";
-                          if (s.automation_id === "application_hiring_panel") label = "Hiring Panel";
-                          if (s.automation_id === "application_final_polish") label = "Final Polish";
-                          return (
-                            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", opacity: s.status === "pending" ? 0.5 : 1 }}>
-                              <span>{label}</span>
-                              <span className={`badge badge-${s.status === "success" ? "success" : s.status === "failed" ? "danger" : "warning"}`}>{s.status}</span>
-                            </div>
-                          );
-                        })}
+                        {(() => {
+                          const stages = workflowDetails[item.workflow_id!].stages || [];
+                          // Dedupe by sequence_number: keep the attempt with the highest attempt_number
+                          const deduped = new Map<number, any>();
+                          for (const s of stages) {
+                            const existing = deduped.get(s.sequence_number);
+                            if (!existing || s.attempt_number > existing.attempt_number) {
+                              deduped.set(s.sequence_number, s);
+                            }
+                          }
+                          return Array.from(deduped.values()).map((s: any, i: number) => {
+                            const meta = APPLICATION_AGENT_METAS[s.automation_id as keyof typeof APPLICATION_AGENT_METAS];
+                            const label = meta?.displayName ?? s.automation_id?.replaceAll("_", " ") ?? `Stage ${s.sequence_number}`;
+                            const retried = s.attempt_number > 1 ? ` (retried ${s.attempt_number - 1}×)` : "";
+                            return (
+                              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", opacity: s.status === "pending" ? 0.5 : 1 }}>
+                                <span>{label}{retried}</span>
+                                <span className={`badge badge-${s.status === "success" ? "success" : s.status === "failed" ? "danger" : "warning"}`}>{s.status}</span>
+                              </div>
+                            );
+                          });
+                        })()}
+                        {(workflowDetails[item.workflow_id!].stages || []).filter((s: any) => s.status === "failed" && s.error_message).length > 0 && (
+                          <div style={{ marginTop: 6 }}>
+                            {(workflowDetails[item.workflow_id!].stages || []).filter((s: any) => s.status === "failed" && s.error_message).map((s: any, i: number) => (
+                              <div key={`err-${i}`} style={{ padding: "4px 6px", background: "rgba(211, 38, 30, 0.08)", borderRadius: 4, fontSize: 11, marginTop: 2 }}>
+                                <strong>Stage {s.sequence_number}:</strong> {s.error_message}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         {item.workflow_status === "failed" && workflowDetails[item.workflow_id!]?.workflow?.last_error && (
                           <div style={{ marginTop: 8, padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
                             <strong>Error:</strong> {workflowDetails[item.workflow_id!].workflow.last_error}
