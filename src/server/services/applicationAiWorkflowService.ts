@@ -5,7 +5,7 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import { callWithUsageTracking, AiRouteCallError, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
-import { SCHEMA_VERSIONS } from "@/lib/ai/application-agents/constants";
+import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { runJobLens } from "@/lib/ai/application-agents/jobLens";
 import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
@@ -424,10 +424,15 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   const parsedTemperature =
     rawTemperature == null ? undefined : Number(rawTemperature);
 
+  // Falls back to this agent's own default ceiling (not a flat constant) when
+  // the ai_agent_configs row is missing/null for max_output_tokens - a missing
+  // seed row for Resume Forge/Final Polish (full-resume JSON output) must not
+  // silently drop to Job Lens/Hiring Panel's (analysis-only JSON) lower ceiling
+  // or vice versa.
   const agentOptions: AgentOptions = {
     system_prompt: agentConfig?.system_prompt ?? undefined,
     temperature: Number.isFinite(parsedTemperature) ? parsedTemperature : undefined,
-    max_output_tokens: agentConfig?.max_output_tokens ?? undefined,
+    max_output_tokens: agentConfig?.max_output_tokens ?? AGENT_CONFIG_DEFAULTS[agentId]?.maxOutputTokens,
     timeout_ms: agentConfig?.timeout_ms ?? undefined,
   };
 
@@ -693,7 +698,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   const claimed = await queryOne(
     `UPDATE application_ai_workflows
      SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes',
-         claimed_by = 'dispatcher', heartbeat_at = NOW(), lock_version = lock_version + 1
+         claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
      WHERE id = $1
        AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
        AND (

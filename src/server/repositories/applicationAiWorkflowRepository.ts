@@ -111,7 +111,7 @@ export async function findActiveWorkflowByApplicationId(applicationId: string): 
 // ── Update status ──
 
 export async function updateWorkflowStatus(id: string, status: WorkflowStatus, extra?: Record<string, unknown>): Promise<void> {
-  const fields: string[] = ["status = $1"];
+  const fields: string[] = ["status = $1", "updated_at = NOW()"];
   const values: (string | number | boolean | null | Date)[] = [status];
   let idx = 2;
 
@@ -193,6 +193,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
         claim_expires_at = NOW() + INTERVAL '2 minutes',
         claimed_by = 'dispatcher',
         heartbeat_at = NOW(),
+        updated_at = NOW(),
         lock_version = lock_version + 1,
         recovery_count = CASE WHEN w.status = 'running'
                               THEN recovery_count + 1
@@ -208,7 +209,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
 
 export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
   await execute(
-    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes' WHERE id = $1`,
+    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
     [workflowId]
   );
 }
