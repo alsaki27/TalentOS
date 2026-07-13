@@ -42,13 +42,23 @@ export async function runFinalPolish(
 
   // Defense in depth against the exact failure the prompt now explicitly
   // forbids: confirmed live, the model can satisfy the single-page word
-  // count by wiping every bullet from a kept role (empty bullets array)
-  // while still setting exportReady: true and a high finalQaScore - a
-  // schema-valid but practically broken resume. Force a retry rather than
-  // let a gutted resume through, since the prompt instruction alone isn't
-  // a guarantee.
+  // count by wiping every bullet from a kept role (empty bullets array),
+  // or even wiping the entire experience section to [], while still
+  // setting exportReady: true and a high finalQaScore - a schema-valid but
+  // practically broken resume (confirmed live: a real draft with 2 roles
+  // and real bullets came out with experience: [] and exportReady: true).
+  // Force a retry rather than let a gutted resume through, since the
+  // prompt instruction alone isn't a guarantee.
+  const draftHadExperience = Array.isArray((draft as any)?.experience) && (draft as any).experience.length > 0;
+  const draftHadBullets = draftHadExperience && (draft as any).experience.some((e: any) => Array.isArray(e?.bullets) && e.bullets.length > 0);
   const emptyBulletRoles = validated.experience.filter((e) => e.bullets.length === 0);
-  if (emptyBulletRoles.length > 0 && validated.exportReady) {
+
+  if (draftHadExperience && validated.experience.length === 0 && validated.exportReady) {
+    throw new Error(
+      `Final Polish wiped the entire experience section (draft had ${(draft as any).experience.length} role(s)) while marking exportReady - rejecting`
+    );
+  }
+  if (draftHadBullets && emptyBulletRoles.length > 0 && validated.exportReady) {
     throw new Error(
       `Final Polish left ${emptyBulletRoles.length} kept role(s) with zero bullets while marking exportReady - rejecting: ${emptyBulletRoles.map((e) => e.title).join(", ")}`
     );

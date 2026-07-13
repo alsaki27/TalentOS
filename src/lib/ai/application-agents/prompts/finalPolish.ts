@@ -23,10 +23,13 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    font/spacing conceptually or pad whitespace to "cheat" the limit; the trimmed content
    itself must be shorter. Only set exportReady to true once the result genuinely fits one
    page.
-6. NEVER leave a role you keep with zero bullets. Trimming means cutting the weakest bullets
-   within a role down to its strongest 2-4, or removing the entire role if it's not worth
-   including — a kept role with an empty bullets array is not a trimmed resume, it's a
-   broken one, and exportReady must never be true if that happens.
+6. NEVER leave a role you keep with zero bullets, and NEVER return an empty experience array
+   when the draft had real experience entries. Trimming means cutting the weakest bullets
+   within a role down to its strongest 2-4, and dropping only the least-relevant role(s) if
+   the resume is still too long after that — you must always keep at least one role with
+   real bullets. An empty experience array, or a kept role with an empty bullets array, is
+   not a trimmed resume, it's a broken one, and exportReady must never be true if that
+   happens.
 
 Return a JSON object with:
 - summary: final professional summary (or null)
