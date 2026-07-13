@@ -28,6 +28,16 @@ interface ActiveProvider {
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 
+// Single source of truth for the fallback maxTokens ceiling used by every
+// DB-managed-key provider builder below. Matches the native Google env-key
+// path (googleProvider.ts) and the Vertex Proxy (googleVertexProxyProvider.ts),
+// both 8192. The per-stage value from AGENT_CONFIG_DEFAULTS[agentId].maxOutputTokens
+// is always passed through .send({maxTokens}) by the agent layer, so this constant
+// only governs the rare caller that doesn't supply one (e.g. testAiKey). A flat
+// 4096 here previously meant a DB-key user on the same agent got a lower ceiling
+// than the env-key path's 8192 — same call, different limit.
+const FALLBACK_MAX_TOKENS = 8192;
+
 /**
  * Build an AI provider from a DB-managed key.
  * Returns null if the provider adapter is not implemented for this provider type.
@@ -96,7 +106,7 @@ export function buildProviderFromDbKey(
       const apiUrl = resolveApiUrl(baseUrl, chatEndpoint, defaultUrl);
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
-      const DEFAULT_MAX_TOKENS = 4096;
+      const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
       return {
         async send({ system, messages, temperature, maxTokens }) {
           const res = await fetch(apiUrl, {
@@ -145,7 +155,7 @@ export function buildProviderFromDbKey(
             body: JSON.stringify({
               model: model || process.env.NVIDIA_MODEL || DEFAULT_MODEL,
               messages: [{ role: "system", content: system }, ...messages.map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n") }))],
-              max_tokens: maxTokens ?? 4096,
+              max_tokens: maxTokens ?? FALLBACK_MAX_TOKENS,
               temperature: temperature ?? 0.4,
               stream: false,
             }),
@@ -186,7 +196,7 @@ export function buildProviderFromDbKey(
             contents: geminiMessages,
             generationConfig: {
               temperature: temperature ?? 0.2,
-              maxOutputTokens: maxTokens ?? 4096,
+              maxOutputTokens: maxTokens ?? FALLBACK_MAX_TOKENS,
             },
           };
 
@@ -244,7 +254,7 @@ export function buildProviderFromDbKey(
         apiKey,
         model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
         errorLabel: "DeepSeek API",
-        maxTokens: 4096,
+        maxTokens: FALLBACK_MAX_TOKENS,
         temperature: 0.3,
         extraHeaders: {},
       });
