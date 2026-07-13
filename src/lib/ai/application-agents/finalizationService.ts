@@ -1,7 +1,8 @@
 // Finalization service — creates a proper application_resume_versions row
 // linked explicitly to the workflow, target_job, application, job, and candidate.
-// Verifies export readiness before persisting. Idempotent: calling twice returns
-// the existing result.
+// Persists the Final Polish output as a draft resume version regardless of its
+// exportReady flag (see comment below) — only a missing artifact blocks this.
+// Idempotent: calling twice returns the existing result.
 //
 // Atomicity boundary:
 //   The CTE+workflow update+packet upsert run inside a single Neon
@@ -52,13 +53,17 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     return null;
   }
 
-  if ((finalData as any)?.exportReady !== true) {
-    const errMsg = "Final resume not marked as export-ready by Final Polish agent.";
-    await updateWorkflowStatus(workflowId, "failed", { last_error: errMsg });
-    await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
-      [errMsg, wf.application_id]);
-    return null;
-  }
+  // exportReady is a quality signal (single-page fit, no empty experience
+  // section — see prompts/finalPolish.ts), not a safety gate: fabricated
+  // claims are handled separately via requiredEdits/rejectedIssueIds, which
+  // Final Polish is instructed to always resolve regardless of exportReady.
+  // Previously exportReady !== true hard-failed the whole workflow with NO
+  // resume saved anywhere, discarding three real (billed) agent calls' worth
+  // of work and leaving the AE with nothing to open in Studio — worse than a
+  // resume that needs a manual once-over. exportReady/unresolvedWarnings are
+  // already surfaced as a "not ready" badge + warning list on the AI
+  // findings page, so persisting it as a draft loses no visibility.
+  const exportReady = (finalData as any)?.exportReady === true;
 
   const tj = await queryOne<{ id: string }>(
     `SELECT id FROM target_jobs
@@ -152,16 +157,22 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);
   }
 
+  if (!exportReady) {
+    console.warn(`[finalizeWorkflow] Workflow ${workflowId} completed with exportReady=false — resume saved as draft, needs manual review (see unresolvedWarnings).`);
+  }
+
   // Log activity (best-effort — failure here does not roll back)
   await logActivity({
     userId: undefined,
     actorName: "AI Agent Pipeline",
     type: "update",
-    description: `Multi-agent workflow completed. Resume version: ${versionId}`,
+    description: exportReady
+      ? `Multi-agent workflow completed. Resume version: ${versionId}`
+      : `Multi-agent workflow completed with quality warnings (not export-ready — needs review). Resume version: ${versionId}`,
     entityType: "application",
     entityId: wf.application_id,
     entityName: `Workflow ${workflowId}`,
-    metadata: { workflowId, versionId, artifactCount: artifacts.length, atsScore },
+    metadata: { workflowId, versionId, artifactCount: artifacts.length, atsScore, exportReady },
   }).catch((err: any) => {
     console.error("[finalizeWorkflow] Activity log failed (non-critical):", err.message || err);
   });
