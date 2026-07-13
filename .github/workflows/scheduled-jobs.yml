@@ -1,0 +1,194 @@
+name: Scheduled Jobs
+
+env:
+  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # dispatch-workflows + email-queue – every 5 minutes
+    - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
+    - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
+    - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
+    - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
+    - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
+    - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to run'
+        required: true
+        type: choice
+        default: ''
+        options:
+          - dispatch-workflows
+          - ai-key-health
+          - ai-digest
+          - import-sources
+          - backup
+          - job-categorization
+          - ai-usage-rollup
+          - email-queue
+          - run-all
+
+jobs:
+  dispatch-workflows:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'dispatch-workflows' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Workflow dispatcher
+    steps:
+      - name: Call Workflow dispatcher (looped)
+        run: |
+          # GitHub Actions' cron floor is 5 minutes - it cannot be scheduled
+          # any more frequently than that, no matter the cron expression. Each
+          # backgroundDispatch() call (ctx.waitUntil) is *meant* to keep the
+          # pipeline self-chaining between stages without needing this cron at
+          # all, but that isn't observably happening in production despite
+          # being wired up per Cloudflare's documented API (confirmed live:
+          # a workflow sat at stage 0 with zero stage_runs for 5+ minutes of
+          # hands-off testing after the fix deployed). Until that's understood,
+          # loop this single cron tick for ~4.5 minutes so any workflow stuck
+          # between stages gets picked up within seconds rather than waiting
+          # for the next scheduled run - same 5-minute cron cadence, but acting
+          # as a near-continuous poller instead of one shot per tick.
+          END=$((SECONDS + 270))
+          CALLS=0
+          FAILURES=0
+          while [ $SECONDS -lt $END ]; do
+            CALLS=$((CALLS + 1))
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              FAILURES=$((FAILURES + 1))
+              echo "::warning::Dispatch call failed with HTTP $HTTP_CODE"
+            fi
+            sleep 15
+          done
+          # Only fail the run if the majority of calls failed - a single
+          # transient blip among ~18 calls per tick shouldn't page anyone,
+          # but sustained failure across the run should.
+          if [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS dispatch calls failed this run"
+            exit 1
+          fi
+
+  ai-digest:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 8 * * *') ||
+      github.event.inputs.job == 'ai-digest' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: AI digest
+    steps:
+      - name: Call AI digest
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/digest")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  import-sources:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 6 * * *') ||
+      github.event.inputs.job == 'import-sources' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Import sources
+    steps:
+      - name: Call Import sources
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/import-sources")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  backup:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 4 * * *') ||
+      github.event.inputs.job == 'backup' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Backup
+    steps:
+      - name: Call Backup
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/backup")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  job-categorization:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 7 * * *') ||
+      github.event.inputs.job == 'job-categorization' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Job categorization
+    steps:
+      - name: Call Job categorization
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  ai-usage-rollup:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 3 * * *') ||
+      github.event.inputs.job == 'ai-usage-rollup' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: AI usage rollup
+    steps:
+      - name: Call AI usage rollup
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-usage-rollup")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  ai-key-health:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '0 * * * *') ||
+      github.event.inputs.job == 'ai-key-health' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: AI key health
+    steps:
+      - name: Call AI key health
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-key-health")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  email-queue:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'email-queue' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Email queue
+    steps:
+      - name: Call Email queue
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/email-queue")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
