@@ -1,9 +1,6 @@
 // src/server/repositories/jobAgentRunRepository.ts
 // Data-access abstraction for job_agent_runs and job_agent_staged_jobs.
-// Follows the same Neon-first / Supabase-fallback pattern as jobsRepository.ts.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface JobAgentRunRow {
@@ -79,23 +76,13 @@ export async function createRun(
   roleGroups: string[],
   tokenId: string
 ): Promise<JobAgentRunRow> {
-  if (isNeon()) {
-    const row = await queryOne<JobAgentRunRow>(
-      `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
-       VALUES ($1, $2, 'pending', $3) RETURNING ${RUN_COLUMNS}`,
-      [configId, tokenId, roleGroups]
-    );
-    if (!row) throw new Error("Failed to create job agent run");
-    return row;
-  }
-
-  const { data, error } = await supabase
-    .from("job_agent_runs")
-    .insert({ config_id: configId, token_id: tokenId, status: "pending", role_groups_ran: roleGroups })
-    .select(RUN_COLUMNS)
-    .single();
-  if (error) throw new Error(error.message);
-  return data as JobAgentRunRow;
+  const row = await queryOne<JobAgentRunRow>(
+    `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
+     VALUES ($1, $2, 'pending', $3) RETURNING ${RUN_COLUMNS}`,
+    [configId, tokenId, roleGroups]
+  );
+  if (!row) throw new Error("Failed to create job agent run");
+  return row;
 }
 
 /**
@@ -105,28 +92,17 @@ export async function updateRunStatus(
   id: string,
   updates: Partial<Omit<JobAgentRunRow, "id" | "created_at">>
 ): Promise<JobAgentRunRow> {
-  if (isNeon()) {
-    const keys = Object.keys(updates).filter((k) => (updates as any)[k] !== undefined);
-    if (keys.length === 0) throw new Error("No fields to update");
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const values = keys.map((k) => (updates as any)[k]);
-    values.push(id);
-    const row = await queryOne<JobAgentRunRow>(
-      `UPDATE job_agent_runs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING ${RUN_COLUMNS}`,
-      values
-    );
-    if (!row) throw new Error("Run update failed");
-    return row;
-  }
-
-  const { data, error } = await supabase
-    .from("job_agent_runs")
-    .update(updates)
-    .eq("id", id)
-    .select(RUN_COLUMNS)
-    .single();
-  if (error) throw new Error(error.message);
-  return data as JobAgentRunRow;
+  const keys = Object.keys(updates).filter((k) => (updates as any)[k] !== undefined);
+  if (keys.length === 0) throw new Error("No fields to update");
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = keys.map((k) => (updates as any)[k]);
+  values.push(id);
+  const row = await queryOne<JobAgentRunRow>(
+    `UPDATE job_agent_runs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING ${RUN_COLUMNS}`,
+    values
+  );
+  if (!row) throw new Error("Run update failed");
+  return row;
 }
 
 /**
@@ -137,46 +113,24 @@ export async function listRuns(
 ): Promise<JobAgentRunSummary[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
 
-  if (isNeon()) {
-    const rows = await query<JobAgentRunRow>(
-      `SELECT ${RUN_COLUMNS} FROM job_agent_runs
-       WHERE ($1::uuid IS NULL OR config_id = $1::uuid)
-       ORDER BY started_at DESC LIMIT $2`,
-      [opts.configId ?? null, limit]
-    );
-    return Promise.all(rows.map((r) => summarizeRun(r)));
-  }
-
-  let q = supabase
-    .from("job_agent_runs")
-    .select(RUN_COLUMNS)
-    .order("started_at", { ascending: false })
-    .limit(limit);
-  if (opts.configId) q = q.eq("config_id", opts.configId);
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  return Promise.all((data ?? []).map((r: any) => summarizeRun(r as JobAgentRunRow)));
+  const rows = await query<JobAgentRunRow>(
+    `SELECT ${RUN_COLUMNS} FROM job_agent_runs
+     WHERE ($1::uuid IS NULL OR config_id = $1::uuid)
+     ORDER BY started_at DESC LIMIT $2`,
+    [opts.configId ?? null, limit]
+  );
+  return Promise.all(rows.map((r) => summarizeRun(r)));
 }
 
 /**
  * Get a single run with tier-count summary.
  */
 export async function getRunById(id: string): Promise<JobAgentRunSummary | null> {
-  if (isNeon()) {
-    const row = await queryOne<JobAgentRunRow>(
-      `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE id = $1`,
-      [id]
-    );
-    return row ? summarizeRun(row) : null;
-  }
-
-  const { data, error } = await supabase
-    .from("job_agent_runs")
-    .select(RUN_COLUMNS)
-    .eq("id", id)
-    .single();
-  if (error || !data) return null;
-  return summarizeRun(data as JobAgentRunRow);
+  const row = await queryOne<JobAgentRunRow>(
+    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE id = $1`,
+    [id]
+  );
+  return row ? summarizeRun(row) : null;
 }
 
 async function summarizeRun(run: JobAgentRunRow): Promise<JobAgentRunSummary> {
@@ -201,50 +155,24 @@ async function getTierCounts(runId: string): Promise<{
     WHERE run_id = $1
   `;
 
-  if (isNeon()) {
-    const row = await queryOne<{ best_count: number; medium_count: number; worthy_count: number; skip_count: number }>(
-      sql,
-      [runId]
-    );
-    return {
-      best_count: row?.best_count ?? 0,
-      medium_count: row?.medium_count ?? 0,
-      worthy_count: row?.worthy_count ?? 0,
-      skip_count: row?.skip_count ?? 0,
-    };
-  }
-
-  const { data: rows, error } = await supabase
-    .from("job_agent_staged_jobs")
-    .select("tier")
-    .eq("run_id", runId);
-  if (error) throw new Error(error.message);
-
-  const counts = { best_count: 0, medium_count: 0, worthy_count: 0, skip_count: 0 };
-  for (const r of rows ?? []) {
-    const t = (r as any).tier;
-    if (t === "best") counts.best_count++;
-    else if (t === "medium") counts.medium_count++;
-    else if (t === "worthy") counts.worthy_count++;
-    else if (t === "skip") counts.skip_count++;
-  }
-  return counts;
+  const row = await queryOne<{ best_count: number; medium_count: number; worthy_count: number; skip_count: number }>(
+    sql,
+    [runId]
+  );
+  return {
+    best_count: row?.best_count ?? 0,
+    medium_count: row?.medium_count ?? 0,
+    worthy_count: row?.worthy_count ?? 0,
+    skip_count: row?.skip_count ?? 0,
+  };
 }
 
 async function countStagedJobs(runId: string): Promise<number> {
-  if (isNeon()) {
-    const row = await queryOne<{ count: number }>(
-      `SELECT COUNT(*)::int as count FROM job_agent_staged_jobs WHERE run_id = $1`,
-      [runId]
-    );
-    return row?.count ?? 0;
-  }
-  const { count, error } = await supabase
-    .from("job_agent_staged_jobs")
-    .select("id", { count: "exact", head: true })
-    .eq("run_id", runId);
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  const row = await queryOne<{ count: number }>(
+    `SELECT COUNT(*)::int as count FROM job_agent_staged_jobs WHERE run_id = $1`,
+    [runId]
+  );
+  return row?.count ?? 0;
 }
 
 /**
@@ -256,34 +184,28 @@ export async function insertStagedJobs(
 ): Promise<void> {
   if (jobs.length === 0) return;
 
-  if (isNeon()) {
-    const cols = [
-      "run_id", "job_title", "company_name", "location", "salary_range", "salary_min",
-      "salary_max", "date_posted", "via_platform", "source_url", "apply_link", "is_remote",
-      "employment_type", "search_query_used", "role_group", "role_group_label",
-      "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
-      "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
-    ];
-    const values: (string | number | boolean | string[] | null)[] = [];
-    const placeholders: string[] = [];
-    let paramIdx = 1;
+  const cols = [
+    "run_id", "job_title", "company_name", "location", "salary_range", "salary_min",
+    "salary_max", "date_posted", "via_platform", "source_url", "apply_link", "is_remote",
+    "employment_type", "search_query_used", "role_group", "role_group_label",
+    "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
+    "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
+  ];
+  const values: (string | number | boolean | string[] | null)[] = [];
+  const placeholders: string[] = [];
+  let paramIdx = 1;
 
-    for (const job of jobs) {
-      const rowPlaceholders: string[] = [];
-      for (const col of cols) {
-        rowPlaceholders.push(`$${paramIdx++}`);
-        values.push((job as any)[col] ?? null);
-      }
-      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+  for (const job of jobs) {
+    const rowPlaceholders: string[] = [];
+    for (const col of cols) {
+      rowPlaceholders.push(`$${paramIdx++}`);
+      values.push((job as any)[col] ?? null);
     }
-
-    const sql = `INSERT INTO job_agent_staged_jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`;
-    await execute(sql, values);
-    return;
+    placeholders.push(`(${rowPlaceholders.join(", ")})`);
   }
 
-  const { error } = await supabase.from("job_agent_staged_jobs").insert(jobs);
-  if (error) throw new Error(error.message);
+  const sql = `INSERT INTO job_agent_staged_jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`;
+  await execute(sql, values);
 }
 
 export interface ListStagedJobsFilters {
@@ -305,56 +227,37 @@ export async function listStagedJobs(
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 100));
 
-  if (isNeon()) {
-    const conditions: string[] = ["run_id = $1"];
-    const values: (string | number)[] = [runId];
-    let idx = 2;
+  const conditions: string[] = ["run_id = $1"];
+  const values: (string | number)[] = [runId];
+  let idx = 2;
 
-    if (filters.tier) {
-      conditions.push(`tier = $${idx++}`);
-      values.push(filters.tier);
-    }
-    if (filters.group) {
-      conditions.push(`role_group = $${idx++}`);
-      values.push(filters.group);
-    }
-    if (filters.importStatus) {
-      conditions.push(`import_status = $${idx++}`);
-      values.push(filters.importStatus);
-    }
-    if (filters.search) {
-      conditions.push(`(job_title ILIKE $${idx} OR company_name ILIKE $${idx} OR location ILIKE $${idx})`);
-      values.push(`%${filters.search}%`);
-      idx++;
-    }
-
-    const where = conditions.join(" AND ");
-    const countSql = `SELECT COUNT(*)::int as total FROM job_agent_staged_jobs WHERE ${where}`;
-    const dataSql = `SELECT * FROM job_agent_staged_jobs WHERE ${where} ORDER BY created_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
-    values.push(pageSize, (page - 1) * pageSize);
-
-    const countRow = await queryOne<{ total: number }>(countSql, values.slice(0, -2));
-    const items = await query<JobAgentStagedJobRow>(dataSql, values);
-
-    return { items: items ?? [], total: countRow?.total ?? 0 };
+  if (filters.tier) {
+    conditions.push(`tier = $${idx++}`);
+    values.push(filters.tier);
   }
-
-  let q = supabase.from("job_agent_staged_jobs").select("*", { count: "exact" }).eq("run_id", runId);
-  if (filters.tier) q = q.eq("tier", filters.tier);
-  if (filters.group) q = q.eq("role_group", filters.group);
-  if (filters.importStatus) q = q.eq("import_status", filters.importStatus);
+  if (filters.group) {
+    conditions.push(`role_group = $${idx++}`);
+    values.push(filters.group);
+  }
+  if (filters.importStatus) {
+    conditions.push(`import_status = $${idx++}`);
+    values.push(filters.importStatus);
+  }
   if (filters.search) {
-    q = q.or(
-      `job_title.ilike.%${filters.search}%,company_name.ilike.%${filters.search}%,location.ilike.%${filters.search}%`
-    );
+    conditions.push(`(job_title ILIKE $${idx} OR company_name ILIKE $${idx} OR location ILIKE $${idx})`);
+    values.push(`%${filters.search}%`);
+    idx++;
   }
 
-  const from = (page - 1) * pageSize;
-  const { data, error, count } = await q
-    .order("created_at", { ascending: false })
-    .range(from, from + pageSize - 1);
-  if (error) throw new Error(error.message);
-  return { items: (data ?? []) as JobAgentStagedJobRow[], total: count ?? 0 };
+  const where = conditions.join(" AND ");
+  const countSql = `SELECT COUNT(*)::int as total FROM job_agent_staged_jobs WHERE ${where}`;
+  const dataSql = `SELECT * FROM job_agent_staged_jobs WHERE ${where} ORDER BY created_at DESC LIMIT $${idx++} OFFSET $${idx++}`;
+  values.push(pageSize, (page - 1) * pageSize);
+
+  const countRow = await queryOne<{ total: number }>(countSql, values.slice(0, -2));
+  const items = await query<JobAgentStagedJobRow>(dataSql, values);
+
+  return { items: items ?? [], total: countRow?.total ?? 0 };
 }
 
 /**
@@ -368,20 +271,14 @@ export async function updateStagedJobStatus(
   const updates: Record<string, unknown> = { import_status: status };
   if (importedJobId !== undefined) updates.imported_job_id = importedJobId ?? null;
 
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const values = Object.values(updates);
-    values.push(id);
-    await execute(
-      `UPDATE job_agent_staged_jobs SET ${setClause} WHERE id = $${keys.length + 1}`,
-      values
-    );
-    return;
-  }
-
-  const { error } = await supabase.from("job_agent_staged_jobs").update(updates).eq("id", id);
-  if (error) throw new Error(error.message);
+  const keys = Object.keys(updates);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = Object.values(updates);
+  values.push(id);
+  await execute(
+    `UPDATE job_agent_staged_jobs SET ${setClause} WHERE id = $${keys.length + 1}`,
+    values
+  );
 }
 
 /**
@@ -393,61 +290,42 @@ export async function bulkUpdateStagedJobStatus(
   status: string,
   opts: { tier?: string; excludeImportStatus?: string; jobIds?: string[] } = {}
 ): Promise<number> {
-  if (isNeon()) {
-    const conditions: string[] = ["run_id = $1"];
-    const values: (string | string[])[] = [runId];
-    let idx = 2;
+  const conditions: string[] = ["run_id = $1"];
+  const values: (string | string[])[] = [runId];
+  let idx = 2;
 
-    if (opts.tier) {
-      conditions.push(`tier = $${idx++}`);
-      values.push(opts.tier);
-    }
-    if (opts.excludeImportStatus) {
-      conditions.push(`import_status <> $${idx++}`);
-      values.push(opts.excludeImportStatus);
-    }
-    if (opts.jobIds && opts.jobIds.length > 0) {
-      conditions.push(`id = ANY($${idx++})`);
-      values.push(opts.jobIds);
-    }
-
-    const where = conditions.join(" AND ");
-    const res = await execute(
-      `UPDATE job_agent_staged_jobs SET import_status = $${idx++} WHERE ${where}`,
-      [...values, status]
-    );
-    return res.rowCount;
+  if (opts.tier) {
+    conditions.push(`tier = $${idx++}`);
+    values.push(opts.tier);
+  }
+  if (opts.excludeImportStatus) {
+    conditions.push(`import_status <> $${idx++}`);
+    values.push(opts.excludeImportStatus);
+  }
+  if (opts.jobIds && opts.jobIds.length > 0) {
+    conditions.push(`id = ANY($${idx++})`);
+    values.push(opts.jobIds);
   }
 
-  let q = supabase.from("job_agent_staged_jobs").update({ import_status: status }).eq("run_id", runId);
-  if (opts.tier) q = q.eq("tier", opts.tier);
-  if (opts.excludeImportStatus) q = q.neq("import_status", opts.excludeImportStatus);
-  if (opts.jobIds && opts.jobIds.length > 0) q = q.in("id", opts.jobIds);
-  const { error, count } = await q;
-  if (error) throw new Error(error.message);
-  return count ?? 0;
+  const where = conditions.join(" AND ");
+  const res = await execute(
+    `UPDATE job_agent_staged_jobs SET import_status = $${idx++} WHERE ${where}`,
+    [...values, status]
+  );
+  return res.rowCount;
 }
 
 /**
  * Sum estimated_cost_usd for today's runs for a config.
  */
 export async function getTodaySpend(configId: string): Promise<number> {
-  if (isNeon()) {
-    const row = await queryOne<{ total: number }>(
-      `SELECT COALESCE(SUM(estimated_cost_usd), 0) as total
-       FROM job_agent_runs
-       WHERE config_id = $1 AND started_at >= CURRENT_DATE`,
-      [configId]
-    );
-    return Number(row?.total ?? 0);
-  }
-  const { data, error } = await supabase
-    .from("job_agent_runs")
-    .select("estimated_cost_usd")
-    .eq("config_id", configId)
-    .gte("started_at", new Date().toISOString().slice(0, 10));
-  if (error) throw new Error(error.message);
-  return (data ?? []).reduce((sum: number, r: any) => sum + (r.estimated_cost_usd ?? 0), 0);
+  const row = await queryOne<{ total: number }>(
+    `SELECT COALESCE(SUM(estimated_cost_usd), 0) as total
+     FROM job_agent_runs
+     WHERE config_id = $1 AND started_at >= CURRENT_DATE`,
+    [configId]
+  );
+  return Number(row?.total ?? 0);
 }
 
 /**
@@ -460,20 +338,10 @@ export async function getDedupHashes(hashes: string[]): Promise<Set<string>> {
   since.setDate(since.getDate() - 30);
   const sinceIso = since.toISOString();
 
-  if (isNeon()) {
-    const rows = await query<{ dedup_hash: string }>(
-      `SELECT DISTINCT dedup_hash FROM job_agent_staged_jobs
-       WHERE dedup_hash = ANY($1) AND created_at >= $2`,
-      [hashes, sinceIso]
-    );
-    return new Set(rows.map((r) => r.dedup_hash));
-  }
-
-  const { data, error } = await supabase
-    .from("job_agent_staged_jobs")
-    .select("dedup_hash")
-    .in("dedup_hash", hashes)
-    .gte("created_at", sinceIso);
-  if (error) throw new Error(error.message);
-  return new Set((data ?? []).map((r: any) => r.dedup_hash as string));
+  const rows = await query<{ dedup_hash: string }>(
+    `SELECT DISTINCT dedup_hash FROM job_agent_staged_jobs
+     WHERE dedup_hash = ANY($1) AND created_at >= $2`,
+    [hashes, sinceIso]
+  );
+  return new Set(rows.map((r) => r.dedup_hash));
 }
