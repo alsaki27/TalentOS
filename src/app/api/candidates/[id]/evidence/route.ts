@@ -10,20 +10,20 @@ import { query, queryOne, execute } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   if (isNeon()) {
-    try {
-      const data = await query<Record<string, any>>(
-        `SELECT ce.*,
-          jsonb_build_object('display_name', p.display_name) as profiles
-         FROM candidate_evidence ce
-         LEFT JOIN profiles p ON ce.created_by = p.id
-         WHERE ce.candidate_id = $1
-         ORDER BY ce.created_at DESC`,
-        [params.id]
-      );
-      return NextResponse.json(data ?? []);
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    // profiles' primary key is user_id, not id (see src/lib/auth.ts and
+    // every other query against this table) - the previous `p.id` join
+    // column never existed, so this endpoint 500'd unconditionally for
+    // every candidate, with no try/catch to even surface the real error.
+    const data = await query<Record<string, any>>(
+      `SELECT ce.*,
+        jsonb_build_object('display_name', p.display_name) as profiles
+       FROM candidate_evidence ce
+       LEFT JOIN profiles p ON ce.created_by = p.user_id
+       WHERE ce.candidate_id = $1
+       ORDER BY ce.created_at DESC`,
+      [params.id]
+    );
+    return NextResponse.json(data ?? []);
   } else {
     const { supabase } = await import("@/lib/supabase");
     const { data, error } = await supabase
