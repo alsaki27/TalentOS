@@ -92,6 +92,15 @@ function fromGeminiParts(parts: GeminiPart[]): AiContentBlock[] {
   return blocks;
 }
 
+// Gemini 2.5 Flash/Flash-Lite support up to 65536 output tokens, but nothing
+// in this pipeline needs anywhere near that - 8192 is generous headroom
+// (2x the largest ai_agent_configs.max_output_tokens, 4096) without inviting
+// runaway cost/latency on a stuck generation. Was hardcoded to 2048 before,
+// well under what Resume Forge/Final Polish actually need (4096 configured)
+// - confirmed live as the cause of "Unterminated string in JSON" truncation
+// failures, the same bug class fixed for the native providers in aiProvider.ts.
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+
 export async function callVertexProxy(opts: {
   proxyUrl: string;
   proxySecret: string;
@@ -99,6 +108,8 @@ export async function callVertexProxy(opts: {
   system: string;
   messages: AiMessage[];
   tools: AiTool[];
+  temperature?: number;
+  maxTokens?: number;
 }): Promise<AiResponse> {
   const geminiTools = toGeminiTools(opts.tools);
 
@@ -113,8 +124,8 @@ export async function callVertexProxy(opts: {
       contents: toGeminiContents(opts.messages),
       tools: geminiTools,
       model: opts.model,
-      temperature: 0.2,
-      maxOutputTokens: 2048,
+      temperature: opts.temperature ?? 0.2,
+      maxOutputTokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       // Only meaningful (and only sent by the proxy) when no tools are active
       // this turn - see index.js's buildVertexBody for why the two are
       // mutually exclusive in Vertex's API.
@@ -157,9 +168,9 @@ export function getGoogleVertexProxyProvider(): AiProvider | null {
   if (!proxyUrl || !proxySecret) return null;
 
   return {
-    send({ system, messages, tools }) {
+    send({ system, messages, tools, temperature, maxTokens }) {
       const model = process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
-      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools });
+      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens });
     },
   };
 }
@@ -172,8 +183,8 @@ export function getGoogleVertexFallbackProvider(): AiProvider | null {
   if (!proxyUrl || !proxySecret || !fallbackModel) return null;
 
   return {
-    send({ system, messages, tools }) {
-      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools });
+    send({ system, messages, tools, temperature, maxTokens }) {
+      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens });
     },
   };
 }

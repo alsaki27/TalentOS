@@ -76,7 +76,7 @@ export function buildProviderFromDbKey(
       const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET;
       if (!proxyUrl || !proxySecret) return null;
       return {
-        send({ system, messages, tools }) {
+        send({ system, messages, tools, temperature, maxTokens }) {
           return callVertexProxy({
             proxyUrl,
             proxySecret,
@@ -84,6 +84,8 @@ export function buildProviderFromDbKey(
             system,
             messages,
             tools,
+            temperature,
+            maxTokens,
           });
         },
       };
