@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 interface QueueItem {
@@ -155,9 +155,76 @@ export default function ApplicationQueuePage() {
 
   useEffect(() => { load(1); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
-  // Live pipeline polling moved to /resume-parsing-status — this page no
-  // longer auto-refreshes on workflow activity, see FindingsButton below
-  // for the deep link into that page.
+  // Lightweight live-update: instead of re-fetching the whole queue (which
+  // resets scroll/selection and feels like a page reload), poll just the
+  // active-workflows list and patch matching rows in place by workflow_id.
+  // This is also what nudges genuinely stuck workflows forward — see
+  // /api/application-ai-workflows/active's own opportunistic-dispatch
+  // comment: a burst of tickets created together can sit at
+  // status='queued' indefinitely with nothing else to drive them, since
+  // the in-process chain-dispatch between stages doesn't reliably survive
+  // on Cloudflare Workers and the GitHub Actions cron safety net has been
+  // observed running 30-40 minutes apart instead of ~5. Anyone with this
+  // page open becomes a much faster safety net than the cron gap.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const hasActiveWork = itemsRef.current.some((i) => i.workflow_status && ["queued", "running"].includes(i.workflow_status));
+      if (!hasActiveWork) return;
+      try {
+        const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const byWorkflowId = new Map((data.workflows ?? []).map((w: any) => [w.id, w]));
+
+        const justCompleted: QueueItem[] = [];
+        setItems((prev) =>
+          prev.map((item) => {
+            if (!item.workflow_id) return item;
+            const wf: any = byWorkflowId.get(item.workflow_id);
+            if (!wf) return item;
+            const wasActive = item.workflow_status === "queued" || item.workflow_status === "running";
+            const nowTerminal = wf.status === "completed" || wf.status === "failed" || wf.status === "cancelled";
+            if (wasActive && nowTerminal) justCompleted.push(item);
+            return {
+              ...item,
+              workflow_status: wf.status,
+              workflow_stage: wf.current_stage,
+              workflow_score: wf.match_score ?? item.workflow_score,
+            };
+          })
+        );
+
+        // A workflow that just finished needs its application row re-read
+        // (resume_generation_status, tailored_resume_version_id, proof
+        // fields aren't on the active-workflows list) - fetched per-row so
+        // only that card updates, not the whole grid.
+        for (const item of justCompleted) {
+          fetch(`/api/applications/${item.id}`, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((fresh) => {
+              if (!fresh) return;
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id
+                    ? {
+                        ...it,
+                        resume_generation_status: fresh.resume_generation_status,
+                        workflow_resume_version_id: fresh.tailored_resume_version_id ?? it.workflow_resume_version_id,
+                      }
+                    : it
+                )
+              );
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const userMap = new Map(users.map((u) => [u.user_id, u]));
   const ownerLabel = (item: QueueItem) => {
@@ -764,12 +831,14 @@ function PipelineActions({
     );
   }
 
-  // Active (queued or running)
+  // Active (queued or running) — live pulse so a page left open visibly
+  // shows progress instead of looking frozen while polling updates it.
   if (wfStatus === "queued" || wfStatus === "running") {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"}`}>
-          {wfStatus === "running" ? "⚡ Running" : "⏳ Queued"}
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, transition: "opacity 0.2s ease" }}>
+        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"} pipeline-live-badge`}>
+          <span className={`pipeline-live-dot ${wfStatus === "running" ? "pipeline-live-dot-running" : ""}`} />
+          {wfStatus === "running" ? "Running" : "Queued"}
         </span>
         {item.workflow_stage !== null && item.workflow_stage !== undefined && (
           <span style={{ fontSize: 11, color: "var(--muted)" }}>{workflowStageLabel(item.workflow_stage)}</span>

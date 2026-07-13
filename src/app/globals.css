@@ -391,6 +391,33 @@ label {
   color: var(--accent);
 }
 
+/* Live AI-pipeline indicator (Application Queue) — a small pulsing dot so a
+   page left open reads as "actively working" rather than frozen while the
+   6s poll silently patches stage/status in the background. */
+.pipeline-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pipeline-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.pipeline-live-dot-running {
+  animation: pipeline-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pipeline-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
 .badge-no_show {
   background: #fbeaea;
   color: var(--danger);

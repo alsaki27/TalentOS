@@ -38,16 +38,24 @@ export async function GET(request: NextRequest) {
     // scheduled-jobs.yml's own comment - and the GitHub Actions cron meant to
     // catch stalled workflows has been observed running 30-40+ minutes apart
     // instead of its intended ~5 minutes (GitHub Actions cron has no
-    // reliability guarantee at that granularity). A 'running' workflow whose
-    // claim already expired is stuck until *something* calls the dispatcher.
-    // Piggyback that call on this page's own 6s poll - anyone with the
-    // status page open becomes a much faster safety net than the cron gap,
-    // without blocking this response (dispatchNextQueuedWorkflow is
-    // idempotent via SKIP LOCKED, so concurrent pollers are harmless).
-    const hasStalledClaim = rows.some(
-      (r: any) => r.status === "running" && r.claim_expires_at && new Date(r.claim_expires_at).getTime() < Date.now()
+    // reliability guarantee at that granularity). A workflow that's plainly
+    // 'queued' (auto-trigger created the row but the self-fetch chain never
+    // fired) or 'running' with an expired claim is stuck until *something*
+    // calls the dispatcher. Confirmed live: a burst of tickets created close
+    // together all sat at status='queued', current_stage=0 indefinitely -
+    // the narrower "stalled running claim only" check below never covered
+    // this because these workflows never even got claimed once, so
+    // claim_expires_at was never set. Piggyback the call on this endpoint's
+    // poll - anyone with a status page open becomes a much faster safety net
+    // than the cron gap, without blocking this response
+    // (dispatchNextQueuedWorkflow is idempotent via SKIP LOCKED, so
+    // concurrent pollers are harmless).
+    const hasQueuedOrStalledWork = rows.some(
+      (r: any) =>
+        r.status === "queued" ||
+        (r.status === "running" && r.claim_expires_at && new Date(r.claim_expires_at).getTime() < Date.now())
     );
-    if (hasStalledClaim) {
+    if (hasQueuedOrStalledWork) {
       await backgroundDispatch(
         dispatchNextQueuedWorkflow().catch((err) => {
           console.error("[active-workflows-poll] Opportunistic dispatch failed:", err);
