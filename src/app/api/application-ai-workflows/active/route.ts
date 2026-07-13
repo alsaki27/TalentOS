@@ -8,7 +8,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { query as neonQuery } from "@/server/db/neon";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { dispatchNextQueuedWorkflow } from "@/server/services/applicationAiWorkflowService";
 
 export async function GET(request: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -41,24 +40,33 @@ export async function GET(request: NextRequest) {
     // reliability guarantee at that granularity). A workflow that's plainly
     // 'queued' (auto-trigger created the row but the self-fetch chain never
     // fired) or 'running' with an expired claim is stuck until *something*
-    // calls the dispatcher. Confirmed live: a burst of tickets created close
-    // together all sat at status='queued', current_stage=0 indefinitely -
-    // the narrower "stalled running claim only" check below never covered
-    // this because these workflows never even got claimed once, so
-    // claim_expires_at was never set. Piggyback the call on this endpoint's
-    // poll - anyone with a status page open becomes a much faster safety net
-    // than the cron gap, without blocking this response
-    // (dispatchNextQueuedWorkflow is idempotent via SKIP LOCKED, so
-    // concurrent pollers are harmless).
+    // calls the dispatcher.
+    //
+    // MUST self-fetch a fresh POST to /dispatch rather than calling
+    // dispatchNextQueuedWorkflow() directly in-process here. Confirmed live:
+    // calling it in-process (wrapped in backgroundDispatch/ctx.waitUntil off
+    // this GET request) worked fine for fast stages (Job Lens, ~10-20s on
+    // Flash) but every Resume Forge stage (gemini-2.5-pro, meaningfully
+    // slower) got orphaned mid-run - claimed, started, then silently
+    // abandoned with the stage_run stuck at 'running' forever, eventually
+    // exhausting recovery_count and failing with "each claim orphaned
+    // without completing or erroring cleanly." A piggybacked waitUntil
+    // extension off an already-answered GET apparently doesn't grant the
+    // same execution budget as a genuine fresh HTTP invocation - every other
+    // dispatch trigger in this codebase (triggerAiWorkflowForApplication,
+    // processWorkflowStage's own stage-to-stage continuation) already
+    // self-fetches a new request for exactly this reason; this endpoint was
+    // the one place that didn't.
     const hasQueuedOrStalledWork = rows.some(
       (r: any) =>
         r.status === "queued" ||
         (r.status === "running" && r.claim_expires_at && new Date(r.claim_expires_at).getTime() < Date.now())
     );
     if (hasQueuedOrStalledWork) {
+      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
       await backgroundDispatch(
-        dispatchNextQueuedWorkflow().catch((err) => {
-          console.error("[active-workflows-poll] Opportunistic dispatch failed:", err);
+        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST" }).catch((err) => {
+          console.error("[active-workflows-poll] Opportunistic dispatch fetch failed:", err);
         })
       );
     }
