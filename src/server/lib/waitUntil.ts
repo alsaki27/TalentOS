@@ -25,13 +25,17 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 // e.g. local dev via `next dev`. Never throws: a failure to register with
 // waitUntil should never break the caller's actual response.
 export async function backgroundDispatch(promise: Promise<unknown>): Promise<void> {
-  const suppressed = promise.catch(() => {});
+  const suppressed = promise.catch((err) => {
+    console.error(`[Dispatch Chain] backgroundDispatch promise rejected:`, err);
+  });
   try {
     const { ctx } = await getCloudflareContext();
     ctx.waitUntil(suppressed);
-  } catch {
+    console.log(`[Dispatch Chain] backgroundDispatch registered with ctx.waitUntil successfully.`);
+  } catch (err) {
     // Not in a Cloudflare Workers context, or waitUntil registration
     // itself failed - the original promise is still running above,
     // just without the extended-lifetime guarantee.
+    console.log(`[Dispatch Chain] backgroundDispatch getCloudflareContext failed (non-Worker env or registration error): ${String(err)}. Promise will run un-awaited.`);
   }
 }

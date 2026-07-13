@@ -280,14 +280,21 @@ export async function triggerAiWorkflowForApplication(
   });
 
   const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
+  console.log(`[Dispatch Chain] Workflow ${workflowId} created with status ${'queued'}, stage 0. Triggering background dispatch to ${baseUrl}/api/application-ai-workflows/dispatch`);
   await backgroundDispatch(
     fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
       method: 'POST'
+    }).then((res) => {
+      console.log(`[Dispatch Chain] Workflow ${workflowId} dispatch self-fetch returned status ${res.status}`);
+      return res.text().then((body) => {
+        console.log(`[Dispatch Chain] Workflow ${workflowId} dispatch self-fetch body: ${body.slice(0, 500)}`);
+      });
     }).catch((err) => {
       console.error(`[Workflow ${workflowId}] Initial dispatch fetch failed:`, err);
     })
   );
 
+  console.log(`[Dispatch Chain] Workflow ${workflowId} backgroundDispatch registration complete. Returning from trigger.`);
   return { started: true, workflowId };
 }
 
@@ -378,9 +385,17 @@ async function syncWorkflowToApplication(
  */
 export async function processWorkflowStage(workflowId: string, _routeAttempt: number = 1): Promise<void> {
   const wf = await findWorkflowById(workflowId);
-  if (!wf) return;
+  if (!wf) {
+    console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} not found.`);
+    return;
+  }
 
-  if (wf.status !== "queued" && wf.status !== "running") return;
+  console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} status=${wf.status}, stage=${wf.current_stage}`);
+
+  if (wf.status !== "queued" && wf.status !== "running") {
+    console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} skipped (status is ${wf.status}, not queued/running).`);
+    return;
+  }
 
   if (wf.status === "queued") {
     await updateWorkflowStatus(workflowId, "running", { current_stage: wf.current_stage, last_error: null } as any);
@@ -645,9 +660,15 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
   let count = 0;
   let lastDispatched: { id: string; current_stage: number } | null = null;
 
+  console.log(`[Dispatch Chain] dispatchNextQueuedWorkflow started (WORKFLOWS_PER_DISPATCH_CALL=${WORKFLOWS_PER_DISPATCH_CALL})`);
+
   for (let i = 0; i < WORKFLOWS_PER_DISPATCH_CALL; i++) {
     const wf = await claimNextPendingWorkflow();
-    if (!wf) break;
+    if (!wf) {
+      console.log(`[Dispatch Chain] claimNextPendingWorkflow returned null (no queued workflows or at concurrency cap). Stopping.`);
+      break;
+    }
+    console.log(`[Dispatch Chain] Claimed workflow ${wf.id} at stage ${wf.current_stage}, recovery_count=${wf.recovery_count}, status=${wf.status}`);
     lastDispatched = wf;
     count++;
 

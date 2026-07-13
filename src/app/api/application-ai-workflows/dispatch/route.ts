@@ -12,7 +12,9 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(_req: NextRequest) {
   try {
+    console.log(`[Dispatch Chain] POST /api/application-ai-workflows/dispatch received`);
     const result = await dispatchNextQueuedWorkflow();
+    console.log(`[Dispatch Chain] POST dispatch result:`, JSON.stringify(result).slice(0, 500));
     return NextResponse.json(result);
   } catch (err: any) {
     // Same gap the GET/cron handler below already had fixed: no try/catch
