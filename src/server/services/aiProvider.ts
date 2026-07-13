@@ -74,16 +74,13 @@ export function buildProviderFromDbKey(
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
-      // The proxy secret always comes from the Cloudflare Worker's own
-      // GOOGLE_VERTEX_PROXY_SECRET env var, never from this key row's
-      // encrypted_key. There's no service-account JSON or per-key API token
-      // for this provider - the DB row exists purely as a routable handle so
-      // it can be assigned to automations in the Control Center; the "API
-      // Key" value entered when creating it is unused. This matches
-      // getGoogleVertexProxyProvider() in src/lib/ai/googleVertexProxyProvider.ts,
-      // the pure-env path used before any DB key existed for this provider.
+      // Prefer the Worker's own GOOGLE_VERTEX_PROXY_SECRET (matches the
+      // pure-env fallback in getGoogleVertexProxyProvider()); fall back to
+      // this key row's own apiKey only if that env var isn't set, so the
+      // DB row still works standalone if the Cloudflare secret is ever
+      // removed instead of hard-failing.
       const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
-      const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET;
+      const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET || apiKey;
       if (!proxyUrl || !proxySecret) return null;
       return {
         send({ system, messages, tools, temperature, maxTokens }) {

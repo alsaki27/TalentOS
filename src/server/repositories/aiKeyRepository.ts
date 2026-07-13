@@ -77,10 +77,11 @@ export interface AiApiKeyRow {
   supports_tools: boolean;
   supports_json_mode: boolean;
   supports_streaming: boolean;
-  // Code-enforced deletion protection (migration 019) — for keys whose real
-  // secret material lives outside this table (e.g. google_vertex_proxy reads
-  // GOOGLE_VERTEX_PROXY_SECRET from Cloudflare env), where deleting the row
-  // would silently break every automation routed to it with no recovery path.
+  // Code-enforced deletion protection (migration 019) — for keys where
+  // deleting the row would silently break every automation routed to it
+  // with no recovery path (e.g. the google_vertex_proxy row, which is the
+  // only "Google Vertex (Proxy)" handle assignable in the Control Center,
+  // even though its actual secret normally comes from Cloudflare env).
   is_protected: boolean;
 }
 
@@ -268,10 +269,10 @@ export async function listEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
 export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow & { decrypted_key: string }) | null> {
   let row: AiApiKeyRow | null = null;
   if (isNeon()) {
-    row = await queryOne<AiApiKeyRow>(
+    row = (await queryOne<AiApiKeyRow>(
       `SELECT * FROM ai_api_keys WHERE id = $1`,
       [id]
-    );
+    )) ?? null;
   } else {
     const { data, error } = await supabase
       .from("ai_api_keys")
@@ -289,6 +290,11 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
       decrypted_key: await decryptSecret(row.encrypted_key),
     };
   } catch (err) {
+    // A single corrupted/undecryptable row (e.g. AI_KEYS_ENCRYPTION_SECRET
+    // rotated since it was written) must not throw out of here - callers in
+    // routing.ts's getProviderForAutomation don't wrap this call, so an
+    // unhandled throw would break route resolution for every automation
+    // that tries this key, not just skip the one bad key.
     console.error(`[AI_KEY] Failed to decrypt key ${id}. The AI_KEYS_ENCRYPTION_SECRET has likely changed or the row is corrupt.`, err);
     return null;
   }

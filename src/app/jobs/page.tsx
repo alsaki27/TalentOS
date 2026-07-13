@@ -1689,7 +1689,11 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
               }
 
               const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
-              const noResume = !c.resume_filename;
+              // /api/jobs/match-score only ever reads base_resumes (most recent
+              // by created_at) - resume_filename (the original uploaded file) is
+              // never consulted there. A candidate built entirely through Falood
+              // Studio with no raw upload still scores fine, so gate on either.
+              const noResume = !c.resume_filename && !c.has_base_resume;
               const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : "";
               const isExpanded = expandedScoreError === c.id;
 

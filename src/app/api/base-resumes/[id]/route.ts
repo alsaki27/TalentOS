@@ -37,6 +37,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (response) return response;
 
   const body = await req.json();
+  if ("status" in body && !DESTRUCTIVE_MANAGER_ROLES.includes(context!.profile.role)) {
+    return NextResponse.json({ error: "Only admin/manager can change base resume status." }, { status: 403 });
+  }
   const allowedFields = ["name", "target_industry", "target_roles", "status", "content", "style_id"];
   const updates: Record<string, unknown> = { updated_by: context!.profile.user_id, updated_at: new Date().toISOString() };
   for (const f of allowedFields) {
