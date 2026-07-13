@@ -667,6 +667,13 @@ export default function CandidateProfilePage() {
                     <button onClick={() => generateEvidenceFromResume(primaryResume.id)} disabled={generatingEvidence}>
                       {generatingEvidence ? "Generating…" : "Generate evidence from resume"}
                     </button>
+                    <button
+                      onClick={() => parseWithMarkitdown(primaryResume.id)}
+                      disabled={parsingMarkitdown}
+                      style={{ marginLeft: "auto" }}
+                    >
+                      {parsingMarkitdown ? "Parsing…" : "Re-parse"}
+                    </button>
                   </div>
                 </div>
               )}
@@ -1064,6 +1071,21 @@ function ParsedResults({ parsed }: { parsed: any }) {
   const experience = parsed?.experience ?? [];
   const education = parsed?.education ?? [];
   const certifications = parsed?.certifications ?? [];
+
+  if (parsed?.parse_error || (!skills.length && !experience.length && !education.length && !certifications.length && !parsed?.name && !parsed?.email)) {
+    return (
+      <div>
+        {parsed?.parse_error ? (
+          <div style={{ padding: "8px 12px", borderRadius: 6, background: "rgba(211, 38, 30, 0.12)", fontSize: 13 }}>
+            <strong>Parsing failed:</strong> {parsed.parse_error}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: 14 }}>No structured data was extracted from this resume.</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
       <div><label>Name</label><p className="muted">{parsed?.name || "—"}</p></div>
