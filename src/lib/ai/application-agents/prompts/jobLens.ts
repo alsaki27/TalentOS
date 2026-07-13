@@ -23,7 +23,7 @@ JOB POSTING:
 Title: ${job?.title ?? "Unknown"}
 Company: ${job?.company ?? "Unknown"}
 Location: ${job?.location ?? "Not specified"}
-Description: ${(job?.description_text || job?.raw_description || job?.description || "No description available").slice(0, 8000)}
+Description: ${(job?.description_text || job?.raw_description || job?.description || job?.notes || "No description available").slice(0, 8000)}
 Employment Type: ${job?.employment_type ?? "Not specified"}
 Seniority: ${job?.seniority_level ?? "Not specified"}
 Salary: ${job?.salary_range ?? "Not specified"}

@@ -32,7 +32,7 @@ export async function GET() {
   if (automationIds.length > 0) {
     const routes = await query<any>(
       `SELECT ar.automation_id, ar.id, ar.ai_key_id, ar.provider, ar.rank, ar.is_enabled,
-              ar.model_override, ar.updated_at, ar.updated_by, ar.created_at,
+              ar.model_override, ar.updated_at, ar.updated_by,
               ak.label as key_label, ak.provider as key_provider,
               ak.model as key_model, ak.key_fingerprint,
               ak.status as key_status

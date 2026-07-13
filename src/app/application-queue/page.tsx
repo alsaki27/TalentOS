@@ -50,18 +50,18 @@ interface QueueStats {
 type TabView = "all" | "mine" | "overdue" | "review" | "workflow";
 
 const STATUS_ICONS: Record<string, string> = {
-  assigned: "📋",
-  stacked: "📚",
-  in_progress: "🔨",
-  applied: "✅",
+  assigned: "",
+  stacked: "",
+  in_progress: "",
+  applied: "",
 };
 
 const WORKFLOW_LABELS: Record<number, string> = {
   0: "Queued",
-  1: "🔍 Job Lens",
-  2: "📝 Resume Forge",
-  3: "👥 Hiring Panel",
-  4: "✨ Final Polish",
+  1: "Job Lens",
+  2: "Resume Forge",
+  3: "Hiring Panel",
+  4: "Final Polish",
 };
 
 export default function ApplicationQueuePage() {
@@ -104,8 +104,8 @@ export default function ApplicationQueuePage() {
     return p;
   }
 
-  async function load(pn: number = page, clearFeedback = true) {
-    setLoading(true);
+  async function load(pn: number = page, clearFeedback = true, isBackground = false) {
+    if (!isBackground) setLoading(true);
     if (clearFeedback) setFeedback(null);
     try {
       const [queueRes, usersRes, meRes] = await Promise.all([
@@ -117,13 +117,13 @@ export default function ApplicationQueuePage() {
       const data = await queueRes.json();
       const newTotal = data.total ?? 0;
       const tp = Math.max(1, Math.ceil(newTotal / pageSize));
-      if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
+      if (pn > tp && pn > 1) { setLoading(false); return load(tp, clearFeedback, isBackground); }
       setItems(data.items ?? []);
       setTotal(newTotal);
       setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
-      setSelected(new Set());
+      if (!isBackground) setSelected(new Set());
       setPage(pn);
     } catch (err: any) {
       setFeedback({ kind: "error", text: err.message || "Load failed." });
@@ -132,21 +132,15 @@ export default function ApplicationQueuePage() {
 
   useEffect(() => { load(1); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
-  // Auto-poll when visible items have active workflows
+  // Auto-poll unconditionally in background for real-time updates
   useEffect(() => {
-    const hasActive = items.some(i =>
-      i.workflow_status && ["queued", "running"].includes(i.workflow_status)
-    );
-    if (hasActive && !pollingRef.current) {
-      pollingRef.current = setInterval(() => load(page, false), 5000);
-    } else if (!hasActive && pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
+    if (!pollingRef.current) {
+      pollingRef.current = setInterval(() => load(page, false, true), 5000);
     }
     return () => {
       if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
     };
-  }, [items]);
+  }, [page, search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
   const userMap = new Map(users.map((u) => [u.user_id, u]));
   const ownerLabel = (item: QueueItem) => {
@@ -206,21 +200,27 @@ export default function ApplicationQueuePage() {
     finally { setActionLoading(null); }
   }
 
-  async function fetchWorkflowDetails(item: QueueItem) {
+  function fetchWorkflowDetails(item: QueueItem) {
     if (!item.workflow_id) return;
-    if (workflowDetails[item.workflow_id]) {
-      setExpandedWorkflow(expandedWorkflow === item.workflow_id ? null : item.workflow_id);
-      return;
-    }
-    setExpandedWorkflow(item.workflow_id);
-    try {
-      const res = await fetch(`/api/application-ai-workflows/${item.workflow_id}?action=status`, { cache: "no-store" });
-      if (res.ok) {
-        const data = await res.json();
-        setWorkflowDetails(p => ({ ...p, [item.workflow_id!]: data }));
-      }
-    } catch {}
+    setExpandedWorkflow(expandedWorkflow === item.workflow_id ? null : item.workflow_id);
   }
+
+  useEffect(() => {
+    if (!expandedWorkflow) return;
+    let active = true;
+    const fetchDetails = async () => {
+      try {
+        const res = await fetch(`/api/application-ai-workflows/${expandedWorkflow}?action=status`, { cache: "no-store" });
+        if (res.ok && active) {
+          const data = await res.json();
+          setWorkflowDetails(p => ({ ...p, [expandedWorkflow]: data }));
+        }
+      } catch {}
+    };
+    fetchDetails();
+    const interval = setInterval(fetchDetails, 3000);
+    return () => { active = false; clearInterval(interval); };
+  }, [expandedWorkflow]);
 
   async function uploadProof(item: QueueItem) {
     const input = document.createElement("input");
@@ -283,7 +283,7 @@ export default function ApplicationQueuePage() {
         const d = await res.json();
         setFaloodResumes(p => ({ ...p, [item.candidates!.id]: [...(p[item.candidates!.id] ?? []), d] }));
         setFeedback({ kind: "success", text: "Base resume created. Opening Studio…" });
-        window.open(`/falood/studio/base/${d.id}`, "_blank");
+        window.open(`/falood/builder?id=${d.id}`, "_blank");
       } else {
         const d = await res.json().catch(() => ({}));
         setFeedback({ kind: "error", text: d.error || "Build failed." });
@@ -465,7 +465,7 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <span className={`badge badge-${item.status}`}>
-                      {STATUS_ICONS[item.status] || ""} {item.status.replaceAll("_", " ")}
+                      {item.status.replaceAll("_", " ")}
                     </span>
                   </td>
 
@@ -495,12 +495,24 @@ export default function ApplicationQueuePage() {
                     {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
                         <div style={{ fontWeight: 600, marginBottom: 4 }}>Pipeline Stages</div>
-                        {workflowDetails[item.workflow_id!].stages?.map((s: any, i: number) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
-                            <span>{s.automation_id?.replaceAll("_", " ") || `Stage ${s.sequence_number}`}</span>
-                            <span className={`badge badge-${s.status === "success" ? "success" : s.status === "failed" ? "danger" : "warning"}`}>{s.status}</span>
+                        {Object.values((workflowDetails[item.workflow_id!].stages || []).reduce((acc: any, s: any) => { acc[s.sequence_number] = s; return acc; }, {})).map((s: any, i: number) => {
+                          let label = s.automation_id?.replaceAll("_", " ") || `Stage ${s.sequence_number}`;
+                          if (s.automation_id === "application_job_lens") label = "Job Lens";
+                          if (s.automation_id === "application_resume_forge") label = "Resume Forge";
+                          if (s.automation_id === "application_hiring_panel") label = "Hiring Panel";
+                          if (s.automation_id === "application_final_polish") label = "Final Polish";
+                          return (
+                            <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)", opacity: s.status === "pending" ? 0.5 : 1 }}>
+                              <span style={{ whiteSpace: "nowrap" }}>{label}</span>
+                              <span className={`badge badge-${s.status === "success" ? "success" : s.status === "failed" ? "danger" : s.status === "running" ? "info" : "warning"}`} style={{ marginLeft: 8 }}>{s.status}</span>
+                            </div>
+                          );
+                        })}
+                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id!]?.workflow?.last_error && (
+                          <div style={{ marginTop: 8, padding: 8, background: "var(--danger-soft)", color: "var(--danger)", borderRadius: 4 }}>
+                            <strong>Error:</strong> {workflowDetails[item.workflow_id!].workflow.last_error}
                           </div>
-                        ))}
+                        )}
                       </div>
                     )}
                   </td>
@@ -509,7 +521,7 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <span className={`badge badge-review-${item.review_status}`}>
-                      {item.review_status === "pending" ? "⏳ Pending" : item.review_status === "approved" ? "✅ Approved" : item.review_status === "changes_requested" ? "✏️ Changes" : "—"}
+                      {item.review_status === "pending" ? "Pending" : item.review_status === "approved" ? "Approved" : item.review_status === "changes_requested" ? "Changes" : "—"}
                     </span>
                   </td>
 
@@ -526,7 +538,7 @@ export default function ApplicationQueuePage() {
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                       <div className="dropdown-wrapper">
                         <button className="btn-compact btn-outline btn-sm" onClick={() => faloodOpen === item.id ? setFaloodOpen(null) : openFaloodDropdown(item)} disabled={!item.candidates}>
-                          🎨 Studio ▾
+                          Studio ▾
                         </button>
                         {faloodOpen === item.id && item.candidates && (
                           <div className="dropdown-menu">
@@ -537,7 +549,7 @@ export default function ApplicationQueuePage() {
                               </button>
                             ) : (
                               (faloodResumes[item.candidates.id] ?? []).map((br: any) => (
-                                <button key={br.id} className="dropdown-item" onClick={() => { window.open(`/falood/studio/base/${br.id}`, "_blank"); setFaloodOpen(null); }}>
+                                <button key={br.id} className="dropdown-item" onClick={() => { window.open(`/falood/builder?id=${br.id}`, "_blank"); setFaloodOpen(null); }}>
                                   {br.name || "Untitled"}
                                 </button>
                               ))
@@ -549,21 +561,21 @@ export default function ApplicationQueuePage() {
                       </div>
 
                       <button className="btn-compact btn-sm" onClick={() => requestReview(item)} disabled={actionLoading === `${item.id}:review`}>
-                        {actionLoading === `${item.id}:review` ? "⟳" : "🔍 Review"}
+                        {actionLoading === `${item.id}:review` ? "..." : "Review"}
                       </button>
 
                       <button className="btn-compact btn-sm" onClick={() => uploadProof(item)} disabled={actionLoading === `${item.id}:proof`}>
-                        {actionLoading === `${item.id}:proof` ? "⟳" : "📎 Proof"}
+                        {actionLoading === `${item.id}:proof` ? "..." : "Proof"}
                       </button>
 
                       <button className="btn-primary btn-sm" onClick={() => setStatus(item.id, "applied")} disabled={actionLoading === `${item.id}:applied`}>
-                        {actionLoading === `${item.id}:applied` ? "⟳" : "✅ Applied"}
+                        {actionLoading === `${item.id}:applied` ? "..." : "Applied"}
                       </button>
 
                       {isManager && (
                         <>
-                          <button className="btn-compact btn-sm" onClick={() => setEditing(item)}>✏️</button>
-                          <button className="btn-danger btn-sm" onClick={() => removeTicket(item)}>🗑</button>
+                          <button className="btn-compact btn-sm" onClick={() => setEditing(item)}>Edit</button>
+                          <button className="btn-danger btn-sm" onClick={() => removeTicket(item)}>Delete</button>
                         </>
                       )}
                     </div>
@@ -643,7 +655,39 @@ export default function ApplicationQueuePage() {
   );
 }
 
-/** Renders the AI Pipeline cell with state-based actions. */
+/** Renders a minimal visual stepper for the AI Pipeline stages. */
+function WorkflowStepper({ stage, status }: { stage: number | null | undefined, status: string | null | undefined }) {
+  const steps = [1, 2, 3, 4];
+  const activeStage = stage ?? 0;
+  
+  return (
+    <div style={{ display: "flex", gap: "4px", alignItems: "center", marginTop: "4px" }}>
+      {steps.map(s => {
+        let color = "var(--surface-3)"; // pending
+        if (status === "completed" || activeStage > s || (activeStage === 4 && s === 4 && status === "waiting")) {
+          color = "var(--success)"; // completed
+        } else if (activeStage === s) {
+          if (status === "running") color = "var(--info)";
+          else if (status === "failed") color = "var(--danger)";
+          else if (status === "waiting") color = "var(--warning)";
+          else if (status === "queued") color = "var(--muted)";
+        }
+        
+        return (
+          <div key={s} title={WORKFLOW_LABELS[s]} style={{
+            flex: 1,
+            height: "6px",
+            borderRadius: "3px",
+            background: color,
+            transition: "background 0.3s ease"
+          }} />
+        );
+      })}
+    </div>
+  );
+}
+
+/** Renders the AI Pipeline cell with state-based actions and visual stepper. */
 function PipelineActions({
   item, actionLoading, onStartWorkflow, onFetchDetails, onReview,
   expandedWorkflow, workflowDetails, workflowStageLabel
@@ -663,14 +707,17 @@ function PipelineActions({
   // Ready — show the tailored resume link
   if (genStatus === "ready" && item.workflow_resume_version_id) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className="badge badge-success">✅ Generated</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span className="badge badge-success" style={{ alignSelf: "flex-start" }}>Generated</span>
+        <WorkflowStepper stage={4} status="completed" />
         {item.workflow_score !== null && item.workflow_score !== undefined && (
-          <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--foreground)" }}>
+            ATS Score: <span className="badge badge-info" style={{ marginLeft: 4 }}>{item.workflow_score}/10</span>
+          </div>
         )}
         <button className="btn-primary btn-sm"
-          onClick={() => window.open(`/falood/studio/application/${item.workflow_resume_version_id}`, "_blank")}>
-          ✏️ Open in Studio
+          onClick={() => window.open(`/falood/builder?id=${item.workflow_resume_version_id}`, "_blank")}>
+          Open in Studio
         </button>
       </div>
     );
@@ -680,11 +727,17 @@ function PipelineActions({
   if (genStatus === "failed" || wfStatus === "failed") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className="badge badge-danger">❌ Failed</span>
-        {item.workflow_id && (
-          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-            View error
-          </button>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span className="badge badge-danger">Failed</span>
+          {item.workflow_id && (
+            <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+              {expandedWorkflow === item.workflow_id ? "Hide details" : "Details"}
+            </button>
+          )}
+        </div>
+        <WorkflowStepper stage={item.workflow_stage} status="failed" />
+        {item.workflow_stage !== null && item.workflow_stage !== undefined && (
+          <span style={{ fontSize: 11, color: "var(--danger)", fontWeight: 500 }}>Failed at {workflowStageLabel(item.workflow_stage)}</span>
         )}
       </div>
     );
@@ -693,10 +746,13 @@ function PipelineActions({
   // Human review needed — show Approve / Reject / Restart buttons
   if (genStatus === "human_review" || wfStatus === "waiting") {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className="badge badge-warning">Human Review</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span className="badge badge-warning" style={{ alignSelf: "flex-start" }}>Human Review</span>
+        <WorkflowStepper stage={item.workflow_stage} status="waiting" />
         {item.workflow_score !== null && item.workflow_score !== undefined && (
-          <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--foreground)" }}>
+            ATS Score: <span className="badge badge-info" style={{ marginLeft: 4 }}>{item.workflow_score}/10</span>
+          </div>
         )}
         {item.workflow_id && (
           <>
@@ -704,21 +760,21 @@ function PipelineActions({
               <button className="btn-primary btn-sm"
                 onClick={() => onReview(item.workflow_id!, "approve")}
                 disabled={actionLoading === `${item.id}:approve`}>
-                {actionLoading === `${item.id}:approve` ? "⟳" : "Approve"}
+                {actionLoading === `${item.id}:approve` ? "..." : "Approve"}
               </button>
               <button className="btn-compact btn-sm"
                 onClick={() => { if (confirm("Reject this resume?")) onReview(item.workflow_id!, "reject"); }}
                 disabled={actionLoading === `${item.id}:reject`}>
-                {actionLoading === `${item.id}:reject` ? "⟳" : "Reject"}
+                {actionLoading === `${item.id}:reject` ? "..." : "Reject"}
               </button>
               <button className="btn-compact btn-sm"
                 onClick={() => { if (confirm("Reject and restart from stage 1?")) onReview(item.workflow_id!, "reject_and_restart"); }}
                 disabled={actionLoading === `${item.id}:restart`}>
-                {actionLoading === `${item.id}:restart` ? "⟳" : "Restart"}
+                {actionLoading === `${item.id}:restart` ? "..." : "Restart"}
               </button>
             </div>
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-              {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+              {expandedWorkflow === item.workflow_id ? "Hide Details" : "View Details"}
             </button>
           </>
         )}
@@ -730,16 +786,19 @@ function PipelineActions({
   if (wfStatus === "queued" || wfStatus === "running") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"}`}>
-          {wfStatus === "running" ? "⚡ Running" : "⏳ Queued"}
-        </span>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"}`}>
+            {wfStatus === "running" ? "Running" : "Queued"}
+          </span>
+          {item.workflow_id && (
+            <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+              {expandedWorkflow === item.workflow_id ? "Hide details" : "Details"}
+            </button>
+          )}
+        </div>
+        <WorkflowStepper stage={item.workflow_stage} status={wfStatus} />
         {item.workflow_stage !== null && item.workflow_stage !== undefined && (
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>{workflowStageLabel(item.workflow_stage)}</span>
-        )}
-        {item.workflow_id && (
-          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
-            {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
-          </button>
+          <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 500 }}>{workflowStageLabel(item.workflow_stage)}</span>
         )}
       </div>
     );
@@ -747,15 +806,23 @@ function PipelineActions({
 
   // Completed (no resume — shouldn't happen but handle gracefully)
   if (wfStatus === "completed") {
-    return <span className="badge badge-success">✅ Completed</span>;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span className="badge badge-success" style={{ alignSelf: "flex-start" }}>Completed</span>
+        <WorkflowStepper stage={4} status="completed" />
+      </div>
+    );
   }
 
   // Not started — show Generate button
   return (
-    <button className="btn-primary btn-sm"
-      onClick={() => onStartWorkflow(item)}
-      disabled={actionLoading === `${item.id}:workflow`}>
-      {actionLoading === `${item.id}:workflow` ? "⟳ Starting..." : "🤖 Generate"}
-    </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <span className="text-muted" style={{ fontSize: 12 }}>No workflow active</span>
+      <button className="btn-primary btn-sm"
+        onClick={() => onStartWorkflow(item)}
+        disabled={actionLoading === `${item.id}:workflow`}>
+        {actionLoading === `${item.id}:workflow` ? "Starting..." : "Generate"}
+      </button>
+    </div>
   );
 }

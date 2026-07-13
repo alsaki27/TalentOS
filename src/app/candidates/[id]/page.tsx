@@ -312,7 +312,7 @@ export default function CandidateProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newContent: buildResumeDocumentFromParsed(parsed) }),
       });
-      router.push(`/falood/studio/base/${baseResume.id}`);
+      router.push(`/falood/builder?id=${baseResume.id}`);
     }
   }
 
@@ -793,7 +793,7 @@ export default function CandidateProfilePage() {
                     <td className="muted">{b.target_industry ?? "—"}</td>
                     <td><span className="badge">{b.status}</span></td>
                     <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
-                    <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
+                    <td><Link className="row-link" href={`/falood/builder?id=${b.id}`}>Open in studio</Link></td>
                   </tr>
                 ))}
               </tbody>
@@ -844,7 +844,7 @@ export default function CandidateProfilePage() {
                       <td className="muted">{company}</td>
                       <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
                       <td>
-                        <Link className="row-link" href={`/falood/studio/tailor/${t.id}`}>Open in studio</Link>
+                        <Link className="row-link" href={`/falood/builder?id=${t.id}`}>Open in studio</Link>
                       </td>
                     </tr>
                   );
@@ -1008,7 +1008,7 @@ export default function CandidateProfilePage() {
           onCreated={(id) => { 
             setShowCreateBaseResume(false); 
             if (id) {
-              router.push(`/falood/studio/base/${id}`);
+              router.push(`/falood/builder?id=${id}`);
             } else {
               loadBaseResumes(); 
             }

@@ -1530,6 +1530,15 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [localScores, setLocalScores] = useState<MatchScore[]>(job.match_scores || []);
   const [generatingScoreFor, setGeneratingScoreFor] = useState<string | null>(null);
   const [expandedScoreError, setExpandedScoreError] = useState<string | null>(null);
+
+  // Base resume + auto-tailor state (quick ATS tailored resume after an application is logged)
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<Record<string, { id: string; name: string; status: string }[]>>({});
+  const [selectedBaseResumes, setSelectedBaseResumes] = useState<Record<string, string>>({});
+  const [autoTailorStatus, setAutoTailorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [autoTailorFaloodId, setAutoTailorFaloodId] = useState<string | null>(null);
+  const [autoTailorJobMeta, setAutoTailorJobMeta] = useState<{ title: string; company: string }>({ title: "", company: "" });
+  const [autoTailorError, setAutoTailorError] = useState("");
+
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
     const bRank = b.role === "application_engineer" ? 0 : 1;
@@ -1554,9 +1563,27 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   useEffect(() => {
     setResumeId("");
-    if (candidateIds.size !== 1) { setResumeVariants([]); return; }
-    const [candidateId] = Array.from(candidateIds);
-    fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    if (candidateIds.size !== 1) { setResumeVariants([]); }
+    else {
+      const [candidateId] = Array.from(candidateIds);
+      fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    }
+    
+    Array.from(candidateIds).forEach((id) => {
+      if (!candidateBaseResumes[id]) {
+        fetch(`/api/base-resumes?candidateId=${id}`)
+          .then((r) => r.ok ? r.json() : [])
+          .then((data: { id: string; name: string; status: string }[]) => {
+            setCandidateBaseResumes((prev) => ({ ...prev, [id]: data }));
+            if (data.length > 0) {
+              setSelectedBaseResumes((prev) => ({ ...prev, [id]: data[0].id }));
+            }
+          })
+          .catch(() => {
+            setCandidateBaseResumes((prev) => ({ ...prev, [id]: [] }));
+          });
+      }
+    });
   }, [candidateIds]);
 
   function toggleCandidate(id: string) {
@@ -1612,6 +1639,38 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     }
   }
 
+  /* ── auto-tailor resume after an application is logged ── */
+  async function autoTailorResume(applicationId: string, candidateId: string, baseResumeId: string) {
+    if (!baseResumeId) { onLogged(); return; }
+    setAutoTailorStatus("running");
+    setAutoTailorError("");
+    setAutoTailorFaloodId(null);
+    try {
+      const res = await fetch("/api/quick-application/auto-tailor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId,
+          jobId: job.id,
+          applicationId,
+          baseResumeId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAutoTailorStatus("error");
+        setAutoTailorError(data.error || "Auto-tailoring failed.");
+        return;
+      }
+      setAutoTailorFaloodId(data.faloodAppId);
+      setAutoTailorJobMeta({ title: data.jobTitle || "", company: data.company || "" });
+      setAutoTailorStatus("done");
+    } catch (err: any) {
+      setAutoTailorStatus("error");
+      setAutoTailorError(err.message || "Network error during auto-tailoring.");
+    }
+  }
+
   async function submit() {
     if (candidateIds.size === 0) { setError("Select at least one candidate."); return; }
     setSaving(true);
@@ -1643,13 +1702,36 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         assignment_due_at: assignmentDueAt || null,
         assignment_note: assignmentNote || null,
         next_action: status === "assigned" || status === "stacked" ? "Apply to this job" : null,
+        source_type: selectedIds.some(id => selectedBaseResumes[id]) ? "base_resume" : undefined,
       }),
     });
     setSaving(false);
     const data = await res.json();
     if (!res.ok) { setError(data.error || "Something went wrong."); return; }
+
+    // Auto-trigger an ATS-tailored resume when candidates have a base resume selected.
+    const createdApps = data.created || [];
+    const appsToTailor = createdApps.filter((app: any) => selectedBaseResumes[app.candidate_id]);
+
+    if (appsToTailor.length > 0) {
+      // Dispatch auto-tailoring tasks in the background
+      appsToTailor.forEach((app: any) => {
+        fetch("/api/quick-application/auto-tailor", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidateId: app.candidate_id,
+            jobId: job.id,
+            applicationId: app.id,
+            baseResumeId: selectedBaseResumes[app.candidate_id],
+          }),
+        }).catch(console.error);
+      });
+    }
     onLogged();
   }
+
+  const isTailoring = autoTailorStatus === "running" || autoTailorStatus === "done" || autoTailorStatus === "error";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1663,6 +1745,38 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           </button>
         </div>
 
+        {isTailoring ? (
+          /* ── Tailoring progress view (replaces the form once an application is logged
+             * and an ATS-tailored resume is being generated from the selected base resume) ── */
+          <div>
+            {autoTailorStatus === "running" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, padding: "10px 14px", borderRadius: 8, background: "var(--accent-bg, #e3f2fd)", fontSize: 13 }}>
+                <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🤖</span>
+                <span>Application created! Generating ATS-tailored resume…</span>
+              </div>
+            )}
+            {autoTailorStatus === "done" && autoTailorFaloodId && (
+              <div style={{ padding: "12px 14px", borderRadius: 8, background: "#e8f5e9", border: "1px solid #a5d6a7", fontSize: 13, marginBottom: 16 }}>
+                <strong>✅ Application created &amp; ATS-tailored resume generated!</strong>
+                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                  <a href={`/falood/studio/tailor/${encodeURIComponent(autoTailorFaloodId)}?jobTitle=${encodeURIComponent(autoTailorJobMeta.title)}&company=${encodeURIComponent(autoTailorJobMeta.company)}`} target="_blank" rel="noreferrer">
+                    <button className="btn-primary" style={{ fontSize: 12 }}>📝 Edit in Resume Builder</button>
+                  </a>
+                  <button onClick={onLogged}>Done</button>
+                </div>
+              </div>
+            )}
+            {autoTailorStatus === "error" && (
+              <div style={{ padding: "12px 14px", borderRadius: 8, background: "#fff3e0", border: "1px solid #ffcc80", fontSize: 13, marginBottom: 16 }}>
+                <strong>⚠ Application created but auto-tailoring failed:</strong> {autoTailorError}
+                <div style={{ marginTop: 8 }}>
+                  <button onClick={onLogged}>Done</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+        <>
         <div className="field-group">
           <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Select Candidates</label>
           <div style={{ maxHeight: "40vh", overflowY: "auto", padding: "4px 8px 4px 0", display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -1689,7 +1803,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
               }
 
               const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
-              const noResume = !c.resume_filename;
+              const noResume = !c.resume_filename && !c.has_base_resume;
               const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : "";
               const isExpanded = expandedScoreError === c.id;
 
@@ -1758,6 +1872,23 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                       <p style={{ margin: 0, lineHeight: 1.4 }}>{errorReason}</p>
                     </div>
                   )}
+                  {candidateIds.has(c.id) && candidateBaseResumes[c.id]?.length > 0 && (
+                    <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px dashed var(--border)", display: "flex", flexDirection: "column", gap: "6px" }}>
+                      <label style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--ink-soft)" }}>Base Resume</label>
+                      <select 
+                        value={selectedBaseResumes[c.id] || ""} 
+                        onChange={(e) => setSelectedBaseResumes(prev => ({ ...prev, [c.id]: e.target.value }))}
+                        style={{ padding: "6px 10px", fontSize: "0.85rem", borderRadius: "6px", border: "1px solid var(--border)", width: "100%" }}
+                      >
+                        {candidateBaseResumes[c.id].map((br) => (
+                          <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                        ))}
+                      </select>
+                      <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+                        An ATS-tailored resume will be auto-generated from this base resume for &ldquo;{job.title}&rdquo; once the application is logged.
+                      </p>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1770,17 +1901,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           )}
         </div>
 
-        {candidateIds.size === 1 && resumeVariants.length > 0 && (
-          <div className="field-group" style={{ marginTop: "16px" }}>
-            <label>Resume version</label>
-            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
-              <option value="">Uploaded Resume (default)</option>
-              {resumeVariants.map((r) => (
-                <option key={r.id} value={r.id}>{r.label}</option>
-              ))}
-            </select>
-          </div>
-        )}
+
+
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "20px" }}>
           <div className="field-group">
@@ -1833,6 +1955,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
             {saving ? "Saving..." : `Create ${candidateIds.size} ticket${candidateIds.size !== 1 ? "s" : ""}`}
           </button>
         </div>
+        </>)}
       </div>
     </div>
   );

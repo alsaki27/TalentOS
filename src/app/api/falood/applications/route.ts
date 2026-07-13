@@ -32,17 +32,67 @@ export async function GET(req: NextRequest) {
 
   try {
     if (id) {
-      const row = await queryOne<any>(
+      let row = await queryOne<any>(
         `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
                 job_description AS "jobDescription", company_name AS "companyName",
                 skills, resume_data AS "resumeData", chat_history AS "chatHistory"
          FROM falood_saved_applications WHERE id = $1`,
         [id]
       );
-      if (!row) {
-        return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+      if (row) return NextResponse.json({ success: true, data: normalizeRow(row) });
+
+      // Fallback 1: Multi-agent application workflow resumes
+      row = await queryOne<any>(
+        `SELECT id, workflow_id, created_at AS "createdAt", updated_at AS "updatedAt",
+                resume_data AS "resumeData", ats_score AS "atsScore"
+         FROM application_resume_versions WHERE id = $1`,
+        [id]
+      );
+      if (row) {
+        // Fetch target job details to populate jobDescription and companyName
+        const ar = await queryOne<any>(`SELECT target_job_id FROM application_resume_versions WHERE id = $1`, [id]);
+        if (ar?.target_job_id) {
+            const tj = await queryOne<any>(`SELECT company_name, job_description FROM target_jobs WHERE id = $1`, [ar.target_job_id]);
+            row.jobDescription = tj?.job_description || "";
+            row.companyName = tj?.company_name || "";
+        }
+        
+        // Fetch reasoning from artifacts
+        let reasoningMessage = "";
+        if (row.workflow_id) {
+           const reviewArtifact = await queryOne<any>(
+             `SELECT data FROM application_ai_workflow_artifacts 
+              WHERE workflow_id = $1 AND automation_id = 'application_hiring_panel'`,
+             [row.workflow_id]
+           );
+           if (reviewArtifact?.data) {
+              const d = typeof reviewArtifact.data === 'string' ? JSON.parse(reviewArtifact.data) : reviewArtifact.data;
+              const comment = d.overallComment || "";
+              const edits = (d.requiredEdits || []).map((e: any) => `- ${e.description}`).join('\n');
+              reasoningMessage = comment;
+              if (edits) {
+                  reasoningMessage += `\n\n**Things to Improve:**\n${edits}`;
+              }
+           }
+        }
+        
+        row.chatHistory = [
+          { role: 'assistant', content: `**ATS Score: ${row.atsScore ?? 'N/A'}/10**\n\n${reasoningMessage}` }
+        ];
+
+        return NextResponse.json({ success: true, data: normalizeRow(row) });
       }
-      return NextResponse.json({ success: true, data: normalizeRow(row) });
+
+      // Fallback 2: Base resumes
+      row = await queryOne<any>(
+        `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
+                content AS "resumeData"
+         FROM base_resumes WHERE id = $1`,
+        [id]
+      );
+      if (row) return NextResponse.json({ success: true, data: normalizeRow(row) });
+
+      return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
     }
 
     const rows = await query<any>(
@@ -142,11 +192,41 @@ export async function PATCH(req: NextRequest) {
       [...values, id]
     );
 
-    if (!row) {
-      return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+    if (row) {
+      return NextResponse.json({ success: true, data: normalizeRow(row) });
     }
 
-    return NextResponse.json({ success: true, data: normalizeRow(row) });
+    // Fallback 1: Multi-agent application workflow resumes
+    if ("resumeData" in body) {
+      const arRow = await queryOne<any>(
+        `UPDATE application_resume_versions
+         SET resume_data = $1::jsonb, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
+                   resume_data AS "resumeData"`,
+        [JSON.stringify(body.resumeData), id]
+      );
+      if (arRow) {
+        return NextResponse.json({ success: true, data: normalizeRow(arRow) });
+      }
+    }
+
+    // Fallback 2: Base resumes
+    if ("resumeData" in body) {
+      const brRow = await queryOne<any>(
+        `UPDATE base_resumes
+         SET content = $1::jsonb, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
+                   content AS "resumeData"`,
+        [JSON.stringify(body.resumeData), id]
+      );
+      if (brRow) {
+        return NextResponse.json({ success: true, data: normalizeRow(brRow) });
+      }
+    }
+
+    return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
   } catch (e: any) {
     console.error("[Falood Applications PATCH]", e);
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });

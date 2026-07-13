@@ -120,8 +120,8 @@ export async function upsertTargetJobByCandidateAndJob(
     const updateCols = allCols.filter((c) => c !== "candidate_id" && c !== "job_id");
     const updateClause =
       updateCols.length > 0
-        ? updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ") + ", updated_at = NOW()"
-        : "updated_at = NOW()";
+        ? updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ")
+        : "candidate_id = EXCLUDED.candidate_id";
     const sql = `
       INSERT INTO target_jobs (${allCols.join(", ")}) VALUES (${placeholders})
       ON CONFLICT (candidate_id, job_id) DO UPDATE SET ${updateClause}

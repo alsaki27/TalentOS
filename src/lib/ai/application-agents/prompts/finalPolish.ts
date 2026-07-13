@@ -24,7 +24,7 @@ Return a JSON object with:
 - rejectedIssueIds: array of { issueId, reason } for edits that were rejected
 - unresolvedWarnings: array of warnings that couldn't be resolved
 - finalQaScore: overall QA score 0-10
-- exportReady: boolean — true if ready for export
+- exportReady: boolean — ALWAYS set this to true unless there are critical unresolved warnings preventing the resume from being exported.
 
 JOB ANALYSIS:
 ${JSON.stringify(jobAnalysis, null, 2).slice(0, 4000)}

@@ -18,6 +18,13 @@
   --accent-soft: #e7f2ec;
   --warn: #b3541e;
   --danger: #b3261e;
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --danger-soft: #fee2e2;
+  --warning: #ca8a04;
+  --warning-soft: #fef9c3;
+  --info: #2563eb;
+  --info-soft: #dbeafe;
   --radius: 8px;
 
   /* shadcn/ui CSS variables (used by falood builder UI components) */
@@ -131,6 +138,13 @@ body {
 .nav-more-menu a:hover {
   background: var(--bg);
 }
+
+
+
+.badge-success { background: var(--success-soft); color: var(--success); border-color: var(--success); border: 1px solid var(--success); }
+.badge-danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); border: 1px solid var(--danger); }
+.badge-warning { background: var(--warning-soft); color: var(--warning); border-color: var(--warning); border: 1px solid var(--warning); }
+.badge-info { background: var(--info-soft); color: var(--info); border-color: var(--info); border: 1px solid var(--info); }
 
 .nav-badge {
   display: inline-flex;
@@ -888,7 +902,14 @@ label {
   --accent: #3d8f6a;
   --accent-soft: #1a2e25;
   --warn: #d4723a;
-  --danger: #d44a3a;
+  --danger: #ef4444;
+  --danger-soft: #450a0a;
+  --success: #22c55e;
+  --success-soft: #052e16;
+  --warning: #eab308;
+  --warning-soft: #422006;
+  --info: #3b82f6;
+  --info-soft: #172554;
 
   /* shadcn/ui dark mode */
   --background: 222.2 84% 4.9%;

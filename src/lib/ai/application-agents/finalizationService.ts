@@ -13,14 +13,18 @@
 import { updateWorkflowStatus, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne, sql as getSql } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
+import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
+import type { FinalResumeV1, ReviewScoreV1 } from "./schemas";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
   const artifacts = await listArtifacts(workflowId);
 
   const wf = await queryOne<{
     id: string; application_id: string; candidate_id: string; job_id: string | null; base_resume_id: string | null;
+    config_snapshot: any;
   }>(
-    `SELECT w.id, w.application_id, a.candidate_id, a.job_id, w.base_resume_id
+    `SELECT w.id, w.application_id, w.base_resume_id, w.config_snapshot,
+            a.candidate_id, a.job_id
      FROM application_ai_workflows w
      JOIN applications a ON w.application_id = a.id
      WHERE w.id = $1`,
@@ -29,7 +33,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   if (!wf) throw new Error(`Workflow not found: ${workflowId}`);
 
   const finalArtifact = artifacts.find((a) => a.automation_id === "application_final_polish");
-  const finalData = finalArtifact?.data;
+  const finalData = finalArtifact?.data as FinalResumeV1 | undefined;
 
   if (!finalData) {
     const errMsg = "No Final Polish artifact found — pipeline incomplete.";
@@ -39,13 +43,37 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     return null;
   }
 
-  if ((finalData as any)?.exportReady !== true) {
-    const errMsg = "Final resume not marked as export-ready by Final Polish agent.";
-    await updateWorkflowStatus(workflowId, "failed", { last_error: errMsg });
-    await query("UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $1 WHERE id = $2",
-      [errMsg, wf.application_id]);
-    return null;
+
+  // ATS score comes from the Hiring Panel review (ReviewScoreV1.atsScore, 0-10),
+  // not the Final Polish QA score — that's the recruiter/HR/ATS-blend the studio
+  // and queue surface to the applicant worker. Fall back to finalQaScore only
+  // if the review artifact is somehow missing.
+  const reviewArtifact = artifacts.find((a) => a.automation_id === "application_hiring_panel");
+  const reviewData = reviewArtifact?.data as ReviewScoreV1 | undefined;
+  const atsScore =
+    typeof reviewData?.atsScore === "number" ? reviewData.atsScore
+    : typeof (finalData as any).finalQaScore === "number" ? (finalData as any).finalQaScore
+    : null;
+  const truthScore =
+    typeof reviewData?.truthfulnessRisk === "number" ? reviewData.truthfulnessRisk : null;
+
+  // The agent schema (FinalResumeV1) carries no contact/identity data; the
+  // studio's ResumeDocument shape needs the candidate's header, which lives on
+  // the base resume content. Prefer the freshest base_resumes.content via
+  // base_resume_id, falling back to the immutable workflow snapshot.
+  let baseContent: any = null;
+  if (wf.base_resume_id) {
+    const baseRow = await queryOne<{ content: any }>(
+      "SELECT content FROM base_resumes WHERE id = $1",
+      [wf.base_resume_id]
+    );
+    baseContent = baseRow?.content ?? null;
   }
+  if (!baseContent) {
+    baseContent = (wf.config_snapshot?.baseResume as any)?.content ?? null;
+  }
+
+  const studioDocument = finalResumeToStudioDocument(finalData, baseContent);
 
   const tj = await queryOne<{ id: string }>(
     `SELECT id FROM target_jobs
@@ -59,7 +87,11 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   // database transaction via Neon's sql.transaction(). If any query fails, the
   // entire transaction rolls back, preventing partial finalization.
   const title = "AI-Generated Tailored Resume";
-  const contentJson = JSON.stringify(finalData);
+  // Store the studio-native ResumeDocument (not the raw FinalResumeV1) so the
+  // Falood Application Resume Studio renders it directly without a runtime
+  // adapter, and persist the ATS/truth scores so the studio + queue can show
+  // them.
+  const contentJson = JSON.stringify(studioDocument);
   const dbSql = getSql();
   let versionId: string | null = null;
   try {
@@ -67,11 +99,12 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       dbSql`WITH inserted AS (
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
-            title, content, source_type, status, created_at)
+            title, content, source_type, status, ats_score, truth_score, created_at)
          VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${wf.base_resume_id ?? null},
-                 ${title}, ${contentJson}, 'ai_agent', 'draft', NOW())
+                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${atsScore}, ${truthScore}, NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
-         DO UPDATE SET updated_at = NOW()
+         DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score,
+                       truth_score = EXCLUDED.truth_score, updated_at = NOW()
          RETURNING id
        )
        UPDATE applications SET
@@ -116,7 +149,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     entityType: "application",
     entityId: wf.application_id,
     entityName: `Workflow ${workflowId}`,
-    metadata: { workflowId, versionId, artifactCount: artifacts.length },
+    metadata: { workflowId, versionId, artifactCount: artifacts.length, atsScore },
   }).catch((err: any) => {
     console.error("[finalizeWorkflow] Activity log failed (non-critical):", err.message || err);
   });

@@ -50,10 +50,16 @@ interface AgentItem {
   config_status: string;
   routes: RouteItem[];
   config: AgentConfig | null;
-  today_calls: number;
-  today_success_rate: number | null;
-  today_cost: number;
-  avg_latency: number | null;
+  today_calls?: number;
+  today_success_rate?: number | null;
+  today_cost?: number | string;
+  avg_latency?: number | null;
+  today_usage?: {
+    calls?: number | string | null;
+    success_rate?: number | string | null;
+    total_cost?: number | string | null;
+    avg_latency?: number | string | null;
+  };
   last_call_at: string | null;
   last_error: string | null;
 }
@@ -174,19 +180,31 @@ function statusBadge(status: string): string {
   return STATUS_BADGE[status] || "badge-info";
 }
 
-function formatCost(cost: number | null | undefined): string {
-  if (cost == null || isNaN(cost)) return "—";
-  return `$${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
-function formatNumber(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
-  return n.toLocaleString();
+function formatCost(cost: number | string | null | undefined): string {
+  const numericCost = toFiniteNumber(cost);
+  if (numericCost == null) return "—";
+  return `$${numericCost.toFixed(numericCost < 0.01 ? 4 : 2)}`;
 }
 
-function formatPercent(n: number | null | undefined): string {
-  if (n == null || isNaN(n)) return "—";
-  return `${n.toFixed(1)}%`;
+function formatNumber(n: number | string | null | undefined): string {
+  const numericValue = toFiniteNumber(n);
+  if (numericValue == null) return "—";
+  return numericValue.toLocaleString();
+}
+
+function formatPercent(n: number | string | null | undefined): string {
+  const numericValue = toFiniteNumber(n);
+  if (numericValue == null) return "—";
+  return `${numericValue.toFixed(1)}%`;
 }
 
 function relativeTime(ts: string | null): string {
@@ -198,6 +216,15 @@ function relativeTime(ts: string | null): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+function getAgentUsage(agent: AgentItem) {
+  return {
+    calls: toFiniteNumber(agent.today_calls) ?? toFiniteNumber(agent.today_usage?.calls) ?? 0,
+    successRate: toFiniteNumber(agent.today_success_rate) ?? toFiniteNumber(agent.today_usage?.success_rate),
+    cost: toFiniteNumber(agent.today_cost) ?? toFiniteNumber(agent.today_usage?.total_cost) ?? 0,
+    avgLatency: toFiniteNumber(agent.avg_latency) ?? toFiniteNumber(agent.today_usage?.avg_latency),
+  };
 }
 
 // ── Main Page ──
@@ -707,8 +734,17 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         fetch("/api/admin/ai/agents"),
         fetch("/api/admin/ai/keys"),
       ]);
-      if (agentsRes.ok) setAgents((await agentsRes.json()).agents ?? []);
-      if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
+      if (!agentsRes.ok) {
+        const data = await agentsRes.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to load agents (HTTP ${agentsRes.status})`);
+      }
+      if (!keysRes.ok) {
+        const data = await keysRes.json().catch(() => ({}));
+        throw new Error(data.error || `Failed to load keys (HTTP ${keysRes.status})`);
+      }
+
+      setAgents((await agentsRes.json()).agents ?? []);
+      setKeys((await keysRes.json()).keys ?? []);
     } catch (e: any) { onError(e.message); }
     finally { setLoading(false); }
   }
@@ -793,68 +829,79 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         </div>
       )}
 
-      <div className="table-shell">
-        <table className="table table-compact">
-          <thead>
-            <tr>
-              <th>Agent</th>
-              <th>Group</th>
-              <th>Status</th>
-              <th>Primary Key</th>
-              <th>Fallback 1</th>
-              <th>Today</th>
-              <th>Success</th>
-              <th>Last Call</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map(a => {
-              const primary = a.routes.find(r => r.rank === 0 && r.is_enabled);
-              const fallback1 = a.routes.find(r => r.rank === 1 && r.is_enabled);
-              return (
-                <tr key={a.id}>
-                  <td className="cell-main">
-                    <div style={{ fontWeight: 500 }}>{a.label}</div>
-                    <div className="text-muted" style={{ fontSize: 11 }}>{a.description}</div>
-                  </td>
-                  <td style={{ fontSize: 12 }}>{a.group_label}</td>
-                  <td>
-                    <span className={`badge ${a.config_status === "ready" ? "badge-success" : a.config_status === "no_route" ? "badge-warning" : a.config_status === "disabled" ? "badge-muted" : "badge-danger"}`}>
-                      {a.config_status.replace("_", " ")}
-                    </span>
-                  </td>
-                  <td style={{ fontSize: 12 }}>
-                    {primary?.key_label ? (
-                      <div>
-                        <div>{primary.key_label}</div>
-                        <div className="text-muted">{primary.key_provider} {primary.key_model && `· ${primary.key_model}`}</div>
-                      </div>
-                    ) : <span className="text-muted">—</span>}
-                  </td>
-                  <td style={{ fontSize: 12 }}>
-                    {fallback1?.key_label ? (
-                      <div>
-                        <div>{fallback1.key_label}</div>
-                        <div className="text-muted">{fallback1.key_provider}</div>
-                      </div>
-                    ) : <span className="text-muted">—</span>}
-                  </td>
-                  <td style={{ fontSize: 12 }}>
-                    <div>{formatNumber(a.today_calls)} calls</div>
-                    <div className="text-muted">{formatCost(a.today_cost)}</div>
-                  </td>
-                  <td><span className={`badge ${(a.today_success_rate ?? 0) >= 95 ? "badge-success" : "badge-warning"}`}>{formatPercent(a.today_success_rate)}</span></td>
-                  <td style={{ fontSize: 12 }}>{relativeTime(a.last_call_at)}</td>
-                  <td>
-                    <button className="btn-compact btn-sm" onClick={() => startEdit(a)}>Edit</button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+      {filtered.length === 0 ? (
+        <div className="empty-state" style={{ padding: 40, textAlign: "center" }}>
+          {agents.length === 0 ? "No AI agents were returned by the admin API." : "No agents match your filters."}
+        </div>
+      ) : (
+        <div className="table-shell">
+          <table className="table table-compact">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th>Group</th>
+                <th>Status</th>
+                <th>Primary Key</th>
+                <th>Fallback 1</th>
+                <th>Today</th>
+                <th>Success</th>
+                <th>Last Call</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(a => {
+                const activeRoutes = [...a.routes]
+                  .filter(r => r.is_enabled)
+                  .sort((left, right) => left.rank - right.rank);
+                const primary = activeRoutes[0];
+                const fallback1 = activeRoutes[1];
+                const usage = getAgentUsage(a);
+
+                return (
+                  <tr key={a.id}>
+                    <td className="cell-main">
+                      <div style={{ fontWeight: 500 }}>{a.label}</div>
+                      <div className="text-muted" style={{ fontSize: 11 }}>{a.description}</div>
+                    </td>
+                    <td style={{ fontSize: 12 }}>{a.group_label}</td>
+                    <td>
+                      <span className={`badge ${a.config_status === "ready" ? "badge-success" : a.config_status === "no_route" ? "badge-warning" : a.config_status === "disabled" ? "badge-muted" : "badge-danger"}`}>
+                        {a.config_status.replace("_", " ")}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {primary?.key_label ? (
+                        <div>
+                          <div>{primary.key_label}</div>
+                          <div className="text-muted">{primary.key_provider} {primary.key_model && `· ${primary.key_model}`}</div>
+                        </div>
+                      ) : <span className="text-muted">—</span>}
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      {fallback1?.key_label ? (
+                        <div>
+                          <div>{fallback1.key_label}</div>
+                          <div className="text-muted">{fallback1.key_provider}</div>
+                        </div>
+                      ) : <span className="text-muted">—</span>}
+                    </td>
+                    <td style={{ fontSize: 12 }}>
+                      <div>{formatNumber(usage.calls)} calls</div>
+                      <div className="text-muted">{formatCost(usage.cost)}</div>
+                    </td>
+                    <td><span className={`badge ${(usage.successRate ?? 0) >= 95 ? "badge-success" : "badge-warning"}`}>{formatPercent(usage.successRate)}</span></td>
+                    <td style={{ fontSize: 12 }}>{relativeTime(a.last_call_at)}</td>
+                    <td>
+                      <button className="btn-compact btn-sm" onClick={() => startEdit(a)}>Edit</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {editingAgent && (
         <div className="modal-overlay" onClick={() => setEditingAgent(null)}>

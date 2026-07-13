@@ -5,7 +5,7 @@
 create table if not exists application_ai_workflows (
   id               uuid primary key default gen_random_uuid(),
   application_id   uuid not null references applications(id) on delete cascade,
-  base_resume_id   uuid references application_resume_versions(id) on delete set null,
+  base_resume_id   uuid references base_resumes(id) on delete set null,
   status           text not null default 'queued'
     check (status in ('queued','running','waiting','failed','cancelled','completed')),
   current_stage    int not null default 0,

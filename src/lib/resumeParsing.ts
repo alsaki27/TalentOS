@@ -1018,8 +1018,17 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
       return parseResumeTextWithProvider(rawText, provider);
     });
     return result;
-  } catch {
-    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText };
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    reportResumeParsingDebug("E", "parseResumeFields callWithUsageTracking failed", {
+      rawTextLength: rawText.length,
+      error: errMsg,
+    });
+    logResumeParsingConsole("parseResumeFields callWithUsageTracking failed", {
+      rawTextLength: rawText.length,
+      error: errMsg,
+    });
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText, parse_error: errMsg };
   }
 }
 

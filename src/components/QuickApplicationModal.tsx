@@ -142,6 +142,15 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
   const [faloodLoading, setFaloodLoading] = useState(false);
   const [faloodError, setFaloodError] = useState("");
 
+  // Auto-tailoring state — kicks off the multi-agent resume workflow right
+  // after an application is logged from a base resume. Fire-and-forget: the
+  // workflow runs async (queued + dispatched across 4 agent stages); the modal
+  // just confirms it started and links to the application queue, which renders
+  // live stage progress, the ATS score, and the "Open in Studio" link.
+  const [autoTailorStatus, setAutoTailorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [autoTailorWorkflowId, setAutoTailorWorkflowId] = useState<string | null>(null);
+  const [autoTailorError, setAutoTailorError] = useState("");
+
   // Job search mode (alternative to pasting JD)
   const [jdMode, setJdMode] = useState<"paste" | "search">("paste");
   const [jobSearchInput, setJobSearchInput] = useState("");
@@ -355,6 +364,10 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     const created = data.created?.[0];
     if (created) {
       setCreatedApp(created);
+      // Auto-trigger ATS tailoring when a base resume is the application source
+      if (selectedJob && sourceType === "base_resume" && selectedBaseResumeId) {
+        autoTailorResume(created.id);
+      }
     }
     setStep(4);
   }
@@ -395,6 +408,40 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
     // Close modal and redirect to Falood studio
     onClose();
     router.push(`/falood/studio/application/${data.versionId}`);
+  }
+
+  /* ── auto-tailor resume after application creation (one-shot ATS tailor) ── */
+  async function autoTailorResume(applicationId: string) {
+    const jobId = selectedJob?.id;
+    if (!jobId || !selectedCandidate || sourceType !== "base_resume" || !selectedBaseResumeId) return;
+
+    setAutoTailorStatus("running");
+    setAutoTailorError("");
+    setAutoTailorWorkflowId(null);
+
+    try {
+      const res = await fetch("/api/quick-application/auto-tailor", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: selectedCandidate.id,
+          jobId,
+          applicationId,
+          baseResumeId: selectedBaseResumeId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAutoTailorStatus("error");
+        setAutoTailorError(data.error || "Could not start the resume workflow.");
+        return;
+      }
+      setAutoTailorWorkflowId(data.workflowId);
+      setAutoTailorStatus("done");
+    } catch (err: any) {
+      setAutoTailorStatus("error");
+      setAutoTailorError(err.message || "Network error while starting the resume workflow.");
+    }
   }
 
   /* ── create blank base resume inline ── */
@@ -795,6 +842,34 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
                 <p><strong>Job:</strong> {selectedJob?.title ?? "Ad-hoc application"}</p>
                 <p><strong>Status:</strong> {createdApp.status}</p>
                 <p><strong>Source:</strong> {sourceType.replaceAll("_", " ")}</p>
+
+                {/* Auto-tailoring status → multi-agent workflow started */}
+                {autoTailorStatus === "running" && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--accent-bg, #e3f2fd)", fontSize: 13 }}>
+                    <span style={{ animation: "spin 1s linear infinite", display: "inline-block" }}>🤖</span>
+                    <span>Starting multi-agent resume workflow…</span>
+                  </div>
+                )}
+                {autoTailorStatus === "done" && autoTailorWorkflowId && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#e8f5e9", border: "1px solid #a5d6a7", fontSize: 13 }}>
+                    <strong>✅ Resume workflow started</strong>
+                    <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Job Lens → Resume Forge → Hiring Panel → Final Polish is running in the background. Track stage progress and open the tailored draft in the queue once it&rsquo;s ready.
+                    </div>
+                    <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                      <Link href="/application-queue" onClick={onClose}>
+                        <button className="btn-primary" style={{ fontSize: 12 }}>📋 Go to Application Queue</button>
+                      </Link>
+                    </div>
+                  </div>
+                )}
+                {autoTailorStatus === "error" && (
+                  <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "#fff3e0", border: "1px solid #ffcc80", fontSize: 13 }}>
+                    <strong>⚠ Workflow start:</strong> {autoTailorError || "Could not start the resume workflow."}
+                    <span className="muted" style={{ display: "block", marginTop: 4, fontSize: 11 }}>You can still start it later from the application queue, or use &ldquo;Build with Falood AI&rdquo; below to manually tailor.</span>
+                  </div>
+                )}
+
                 {faloodError && <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{faloodError}</p>}
                 <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                   {selectedCandidate && (

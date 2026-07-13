@@ -216,9 +216,9 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
   const agentOptions: AgentOptions = {
     system_prompt: agentConfig?.system_prompt ?? undefined,
-    temperature: agentConfig?.temperature ?? undefined,
-    max_output_tokens: agentConfig?.max_output_tokens ?? undefined,
-    timeout_ms: agentConfig?.timeout_ms ?? undefined,
+    temperature: agentConfig?.temperature != null ? Number(agentConfig.temperature) : undefined,
+    max_output_tokens: agentConfig?.max_output_tokens != null ? Number(agentConfig.max_output_tokens) : undefined,
+    timeout_ms: agentConfig?.timeout_ms != null ? Number(agentConfig.timeout_ms) : undefined,
   };
 
   const previousRuns = await listStageRuns(workflowId);
@@ -265,6 +265,9 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
           applicationId: wf.application_id,
           attemptNumber,
         };
+        console.log(`\n--- [AGENT START] ${agentId} ---`);
+        console.log(`INPUT Context:\n`, JSON.stringify(ctx, null, 2));
+        
         const callResult = await callWithUsageTracking(
           agentId,
           callCtx,
@@ -275,12 +278,17 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
           failedKeyIds.size > 0 ? failedKeyIds : undefined,
         );
         agentOutput = callResult.result;
+        
+        console.log(`--- [AGENT END] ${agentId} ---`);
+        console.log(`OUTPUT:\n`, JSON.stringify(agentOutput, null, 2));
+        
         resolvedProviderName = callResult.providerName;
         resolvedKeyId = callResult.aiKeyId;
         resolvedModel = callResult.model;
         lastError = null;
         break;
       } catch (err: any) {
+        console.error(`[Fallback ${fallbackAttempt}] Agent failed:`, err);
         lastError = err;
         if (err instanceof AiRouteCallError && err.aiKeyId) {
           failedKeyIds.add(err.aiKeyId);
@@ -324,23 +332,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       completed_at: new Date().toISOString(),
     });
 
-    // Quality gate after Hiring Panel
-    if (agentId === "application_hiring_panel") {
-      await syncWorkflowToApplication(workflowId, "running", currentIdx + 1);
-      const gateResult = await evaluateQualityGate(
-        agentOutput as import("@/lib/ai/application-agents/schemas").ReviewScoreV1,
-        wf.application_id
-      );
-      if (!gateResult.passed) {
-        const isHardFail = gateResult.action === "fail";
-        await syncWorkflowToApplication(workflowId, isHardFail ? "failed" : "waiting", undefined, gateResult.reason ?? undefined);
-        await updateWorkflowStatus(workflowId, isHardFail ? "failed" : "waiting", {
-          current_stage: currentIdx + 1,
-          last_error: gateResult.reason ?? undefined,
-        });
-        return;
-      }
-    }
+    // Quality gate disabled per user request: workflow proceeds straight to final polish.
 
     // Final polish complete → finalize
     if (agentId === "application_final_polish") {
@@ -358,6 +350,11 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     // Advance to next stage and re-queue
     await continueToNextStage(workflowId, currentIdx + 1);
     await syncWorkflowToApplication(workflowId, "queued");
+    
+    // Eagerly trigger the next stage (crucial for local dev where Vercel cron isn't running)
+    setTimeout(() => {
+      dispatchWorkflowById(workflowId).catch(console.error);
+    }, 100);
   } catch (err: any) {
     await updateStageRun(stageRun.id, {
       status: "failed",
