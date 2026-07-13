@@ -267,28 +267,36 @@ export async function listEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
  * Get a single AI key by ID, with the decrypted key for server-side use only.
  */
 export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow & { decrypted_key: string }) | null> {
+  let row: AiApiKeyRow | null = null;
   if (isNeon()) {
-    const row = await queryOne<AiApiKeyRow>(
+    row = (await queryOne<AiApiKeyRow>(
       `SELECT * FROM ai_api_keys WHERE id = $1`,
       [id]
-    );
-    if (!row) return null;
-    return {
-      ...row,
-      decrypted_key: await decryptSecret(row.encrypted_key),
-    };
+    )) ?? null;
   } else {
     const { data, error } = await supabase
       .from("ai_api_keys")
       .select("*")
       .eq("id", id)
       .single();
-    if (error || !data) return null;
-    const row = data as AiApiKeyRow;
+    if (!error && data) row = data as AiApiKeyRow;
+  }
+
+  if (!row) return null;
+
+  try {
     return {
       ...row,
       decrypted_key: await decryptSecret(row.encrypted_key),
     };
+  } catch (err) {
+    // A single corrupted/undecryptable row (e.g. AI_KEYS_ENCRYPTION_SECRET
+    // rotated since it was written) must not throw out of here - callers in
+    // routing.ts's getProviderForAutomation don't wrap this call, so an
+    // unhandled throw would break route resolution for every automation
+    // that tries this key, not just skip the one bad key.
+    console.error(`[AI_KEY] Failed to decrypt key ${id}:`, err);
+    return null;
   }
 }
 
