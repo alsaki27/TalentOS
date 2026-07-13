@@ -605,7 +605,17 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher" };
   }
 
-  processWorkflowStage(workflowId).catch(err => {
+  // MUST be awaited here, not fire-and-forget: dispatchWorkflowById's own
+  // returned promise is what every caller registers with ctx.waitUntil()
+  // (directly or via backgroundDispatch). If this call isn't awaited,
+  // dispatchWorkflowById's promise resolves the instant the claim UPDATE
+  // above completes - status flips to 'running' but the actual stage never
+  // runs, since nothing is left tracking processWorkflowStage's lifetime.
+  // Confirmed live: workflows got stuck at current_stage 0 with zero
+  // stage_runs indefinitely after auto-trigger, even with the waitUntil fix
+  // (ef4e182) in place - because that fix wrapped the outer dispatch call,
+  // not this inner one.
+  await processWorkflowStage(workflowId).catch(err => {
     console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
   });
 

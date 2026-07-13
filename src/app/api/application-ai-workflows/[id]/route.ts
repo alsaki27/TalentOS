@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findWorkflowById, listStageRuns, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
@@ -61,11 +62,15 @@ export async function POST(
         return NextResponse.json({ error: `Can only retry failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await retryWorkflow(workflowId);
-      // Fire-and-forget: respond immediately so the caller isn't blocked;
-      // the dispatcher handles stage processing asynchronously in the background.
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, err);
-      });
+      // Registered with ctx.waitUntil via backgroundDispatch so it survives
+      // past this response instead of racing it (see waitUntil.ts) - a plain
+      // un-awaited call here was confirmed to get killed before the stage
+      // dispatcher ever ran.
+      await backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((err) => {
+          console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, err);
+        })
+      );
       return NextResponse.json({ workflowId, status: "queued" });
     }
 
@@ -74,9 +79,11 @@ export async function POST(
         return NextResponse.json({ error: `Can only restart failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await restartWorkflow(workflowId);
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
-      });
+      await backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((err) => {
+          console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
+        })
+      );
       return NextResponse.json({ workflowId, status: "queued", fromStage: 0 });
     }
 
@@ -87,10 +94,11 @@ export async function POST(
         return NextResponse.json({ error: "Invalid stage parameter" }, { status: 400 });
       }
       await rerunFromStage(workflowId, stage);
-      // Fire-and-forget: respond immediately, dispatch runs in background
-      dispatchWorkflowById(workflowId).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Rerun dispatch failed:`, err);
-      });
+      await backgroundDispatch(
+        dispatchWorkflowById(workflowId).catch((err) => {
+          console.error(`[Workflow ${workflowId}] Rerun dispatch failed:`, err);
+        })
+      );
       return NextResponse.json({ workflowId, status: "queued", fromStage: stage });
     }
 
