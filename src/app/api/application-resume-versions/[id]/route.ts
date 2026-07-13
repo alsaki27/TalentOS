@@ -66,6 +66,18 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     data.application_id = packet?.application_id ?? null;
   }
 
+  // Neon returns JSONB columns as raw strings. The studio page and other
+  // callers expect objects, not serialized JSON strings — normalize here so
+  // downstream JSON.parse(JSON.stringify(...)) doesn't pass a string through.
+  if (data) {
+    if (typeof data.content === "string") {
+      try { data.content = JSON.parse(data.content); } catch { /* leave as-is */ }
+    }
+    if (typeof data.formatting === "string") {
+      try { data.formatting = JSON.parse(data.formatting); } catch { /* leave as-is */ }
+    }
+  }
+
   return NextResponse.json(data);
 }
 

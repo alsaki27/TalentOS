@@ -270,7 +270,19 @@ export default function ApplicationResumeStudioPage() {
       const ar: ApplicationResumeVersion = await res.json();
       setAppResume(ar);
       setApplicationId((ar as any).application_id || (ar as any).applicationId || null);
-      setDraftContent(JSON.parse(JSON.stringify(ar.content)));
+
+      // Neon returns JSONB columns as raw strings. The "deep clone" idiom
+      // JSON.parse(JSON.stringify(str)) returns the same string, not an object,
+      // so keywordMap's content.skills.some() crashes with TypeError. Parse
+      // string content into an object first; deep-clone objects as before.
+      let rawContent = ar.content;
+      if (typeof rawContent === "string") {
+        try { rawContent = JSON.parse(rawContent); } catch { /* leave as string, guard below catches it */ }
+      }
+      setDraftContent(typeof rawContent === "object" && rawContent !== null
+        ? JSON.parse(JSON.stringify(rawContent))
+        : null
+      );
 
       const [jobRes, baseRes, candRes, kaRes, sugRes] = await Promise.all([
         fetch(`/api/target-jobs/${ar.target_job_id}`),
@@ -477,7 +489,7 @@ export default function ApplicationResumeStudioPage() {
   const content = draftContent ?? appResume?.content;
 
   const keywordMap = useMemo(() => {
-    if (!targetJob || !content) return {};
+    if (!targetJob || !content || typeof content !== "object") return {};
     const map: Record<string, string[]> = {};
     const text = JSON.stringify(content).toLowerCase();
 

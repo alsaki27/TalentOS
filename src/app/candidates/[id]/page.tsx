@@ -109,6 +109,11 @@ interface TailoredResumeEntry {
   skills: string[];
   resumeData: any;
   chatHistory: any;
+  // AI-generated resume versions from application_resume_versions
+  isAiGenerated?: boolean;
+  studioLink?: string; // overrides the default /falood/studio/tailor/[id] link
+  sourceType?: string | null;
+  atsScore?: number | null;
 }
 
 function initials(name: string): string {
@@ -215,6 +220,7 @@ export default function CandidateProfilePage() {
     if (!id) return;
     setTailoredResumesLoading(true);
     try {
+      // Source 1: Falood Tailor system (falood_saved_applications)
       const res = await fetch("/api/falood/applications", { cache: "no-store" });
       const json = await res.json().catch(() => ({}));
       const rows: TailoredResumeEntry[] = json?.success ? (json.data ?? []) : [];
@@ -238,12 +244,38 @@ export default function CandidateProfilePage() {
         return false;
       };
 
-      const tailored = rows
+      const faloodTailored = rows
         .filter((a) => (a.jobDescription || "").trim().length > 0)
-        .filter(isForCandidate)
+        .filter(isForCandidate);
+
+      // Source 2: AI pipeline (application_resume_versions, source_type = 'ai_agent')
+      // The 4-agent workflow finalizes into this table. The Falood Tailor
+      // system above writes to a separate table and never intersects — so
+      // without this merge, AI-completed resumes are invisible in this tab.
+      const aiRes = await fetch(`/api/application-resume-versions?candidateId=${id}`, { cache: "no-store" });
+      const aiVersions: any[] = aiRes.ok ? (await aiRes.json()) : [];
+
+      const aiTailored: TailoredResumeEntry[] = aiVersions
+        .filter((v: any) => v.source_type === "ai_agent" || v.source_type === "base_resume")
+        .map((v: any) => ({
+          id: v.id,
+          createdAt: v.created_at,
+          updatedAt: v.updated_at,
+          jobDescription: v.target_jobs?.jobs?.title ?? null,
+          companyName: v.target_jobs?.jobs?.company ?? null,
+          skills: [],
+          resumeData: null,
+          chatHistory: [],
+          isAiGenerated: v.source_type === "ai_agent",
+          studioLink: `/falood/studio/application/${v.id}`,
+          sourceType: v.source_type,
+          atsScore: v.ats_score,
+        }));
+
+      const merged = [...faloodTailored, ...aiTailored]
         .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
-      setTailoredResumes(tailored);
+      setTailoredResumes(merged);
     } catch {
       setTailoredResumes([]);
     } finally {
@@ -877,15 +909,23 @@ export default function CandidateProfilePage() {
                   const firstLine = jd.split("\n")[0] || "";
                   const title = firstLine.toLowerCase().startsWith("title:")
                     ? firstLine.replace(/^title:\s*/i, "").trim()
-                    : "Tailored resume";
+                    : t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
                   const company = t.companyName || "—";
                   return (
                     <tr key={t.id}>
-                      <td><strong>{title || "Tailored resume"}</strong></td>
+                      <td>
+                        <strong>{title || "Tailored resume"}</strong>
+                        {t.isAiGenerated && (
+                          <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent)", color: "var(--surface)" }}>AI</span>
+                        )}
+                        {t.atsScore != null && (
+                          <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}/10</span>
+                        )}
+                      </td>
                       <td className="muted">{company}</td>
                       <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
                       <td>
-                        <Link className="row-link" href={`/falood/studio/tailor/${t.id}`}>Open in studio</Link>
+                        <Link className="row-link" href={t.studioLink ?? `/falood/studio/tailor/${t.id}`}>Open in studio</Link>
                       </td>
                     </tr>
                   );
