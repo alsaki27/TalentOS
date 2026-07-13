@@ -17,7 +17,12 @@ export async function POST(
     return NextResponse.json({ error: "Application ID is required" }, { status: 400 });
   }
 
-  const result = await triggerAiWorkflowForApplication(applicationId, context?.profile.user_id);
+  let result;
+  try {
+    result = await triggerAiWorkflowForApplication(applicationId, context?.profile.user_id);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? String(err) }, { status: 500 });
+  }
 
   if (!result.started) {
     if (result.reason === "An active workflow already exists for this application") {
