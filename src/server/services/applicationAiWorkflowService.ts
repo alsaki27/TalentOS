@@ -698,7 +698,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   const claimed = await queryOne(
     `UPDATE application_ai_workflows
      SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes',
-         claimed_by = 'dispatcher', heartbeat_at = NOW(), lock_version = lock_version + 1
+         claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
      WHERE id = $1
        AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
        AND (
