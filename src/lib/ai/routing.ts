@@ -59,7 +59,18 @@ async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?:
        WHERE ai_key_id = $1 AND created_at >= date_trunc('month', CURRENT_DATE)`,
       [keyRow.id]
     );
-    if (monthCost && monthCost.total >= keyRow.monthly_budget_limit_usd) {
+    // Both estimated_cost_usd and monthly_budget_limit_usd are Postgres
+    // `numeric` columns - the driver returns them as strings ("2.01530",
+    // "19.99000"), not JS numbers, to avoid float precision loss. Comparing
+    // with >= directly does a LEXICOGRAPHIC string comparison, not a
+    // numeric one: "2.01530" >= "19.99000" is true (since '2' > '1' as the
+    // first character), so a key at ~10% of its real budget was being
+    // treated as exhausted. Confirmed live: $2.02 of a $19.99 cap tripped
+    // monthly_budget_exhausted on every call, silently skipping every AI
+    // stage rather than making the request.
+    const spent = Number(monthCost?.total ?? 0);
+    const limit = Number(keyRow.monthly_budget_limit_usd);
+    if (Number.isFinite(spent) && Number.isFinite(limit) && spent >= limit) {
       return { allowed: false, reason: 'monthly_budget_exhausted' };
     }
   }
