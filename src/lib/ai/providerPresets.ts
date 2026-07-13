@@ -111,6 +111,18 @@ export const PROVIDER_MODEL_PRESETS: Record<string, { id: string; label: string 
     { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
     { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
   ],
+  // Same Gemini model family as the native `google` provider - Vertex AI hosts
+  // the same models, just via the Cloud Run proxy instead of the public
+  // Generative Language API. Whether a given model actually works depends on
+  // what the proxy itself forwards/allowlists (see GOOGLE_VERTEX_PROXY_URL) -
+  // this list is a starting point, not a guarantee; untested IDs may 404 or
+  // error at the proxy.
+  google_vertex_proxy: [
+    { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+    { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+    { id: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite" },
+    { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+  ],
   deepseek: [
     { id: "deepseek-chat", label: "DeepSeek Chat" },
     { id: "deepseek-reasoner", label: "DeepSeek Reasoner" },
