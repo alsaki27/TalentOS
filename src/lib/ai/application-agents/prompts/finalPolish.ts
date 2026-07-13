@@ -45,16 +45,16 @@ Return a JSON object with:
 - exportReady: boolean — true if ready for export
 
 JOB ANALYSIS:
-${JSON.stringify(jobAnalysis, null, 2).slice(0, 4000)}
+${JSON.stringify(jobAnalysis).slice(0, 4000)}
 
 BASE RESUME:
-${JSON.stringify(baseResume?.content ?? {}, null, 2).slice(0, 4000)}
+${JSON.stringify(baseResume?.content ?? {}).slice(0, 4000)}
 
 TAILORED DRAFT:
-${JSON.stringify(draft, null, 2).slice(0, 8000)}
+${JSON.stringify(draft).slice(0, 8000)}
 
 REVIEWER SCORES:
-${JSON.stringify(review, null, 2)}
+${JSON.stringify(review)}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }
