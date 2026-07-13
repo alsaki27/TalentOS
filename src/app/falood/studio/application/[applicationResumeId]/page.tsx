@@ -343,7 +343,10 @@ export default function ApplicationResumeStudioPage() {
         fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`),
       ]);
 
-      if (jobRes.ok) setTargetJob(await jobRes.json());
+      if (jobRes.ok) {
+        const jobData = await jobRes.json();
+        setTargetJob({ ...jobData, keywords: jobData.keywords ?? jobData.job_keywords ?? [] });
+      }
       if (baseRes.ok) setBaseResume(await baseRes.json());
       if (candRes.ok) setCandidate(await candRes.json());
       if (kaRes.ok) setKeywordApprovals(await kaRes.json());
