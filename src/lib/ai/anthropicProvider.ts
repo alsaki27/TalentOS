@@ -8,7 +8,7 @@ import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const MAX_TOKENS = 2048;
+const MAX_TOKENS = 4096;
 
 function toAnthropicContent(content: AiContentBlock[]): unknown[] {
   return content.map((block) => {
@@ -31,7 +31,7 @@ export function getAnthropicProvider(): AiProvider | null {
   if (!apiKey) return null;
 
   return {
-    async send({ system, messages, tools }) {
+    async send({ system, messages, tools, maxTokens }) {
       const res = await fetch(ANTHROPIC_API_URL, {
         method: "POST",
         headers: {
@@ -41,7 +41,7 @@ export function getAnthropicProvider(): AiProvider | null {
         },
         body: JSON.stringify({
           model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-          max_tokens: MAX_TOKENS,
+          max_tokens: maxTokens ?? MAX_TOKENS,
           system,
           messages: messages.map((m) => ({ role: m.role, content: toAnthropicContent(m.content) })),
           tools: tools.map((t): unknown => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),

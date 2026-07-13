@@ -295,7 +295,7 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
     // routing.ts's getProviderForAutomation don't wrap this call, so an
     // unhandled throw would break route resolution for every automation
     // that tries this key, not just skip the one bad key.
-    console.error(`[AI_KEY] Failed to decrypt key ${id}:`, err);
+    console.error(`[AI_KEY] Failed to decrypt key ${id}. The AI_KEYS_ENCRYPTION_SECRET has likely changed or the row is corrupt.`, err);
     return null;
   }
 }
