@@ -67,11 +67,13 @@ export async function createWorkflow(input: {
   idempotencyKey?: string;
   configSnapshot?: unknown;
   startedBy?: string;
+  matchScore?: number;
+  matchReason?: string;
 }): Promise<WorkflowRow> {
   const rows = await query<WorkflowRow>(
     `INSERT INTO application_ai_workflows
-      (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, started_at)
-     VALUES ($1, $2, 'queued', 0, $3, $4, $5, NOW())
+      (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, match_score, match_reason, started_at)
+     VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, NOW())
      RETURNING *`,
     [
       input.applicationId,
@@ -79,6 +81,8 @@ export async function createWorkflow(input: {
       input.idempotencyKey ?? null,
       input.configSnapshot ?? null,
       input.startedBy ?? null,
+      input.matchScore ?? null,
+      input.matchReason ?? null,
     ]
   );
   return rows[0];

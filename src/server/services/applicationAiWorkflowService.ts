@@ -30,6 +30,7 @@ import {
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
+import { selectBestBaseResume } from "@/lib/ai/selectBestBaseResume";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
@@ -73,6 +74,8 @@ export async function startWorkflow(input: {
   verifiedSkills?: string[];
   idempotencyKey?: string;
   startedBy?: string;
+  matchScore?: number;
+  matchReason?: string;
 }): Promise<{ workflowId: string }> {
   const configSnapshot = {
     candidateId: input.candidateId,
@@ -82,20 +85,14 @@ export async function startWorkflow(input: {
     verifiedSkills: input.verifiedSkills ?? [],
   };
 
-  // application_ai_workflows.base_resume_id's FK references base_resumes(id)
-  // (confirmed live via pg_constraint - an earlier fix in this file assumed
-  // the opposite, that it referenced application_resume_versions(id), and
-  // was wrong: passing input.baseResume.id there hard-failed every workflow
-  // creation with a real base resume, "violates foreign key constraint
-  // application_ai_workflows_base_resume_id_fkey"). input.baseResume is
-  // always an application_resume_versions row, whose own base_resume_id
-  // column is the real base_resumes.id - that's what belongs here.
   const wf = await createWorkflow({
     applicationId: input.applicationId,
     baseResumeId: input.baseResume?.base_resume_id ?? null,
     idempotencyKey: input.idempotencyKey,
     configSnapshot,
     startedBy: input.startedBy,
+    matchScore: input.matchScore,
+    matchReason: input.matchReason,
   });
   return { workflowId: wf.id };
 }
@@ -128,11 +125,21 @@ async function materializeFromBaseResume(
   applicationId: string,
   job: any,
   createdBy: string | undefined,
+  preferredBaseResumeId?: string,
 ): Promise<any | null> {
-  const baseResumeRow = await queryOne<{ id: string; content: unknown }>(
-    "SELECT id, content FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
-    [candidateId]
-  );
+  let baseResumeRow: { id: string; content: unknown } | null = null;
+  if (preferredBaseResumeId) {
+    baseResumeRow = await queryOne<{ id: string; content: unknown }>(
+      "SELECT id, content FROM base_resumes WHERE id = $1 AND candidate_id = $2",
+      [preferredBaseResumeId, candidateId]
+    );
+  }
+  if (!baseResumeRow) {
+    baseResumeRow = await queryOne<{ id: string; content: unknown }>(
+      "SELECT id, content FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [candidateId]
+    );
+  }
   if (!baseResumeRow) return null;
 
   const targetJob = await upsertTargetJobByCandidateAndJob(candidateId, jobId, {
@@ -197,7 +204,8 @@ export async function triggerAiWorkflowForApplication(
   const job: any = jobRow ?? {};
 
   // Prioritise the resume linked to the target_job for this application's
-  // job, falling back to the candidate's most recent base resume overall.
+  // job, falling back to domain-matched base resume, then the candidate's
+  // most recent base resume overall.
   let resumeRow = await queryOne<any>(
     `SELECT arv.* FROM application_resume_versions arv
      WHERE arv.target_job_id IN (
@@ -207,11 +215,24 @@ export async function triggerAiWorkflowForApplication(
      ORDER BY arv.created_at DESC LIMIT 1`,
     [appRow.candidate_id, appRow.job_id]
   );
+  let matchScore: number | null = null;
+  let matchReason: string | null = null;
   if (!resumeRow) {
-    resumeRow = await queryOne<any>(
-      "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
-      [appRow.candidate_id]
-    );
+    // Domain-matched base resume selection — score each active base_resume
+    // by industry/role overlap with the job, pick the best one, materialize
+    // from it (not from the most recent), and persist the score + reason so
+    // the status page can show why this resume was chosen.
+    const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
+    if (best) {
+      matchScore = best.score;
+      matchReason = best.reason;
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, best.resume.id);
+    } else {
+      resumeRow = await queryOne<any>(
+        "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
+        [appRow.candidate_id]
+      );
+    }
   }
   if (!resumeRow) {
     resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy);
@@ -254,6 +275,8 @@ export async function triggerAiWorkflowForApplication(
     evidence: evidence ?? [],
     verifiedSkills: candidateRow?.verified_skills ?? [],
     startedBy,
+    matchScore: matchScore ?? undefined,
+    matchReason: matchReason ?? undefined,
   });
 
   await backgroundDispatch(
