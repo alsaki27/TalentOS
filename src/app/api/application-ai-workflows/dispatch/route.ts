@@ -11,8 +11,16 @@ export const dynamic = "force-dynamic";
  * Can be triggered by admin-authenticated calls (no CRON_SECRET required).
  */
 export async function POST(_req: NextRequest) {
-  const result = await dispatchNextQueuedWorkflow();
-  return NextResponse.json(result);
+  try {
+    const result = await dispatchNextQueuedWorkflow();
+    return NextResponse.json(result);
+  } catch (err: any) {
+    // Same gap the GET/cron handler below already had fixed: no try/catch
+    // meant any error out of dispatchNextQueuedWorkflow (e.g. a stage's
+    // agent call throwing before its own retry logic could catch it)
+    // surfaced as an empty-body 500 with no diagnostic trail.
+    return NextResponse.json({ error: err?.message ?? String(err) }, { status: 500 });
+  }
 }
 
 /**
