@@ -8,8 +8,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { buildSkeletonDocument } from "@/lib/ai/faloodBaseResume";
@@ -93,41 +91,24 @@ function guessMimeType(filename: string, contentType?: string | null): string {
 }
 
 async function loadLatestUploadedResume(candidateId: string) {
-  if (isNeon()) {
-    return queryOne<{
-      id: string;
-      filename: string;
-      file_url: string;
-      parsed_json: any | null;
-      is_original_upload: boolean;
-    }>(
-      `SELECT id, filename, file_url, parsed_json, is_original_upload
-       FROM resumes
-       WHERE candidate_id = $1 AND kind = 'resume'
-       ORDER BY is_original_upload DESC, created_at DESC
-       LIMIT 1`,
-      [candidateId]
-    );
-  }
-
-  const res = await supabase
-    .from("resumes")
-    .select("id, filename, file_url, parsed_json, is_original_upload")
-    .eq("candidate_id", candidateId)
-    .eq("kind", "resume")
-    .order("is_original_upload", { ascending: false })
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return res.data;
+  return queryOne<{
+    id: string;
+    filename: string;
+    file_url: string;
+    parsed_json: any | null;
+    is_original_upload: boolean;
+  }>(
+    `SELECT id, filename, file_url, parsed_json, is_original_upload
+     FROM resumes
+     WHERE candidate_id = $1 AND kind = 'resume'
+     ORDER BY is_original_upload DESC, created_at DESC
+     LIMIT 1`,
+    [candidateId]
+  );
 }
 
 async function updateParsedResume(resumeId: string, parsed: any) {
-  if (isNeon()) {
-    await execute("UPDATE resumes SET parsed_json = $1 WHERE id = $2", [parsed, resumeId]);
-    return;
-  }
-  await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
+  await execute("UPDATE resumes SET parsed_json = $1 WHERE id = $2", [parsed, resumeId]);
 }
 
 async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename: string; file_url: string }) {
@@ -306,26 +287,11 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  let data: any[];
-  let error: any;
+  const data = await query(
+    'SELECT id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
+    [candidateId]
+  );
 
-  if (isNeon()) {
-    data = await query(
-      'SELECT id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
-      [candidateId]
-    );
-    error = null;
-  } else {
-    const res = await supabase
-      .from("base_resumes")
-      .select("id, name, target_industry, target_roles, style_id, status, created_at, updated_at")
-      .eq("candidate_id", candidateId)
-      .order("created_at", { ascending: false });
-    data = res.data ?? [];
-    error = res.error;
-  }
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
 }
 
@@ -364,53 +330,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "candidateId and name are required" }, { status: 400 });
     }
 
-    let candidate: any;
-    let candidateError: any;
+    const candidate = await queryOne(
+      'SELECT id, name, email, phone, linkedin_url, github_url, portfolio_url FROM candidates WHERE id = $1',
+      [candidateId]
+    );
 
-    if (isNeon()) {
-      candidate = await queryOne(
-        'SELECT id, name, email, phone, linkedin_url, github_url, portfolio_url FROM candidates WHERE id = $1',
-        [candidateId]
-      );
-      candidateError = candidate ? null : { message: 'Candidate not found' };
-    } else {
-      const res = await supabase
-        .from("candidates")
-        .select("id, name, email, phone, linkedin_url, github_url, portfolio_url")
-        .eq("id", candidateId)
-        .single();
-      candidate = res.data;
-      candidateError = res.error;
-    }
-
-    if (candidateError || !candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
+    if (!candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
 
     let style: any;
-    if (isNeon()) {
-      style = await queryOne(
-        'SELECT id, formatting_defaults FROM resume_styles WHERE id = $1',
-        [styleId]
-      );
-    } else {
-      const res = await supabase.from("resume_styles").select("id, formatting_defaults").eq("id", styleId).single();
-      style = res.data;
-    }
+    style = await queryOne(
+      'SELECT id, formatting_defaults FROM resume_styles WHERE id = $1',
+      [styleId]
+    );
     const formatting = style ? { styleId, ...(style.formatting_defaults ?? {}) } : { styleId };
     const effectiveStyleId = style ? styleId : null;
 
     let content: ResumeDocument;
 
     if (startingSource === "duplicate" && sourceBaseResumeId) {
-      let source: any;
-      if (isNeon()) {
-        source = await queryOne(
-          'SELECT content FROM base_resumes WHERE id = $1',
-          [sourceBaseResumeId]
-        );
-      } else {
-        const res = await supabase.from("base_resumes").select("content").eq("id", sourceBaseResumeId).single();
-        source = res.data;
-      }
+      const source = await queryOne(
+        'SELECT content FROM base_resumes WHERE id = $1',
+        [sourceBaseResumeId]
+      );
       content = source?.content ?? buildSkeletonDocument(candidate, formatting);
       // #region debug-point D:base-resume-duplicate-source
       reportBaseResumeSeedingDebug("D", "base resume duplicated from existing resume", {
@@ -461,41 +402,18 @@ export async function POST(req: NextRequest) {
     let data: any;
     let error: any;
 
-    if (isNeon()) {
-      const contentJson = JSON.stringify(content);
-      data = await queryOne(
-        `INSERT INTO base_resumes (candidate_id, name, target_industry, target_roles, style_id, content, created_by, updated_by)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING *`,
-        [candidateId, name, targetIndustry ?? null, targetRoles, effectiveStyleId, contentJson, context!.profile.user_id, context!.profile.user_id]
-      );
-      error = data ? null : { message: 'Insert failed' };
-    } else {
-      const res = await supabase
-        .from("base_resumes")
-        .insert({
-          candidate_id: candidateId,
-          name,
-          target_industry: targetIndustry ?? null,
-          target_roles: targetRoles,
-          style_id: effectiveStyleId,
-          content,
-          created_by: context!.profile.user_id,
-          updated_by: context!.profile.user_id,
-        })
-        .select()
-        .single();
-      data = res.data;
-      error = res.error;
+    const contentJson = JSON.stringify(content);
+    data = await queryOne(
+      `INSERT INTO base_resumes (candidate_id, name, target_industry, target_roles, style_id, content, created_by, updated_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING *`,
+      [candidateId, name, targetIndustry ?? null, targetRoles, effectiveStyleId, contentJson, context!.profile.user_id, context!.profile.user_id]
+    );
+    if (!data) {
+      return NextResponse.json({ error: "Insert failed" }, { status: 500 });
     }
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     // Invalidate match scores for this candidate since they have a new base resume
-    if (isNeon()) {
-      await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [candidateId]);
-    } else {
-      await supabase.from("job_match_scores").delete().eq("candidate_id", candidateId);
-    }
+    await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [candidateId]);
 
     await logActivity({
       userId: context!.profile.user_id,

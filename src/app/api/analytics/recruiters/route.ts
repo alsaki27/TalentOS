@@ -3,8 +3,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { sanitizeError } from "@/lib/utils";
 
@@ -23,113 +21,70 @@ export async function GET(req: NextRequest) {
   let applications: any[];
   let interviews: any[];
 
-  if (isNeon()) {
-    let candSql = 'SELECT created_by FROM candidates WHERE 1=1';
-    const candParams: any[] = [];
-    if (dateFrom) {
-      candParams.push(dateFrom);
-      candSql += ` AND created_at >= $${candParams.length}::timestamptz`;
-    }
-    if (dateTo) {
-      candParams.push(dateTo);
-      candSql += ` AND created_at <= $${candParams.length}::timestamptz`;
-    }
-    candidates = await query(candSql, candParams);
-
-    let appSql = 'SELECT created_by, status, job_id, created_at FROM applications WHERE 1=1';
-    const appParams: any[] = [];
-    if (dateFrom) {
-      appParams.push(dateFrom);
-      appSql += ` AND created_at >= $${appParams.length}::timestamptz`;
-    }
-    if (dateTo) {
-      appParams.push(dateTo);
-      appSql += ` AND created_at <= $${appParams.length}::timestamptz`;
-    }
-    applications = await query(appSql, appParams);
-
-    let intSql = 'SELECT created_by FROM interview_schedules WHERE 1=1';
-    const intParams: any[] = [];
-    if (dateFrom) {
-      intParams.push(dateFrom);
-      intSql += ` AND scheduled_at >= $${intParams.length}::timestamptz`;
-    }
-    if (dateTo) {
-      intParams.push(dateTo);
-      intSql += ` AND scheduled_at <= $${intParams.length}::timestamptz`;
-    }
-    interviews = await query(intSql, intParams);
-  } else {
-    // 1. Candidates sourced
-    let candQuery = supabase.from("candidates").select("created_by");
-    if (dateFrom) candQuery = candQuery.gte("created_at", dateFrom);
-    if (dateTo) candQuery = candQuery.lte("created_at", dateTo);
-    const { data: candidatesData } = await candQuery;
-    candidates = candidatesData ?? [];
-
-    // 2. Applications processed
-    let appQuery = supabase
-      .from("applications")
-      .select("created_by, status, job_id, created_at");
-    if (dateFrom) appQuery = appQuery.gte("created_at", dateFrom);
-    if (dateTo) appQuery = appQuery.lte("created_at", dateTo);
-    const { data: applicationsData } = await appQuery;
-    applications = applicationsData ?? [];
-
-    // 3. Interviews scheduled
-    let intQuery = supabase.from("interview_schedules").select("created_by");
-    if (dateFrom) intQuery = intQuery.gte("created_at", dateFrom);
-    if (dateTo) intQuery = intQuery.lte("created_at", dateTo);
-    const { data: interviewsData } = await intQuery;
-    interviews = interviewsData ?? [];
+  let candSql = 'SELECT created_by FROM candidates WHERE 1=1';
+  const candParams: any[] = [];
+  if (dateFrom) {
+    candParams.push(dateFrom);
+    candSql += ` AND created_at >= $${candParams.length}::timestamptz`;
   }
+  if (dateTo) {
+    candParams.push(dateTo);
+    candSql += ` AND created_at <= $${candParams.length}::timestamptz`;
+  }
+  candidates = await query(candSql, candParams);
 
-  // 4. Resolve names
+  let appSql = 'SELECT created_by, status, job_id, created_at FROM applications WHERE 1=1';
+  const appParams: any[] = [];
+  if (dateFrom) {
+    appParams.push(dateFrom);
+    appSql += ` AND created_at >= $${appParams.length}::timestamptz`;
+  }
+  if (dateTo) {
+    appParams.push(dateTo);
+    appSql += ` AND created_at <= $${appParams.length}::timestamptz`;
+  }
+  applications = await query(appSql, appParams);
+
+  let intSql = 'SELECT created_by FROM interview_schedules WHERE 1=1';
+  const intParams: any[] = [];
+  if (dateFrom) {
+    intParams.push(dateFrom);
+    intSql += ` AND scheduled_at >= $${intParams.length}::timestamptz`;
+  }
+  if (dateTo) {
+    intParams.push(dateTo);
+    intSql += ` AND scheduled_at <= $${intParams.length}::timestamptz`;
+  }
+  interviews = await query(intSql, intParams);
+
   const userIds = new Set<string>();
   for (const c of candidates ?? []) if ((c as any).created_by) userIds.add((c as any).created_by as string);
   for (const a of applications ?? []) if ((a as any).created_by) userIds.add((a as any).created_by as string);
   for (const i of interviews ?? []) if ((i as any).created_by) userIds.add((i as any).created_by as string);
 
   let profiles: any[];
-  if (isNeon()) {
-    if (userIds.size > 0) {
-      profiles = await query(
-        'SELECT user_id, display_name FROM profiles WHERE user_id::text = ANY($1)',
-        [Array.from(userIds)]
-      );
-    } else {
-      profiles = [];
-    }
+  if (userIds.size > 0) {
+    profiles = await query(
+      'SELECT user_id, display_name FROM profiles WHERE user_id::text = ANY($1)',
+      [Array.from(userIds)]
+    );
   } else {
-    const { data: profilesData } = await supabase
-      .from("profiles")
-      .select("user_id, display_name")
-      .in("user_id", [...userIds]);
-    profiles = profilesData ?? [];
+    profiles = [];
   }
   const profileMap = new Map(
     profiles?.map((p: { user_id: string; display_name: string | null }) => [p.user_id, p.display_name]) ?? []
   );
 
-  // 5. Compute time-to-fill per recruiter (jobs where they made the first placement)
   const placedApps = (applications ?? []).filter(
     (a: any) => a.status === "placed" && a.job_id
   );
   const jobIds = [...new Set(placedApps.map((a: any) => a.job_id))];
 
   let jobs: any[];
-  if (isNeon()) {
-    if (jobIds.length > 0) {
-      jobs = await query('SELECT id, created_at FROM jobs WHERE id::text = ANY($1)', [jobIds]);
-    } else {
-      jobs = [];
-    }
+  if (jobIds.length > 0) {
+    jobs = await query('SELECT id, created_at FROM jobs WHERE id::text = ANY($1)', [jobIds]);
   } else {
-    const { data: jobsData } = await supabase
-      .from("jobs")
-      .select("id, created_at")
-      .in("id", jobIds);
-    jobs = jobsData ?? [];
+    jobs = [];
   }
   const jobCreatedMap = new Map<string, string>(jobs?.map((j: any) => [j.id as string, j.created_at as string]) ?? []);
 
@@ -152,7 +107,7 @@ export async function GET(req: NextRequest) {
     const appCreatedAt = (app as any).created_at as string;
     const appCreatedBy = (app as any).created_by as string;
     const firstPlaced = jobFirstPlaced[appJobId];
-    if (appCreatedAt !== firstPlaced) continue; // only count first placement
+    if (appCreatedAt !== firstPlaced) continue;
     const jobCreated = jobCreatedMap.get(appJobId);
     if (!jobCreated) continue;
     const days = Math.round(
@@ -167,7 +122,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // 6. Aggregate stats
   const stats: Record<
     string,
     {

@@ -4,8 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -17,38 +16,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const proofRequired = body.proofRequired as boolean | undefined;
 
   let existingApplication;
-  if (isNeon()) {
-    existingApplication = await queryOne<{ proof_required: boolean | null }>(
-      'SELECT proof_required FROM applications WHERE id = $1',
-      [params.id]
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data } = await supabase
-      .from("applications")
-      .select("proof_required")
-      .eq("id", params.id)
-      .single();
-    existingApplication = data;
-  }
+  existingApplication = await queryOne<{ proof_required: boolean | null }>(
+    'SELECT proof_required FROM applications WHERE id = $1',
+    [params.id]
+  );
   const requiresProof = proofRequired ?? existingApplication?.proof_required ?? false;
 
   if (requiresProof) {
     let count: number | null = null;
-    if (isNeon()) {
-      const row = await queryOne<{ count: number }>(
-        'SELECT COUNT(*)::int as count FROM application_proofs WHERE application_id = $1',
-        [params.id]
-      );
-      count = row?.count ?? null;
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      const { count: c } = await supabase
-        .from("application_proofs")
-        .select("id", { count: "exact", head: true })
-        .eq("application_id", params.id);
-      count = c;
-    }
+    const row = await queryOne<{ count: number }>(
+      'SELECT COUNT(*)::int as count FROM application_proofs WHERE application_id = $1',
+      [params.id]
+    );
+    count = row?.count ?? null;
     if (!count) {
       return NextResponse.json(
         { error: "Proof of submission is required before closing this ticket. Upload a screenshot first." },
@@ -66,46 +46,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (proofRequired !== undefined) updates.proof_required = proofRequired;
   if (closeNote !== undefined) {
     let existing;
-    if (isNeon()) {
       existing = await queryOne<{ notes: string | null }>(
         'SELECT notes FROM applications WHERE id = $1',
         [params.id]
       );
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      const { data } = await supabase
-        .from("applications")
-        .select("notes")
-        .eq("id", params.id)
-        .single();
-      existing = data;
-    }
     const existingNotes = existing?.notes ? existing.notes + "\n\n" : "";
     updates.notes = existingNotes + `[Closed] ${closeNote}`;
   }
 
   let data;
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const values = Object.values(updates) as (string | number | boolean | object | Date | null)[];
-    values.push(params.id);
-    data = await queryOne<Record<string, any>>(
-      `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
-      values
-    );
-    if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data: d, error } = await supabase
-      .from("applications")
-      .update(updates)
-      .eq("id", params.id)
-      .select()
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    data = d;
-  }
+  const keys = Object.keys(updates);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = Object.values(updates) as (string | number | boolean | object | Date | null)[];
+  values.push(params.id);
+  data = await queryOne<Record<string, any>>(
+    `UPDATE applications SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
 
   if (context) {
     await logActivity({

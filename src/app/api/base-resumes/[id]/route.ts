@@ -8,27 +8,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
-  let data: any;
-  let error: any;
-
-  if (isNeon()) {
-    data = await queryOne('SELECT * FROM base_resumes WHERE id = $1', [params.id]);
-    error = data ? null : { message: 'Not found' };
-  } else {
-    const res = await supabase.from("base_resumes").select("*").eq("id", params.id).single();
-    data = res.data;
-    error = res.error;
-  }
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 404 });
+  const data = await queryOne('SELECT * FROM base_resumes WHERE id = $1', [params.id]);
+  if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(data);
 }
 
@@ -50,33 +37,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    if (keys.length === 0) {
-      return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
-    }
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-    const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
-    data = await queryOne(
-      `UPDATE base_resumes SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
-      values
-    );
-    error = data ? null : { message: 'Update failed' };
-  } else {
-    const res = await supabase.from("base_resumes").update(updates).eq("id", params.id).select().single();
-    data = res.data;
-    error = res.error;
+  const keys = Object.keys(updates);
+  if (keys.length === 0) {
+    return NextResponse.json({ error: 'No fields to update' }, { status: 400 });
   }
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
+  data = await queryOne(
+    `UPDATE base_resumes SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
 
   // If content changed, invalidate match scores for this candidate
   if (body.content && data?.candidate_id) {
-    if (isNeon()) {
-      await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]);
-    } else {
-      await supabase.from("job_match_scores").delete().eq("candidate_id", data.candidate_id);
-    }
+    await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]);
   }
 
   return NextResponse.json(data);
@@ -88,14 +63,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   let error: any;
 
-  if (isNeon()) {
-    const res = await execute('DELETE FROM base_resumes WHERE id = $1', [params.id]);
-    error = res.rowCount === 0 ? { message: 'Not found' } : null;
-  } else {
-    const res = await supabase.from("base_resumes").delete().eq("id", params.id);
-    error = res.error;
-  }
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const res = await execute('DELETE FROM base_resumes WHERE id = $1', [params.id]);
+  if (res.rowCount === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json({ ok: true });
 }

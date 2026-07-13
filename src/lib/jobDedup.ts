@@ -2,9 +2,6 @@
 // Prevents duplicate job rows when re-importing from any source (CSV, LinkedIn, ATS).
 // Matches first on source_url, then on title + company + posted_at + applicants_count.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query } from "@/server/db/neon";
 import {
   findJobsBySourceUrls,
   updateJobsLastSeenAtByUrls,

@@ -8,7 +8,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { findJobById } from "@/server/repositories/jobsRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
@@ -83,20 +82,10 @@ export async function POST(req: NextRequest) {
   if (baseResumeId) {
     /* Copy from base resume */
     let baseResume: any;
-    if (isNeon()) {
       baseResume = await queryOne(
         `SELECT content, candidate_id FROM base_resumes WHERE id = $1`,
         [baseResumeId]
       );
-    } else {
-      const { supabase } = await import("@/lib/supabase");
-      const res = await supabase
-        .from("base_resumes")
-        .select("content, candidate_id")
-        .eq("id", baseResumeId)
-        .single();
-      baseResume = res.data;
-    }
 
     if (!baseResume) {
       return NextResponse.json(
@@ -136,48 +125,23 @@ export async function POST(req: NextRequest) {
 
   /* ── 4. Insert application_resume_version ── */
   let version: any;
-  if (isNeon()) {
-    const contentJson = JSON.stringify(insertData.content);
-    version = await queryOne(
-      `INSERT INTO application_resume_versions
-        (candidate_id, base_resume_id, target_job_id, content, status, source_type, created_by, source_resume_id)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        insertData.candidate_id,
-        insertData.base_resume_id,
-        insertData.target_job_id,
-        contentJson,
-        insertData.status,
-        insertData.source_type,
-        insertData.created_by,
-        insertData.source_resume_id,
-      ]
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_resume_versions")
-      .insert({
-        candidate_id: insertData.candidate_id,
-        base_resume_id: insertData.base_resume_id,
-        target_job_id: insertData.target_job_id,
-        content: insertData.content,
-        status: insertData.status,
-        source_type: insertData.source_type,
-        created_by: insertData.created_by,
-        source_resume_id: insertData.source_resume_id,
-      })
-      .select()
-      .single();
-    version = res.data;
-    if (res.error) {
-      return NextResponse.json(
-        { error: res.error.message },
-        { status: 500 }
-      );
-    }
-  }
+  const contentJson = JSON.stringify(insertData.content);
+  version = await queryOne(
+    `INSERT INTO application_resume_versions
+      (candidate_id, base_resume_id, target_job_id, content, status, source_type, created_by, source_resume_id)
+     VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8)
+     RETURNING *`,
+    [
+      insertData.candidate_id,
+      insertData.base_resume_id,
+      insertData.target_job_id,
+      contentJson,
+      insertData.status,
+      insertData.source_type,
+      insertData.created_by,
+      insertData.source_resume_id,
+    ]
+  );
 
   if (!version) {
     return NextResponse.json(
@@ -199,7 +163,6 @@ export async function POST(req: NextRequest) {
   let packetId: string | null = null;
   if (applicationId) {
     try {
-      if (isNeon()) {
         await execute(
           `INSERT INTO application_packets (application_id, resume_version_id, updated_at)
            VALUES ($1, $2, NOW())
@@ -208,16 +171,7 @@ export async function POST(req: NextRequest) {
           [applicationId, version.id]
         );
         packetId = applicationId;
-      } else {
-        const { supabase } = await import("@/lib/supabase");
-        const res = await supabase
-          .from("application_packets")
-          .upsert({ application_id: applicationId, resume_version_id: version.id }, { onConflict: "application_id" })
-          .select()
-          .single();
-        if (res.data) packetId = res.data.application_id;
-      }
-    } catch (e: any) {
+      } catch (e: any) {
       // 23505 = duplicate packet; ignore since we just want the version created
       if (e?.code !== "23505") {
         console.error("Failed to create application packet:", e);

@@ -8,8 +8,6 @@ import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -71,182 +69,107 @@ export async function GET(req: NextRequest) {
     if (isNaN(scoreMax)) scoreMax = 100;
   }
 
-  if (isNeon()) {
-    const offset = (page - 1) * pageSize;
-    const searchParam = `%${search}%`;
+  const offset = (page - 1) * pageSize;
+  const searchParam = `%${search}%`;
 
-    const dataSql = `
-      SELECT ${JOB_COLUMNS},
-        COALESCE(
-          (SELECT jsonb_agg(
-            jsonb_build_object(
-              'id', a.id,
-              'status', a.status,
-              'candidates', jsonb_build_object('id', c.id, 'name', c.name, 'avatar_url', c.avatar_url)
-            )
-          ) FROM applications a LEFT JOIN candidates c ON a.candidate_id = c.id WHERE a.job_id = j.id),
-          '[]'::jsonb
-        ) as applications
-      FROM jobs j
-      WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
-        AND ($2 = '' OR j.source = $2)
-        AND ($3 = '' OR j.role_tier = $3)
-        AND ($4 = '' OR j.is_active = ($4 = 'active'))
-        AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
-        AND ($7 = '' OR j.work_authorization = $7)
-        AND ($8 = '' OR j.posted_at >= $8::timestamp)
-        AND ($9 = '' OR j.posted_at <= $9::timestamp)
-        AND ($10 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $10))
-        AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
-        AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
-        AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
-      ORDER BY
-        CASE WHEN $15 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
-        CASE WHEN $15 = 'posted_desc' THEN j.posted_at END DESC NULLS LAST,
-        CASE WHEN $15 <> 'posted_asc' AND $15 <> 'posted_desc' THEN j.created_at END DESC NULLS LAST
-      OFFSET $16 LIMIT $17
-    `;
+  const dataSql = `
+    SELECT ${JOB_COLUMNS},
+      COALESCE(
+        (SELECT jsonb_agg(
+          jsonb_build_object(
+            'id', a.id,
+            'status', a.status,
+            'candidates', jsonb_build_object('id', c.id, 'name', c.name, 'avatar_url', c.avatar_url)
+          )
+        ) FROM applications a LEFT JOIN candidates c ON a.candidate_id = c.id WHERE a.job_id = j.id),
+        '[]'::jsonb
+      ) as applications
+    FROM jobs j
+    WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
+      AND ($2 = '' OR j.source = $2)
+      AND ($3 = '' OR j.role_tier = $3)
+      AND ($4 = '' OR j.is_active = ($4 = 'active'))
+      AND ($5 = '' OR j.employment_type = $5)
+      AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
+      AND ($7 = '' OR j.work_authorization = $7)
+      AND ($8 = '' OR j.posted_at >= $8::timestamp)
+      AND ($9 = '' OR j.posted_at <= $9::timestamp)
+      AND ($10 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $10))
+      AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
+      AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
+      AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+    ORDER BY
+      CASE WHEN $15 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
+      CASE WHEN $15 = 'posted_desc' THEN j.posted_at END DESC NULLS LAST,
+      CASE WHEN $15 <> 'posted_asc' AND $15 <> 'posted_desc' THEN j.created_at END DESC NULLS LAST
+    OFFSET $16 LIMIT $17
+  `;
 
-    const countSql = `
-      SELECT COUNT(*)::int as total
-      FROM jobs j
-      WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
-        AND ($2 = '' OR j.source = $2)
-        AND ($3 = '' OR j.role_tier = $3)
-        AND ($4 = '' OR j.is_active = ($4 = 'active'))
-        AND ($5 = '' OR j.employment_type = $5)
-        AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
-        AND ($7 = '' OR j.work_authorization = $7)
-        AND ($8 = '' OR j.posted_at >= $8::timestamp)
-        AND ($9 = '' OR j.posted_at <= $9::timestamp)
-        AND ($10 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $10))
-        AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
-        AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
-        AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
-    `;
+  const countSql = `
+    SELECT COUNT(*)::int as total
+    FROM jobs j
+    WHERE ($1 = '' OR j.title ILIKE $1 OR j.company ILIKE $1 OR j.location ILIKE $1)
+      AND ($2 = '' OR j.source = $2)
+      AND ($3 = '' OR j.role_tier = $3)
+      AND ($4 = '' OR j.is_active = ($4 = 'active'))
+      AND ($5 = '' OR j.employment_type = $5)
+      AND ($6 = '' OR j.job_category ILIKE '%' || $6 || '%' OR array_to_string(j.category_tags, ',') ILIKE '%' || $6 || '%')
+      AND ($7 = '' OR j.work_authorization = $7)
+      AND ($8 = '' OR j.posted_at >= $8::timestamp)
+      AND ($9 = '' OR j.posted_at <= $9::timestamp)
+      AND ($10 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND a.candidate_id::text = $10))
+      AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
+      AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
+      AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+  `;
 
-    try {
-      const jobs = await query<Record<string, any>>(dataSql, [
-        searchParam, source, roleTier, active, employmentType, category, workAuthorization,
-        dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax, sort, offset, pageSize,
-      ]);
-      const countRow = await queryOne<{ total: number }>(countSql, [
-        searchParam, source, roleTier, active, employmentType, category, workAuthorization,
-        dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax,
-      ]);
+  try {
+    const jobs = await query<Record<string, any>>(dataSql, [
+      searchParam, source, roleTier, active, employmentType, category, workAuthorization,
+      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax, sort, offset, pageSize,
+    ]);
+    const countRow = await queryOne<{ total: number }>(countSql, [
+      searchParam, source, roleTier, active, employmentType, category, workAuthorization,
+      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax,
+    ]);
 
-      const shaped = (jobs ?? []).map((job: any) => ({
-        ...job,
-        applicant_count: job.applications?.length ?? 0,
-        applicants: (job.applications ?? []).map((a: any) => ({
-          application_id: a.id,
-          candidate_id: a.candidates?.id,
-          name: a.candidates?.name,
-          avatar_url: a.candidates?.avatar_url,
-          status: a.status,
-        })),
-      }));
-
-      const jobIds = shaped.map((j: any) => j.id);
-      let matchScores: any[] = [];
-      if (jobIds.length > 0) {
-        const placeholders = jobIds.map((_, i) => `$${i + 1}`).join(",");
-        const scores = await query<Record<string, any>>(`
-          SELECT ms.job_id, ms.score, ms.breakdown, c.id as candidate_id, c.name as candidate_name 
-          FROM job_match_scores ms
-          LEFT JOIN candidates c ON ms.candidate_id = c.id
-          WHERE ms.job_id IN (${placeholders})
-        `, jobIds);
-        matchScores = scores || [];
-      }
-
-      const shapedWithScores = shaped.map((job: any) => ({
-        ...job,
-        match_scores: matchScores.filter((ms) => 
-          ms.job_id === job.id && 
-          job.applicants.some((a: any) => a.candidate_id === ms.candidate_id)
-        ),
-      }));
-
-      return NextResponse.json({ jobs: shapedWithScores, total: countRow?.total ?? 0, page, pageSize });
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-  }
-
-  let dbQuery = supabase.from("jobs").select(LIST_COLUMNS, { count: "planned" });
-
-  if (search) {
-    const safeSearch = search.replace(/"/g, '""');
-    dbQuery = dbQuery.or(`title.ilike."%${safeSearch}%",company.ilike."%${safeSearch}%",location.ilike."%${safeSearch}%"`);
-  }
-  if (source) dbQuery = dbQuery.eq("source", source);
-  if (roleTier) dbQuery = dbQuery.eq("role_tier", roleTier);
-  if (active === "active") dbQuery = dbQuery.eq("is_active", true);
-  if (active === "inactive") dbQuery = dbQuery.eq("is_active", false);
-  if (employmentType) dbQuery = dbQuery.eq("employment_type", employmentType);
-  if (category) dbQuery = dbQuery.or(`job_category.eq.${category},category_tags.cs.{"${category}"}`);
-  if (workAuthorization) dbQuery = dbQuery.eq("work_authorization", workAuthorization);
-  if (dateStart) dbQuery = dbQuery.gte("posted_at", dateStart);
-  if (dateEnd) dbQuery = dbQuery.lte("posted_at", dateEnd);
-  if (scoreStr) dbQuery = dbQuery.gte("category_relevance_score", scoreMin).lte("category_relevance_score", scoreMax);
-
-  if (candidate || assignedBy || owner) {
-    let appQuery = supabase.from("applications").select("job_id");
-    if (candidate) appQuery = appQuery.eq("candidate_id", candidate);
-    if (assignedBy) appQuery = appQuery.or(`assigned_by_user_id.eq.${assignedBy},assigned_by.eq.${assignedBy}`);
-    if (owner) appQuery = appQuery.or(`assigned_to_user_id.eq.${owner},assigned_to.eq.${owner}`);
-    const { data: appRows } = await appQuery;
-    const jobIds = Array.from(new Set(appRows?.map((r: any) => r.job_id).filter(Boolean) ?? []));
-    if (jobIds.length === 0) return NextResponse.json({ jobs: [], total: 0, page, pageSize });
-    dbQuery = dbQuery.in("id", jobIds);
-  }
-
-  if (sort === "posted_asc") dbQuery = dbQuery.order("posted_at", { ascending: true, nullsFirst: false });
-  else if (sort === "posted_desc") dbQuery = dbQuery.order("posted_at", { ascending: false, nullsFirst: false });
-  else dbQuery = dbQuery.order("created_at", { ascending: false });
-
-  const from = (page - 1) * pageSize;
-  const { data: jobs, error, count } = await dbQuery.range(from, from + pageSize - 1);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  // Shape it so the dashboard gets a clean "applicant_count" + "applicants" list per job.
-  const shaped = (jobs ?? []).map((job: any) => ({
-    ...job,
-    applicant_count: job.applications?.length ?? 0,
-    applicants: (job.applications ?? []).map((a: any) => ({
-      application_id: a.id,
-      candidate_id: a.candidates?.id,
-      name: a.candidates?.name,
-      avatar_url: a.candidates?.avatar_url,
-      status: a.status,
-    })),
-  }));
-
-  const jobIds = shaped.map((j: any) => j.id);
-  let matchScores: any[] = [];
-  if (jobIds.length > 0) {
-    const { data } = await supabase.from('job_match_scores').select('job_id, score, breakdown, candidates(id, name)').in('job_id', jobIds);
-    matchScores = (data || []).map((ms: any) => ({
-      job_id: ms.job_id,
-      score: ms.score,
-      breakdown: ms.breakdown,
-      candidate_id: ms.candidates?.id,
-      candidate_name: ms.candidates?.name
+    const shaped = (jobs ?? []).map((job: any) => ({
+      ...job,
+      applicant_count: job.applications?.length ?? 0,
+      applicants: (job.applications ?? []).map((a: any) => ({
+        application_id: a.id,
+        candidate_id: a.candidates?.id,
+        name: a.candidates?.name,
+        avatar_url: a.candidates?.avatar_url,
+        status: a.status,
+      })),
     }));
+
+    const jobIds = shaped.map((j: any) => j.id);
+    let matchScores: any[] = [];
+    if (jobIds.length > 0) {
+      const placeholders = jobIds.map((_, i) => `$${i + 1}`).join(",");
+      const scores = await query<Record<string, any>>(`
+        SELECT ms.job_id, ms.score, ms.breakdown, c.id as candidate_id, c.name as candidate_name 
+        FROM job_match_scores ms
+        LEFT JOIN candidates c ON ms.candidate_id = c.id
+        WHERE ms.job_id IN (${placeholders})
+      `, jobIds);
+      matchScores = scores || [];
+    }
+
+    const shapedWithScores = shaped.map((job: any) => ({
+      ...job,
+      match_scores: matchScores.filter((ms) => 
+        ms.job_id === job.id && 
+        job.applicants.some((a: any) => a.candidate_id === ms.candidate_id)
+      ),
+    }));
+
+    return NextResponse.json({ jobs: shapedWithScores, total: countRow?.total ?? 0, page, pageSize });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  const shapedWithScores = shaped.map((job: any) => ({
-    ...job,
-    match_scores: matchScores.filter((ms) => 
-      ms.job_id === job.id && 
-      job.applicants.some((a: any) => a.candidate_id === ms.candidate_id)
-    ),
-  }));
-
-  return NextResponse.json({ jobs: shapedWithScores, total: count ?? 0, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -286,68 +209,36 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (isNeon()) {
-    try {
-      const cols = Object.keys(row);
-      const values = Object.values(row);
-      const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
-      const data = await queryOne<Record<string, any>>(sql, values);
-      if (!data) throw new Error("Insert failed");
-      await syncCompanyDirectoryFromJobs([data]);
+  try {
+    const cols = Object.keys(row);
+    const values = Object.values(row);
+    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
+    const data = await queryOne<Record<string, any>>(sql, values);
+    if (!data) throw new Error("Insert failed");
+    await syncCompanyDirectoryFromJobs([data]);
 
-      if (context && data) {
-        await logActivity({
-          userId: context.profile.user_id,
-          actorName: context.profile.display_name || context.profile.email || undefined,
-          type: "create",
-          description: `Created job ${data.title}`,
-          entityType: "job",
-          entityId: data.id,
-          entityName: data.title,
-          metadata: { company: data.company },
-        });
-        void triggerWebhooks("job.created", {
-          job_id: data.id,
-          title: data.title,
-          company: data.company,
-          created_by: context.profile.user_id,
-        });
-      }
-
-      return NextResponse.json(data, { status: 201 });
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (context && data) {
+      await logActivity({
+        userId: context.profile.user_id,
+        actorName: context.profile.display_name || context.profile.email || undefined,
+        type: "create",
+        description: `Created job ${data.title}`,
+        entityType: "job",
+        entityId: data.id,
+        entityName: data.title,
+        metadata: { company: data.company },
+      });
+      void triggerWebhooks("job.created", {
+        job_id: data.id,
+        title: data.title,
+        company: data.company,
+        created_by: context.profile.user_id,
+      });
     }
+
+    return NextResponse.json(data, { status: 201 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  const { data, error } = await supabase
-    .from("jobs")
-    .insert(row)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  await syncCompanyDirectoryFromJobs([data]);
-
-  if (context && data) {
-    await logActivity({
-      userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email || undefined,
-      type: "create",
-      description: `Created job ${data.title}`,
-      entityType: "job",
-      entityId: data.id,
-      entityName: data.title,
-      metadata: { company: data.company },
-    });
-    void triggerWebhooks("job.created", {
-      job_id: data.id,
-      title: data.title,
-      company: data.company,
-      created_by: context.profile.user_id,
-    });
-  }
-
-  return NextResponse.json(data, { status: 201 });
 }

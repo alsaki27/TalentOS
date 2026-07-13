@@ -13,8 +13,6 @@
 // gentle on provider rate limits and keeps import fast since categorization always
 // happens after the insert, not as part of it.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { updateJob } from "@/server/repositories/jobsRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";
@@ -138,40 +136,20 @@ export async function processPendingCategorization(
   const limit = Math.min(opts.limit ?? 200, 200);
 
   let runRow: { id: string } | null = null;
-  if (isNeon()) {
-    runRow = await queryOne<{ id: string }>(
-      "INSERT INTO categorization_runs (triggered_by) VALUES ($1) RETURNING id",
-      [opts.triggeredBy ?? "manual"]
-    );
-  } else {
-    const { data } = await supabase
-      .from("categorization_runs")
-      .insert({ triggered_by: opts.triggeredBy ?? "manual" })
-      .select("id")
-      .single();
-    runRow = data ?? null;
-  }
+  runRow = await queryOne<{ id: string }>(
+    "INSERT INTO categorization_runs (triggered_by) VALUES ($1) RETURNING id",
+    [opts.triggeredBy ?? "manual"]
+  );
 
   let pending: any[] = [];
   let pendingError: any = null;
-  if (isNeon()) {
-    try {
-      pending = await query<PendingJob>(
-        "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' OR category_status IS NULL ORDER BY created_at DESC LIMIT $1",
-        [limit]
-      );
-    } catch (err: any) {
-      pendingError = err;
-    }
-  } else {
-    const { data, error } = await supabase
-      .from("jobs")
-      .select("id, title, description_text, job_function, industries, company_description, salary_range")
-      .or('category_status.eq.pending,category_status.is.null')
-      .order("created_at", { ascending: false })
-      .limit(limit);
-    pending = data ?? [];
-    pendingError = error;
+  try {
+    pending = await query<PendingJob>(
+      "SELECT id, title, description_text, job_function, industries, company_description, salary_range FROM jobs WHERE category_status = 'pending' OR category_status IS NULL ORDER BY created_at DESC LIMIT $1",
+      [limit]
+    );
+  } catch (err: any) {
+    pendingError = err;
   }
 
   let processed = 0;
@@ -211,34 +189,17 @@ export async function processPendingCategorization(
   }
 
   if (runRow) {
-    if (isNeon()) {
-      await execute(
-        "UPDATE categorization_runs SET finished_at = $1, jobs_processed = $2, jobs_failed = $3, error = $4 WHERE id = $5",
-        [new Date().toISOString(), processed, failed, runError, runRow.id]
-      );
-    } else {
-      await supabase.from("categorization_runs").update({
-        finished_at: new Date().toISOString(),
-        jobs_processed: processed,
-        jobs_failed: failed,
-        error: runError,
-      }).eq("id", runRow.id);
-    }
+    await execute(
+      "UPDATE categorization_runs SET finished_at = $1, jobs_processed = $2, jobs_failed = $3, error = $4 WHERE id = $5",
+      [new Date().toISOString(), processed, failed, runError, runRow.id]
+    );
   }
 
   let remainingCount = 0;
-  if (isNeon()) {
-    const row = await queryOne<{ count: number }>(
-      "SELECT COUNT(*)::int as count FROM jobs WHERE category_status = 'pending' OR category_status IS NULL"
-    );
-    remainingCount = row?.count ?? 0;
-  } else {
-    const { count } = await supabase
-      .from("jobs")
-      .select("id", { count: "exact", head: true })
-      .or('category_status.eq.pending,category_status.is.null');
-    remainingCount = count ?? 0;
-  }
+  const row = await queryOne<{ count: number }>(
+    "SELECT COUNT(*)::int as count FROM jobs WHERE category_status = 'pending' OR category_status IS NULL"
+  );
+  remainingCount = row?.count ?? 0;
 
   return { processed, failed, remainingPending: remainingCount, updatedJobs };
 }

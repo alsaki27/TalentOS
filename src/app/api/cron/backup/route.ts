@@ -5,9 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { buildBackupSnapshot, storeBackupSnapshot } from "@/lib/backup";
-import { isNeon } from "@/server/db";
-import { execute } from "@/server/db/neon";
-import { supabase } from "@/lib/supabase";
+import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
@@ -19,20 +17,13 @@ function isAuthorized(req: NextRequest) {
 }
 
 async function logBackupAttempt(action: "backup.created" | "backup.failed", metadata: Record<string, unknown>) {
-  if (isNeon()) {
-    await execute(
-      `INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, metadata) VALUES ($1, $2, $3, $4, $5)`,
-      ["00000000-0000-0000-0000-000000000000", "system@talentos", action, "backup", metadata]
-    );
-  } else {
-    await supabase.from("audit_logs").insert({
-      actor_user_id: "00000000-0000-0000-0000-000000000000",
-      actor_email: "system@talentos",
-      action,
-      entity_type: "backup",
-      metadata,
-    });
-  }
+  await recordAuditEvent({
+    actor_user_id: "00000000-0000-0000-0000-000000000000",
+    actor_email: "system@talentos",
+    action,
+    entity_type: "backup",
+    metadata,
+  });
 }
 
 export async function GET(req: NextRequest) {

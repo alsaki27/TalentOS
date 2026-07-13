@@ -3,7 +3,6 @@
 // Falls back to AI text extraction when markitdown service is not configured.
 
 import { NextRequest, NextResponse } from "next/server";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { parseResumeFromMarkdown, extractText, finalizeParsedResume } from "@/lib/resumeParsing";
@@ -277,12 +276,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const { parsed, parseStatus } = await parseResumeWithAI(resumeText.trim());
       // Save parsed_json to the resume record if resumeId is provided
       if (resumeId) {
-        if (isNeon()) {
-          await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
-        } else {
-          const { supabase } = await import("@/lib/supabase");
-          await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
-        }
+        await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
       }
       return NextResponse.json({ parsed, parseStatus, source: "ai_direct" });
     } catch (err: any) {
@@ -296,21 +290,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   // 1. Get the resume file URL
   let resume: any;
-  if (isNeon()) {
-    resume = await queryOne<{ file_url: string; filename: string }>(
-      'SELECT file_url, filename FROM resumes WHERE id = $1 AND candidate_id = $2',
-      [resumeId, params.id]
-    );
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data } = await supabase
-      .from("resumes")
-      .select("file_url, filename")
-      .eq("id", resumeId)
-      .eq("candidate_id", params.id)
-      .single();
-    resume = data;
-  }
+  resume = await queryOne<{ file_url: string; filename: string }>(
+    'SELECT file_url, filename FROM resumes WHERE id = $1 AND candidate_id = $2',
+    [resumeId, params.id]
+  );
 
   if (!resume) {
     return NextResponse.json({ error: "Resume not found" }, { status: 404 });
@@ -340,12 +323,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       if (!parsed.linkedin_url) {
         parsed.linkedin_url = extractLinkedInUrlFromBinary(buffer) ?? undefined;
       }
-      if (isNeon()) {
-        await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
-      } else {
-        const { supabase } = await import("@/lib/supabase");
-        await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
-      }
+      await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
       const parseStatus = {
         hasName: !!parsed.name,
         hasEmail: !!parsed.email,
@@ -366,12 +344,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (extractedText) {
     try {
       const { parsed, parseStatus } = await parseResumeWithAI(extractedText);
-      if (isNeon()) {
-        await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
-      } else {
-        const { supabase } = await import("@/lib/supabase");
-        await supabase.from("resumes").update({ parsed_json: parsed }).eq("id", resumeId);
-      }
+      await query('UPDATE resumes SET parsed_json = $1 WHERE id = $2', [parsed, resumeId]);
       return NextResponse.json({ parsed, parseStatus, source: "ai_pdf_extraction" });
     } catch (err: any) {
       return NextResponse.json({ error: err.message ?? "AI parsing failed" }, { status: 500 });

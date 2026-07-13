@@ -8,8 +8,7 @@ import { logActivity } from "@/lib/activity";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import { listResumeVersionsByApplication } from "@/server/repositories/applicationResumeVersionsRepository";
 import { buildResumeDraftFromAcceptedSuggestions } from "@/server/services/resumeDraftBuilderService";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -24,22 +23,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   }
 
   let targetJobId: string | null = null;
-  if (isNeon()) {
-    const targetJob = await queryOne<{ id: string }>(
-      'SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2',
-      [app.candidate_id, app.job_id]
-    );
-    targetJobId = targetJob?.id ?? null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const { data: targetJob } = await supabase
-      .from("target_jobs")
-      .select("id")
-      .eq("candidate_id", app.candidate_id)
-      .eq("job_id", app.job_id)
-      .maybeSingle();
-    targetJobId = targetJob?.id ?? null;
-  }
+  const targetJob = await queryOne<{ id: string }>(
+    'SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2',
+    [app.candidate_id, app.job_id]
+  );
+  targetJobId = targetJob?.id ?? null;
 
   if (!targetJobId) {
     return NextResponse.json({ drafts: [], applicationId });

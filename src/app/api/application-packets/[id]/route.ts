@@ -6,7 +6,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { isNeon } from "@/server/db";
 import { queryOne, execute } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -16,12 +15,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    const row = await queryOne<any>(
-      `SELECT ap.*, a.status as application_status, a.review_status as application_review_status, a.review_note as application_review_note, j.title as job_title, j.company as job_company FROM application_packets ap LEFT JOIN applications a ON a.id = ap.application_id LEFT JOIN jobs j ON j.id = a.job_id WHERE ap.application_id = $1`,
-      [params.id]
-    );
-    if (row) {
+  const row = await queryOne<any>(
+    `SELECT ap.*, a.status as application_status, a.review_status as application_review_status, a.review_note as application_review_note, j.title as job_title, j.company as job_company FROM application_packets ap LEFT JOIN applications a ON a.id = ap.application_id LEFT JOIN jobs j ON j.id = a.job_id WHERE ap.application_id = $1`,
+    [params.id]
+  );
+  if (row) {
       const { application_status, application_review_status, application_review_note, job_title, job_company, ...rest } = row;
       data = {
         ...rest,
@@ -36,19 +34,9 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         },
       };
       error = null;
-    } else {
-      data = null;
-      error = { message: "Not found" };
-    }
   } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_packets")
-      .select("*, applications(status, review_status, review_note, jobs(title, company))")
-      .eq("application_id", params.id)
-      .single();
-    data = res.data;
-    error = res.error;
+    data = null;
+    error = { message: "Not found" };
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
@@ -73,26 +61,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-    const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
-    data = await queryOne(
-      `UPDATE application_packets SET ${setClause} WHERE application_id = $${keys.length + 1} RETURNING *`,
-      values
-    );
-    error = data ? null : { message: "Update failed" };
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_packets")
-      .update(updates)
-      .eq("application_id", params.id)
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
-  }
+  const keys = Object.keys(updates);
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const values = [...keys.map((k) => updates[k]), params.id] as (string | number | boolean | object | Date | null)[];
+  data = await queryOne(
+    `UPDATE application_packets SET ${setClause} WHERE application_id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  error = data ? null : { message: "Update failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -129,20 +105,11 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
 
   let error: any;
 
-  if (isNeon()) {
-    const res = await execute(
-      `DELETE FROM application_packets WHERE application_id = $1`,
-      [params.id]
-    );
-    error = res.rowCount === 0 ? { message: "Not found" } : null;
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_packets")
-      .delete()
-      .eq("application_id", params.id);
-    error = res.error;
-  }
+  const res = await execute(
+    `DELETE FROM application_packets WHERE application_id = $1`,
+    [params.id]
+  );
+  error = res.rowCount === 0 ? { message: "Not found" } : null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

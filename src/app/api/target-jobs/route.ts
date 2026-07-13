@@ -5,8 +5,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, execute } from "@/server/db/neon";
 import { listTargetJobsByCandidate, createTargetJob } from "@/server/repositories/targetJobsRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";
@@ -121,24 +119,20 @@ export async function POST(req: NextRequest) {
   }
 
   if (keywordsToInsert.length > 0) {
-    if (isNeon()) {
-      const cols = Object.keys(keywordsToInsert[0]);
-      const values: (string | number | null)[] = [];
-      const placeholders: string[] = [];
-      let paramIdx = 1;
-      for (const r of keywordsToInsert) {
-        const rowPlaceholders: string[] = [];
-        for (const col of cols) {
-          rowPlaceholders.push(`$${paramIdx++}`);
-          values.push((r as any)[col]);
-        }
-        placeholders.push(`(${rowPlaceholders.join(", ")})`);
+    const cols = Object.keys(keywordsToInsert[0]);
+    const values: (string | number | null)[] = [];
+    const placeholders: string[] = [];
+    let paramIdx = 1;
+    for (const r of keywordsToInsert) {
+      const rowPlaceholders: string[] = [];
+      for (const col of cols) {
+        rowPlaceholders.push(`$${paramIdx++}`);
+        values.push((r as any)[col]);
       }
-      const sql = `INSERT INTO job_keywords (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`;
-      await query(sql, values);
-    } else {
-      await supabase.from("job_keywords").insert(keywordsToInsert);
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
     }
+    const sql = `INSERT INTO job_keywords (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`;
+    await query(sql, values);
   }
 
   await logActivity({

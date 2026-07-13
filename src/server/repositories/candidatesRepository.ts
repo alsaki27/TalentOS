@@ -1,10 +1,7 @@
 // src/server/repositories/candidatesRepository.ts
 // Data-access abstraction for the candidates table.
-// Implementation supports both Supabase and Neon backends.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 
 export interface CandidateRow {
   id: string;
@@ -31,21 +28,11 @@ export interface CandidateRow {
 }
 
 export async function findCandidateById(id: string): Promise<CandidateRow | null> {
-  if (isNeon()) {
-    const row = await queryOne<CandidateRow>(
-      `SELECT * FROM candidates WHERE id = $1`,
-      [id]
-    );
-    return row ?? null;
-  } else {
-    const { data, error } = await supabase
-      .from("candidates")
-      .select("*")
-      .eq("id", id)
-      .single();
-    if (error || !data) return null;
-    return data as CandidateRow;
-  }
+  const row = await queryOne<CandidateRow>(
+    `SELECT * FROM candidates WHERE id = $1`,
+    [id]
+  );
+  return row ?? null;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -56,42 +43,28 @@ export async function listCandidates(
   opts: { status?: string | null; target_tier?: string | null; search?: string | null; limit?: number } = {}
 ): Promise<CandidateRow[]> {
   const limit = Math.max(1, Math.min(opts.limit ?? 20, 50));
-  if (isNeon()) {
-    const conditions: string[] = [];
-    const values: (string | number | null)[] = [];
-    let idx = 1;
-    if (opts.status) {
-      conditions.push(`status = $${idx++}`);
-      values.push(opts.status);
-    }
-    if (opts.target_tier) {
-      conditions.push(`target_tier = $${idx++}`);
-      values.push(opts.target_tier);
-    }
-    if (opts.search) {
-      conditions.push(`(name ILIKE $${idx++} OR email ILIKE $${idx++})`);
-      values.push(`%${opts.search}%`, `%${opts.search}%`);
-    }
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const sql = `SELECT * FROM candidates ${where} ORDER BY created_at DESC LIMIT $${idx}`;
-    values.push(limit);
-    return query<CandidateRow>(sql, values);
+  const conditions: string[] = [];
+  const values: (string | number | null)[] = [];
+  let idx = 1;
+  if (opts.status) {
+    conditions.push(`status = $${idx++}`);
+    values.push(opts.status);
   }
-  let q = supabase.from("candidates").select("*");
-  if (opts.status) q = q.eq("status", opts.status);
-  if (opts.target_tier) q = q.eq("target_tier", opts.target_tier);
-  if (opts.search) q = q.or(`name.ilike.%${opts.search}%,email.ilike.%${opts.search}%`);
-  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
-  if (error) throw error;
-  return (data ?? []) as CandidateRow[];
+  if (opts.target_tier) {
+    conditions.push(`target_tier = $${idx++}`);
+    values.push(opts.target_tier);
+  }
+  if (opts.search) {
+    conditions.push(`(name ILIKE $${idx++} OR email ILIKE $${idx++})`);
+    values.push(`%${opts.search}%`, `%${opts.search}%`);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const sql = `SELECT * FROM candidates ${where} ORDER BY created_at DESC LIMIT $${idx}`;
+  values.push(limit);
+  return query<CandidateRow>(sql, values);
 }
 
 export async function countCandidates(): Promise<number> {
-  if (isNeon()) {
-    const row = await queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM candidates");
-    return row?.count ?? 0;
-  }
-  const { count, error } = await supabase.from("candidates").select("id", { count: "exact", head: true });
-  if (error) throw error;
-  return count ?? 0;
+  const row = await queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM candidates");
+  return row?.count ?? 0;
 }

@@ -8,7 +8,6 @@
 
 import { NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { queryOne } from "@/server/db/neon";
 import { autoFitOnePage } from "@/lib/falood/autoFit";
 import { ResumeDocument } from "@/lib/falood/types";
@@ -20,22 +19,11 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    data = await queryOne(
-      `SELECT content FROM application_resume_versions WHERE id = $1`,
-      [params.id]
-    );
-    error = data ? null : { message: "Application resume version not found" };
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("application_resume_versions")
-      .select("content")
-      .eq("id", params.id)
-      .single();
-    data = res.data;
-    error = res.error;
-  }
+  data = await queryOne(
+    `SELECT content FROM application_resume_versions WHERE id = $1`,
+    [params.id]
+  );
+  error = data ? null : { message: "Application resume version not found" };
 
   if (error || !data) return NextResponse.json({ error: error?.message || "Application resume version not found" }, { status: 404 });
 

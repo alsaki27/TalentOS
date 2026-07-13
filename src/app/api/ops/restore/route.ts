@@ -5,9 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { loadStoredBackupSnapshot, parseBackupSnapshot, restoreBackupSnapshot } from "@/lib/backup";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { execute } from "@/server/db/neon";
+import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -66,36 +64,18 @@ export async function POST(req: NextRequest) {
 
     const restored = await restoreBackupSnapshot(result.snapshot);
 
-    if (isNeon()) {
-      await execute(
-        'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, metadata) VALUES ($1, $2, $3, $4, $5)',
-        [
-          context!.profile.user_id,
-          context!.profile.email,
-          'backup.restored',
-          'backup',
-          {
-            source: result.source,
-            takenAt: result.snapshot.takenAt,
-            restored,
-            mode: 'upsert',
-          },
-        ]
-      );
-    } else {
-      await supabase.from("audit_logs").insert({
-        actor_user_id: context!.profile.user_id,
-        actor_email: context!.profile.email,
-        action: "backup.restored",
-        entity_type: "backup",
-        metadata: {
-          source: result.source,
-          takenAt: result.snapshot.takenAt,
-          restored,
-          mode: "upsert",
-        },
-      });
-    }
+    await recordAuditEvent({
+      actor_user_id: context!.profile.user_id,
+      actor_email: context!.profile.email,
+      action: "backup.restored",
+      entity_type: "backup",
+      metadata: {
+        source: result.source,
+        takenAt: result.snapshot.takenAt,
+        restored,
+        mode: "upsert",
+      },
+    });
 
     return NextResponse.json({
       ok: true,

@@ -12,8 +12,6 @@
 // separation is the literal enforcement of "AI suggests, human approves" for base
 // resumes (see ROADMAP/PLAN — Architecture decision #9).
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";
@@ -51,45 +49,22 @@ interface BaseResumeContext {
 }
 
 async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | null> {
-  const baseResume = isNeon()
-    ? await queryOne<{ id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string; candidate_id: string }>(
-        "SELECT * FROM base_resumes WHERE id = $1",
-        [baseResumeId]
-      )
-    : await supabase
-        .from("base_resumes")
-        .select("id, name, target_industry, target_roles, content, status, candidate_id")
-        .eq("id", baseResumeId)
-        .single()
-        .then((r: any) => r.data ?? null);
+  const baseResume = await queryOne<{ id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string; candidate_id: string }>(
+    "SELECT * FROM base_resumes WHERE id = $1",
+    [baseResumeId]
+  );
   if (!baseResume) return null;
 
   const [candidate, evidence, originalResume] = await Promise.all([
     findCandidateById(baseResume.candidate_id),
-    isNeon()
-      ? query<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>(
-          "SELECT title, description, related_skills, source_type, confidence_score FROM candidate_evidence WHERE candidate_id = $1",
-          [baseResume.candidate_id]
-        )
-      : supabase
-          .from("candidate_evidence")
-          .select("title, description, related_skills, source_type, confidence_score")
-          .eq("candidate_id", baseResume.candidate_id)
-          .then((r: { data: any[] | null }) => r.data ?? []),
-    isNeon()
-      ? queryOne<{ parsed_json: Record<string, unknown>; filename: string; file_url: string }>(
-          "SELECT parsed_json, filename, file_url FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
-          [baseResume.candidate_id]
-        )
-      : supabase
-          .from("resumes")
-          .select("parsed_json, filename, file_url")
-          .eq("candidate_id", baseResume.candidate_id)
-          .eq("is_original_upload", true)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then((r: { data: { parsed_json: Record<string, unknown>; filename: string; file_url: string } | null }) => r.data ?? null),
+    query<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>(
+      "SELECT title, description, related_skills, source_type, confidence_score FROM candidate_evidence WHERE candidate_id = $1",
+      [baseResume.candidate_id]
+    ),
+    queryOne<{ parsed_json: Record<string, unknown>; filename: string; file_url: string }>(
+      "SELECT parsed_json, filename, file_url FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
+      [baseResume.candidate_id]
+    ),
   ]);
 
   if (!candidate) return null;

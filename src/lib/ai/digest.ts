@@ -6,7 +6,6 @@
 // particular. This automation doesn't hit that failure mode because there's no
 // second turn for the model to degenerate on.
 
-import { supabase } from "@/lib/supabase";
 import { countJobsSince } from "@/server/repositories/jobsRepository";
 import { listOverdueApplications, listApplicationsSince, countApplicationsByStatus } from "@/server/repositories/applicationsRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";

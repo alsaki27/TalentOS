@@ -2,7 +2,7 @@
 // Simple cron-like email queue processor.
 // Called by a cron job or manual trigger to process pending email sequence steps.
 
-import { supabase } from "./supabase";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { sendEmail, renderTemplate } from "./emailService";
 
 export interface ProcessResult {
@@ -16,16 +16,13 @@ export async function processEmailQueue(): Promise<ProcessResult> {
 
   try {
     // Find pending sequence steps where delay_hours has passed since trigger
-    const { data: pendingItems, error } = await supabase
-      .from("email_queue")
-      .select("*, templates:email_templates(*)")
-      .eq("status", "pending")
-      .lte("trigger_at", new Date().toISOString());
-
-    if (error) {
-      result.errors.push(`Queue fetch error: ${error.message}`);
-      return result;
-    }
+    const pendingItems = await query<any>(
+      `SELECT eq.*, et.subject AS template_subject, et.body AS template_body
+       FROM email_queue eq
+       LEFT JOIN email_templates et ON eq.template_id = et.id
+       WHERE eq.status = 'pending' AND eq.trigger_at <= $1`,
+      [new Date().toISOString()]
+    );
 
     if (!pendingItems || pendingItems.length === 0) {
       return result;
@@ -33,26 +30,25 @@ export async function processEmailQueue(): Promise<ProcessResult> {
 
     for (const item of pendingItems) {
       try {
-        const candidate = await supabase
-          .from("candidates")
-          .select("id, name, email")
-          .eq("id", item.candidate_id)
-          .maybeSingle();
+        const candidate = await queryOne<{ id: string; name: string; email: string }>(
+          "SELECT id, name, email FROM candidates WHERE id = $1",
+          [item.candidate_id]
+        );
 
-        if (!candidate.data?.email) {
+        if (!candidate?.email) {
           result.failed++;
           result.errors.push(`Candidate ${item.candidate_id} has no email.`);
-          await supabase
-            .from("email_queue")
-            .update({ status: "failed", error: "No candidate email" })
-            .eq("id", item.id);
+          await execute(
+            "UPDATE email_queue SET status = 'failed', error = 'No candidate email' WHERE id = $1",
+            [item.id]
+          );
           continue;
         }
 
-        const templateBody = item.templates?.body ?? "";
-        const subject = item.templates?.subject ?? "";
+        const templateBody = item.template_body ?? "";
+        const subject = item.template_subject ?? "";
         const mergeData: Record<string, string> = {
-          candidate_name: candidate.data.name || "Candidate",
+          candidate_name: candidate.name || "Candidate",
         };
 
         const renderedBody = renderTemplate(templateBody, mergeData);
@@ -69,16 +65,16 @@ export async function processEmailQueue(): Promise<ProcessResult> {
         });
 
         if (sendResult.success) {
-          await supabase
-            .from("email_queue")
-            .update({ status: "sent", sent_at: new Date().toISOString() })
-            .eq("id", item.id);
+          await execute(
+            "UPDATE email_queue SET status = 'sent', sent_at = $1 WHERE id = $2",
+            [new Date().toISOString(), item.id]
+          );
           result.processed++;
         } else {
-          await supabase
-            .from("email_queue")
-            .update({ status: "failed", error: sendResult.error ?? "Unknown" })
-            .eq("id", item.id);
+          await execute(
+            "UPDATE email_queue SET status = 'failed', error = $1 WHERE id = $2",
+            [sendResult.error ?? "Unknown", item.id]
+          );
           result.failed++;
           result.errors.push(`Step ${item.step_number} failed: ${sendResult.error}`);
         }

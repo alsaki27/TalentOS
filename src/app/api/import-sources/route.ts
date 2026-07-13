@@ -5,7 +5,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 
 const PROVIDERS = ["greenhouse", "lever", "ashby", "usajobs", "career_page"] as const;
@@ -17,21 +16,11 @@ export async function GET() {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    try {
-      data = await query(`SELECT * FROM import_sources ORDER BY created_at DESC`);
-      error = null;
-    } catch (err: any) {
-      error = { message: err.message };
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("import_sources")
-      .select("*")
-      .order("created_at", { ascending: false });
-    data = res.data;
-    error = res.error;
+  try {
+    data = await query(`SELECT * FROM import_sources ORDER BY created_at DESC`);
+    error = null;
+  } catch (err: any) {
+    error = { message: err.message };
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -56,25 +45,14 @@ export async function POST(req: NextRequest) {
   let data: any;
   let error: any;
 
-  if (isNeon()) {
-    try {
-      data = await queryOne(
-        `INSERT INTO import_sources (label, provider, token_or_url) VALUES ($1, $2, $3) RETURNING *`,
-        [label, provider, tokenOrUrl]
-      );
-      error = data ? null : { message: "Insert failed" };
-    } catch (err: any) {
-      error = { message: err.message };
-    }
-  } else {
-    const { supabase } = await import("@/lib/supabase");
-    const res = await supabase
-      .from("import_sources")
-      .insert({ label, provider, token_or_url: tokenOrUrl })
-      .select()
-      .single();
-    data = res.data;
-    error = res.error;
+  try {
+    data = await queryOne(
+      `INSERT INTO import_sources (label, provider, token_or_url) VALUES ($1, $2, $3) RETURNING *`,
+      [label, provider, tokenOrUrl]
+    );
+    error = data ? null : { message: "Insert failed" };
+  } catch (err: any) {
+    error = { message: err.message };
   }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
