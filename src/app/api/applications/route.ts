@@ -189,7 +189,7 @@ export async function POST(req: NextRequest) {
     // normally (Generate remains available to retry manually later).
     if (body.job_id) {
       for (const application of data ?? []) {
-        backgroundDispatch(
+        await backgroundDispatch(
           triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id).catch((err) => {
             console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
           })

@@ -235,7 +235,7 @@ export async function triggerAiWorkflowForApplication(
     startedBy,
   });
 
-  backgroundDispatch(
+  await backgroundDispatch(
     dispatchWorkflowById(workflowId).catch((err) => {
       console.error(`[Workflow ${workflowId}] Initial dispatch failed:`, err);
     })
@@ -520,7 +520,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
     // Immediately dispatch the next stage so the pipeline doesn't stall
     // between stages waiting for the 5-minute cron dispatcher.
-    backgroundDispatch(
+    await backgroundDispatch(
       dispatchWorkflowById(workflowId).catch((err) => {
         console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} failed:`, err);
       })
@@ -540,7 +540,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       await syncWorkflowToApplication(workflowId, "queued");
 
       // Continue retry immediately — don't wait for cron
-      backgroundDispatch(
+      await backgroundDispatch(
         dispatchWorkflowById(workflowId).catch((retryErr) => {
           console.error(`[Workflow ${workflowId}] Retry dispatch failed:`, retryErr);
         })

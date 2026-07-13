@@ -65,7 +65,7 @@ export async function POST(
       );
 
       // Fire-and-forget: respond immediately, dispatch runs in background
-      backgroundDispatch(
+      await backgroundDispatch(
         dispatchWorkflowById(workflowId).catch((err) => {
           console.error(`[Workflow ${workflowId}] Review approval dispatch failed:`, err);
         })
@@ -112,7 +112,7 @@ export async function POST(
       );
 
       // Fire-and-forget: respond immediately, dispatch runs in background
-      backgroundDispatch(
+      await backgroundDispatch(
         dispatchWorkflowById(workflowId).catch((err) => {
           console.error(`[Workflow ${workflowId}] Restart dispatch failed:`, err);
         })

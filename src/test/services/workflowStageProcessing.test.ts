@@ -33,6 +33,14 @@ vi.mock("@/server/repositories/aiAgentConfigRepository", () => ({
   findAgentConfigByAutomationId: vi.fn().mockResolvedValue(null),
 }));
 
+// @opennextjs/cloudflare's entry imports "server-only", which isn't
+// resolvable outside a real Next.js server build - mock it out rather than
+// let applicationAiWorkflowService.ts's static import of backgroundDispatch
+// drag it in at module-load time.
+vi.mock("@/server/lib/waitUntil", () => ({
+  backgroundDispatch: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("@/lib/ai/application-agents/finalizationService", () => ({
   finalizeWorkflow: vi.fn().mockResolvedValue("resume-version-1"),
 }));
