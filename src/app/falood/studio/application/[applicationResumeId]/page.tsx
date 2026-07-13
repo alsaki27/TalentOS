@@ -279,6 +279,57 @@ export default function ApplicationResumeStudioPage() {
       if (typeof rawContent === "string") {
         try { rawContent = JSON.parse(rawContent); } catch { /* leave as string, guard below catches it */ }
       }
+
+      // Older AI workflows (finalized before the finalResumeToStudioDocument
+      // transformer was added) stored raw FinalResumeV1 as content, which has
+      // no "header" field and flat skills: string[] instead of skills: {id,
+      // title, skills}[]. The studio page and A4Preview crash accessing
+      // content.header.fullName. Detect and normalize: if content has no
+      // "header" field but has "skills" as a flat string array, it's a
+      // legacy FinalResumeV1 — construct a minimal ResumeDocument shell.
+      const legacy: any = rawContent;
+      if (legacy && typeof legacy === "object" && !legacy.header) {
+        rawContent = {
+          header: { fullName: (ar as any).candidate_name ?? "" },
+          summary: legacy.summary ? { id: "sum-legacy", text: legacy.summary } : undefined,
+          skills: Array.isArray(legacy.skills) && legacy.skills.length > 0 && typeof legacy.skills[0] === "string"
+            ? [{ id: "skg-legacy", title: "Skills", skills: legacy.skills }]
+            : Array.isArray(legacy.skills) ? legacy.skills : [],
+          experience: Array.isArray(legacy.experience)
+            ? legacy.experience.map((e: any, i: number) => ({
+                id: `exp-legacy-${i}`,
+                title: e.title ?? "",
+                company: e.company ?? "",
+                location: e.location,
+                startDate: e.startDate ?? "",
+                endDate: e.endDate,
+                bullets: Array.isArray(e.bullets)
+                  ? e.bullets.map((b: any, j: number) => ({ id: `b-legacy-${i}-${j}`, text: typeof b === "string" ? b : (b.text ?? "") }))
+                  : [],
+              }))
+            : [],
+          education: Array.isArray(legacy.education)
+            ? legacy.education.map((e: any, i: number) => ({
+                id: `edu-legacy-${i}`,
+                degree: e.degree ?? "",
+                school: e.school ?? "",
+                graduationDate: e.graduationDate ?? undefined,
+              }))
+            : [],
+          certifications: Array.isArray(legacy.certifications)
+            ? legacy.certifications.map((c: any, i: number) => ({ id: `cert-legacy-${i}`, name: typeof c === "string" ? c : (c.name ?? "") }))
+            : [],
+          projects: Array.isArray(legacy.projects)
+            ? legacy.projects.map((p: any, i: number) => ({
+                id: `proj-legacy-${i}`,
+                title: p.name ?? "",
+                description: p.description,
+                bullets: p.description ? [{ id: `pb-legacy-${i}`, text: p.description }] : [],
+              }))
+            : [],
+        };
+      }
+
       setDraftContent(typeof rawContent === "object" && rawContent !== null
         ? JSON.parse(JSON.stringify(rawContent))
         : null

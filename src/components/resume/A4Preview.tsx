@@ -104,6 +104,23 @@ export default function A4Preview({
 
   useEffect(() => { setInternalZoom(zoom); }, [zoom]);
 
+  // Defensive guard: legacy AI workflows stored raw FinalResumeV1 (no header,
+  // flat skills[]) as content. The caller should normalize before passing,
+  // but never trust that — if content.header is missing, bail safely instead
+  // of crashing on content.header.fullName. Placed AFTER all hooks so React's
+  // rules-of-hooks aren't violated.
+  if (!content || typeof content !== "object" || !content.header) {
+    return (
+      <div className="a4-preview-wrapper">
+        <div className="a4-preview-scroll">
+          <div className="a4-paper" style={{ padding: "56px", textAlign: "center" }}>
+            <p className="muted">Resume content is in a legacy format. Use the editor panel to rebuild or re-finalize this resume.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // A4 is 210mm x 297mm. At 96 DPI, that's ~794px x 1123px.
   // We use a scale transform so the page fits the container.
   const A4_WIDTH_PX = 794;
