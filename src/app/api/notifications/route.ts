@@ -37,6 +37,26 @@ export async function GET(req: NextRequest) {
        FROM applications WHERE follow_up_at IS NOT NULL AND follow_up_at <= $1`,
       [today]
     );
+
+    const visibleFollowUps = context.profile.role === "application_engineer"
+      ? (dueFollowUps ?? []).filter((item: any) => (
+        item.assigned_to_user_id === context.profile.user_id
+        || item.assigned_to === context.profile.display_name
+        || item.assigned_to === context.profile.email
+      ))
+      : (dueFollowUps ?? []);
+
+    return NextResponse.json({
+      queue: {
+        total: visibleQueue.length,
+        overdue: visibleQueue.filter((item: any) => item.assignment_due_at && item.assignment_due_at <= today).length,
+        urgent: visibleQueue.filter((item: any) => item.priority === "urgent").length,
+        pendingReview: visibleQueue.filter((item: any) => item.review_status === "pending").length,
+      },
+      followUps: {
+        due: visibleFollowUps.length,
+      },
+    });
   }
 
   // New notification list mode
