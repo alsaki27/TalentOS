@@ -100,7 +100,7 @@ export async function selectBestBaseResume(
   const rows = await neonQuery<BaseResumeCandidate>(
     `SELECT id, name, target_industry, target_roles, content
      FROM base_resumes
-     WHERE candidate_id = $1 AND status = 'active'
+     WHERE candidate_id = $1 AND status = 'approved'
        AND (target_industry IS NOT NULL OR target_roles IS NOT NULL AND array_length(target_roles, 1) > 0)
      ORDER BY created_at DESC`,
     [candidateId]
