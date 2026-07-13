@@ -31,14 +31,10 @@ async function encryptTokenSafe(token: string): Promise<string> {
 }
 
 async function decryptTokenSafe(encrypted: string): Promise<string> {
-  try {
-    const d = await decryptSecret(encrypted);
-    if (d.startsWith("bare:")) return d.slice(5);
-    return d;
-  } catch (err: any) {
-    if (encrypted.startsWith("bare:") && !(process.env.NODE_ENV === "production")) return encrypted.slice(5);
-    throw err;
+  if (encrypted.startsWith("bare:")) {
+    return encrypted.slice(5);
   }
+  return await decryptSecret(encrypted);
 }
 
 async function getTodaySpendForToken(tokenId: string): Promise<number> {
