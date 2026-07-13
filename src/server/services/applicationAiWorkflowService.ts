@@ -583,7 +583,14 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
     count++;
 
     if (wf.recovery_count >= 3 && wf.status === 'failed') {
-      await syncWorkflowToApplication(wf.id, 'failed', undefined, 'Workflow failed after 3 recovery attempts');
+      // Previously only synced to applications.resume_generation_error -
+      // the workflow row itself (what GET .../ai-workflow and the overview
+      // endpoint surface) kept last_error: null, making an exhausted-retry
+      // failure look identical to "no error ever recorded." Persist it in
+      // both places so it's visible wherever someone's looking.
+      const message = `Workflow failed after ${wf.recovery_count} recovery attempts at stage ${wf.current_stage} - each claim orphaned without completing or erroring cleanly`;
+      await updateWorkflowStatus(wf.id, "failed", { last_error: message } as any).catch(() => {});
+      await syncWorkflowToApplication(wf.id, 'failed', undefined, message);
       continue;
     }
 
