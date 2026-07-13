@@ -2,9 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import OpenAI from "openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build",
-});
 
 async function storeErrorScore(job_id: string, candidate_id: string, reasoning: string) {
   const errorBreakdown = {
@@ -26,6 +23,11 @@ export async function POST(req: NextRequest) {
   let candidate_id = "";
 
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: "OPENAI_API_KEY is missing. Configure it to enable match scoring." }, { status: 500 });
+    }
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
     const body = await req.json();
     job_id = body.job_id;
     candidate_id = body.candidate_id;

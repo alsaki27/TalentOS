@@ -3,13 +3,17 @@ import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
 import OpenAI from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "dummy-key-for-build" });
+
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({ error: "OPENAI_API_KEY is missing. Configure it to enable AI analysis." }, { status: 500 });
+    }
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const job = await queryOne(`SELECT id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization FROM jobs WHERE id = $1`, [params.id]);
 
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
