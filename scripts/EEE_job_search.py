@@ -157,6 +157,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Output .xlsx path. Defaults to exports/EEE_jobs_<track>_<date-range>.xlsx.",
     )
+    p.add_argument(
+        "--exclude-senior",
+        action="store_true",
+        help="Drop postings whose title signals Senior/Staff/Principal/Lead/III/IV-level seniority "
+        "(title-text heuristic — the dataset has no real years-of-experience field). A plain title "
+        "with no seniority modifier is kept, since that ambiguity is exactly the target zone for a "
+        "candidate whose experience doesn't cleanly match 'entry' or 'senior'.",
+    )
+    p.add_argument(
+        "--countries",
+        default=None,
+        help="Comma-separated country filter (e.g. 'United States'). Matches the dataset's country field exactly.",
+    )
     return p.parse_args()
 
 
@@ -179,6 +192,9 @@ def resolve_keywords(args: argparse.Namespace) -> tuple[list[str], str]:
 def main() -> int:
     args = parse_args()
     keywords, output_stub = resolve_keywords(args)
+    if args.exclude_senior:
+        output_stub += "_noSenior"
+    countries = [c.strip() for c in args.countries.split(",")] if args.countries else None
 
     run_keyword_export(
         keywords=keywords,
@@ -188,6 +204,8 @@ def main() -> int:
         keywords_only_title=args.keywords_only_title,
         output_path=Path(args.output) if args.output else None,
         output_stub=output_stub,
+        drop_senior_titles=args.exclude_senior,
+        countries=countries,
         sheet_name="EEE Jobs",
         log_prefix="EEE-job-search",
     )

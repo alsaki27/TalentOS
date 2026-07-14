@@ -97,6 +97,24 @@ def matched_keywords(text: str, pattern: re.Pattern) -> list[str]:
     return sorted(set(m.group(0).lower() for m in pattern.finditer(text)))
 
 
+# Title-level seniority signal. Deliberately conservative (word-boundary, same discipline
+# as the keyword matcher) — this is a title-text heuristic, not a real years-of-experience
+# field (the dataset doesn't have one), so it only catches postings that seniority-gate
+# themselves explicitly in the title. A plain "FPGA Design Engineer" with no modifier is
+# NOT flagged senior even though it could be filled at any level — that ambiguity is the
+# point: those are the postings where a lower-experience candidate isn't visibly screened
+# out by the title alone.
+SENIOR_TITLE_PATTERN = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|distinguished|fellow|director|head of|chief|"
+    r"iv|iii|level\s*(3|4|5)|l[3-5])\b",
+    re.IGNORECASE,
+)
+
+
+def is_senior_title(title: str) -> bool:
+    return bool(SENIOR_TITLE_PATTERN.search(str(title or "")))
+
+
 def load_and_filter_one_day(
     fs: HfFileSystem,
     date_str: str,
@@ -205,6 +223,8 @@ def run_keyword_export(
     sheet_name: str = "Jobs",
     log_prefix: str = "openjobdata",
     extra_output_columns: dict[str, str] | None = None,
+    drop_senior_titles: bool = False,
+    countries: list[str] | None = None,
 ) -> pd.DataFrame | None:
     """Runs a full keyword-filtered pull across `days` trailing daily deltas and writes
     an .xlsx. Returns the exported DataFrame (empty-safe: None if nothing matched).
@@ -241,6 +261,23 @@ def run_keyword_export(
                   f"(same job updated on multiple days) -> {len(matches):,} unique postings.")
 
     print(f"[{log_prefix}] {len(matches):,} total unique matched postings across the window.")
+
+    if drop_senior_titles and "title" in matches.columns:
+        before = len(matches)
+        matches = matches[~matches["title"].apply(is_senior_title)].copy()
+        print(f"[{log_prefix}] Dropped {before - len(matches):,} postings with a Senior/Staff/Principal/"
+              f"Lead/III/IV-style title -> {len(matches):,} remaining.")
+
+    if countries and "country" in matches.columns:
+        before = len(matches)
+        wanted = {c.strip().lower() for c in countries}
+        matches = matches[matches["country"].astype(str).str.strip().str.lower().isin(wanted)].copy()
+        print(f"[{log_prefix}] Filtered to countries {countries} -> {len(matches):,} remaining "
+              f"(from {before:,}).")
+
+    if matches.empty:
+        print(f"[{log_prefix}] Nothing left after seniority/country filtering. Nothing to export.")
+        return None
 
     matches = join_company_metadata(fs, matches, log_prefix)
 
