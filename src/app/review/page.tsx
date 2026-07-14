@@ -810,7 +810,7 @@ function ReviewModal({
                     <button
                       className="row-link"
                       style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}
-                      onClick={() => { openFaloodStudio("application_resume_version", packet.final_resume_version_id); onClose(); }}
+                      onClick={() => { openFaloodStudio("application_resume_version", packet.final_resume_version_id!); onClose(); }}
                     >
                       Falood Studio
                     </button>
