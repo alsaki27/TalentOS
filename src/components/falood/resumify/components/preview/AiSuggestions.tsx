@@ -437,7 +437,14 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             // of a hardcoded generic message that hides what actually broke.
             throw new Error(data?.error || 'Failed to get suggestions from AI');
         }
-        return (data.suggestions || []) as Suggestion[];
+        // `reply` is the model's own message when it responded conversationally
+        // instead of (or alongside) suggestions - e.g. declining to add
+        // something it has no evidence for. Show it verbatim so the user knows
+        // why nothing was proposed, rather than a generic canned line.
+        return {
+            suggestions: (data.suggestions || []) as Suggestion[],
+            reply: typeof data.reply === 'string' ? data.reply : undefined,
+        };
     }, [state.resumeData, candidateId]);
 
     const handleSendMessage = async () => {
@@ -469,7 +476,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                 role: m.role,
                 content: m.content
             }));
-            const newSuggestions: Suggestion[] = await fetchAiSuggestions(
+            const { suggestions: newSuggestions, reply } = await fetchAiSuggestions(
                 apiMessages,
                 state.jobDescription || currentInput
             );
@@ -477,9 +484,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             const aiMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: newSuggestions.length > 0
-                    ? 'I have initialized some suggestions for you based on our conversation.'
-                    : 'I acknowledged that. Is there anything specific on the resume you would like to work on?',
+                content: reply
+                    ? reply
+                    : newSuggestions.length > 0
+                        ? 'I have initialized some suggestions for you based on our conversation.'
+                        : 'I acknowledged that. Is there anything specific on the resume you would like to work on?',
                 suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
             };
 
@@ -524,13 +533,15 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         ];
 
         fetchAiSuggestions(apiMessages, jobDescription)
-            .then((newSuggestions) => {
+            .then(({ suggestions: newSuggestions, reply }) => {
                 const aiMsg: ChatMessage = {
                     id: (Date.now() + 1).toString(),
                     role: 'assistant',
-                    content: newSuggestions.length > 0
-                        ? 'Here are some initial suggestions based on your resume and the job description.'
-                        : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
+                    content: reply
+                        ? reply
+                        : newSuggestions.length > 0
+                            ? 'Here are some initial suggestions based on your resume and the job description.'
+                            : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
                     suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
                 };
                 setChatHistory([...messages, aiMsg]);
