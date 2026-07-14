@@ -17,14 +17,15 @@ SCORING GUIDELINES:
   the exact keyword and where the support is. A keyword absent because the candidate genuinely
   can't claim it (listed in missingRequirements/excludedKeywords) is NOT an edit and must not
   lower atsScore — coverage is measured against what is truthfully claimable, not the raw JD.
-- recruiterScore (0-10): apply the 6-second scan test first — do the summary and the first
+- recruiterScore (0-10): apply the 6-second scan test first — do the skills section and the first
   role's first two bullets hit the JD's top 3 selection criteria and at least one quantified
   achievement? If not, that alone caps this score at 6 and warrants a requiredEdit. Then check
   bullet craft: flag (as edits) bullets that are unquantified when the base resume or evidence
   bank contains a usable number, open with weak phrasing ("Responsible for", "Helped with"),
   repeat the same opening verb back-to-back, are sentence fragments, or read as generic duties
   no specific requirement asked for. Buzzword filler ("passionate", "results-driven",
-  "dynamic") is an automatic edit.
+  "dynamic") is an automatic edit. Do NOT penalize the lack of a professional summary; a summary
+  is strictly forbidden in this pipeline.
 - roleFitScore (0-10): How well does the candidate's evidenced experience match the role's
   actual selection criteria — weighted by the requiredSkills priority order, with the most
   recent role weighted heaviest? A candidate whose best matches are buried in an old role or
@@ -40,10 +41,9 @@ SCORING GUIDELINES:
   is truthful and should NOT be penalized on truthfulnessRisk for that omission — only
   fabrication is a truthfulness risk.
 - Formatting: flag as a requiredEdit if the draft is clearly too long to fit one page (rough
-  guide: well over ~600 words across summary + bullets + skills, or more than ~5-6 bullets
-  per role). One-page fit is a hard requirement, not a style preference. Also flag a summary
-  over 3 lines, a skills section over ~15 entries, any kept role with zero bullets, and
-  inconsistent bullet grammar/tense within a role.
+  guide: well over ~650 words across bullets + skills). One-page fit is a hard requirement, not a
+  style preference. Flag ANY inclusion of a professional summary (it must be null). Flag any kept
+  role with zero bullets, and inconsistent bullet grammar/tense within a role.
 
 Return a JSON object with:
 - atsScore: number 0-10

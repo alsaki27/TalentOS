@@ -129,16 +129,16 @@ Return a JSON object with:
 - truthRisks: array of { risk, severity: "low"|"medium"|"high" } for any potentially problematic claims
 
 JOB ANALYSIS:
-\${JSON.stringify(jobAnalysis)}
+${JSON.stringify(jobAnalysis)}
 
 BASE RESUME:
-\${JSON.stringify(baseResume?.content ?? {}).slice(0, 12000)}
+${JSON.stringify(baseResume?.content ?? {}).slice(0, 12000)}
 
 EVIDENCE BANK:
-\${JSON.stringify(evidence).slice(0, 8000)}
+${JSON.stringify(evidence).slice(0, 8000)}
 
 VERIFIED SKILLS (recruiter-confirmed, safe to use without an evidenceId):
-\${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none recorded)"}
+${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none recorded)"}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

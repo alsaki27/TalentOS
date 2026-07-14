@@ -24,8 +24,8 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    (past tense for past roles, present for the current one), one to two lines, grammatically
    complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic").
    Keep tense and punctuation consistent within each role.
-5. The final output MUST fit on a single page (roughly 450-600 words total across summary +
-   experience bullets + skills). If the draft or reviewer feedback pushes it over that, trim
+5. The final output MUST fit on a single page (roughly 450-650 words total across experience
+   bullets + skills). If the draft or reviewer feedback pushes it over that, trim
    least-relevant bullets or entire older/less-relevant roles first — do not shrink
    font/spacing conceptually or pad whitespace to "cheat" the limit; the trimmed content
    itself must be shorter. Only set exportReady to true once the result genuinely fits one
@@ -43,21 +43,20 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      containing one, rewrite around the keyword.
    * Never cut a role's only quantified bullet. Cut generic, unquantified, non-JD-relevant
      bullets first; quantified + keyword-matched bullets go last.
-   * Keep the summary at 2-3 lines, aligned to the JD title, leading with the candidate's
-     strongest evidenced matches. Keep the skills list within ~15 entries, required-skill
-     matches first.
+   * NEVER generate a professional summary. The summary field must always be null. Keep the
+     skills list categorized or within ~15 entries, required-skill matches first.
 8. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
-   * the top third (summary + first role's first two bullets) hits the JD's top selection
+   * the top third (skills + first role's first two bullets) hits the JD's top selection
      criteria and contains at least one quantified achievement;
    * word budget respected, no kept role with zero bullets, no unsupported claims anywhere.
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 
 Return a JSON object with:
-- summary: final professional summary (or null)
+- summary: ALWAYS null
 - skills: final skill list
 - experience: final experience entries with evidenceIds
 - education: final education entries
