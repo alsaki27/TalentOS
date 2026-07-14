@@ -76,6 +76,18 @@ export default function ResumeParsingStatusPage() {
       const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
+
+      // The server's own self-fetch dispatch (a Worker calling its own URL
+      // from within this same GET request) is unreliable in production -
+      // confirmed live, workflows sat queued for 5+ minutes with this page
+      // open and polling the whole time. A real client-initiated POST
+      // never failed once in the same testing, so fire it directly instead
+      // of hoping the server-side one landed. Fire-and-forget: the next
+      // 6s poll picks up whatever it advanced.
+      if (data.needsDispatch) {
+        fetch("/api/application-ai-workflows/dispatch", { method: "POST" }).catch(() => {});
+      }
+
       const incoming: WorkflowCard[] = data.workflows ?? [];
       setWorkflows((prev) => {
         const prevMap = new Map(prev.map((w) => [w.id, w]));

@@ -80,7 +80,18 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ workflows: rows });
+    // Belt-and-suspenders: the self-fetch above (Worker calling its own
+    // public URL from inside a request it's still handling) is unreliable
+    // in production - confirmed live, a batch of 10 freshly queued
+    // workflows sat completely untouched for 5+ minutes despite this route
+    // being polled every 6s the whole time (ruling out the caching issue
+    // force-dynamic above already fixed), while a plain client-initiated
+    // POST to /dispatch from a real browser tab succeeded instantly, every
+    // single time, no exceptions. Surface that signal so callers (the
+    // application-queue and resume-parsing-status pollers) can also fire a
+    // real, separate client->server POST instead of depending solely on
+    // this Worker-to-itself fetch.
+    return NextResponse.json({ workflows: rows, needsDispatch: hasQueuedOrStalledWork });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

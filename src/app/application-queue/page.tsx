@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 interface QueueItem {
@@ -172,17 +172,30 @@ export default function ApplicationQueuePage() {
   // on Cloudflare Workers and the GitHub Actions cron safety net has been
   // observed running 30-40 minutes apart instead of ~5. Anyone with this
   // page open becomes a much faster safety net than the cron gap.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
 
   useEffect(() => {
     const interval = setInterval(async () => {
-      const hasActiveWork = itemsRef.current.some((i) => i.workflow_status && ["queued", "running"].includes(i.workflow_status));
-      if (!hasActiveWork) return;
+      // Previously gated on itemsRef already showing an active
+      // workflow_status before even asking the server - a stale/incomplete
+      // initial snapshot (e.g. applications created via a different flow,
+      // or a race between application creation and this page's load) meant
+      // the poller silently never checked at all. Always poll instead; the
+      // request is cheap and this is what actually finds newly-queued work.
       try {
         const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
         if (!res.ok) return;
         const data = await res.json();
+
+        // Server-side self-dispatch (the Worker fetching its own URL from
+        // within this same GET request) is unreliable in production -
+        // confirmed live, a batch of workflows sat queued for 5+ minutes
+        // despite this exact polling running the whole time. A real
+        // client-initiated POST never failed once in the same testing, so
+        // fire it directly instead of hoping the server-side one landed.
+        if (data.needsDispatch) {
+          fetch("/api/application-ai-workflows/dispatch", { method: "POST" }).catch(() => {});
+        }
+
         const byWorkflowId = new Map((data.workflows ?? []).map((w: any) => [w.id, w]));
 
         const justCompleted: QueueItem[] = [];
