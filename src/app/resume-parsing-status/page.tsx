@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback, memo } from "react";
 import Link from "next/link";
 import { APPLICATION_AGENT_METAS } from "@/lib/ai/application-agents/types";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 interface WorkflowCard {
   id: string;
@@ -324,7 +325,7 @@ const BoardCard = memo(function BoardCard({
           <button
             className="btn-compact btn-sm"
             style={{ fontSize: 10, padding: "2px 6px" }}
-            onClick={() => window.open(`/falood/studio/application/${wf.tailored_resume_version_id}`, "_blank")}
+            onClick={() => openFaloodStudio("application_resume_version", wf.tailored_resume_version_id!)}
           >
             Studio
           </button>

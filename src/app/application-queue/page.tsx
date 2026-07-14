@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 interface QueueItem {
   id: string;
@@ -381,7 +382,7 @@ export default function ApplicationQueuePage() {
         const d = await res.json();
         setFaloodResumes(p => ({ ...p, [item.candidates!.id]: [...(p[item.candidates!.id] ?? []), d] }));
         setFeedback({ kind: "success", text: "Base resume created. Opening Studio…" });
-        window.open(`/falood/studio/base/${d.id}`, "_blank");
+        openFaloodStudio("base_resume", d.id);
       } else {
         const d = await res.json().catch(() => ({}));
         setFeedback({ kind: "error", text: d.error || "Build failed." });
@@ -645,7 +646,7 @@ export default function ApplicationQueuePage() {
                               </button>
                             ) : (
                               (faloodResumes[item.candidates.id] ?? []).map((br: any) => (
-                                <button key={br.id} className="dropdown-item" onClick={() => { window.open(`/falood/studio/base/${br.id}`, "_blank"); setFaloodOpen(null); }}>
+                                <button key={br.id} className="dropdown-item" onClick={() => { openFaloodStudio("base_resume", br.id); setFaloodOpen(null); }}>
                                   {br.name || "Untitled"}
                                 </button>
                               ))
@@ -790,7 +791,7 @@ function PipelineActions({
           <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
         )}
         <button className="btn-primary btn-sm"
-          onClick={() => window.open(`/falood/studio/application/${item.workflow_resume_version_id}`, "_blank")}>
+          onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
           ✏️ Open in Studio
         </button>
         <FindingsButton item={item} />

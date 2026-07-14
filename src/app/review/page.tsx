@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../Skeleton";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 const REVIEWER_ROLES = ["admin", "manager", "application_engineer"];
 
@@ -806,9 +807,13 @@ function ReviewModal({
                 packet?.final_resume_version_id ? (
                   <p className="muted" style={{ fontSize: 12 }}>
                     Command history is available in the{" "}
-                    <Link href={`/falood/studio/application/${packet.final_resume_version_id}`} onClick={onClose}>
+                    <button
+                      className="row-link"
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}
+                      onClick={() => { openFaloodStudio("application_resume_version", packet.final_resume_version_id); onClose(); }}
+                    >
                       Falood Studio
-                    </Link>
+                    </button>
                     .
                   </p>
                 ) : (
@@ -817,9 +822,13 @@ function ReviewModal({
               ) : (
                 <p className="muted" style={{ fontSize: 12 }}>
                   Command history is available in the{" "}
-                  <Link href={`/falood/studio/base/${item.id}`} onClick={onClose}>
+                  <button
+                    className="row-link"
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}
+                    onClick={() => { openFaloodStudio("base_resume", item.id); onClose(); }}
+                  >
                     Falood Studio
-                  </Link>
+                  </button>
                   .
                 </p>
               )}

@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
+import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 
 interface BaseResumeSummary {
   id: string;
@@ -111,7 +112,6 @@ interface TailoredResumeEntry {
   chatHistory: any;
   // AI-generated resume versions from application_resume_versions
   isAiGenerated?: boolean;
-  studioLink?: string; // overrides the default /falood/studio/tailor/[id] link
   sourceType?: string | null;
   atsScore?: number | null;
   applicationId?: string | null;
@@ -273,7 +273,6 @@ export default function CandidateProfilePage() {
           resumeData: null,
           chatHistory: [],
           isAiGenerated: v.source_type === "ai_agent",
-          studioLink: `/falood/studio/application/${v.id}`,
           sourceType: v.source_type,
           atsScore: v.ats_score,
           applicationId: v.application_id ?? null,
@@ -407,7 +406,7 @@ export default function CandidateProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ newContent: buildResumeDocumentFromParsed(parsed) }),
       });
-      router.push(`/falood/studio/base/${baseResume.id}`);
+      router.push(await resolveFaloodStudioUrl("base_resume", baseResume.id));
     }
   }
 
@@ -916,7 +915,15 @@ export default function CandidateProfilePage() {
                         )}
                       </td>
                       <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
-                      <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
+                      <td>
+                        <button
+                          className="row-link"
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+                          onClick={() => openFaloodStudio("base_resume", b.id)}
+                        >
+                          Open in studio
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -992,7 +999,13 @@ export default function CandidateProfilePage() {
                         </td>
                         <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
                         <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          <Link className="row-link" href={t.studioLink ?? `/falood/studio/tailor/${t.id}`}>Open in studio</Link>
+                          <button
+                            className="row-link"
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+                            onClick={() => t.isAiGenerated ? openFaloodStudio("application_resume_version", t.id) : window.open(`/falood/studio/tailor/${t.id}`, "_blank")}
+                          >
+                            Open in studio
+                          </button>
                           {t.applicationId && (
                             <>
                               <button
@@ -1174,12 +1187,12 @@ export default function CandidateProfilePage() {
           candidateName={candidate.name}
           hasUploadedResume={candidate.resumes.some((resume) => resume.kind === "resume")}
           onClose={() => setShowCreateBaseResume(false)}
-          onCreated={(id) => { 
-            setShowCreateBaseResume(false); 
+          onCreated={async (id) => {
+            setShowCreateBaseResume(false);
             if (id) {
-              router.push(`/falood/studio/base/${id}`);
+              router.push(await resolveFaloodStudioUrl("base_resume", id));
             } else {
-              loadBaseResumes(); 
+              loadBaseResumes();
             }
           }}
         />

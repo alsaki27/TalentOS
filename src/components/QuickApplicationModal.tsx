@@ -12,6 +12,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 
 /* ─────────── types ─────────── */
 
@@ -396,7 +397,7 @@ export default function QuickApplicationModal({ onClose, userRole = "" }: Props)
 
     // Close modal and redirect to Falood studio
     onClose();
-    router.push(`/falood/studio/application/${data.versionId}`);
+    router.push(await resolveFaloodStudioUrl("application_resume_version", data.versionId));
   }
 
   /* ── create blank base resume inline ── */
