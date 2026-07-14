@@ -93,7 +93,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--date",
         default=None,
-        help="Date (YYYY-MM-DD, UTC) of the delta file to pull. Defaults to yesterday (UTC).",
+        help="Date (YYYY-MM-DD, UTC) of the delta file to pull. Defaults to yesterday (UTC). "
+        "With --days > 1, this is treated as the LAST (most recent) day of the window.",
+    )
+    p.add_argument(
+        "--days",
+        type=int,
+        default=1,
+        help="Number of trailing daily delta files to pull and combine into one export (default: 1, "
+        "i.e. --date only). E.g. --days 7 pulls the 7 days ending on --date (or yesterday).",
     )
     p.add_argument(
         "--variant",
@@ -172,46 +180,33 @@ def matched_keywords(text: str, pattern: re.Pattern) -> list[str]:
     return sorted(set(m.group(0).lower() for m in pattern.finditer(text)))
 
 
-def main() -> int:
-    args = parse_args()
-    date_str = resolve_date(args.date)
-    keywords = (
-        [k.strip() for k in args.keywords.split(",")] if args.keywords else DEFAULT_OSP_KEYWORDS
-    )
-    pattern = build_keyword_pattern(keywords)
-
-    print(f"[openjobdata-export] date={date_str} variant={args.variant} keywords={len(keywords)}")
-
-    fs = HfFileSystem()
-
-    changes_path = f"{BUCKET_PREFIX}/data/{args.variant}/changes/{date_str}.parquet"
+def load_and_filter_one_day(fs: HfFileSystem, date_str: str, variant: str, pattern: re.Pattern, keywords_only_title: bool) -> pd.DataFrame:
+    """Reads one day's delta file and returns just the OSP-relevant matched rows for that day."""
+    changes_path = f"{BUCKET_PREFIX}/data/{variant}/changes/{date_str}.parquet"
     if not fs.exists(changes_path):
-        print(f"[openjobdata-export] No delta file found for {date_str} at {changes_path}. "
-              f"The dataset may not have published today's delta yet, or the date has no data.", file=sys.stderr)
-        return 1
+        print(f"[openjobdata-export] No delta file found for {date_str} at {changes_path} — skipping.", file=sys.stderr)
+        return pd.DataFrame()
 
     print(f"[openjobdata-export] Reading {changes_path} ...")
     with fs.open(changes_path, "rb") as f:
         jobs_df = pd.read_parquet(f)
-    print(f"[openjobdata-export] Loaded {len(jobs_df):,} job records for {date_str}.")
+    print(f"[openjobdata-export] {date_str}: loaded {len(jobs_df):,} job records.")
 
     if jobs_df.empty:
-        print("[openjobdata-export] No jobs in today's delta. Nothing to export.")
-        return 0
+        return pd.DataFrame()
 
-    # Only postings that appeared/updated as OPEN yesterday, not closures — "jobs posted
-    # yesterday" means new openings, and status filtering avoids exporting yesterday's
-    # closures as if they were new jobs.
+    # Only postings that appeared/updated as OPEN, not closures — "jobs posted" means new
+    # openings, and status filtering avoids exporting that day's closures as if new.
     if "status" in jobs_df.columns:
         jobs_df = jobs_df[jobs_df["status"] == "active"].copy()
-        print(f"[openjobdata-export] {len(jobs_df):,} active postings after status filter.")
+        print(f"[openjobdata-export] {date_str}: {len(jobs_df):,} active postings after status filter.")
 
     title_dept_text = (
         jobs_df.get("title", "").fillna("") + " | " + jobs_df.get("department", "").fillna("")
     )
 
-    if args.variant == "full" and not args.keywords_only_title:
-        print("[openjobdata-export] Extracting description text for full-recall keyword scan (this is the slow part)...")
+    if variant == "full" and not keywords_only_title:
+        print(f"[openjobdata-export] {date_str}: extracting description text for full-recall keyword scan (slow part)...")
         description_text = jobs_df.apply(extract_description_text, axis=1)
         full_text = title_dept_text + " | " + description_text
     else:
@@ -220,11 +215,50 @@ def main() -> int:
     mask = full_text.str.contains(pattern, na=False)
     matches = jobs_df[mask].copy()
     matches["matched_keywords"] = full_text[mask].apply(lambda t: ", ".join(matched_keywords(t, pattern)))
-    print(f"[openjobdata-export] {len(matches):,} OSP-relevant postings matched.")
+    matches["delta_date"] = date_str
+    print(f"[openjobdata-export] {date_str}: {len(matches):,} OSP-relevant postings matched.")
+    return matches
+
+
+def main() -> int:
+    args = parse_args()
+    if args.days < 1:
+        print("[openjobdata-export] --days must be >= 1", file=sys.stderr)
+        return 1
+
+    end_date_str = resolve_date(args.date)
+    end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+    date_strs = [(end_date - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(args.days - 1, -1, -1)]
+
+    keywords = (
+        [k.strip() for k in args.keywords.split(",")] if args.keywords else DEFAULT_OSP_KEYWORDS
+    )
+    pattern = build_keyword_pattern(keywords)
+
+    print(f"[openjobdata-export] window={date_strs[0]}..{date_strs[-1]} ({len(date_strs)} day(s)) "
+          f"variant={args.variant} keywords={len(keywords)}")
+
+    fs = HfFileSystem()
+
+    per_day_matches = [
+        load_and_filter_one_day(fs, d, args.variant, pattern, args.keywords_only_title) for d in date_strs
+    ]
+    matches = pd.concat([m for m in per_day_matches if not m.empty], ignore_index=True) if any(not m.empty for m in per_day_matches) else pd.DataFrame()
 
     if matches.empty:
-        print("[openjobdata-export] No OSP-relevant jobs matched for this date. Nothing to export.")
+        print("[openjobdata-export] No OSP-relevant jobs matched across the window. Nothing to export.")
         return 0
+
+    # A job can appear in more than one day's delta (e.g. updated after posting). Keep the
+    # most recent delta row per job id so the export doesn't duplicate the same posting.
+    if "id" in matches.columns:
+        before = len(matches)
+        matches = matches.sort_values("delta_date").drop_duplicates(subset="id", keep="last")
+        if len(matches) != before:
+            print(f"[openjobdata-export] Deduplicated {before - len(matches):,} repeat postings across days "
+                  f"(same job updated on multiple days) -> {len(matches):,} unique postings.")
+
+    print(f"[openjobdata-export] {len(matches):,} total unique OSP-relevant postings across the window.")
 
     # Join company names/domains for readability.
     companies_path = f"{BUCKET_PREFIX}/data/companies/companies.parquet"
@@ -258,6 +292,7 @@ def main() -> int:
         "apply_url": "Apply URL",
         "matched_keywords": "Matched Keywords",
         "status": "Status",
+        "delta_date": "Delta Date",
     }
     present_cols = [c for c in output_columns if c in matches.columns]
     export_df = matches[present_cols].rename(columns=output_columns)
@@ -267,7 +302,11 @@ def main() -> int:
         # convert to naive UTC rather than dropping the offset without normalizing it.
         export_df["Posted At"] = pd.to_datetime(export_df["Posted At"], utc=True).dt.tz_localize(None)
 
-    output_path = Path(args.output) if args.output else Path(__file__).resolve().parent.parent / "exports" / f"osp_jobs_{date_str}.xlsx"
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        suffix = date_strs[-1] if len(date_strs) == 1 else f"{date_strs[0]}_to_{date_strs[-1]}"
+        output_path = Path(__file__).resolve().parent.parent / "exports" / f"osp_jobs_{suffix}.xlsx"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:

@@ -23,9 +23,13 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: "Date to export (YYYY-MM-DD, UTC). Leave blank for yesterday."
+        description: "Last day of the export window (YYYY-MM-DD, UTC). Leave blank for yesterday."
         required: false
         default: ""
+      days:
+        description: "Number of trailing days to combine into one export (default: 1)."
+        required: false
+        default: "1"
 
 jobs:
   export-osp-jobs:
@@ -42,11 +46,14 @@ jobs:
 
       - name: Run export
         run: |
+          ARGS=()
           if [ -n "${{ github.event.inputs.date }}" ]; then
-            python scripts/openjobdata_export.py --date "${{ github.event.inputs.date }}"
-          else
-            python scripts/openjobdata_export.py
+            ARGS+=(--date "${{ github.event.inputs.date }}")
           fi
+          if [ -n "${{ github.event.inputs.days }}" ] && [ "${{ github.event.inputs.days }}" != "1" ]; then
+            ARGS+=(--days "${{ github.event.inputs.days }}")
+          fi
+          python scripts/openjobdata_export.py "${ARGS[@]}"
 
       - name: Upload export as artifact
         uses: actions/upload-artifact@v4
