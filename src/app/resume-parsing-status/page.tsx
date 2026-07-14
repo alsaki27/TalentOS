@@ -49,6 +49,27 @@ const COLUMNS: ColumnDef[] = [
 const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "job_lens", 2: "resume_forge", 3: "hiring_panel", 4: "final_polish", 5: "completed" };
 const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, job_lens: 1, resume_forge: 2, hiring_panel: 3, final_polish: 4, completed: 5 };
 
+// updateWorkflowStatus() sets `updated_at = NOW()` on every status/stage
+// transition (queued->running, stage advance, ->completed, ->failed) - so
+// it doubles as "entered current bucket" without a separate per-stage
+// timestamp fetch. Uses the viewer's own browser locale/timezone (not a
+// fixed one) since this board has international users - each person sees
+// their own local time, not a hardcoded zone.
+const cardTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZoneName: "short",
+});
+function formatCardTime(iso: string): string {
+  try {
+    return cardTimeFormatter.format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
 function StatusBadge({ status }: { status: string }) {
   const cls = status === "completed" ? "badge-success" : status === "failed" ? "badge-danger" : status === "running" ? "badge-info" : "badge-warning";
   return <span className={`badge ${cls}`} style={{ fontSize: 10 }}>{status}</span>;
@@ -298,6 +319,10 @@ const BoardCard = memo(function BoardCard({
           </div>
         </div>
         <StatusBadge status={wf.status} />
+      </div>
+
+      <div className="muted" style={{ fontSize: 10, marginBottom: 4 }} title={new Date(wf.updated_at).toISOString()}>
+        {wf.status === "completed" ? "Completed" : wf.status === "failed" ? "Failed" : "Entered stage"} {formatCardTime(wf.updated_at)}
       </div>
 
       {wf.match_reason && (
