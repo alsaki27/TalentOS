@@ -1571,6 +1571,9 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [status, setStatus] = useState("assigned");
   const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
   const [resumeId, setResumeId] = useState("");
+  const [baseResumes, setBaseResumes] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
+  const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
@@ -1603,9 +1606,21 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   useEffect(() => {
     setResumeId("");
+    setBaseResumes([]);
+    setSelectedBaseResumeId("");
     if (candidateIds.size !== 1) { setResumeVariants([]); return; }
     const [candidateId] = Array.from(candidateIds);
     fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    // Fetch base resumes for the selected candidate
+    setBaseResumesLoading(true);
+    fetch(`/api/base-resumes?candidateId=${candidateId}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: { id: string; name: string; status: string }[]) => {
+        setBaseResumes(data);
+        if (data.length > 0) setSelectedBaseResumeId(data[0].id);
+      })
+      .catch(() => setBaseResumes([]))
+      .finally(() => setBaseResumesLoading(false));
   }, [candidateIds]);
 
   function toggleCandidate(id: string) {
@@ -1685,6 +1700,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         resume_id: variant?.id ?? null,
         resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
         resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        source_type: "base_resume",
+        base_resume_id: selectedBaseResumeId || null,
         assigned_by: currentUser?.display_name || currentUser?.email || null,
         assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
         assigned_by_user_id: currentUser?.user_id ?? null,
@@ -1823,15 +1840,34 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           )}
         </div>
 
-        {candidateIds.size === 1 && resumeVariants.length > 0 && (
+
+
+
+        {candidateIds.size === 1 && (
           <div className="field-group" style={{ marginTop: "16px" }}>
-            <label>Resume version</label>
-            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
-              <option value="">Uploaded Resume (default)</option>
-              {resumeVariants.map((r) => (
-                <option key={r.id} value={r.id}>{r.label}</option>
-              ))}
-            </select>
+            <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+              Base Resume
+            </label>
+            {baseResumesLoading ? (
+              <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
+            ) : baseResumes.length > 0 ? (
+              <select
+                value={selectedBaseResumeId}
+                onChange={(e) => setSelectedBaseResumeId(e.target.value)}
+                style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+              >
+                {baseResumes.map((br) => (
+                  <option key={br.id} value={br.id}>
+                    {br.name} ({br.status})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warning, #b45309)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                No base resumes found for this candidate. The AI workflow will create one automatically.
+              </div>
+            )}
           </div>
         )}
 

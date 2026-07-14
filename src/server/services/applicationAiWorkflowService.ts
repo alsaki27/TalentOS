@@ -183,6 +183,7 @@ export type TriggerWorkflowResult =
 export async function triggerAiWorkflowForApplication(
   applicationId: string,
   startedBy?: string,
+  preferredBaseResumeId?: string,
 ): Promise<TriggerWorkflowResult> {
   const existing = await findActiveWorkflowByApplicationId(applicationId);
   if (existing) {
@@ -218,20 +219,27 @@ export async function triggerAiWorkflowForApplication(
   let matchScore: number | null = null;
   let matchReason: string | null = null;
   if (!resumeRow) {
-    // Domain-matched base resume selection — score each active base_resume
-    // by industry/role overlap with the job, pick the best one, materialize
-    // from it (not from the most recent), and persist the score + reason so
-    // the status page can show why this resume was chosen.
-    const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
-    if (best) {
-      matchScore = best.score;
-      matchReason = best.reason;
-      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, best.resume.id);
+    if (preferredBaseResumeId) {
+      // User explicitly chose a base resume — honour that choice instead
+      // of running the automatic best-match selection.
+      matchReason = "User-selected base resume";
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, preferredBaseResumeId);
     } else {
-      resumeRow = await queryOne<any>(
-        "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
-        [appRow.candidate_id]
-      );
+      // Domain-matched base resume selection — score each active base_resume
+      // by industry/role overlap with the job, pick the best one, materialize
+      // from it (not from the most recent), and persist the score + reason so
+      // the status page can show why this resume was chosen.
+      const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
+      if (best) {
+        matchScore = best.score;
+        matchReason = best.reason;
+        resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, best.resume.id);
+      } else {
+        resumeRow = await queryOne<any>(
+          "SELECT * FROM application_resume_versions WHERE candidate_id = $1 AND source_type = 'base_resume' ORDER BY created_at DESC LIMIT 1",
+          [appRow.candidate_id]
+        );
+      }
     }
   }
   if (!resumeRow) {

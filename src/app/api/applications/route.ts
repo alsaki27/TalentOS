@@ -154,7 +154,7 @@ export async function POST(req: NextRequest) {
     if (body.job_id) {
       for (const application of data ?? []) {
         await backgroundDispatch(
-          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id).catch((err) => {
+          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, body.base_resume_id ?? undefined).catch((err) => {
             console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
           })
         );
