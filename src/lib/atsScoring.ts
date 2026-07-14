@@ -1,10 +1,19 @@
-import OpenAI from "openai";
+// This module previously called `new OpenAI(...)` directly against a
+// hardcoded, quota-exhausted OPENAI_API_KEY, bypassing the app's
+// multi-provider routing/key-management system - same root cause as
+// src/server/services/faloodAiService.ts and the Jobs page match-score
+// bug. Confirmed live: every ATS Score Analysis run 500'd with "429 You
+// exceeded your current quota." Routed through
+// callWithUsageTracking("ats_scoring", ...) instead. OpenAI's strict
+// json_schema response_format isn't part of the shared AiProvider
+// interface, so both calls now prompt for raw JSON and parse leniently
+// (fence-stripping), the same pattern every other routed AI feature uses.
+import { callWithUsageTracking } from "@/lib/ai/routing";
+import { textOf } from "@/lib/ai/provider";
 
-function getOpenAIClient() {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is missing. Configure it to enable ATS scoring.");
-  }
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function parseJsonResponse<T>(raw: string): T {
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  return JSON.parse(cleaned || "{}") as T;
 }
 
 export type ResumeType = "base" | "tailored";
@@ -182,8 +191,18 @@ export function computeDeterministicScore(
 }
 
 export async function extractStructuredData(resumeText: string, jobText?: string): Promise<AtsExtractionResult> {
-  const systemPrompt = `You are an expert ATS extraction parser. Your goal is to extract structured facts from the given resume and job description. Do NOT hallucinate. Do NOT calculate scores. Only extract what is explicitly written.`;
-  
+  const systemPrompt = `You are an expert ATS extraction parser. Your goal is to extract structured facts from the given resume and job description. Do NOT hallucinate. Do NOT calculate scores. Only extract what is explicitly written.
+
+Output strictly valid JSON (no markdown fences, no explanation) matching this exact schema:
+{
+  "candidate": {
+    "skills": ["string"],
+    "yearsOfExperience": number,
+    "education": [{"degree": "string", "field": "string"}]
+  },
+  "job": {"hardSkills": ["string"], "niceToHaveSkills": ["string"], "minYearsOfExperience": number, "educationRequirement": "string"} or null
+}`;
+
   const userPrompt = `
 RESUME:
 ${resumeText.substring(0, 5000)}
@@ -191,68 +210,16 @@ ${resumeText.substring(0, 5000)}
 ${jobText ? `JOB DESCRIPTION:\n${jobText.substring(0, 3000)}` : ""}
 `;
 
-  const schema = {
-    name: "extract_ats_data",
-    schema: {
-      type: "object",
-      properties: {
-        candidate: {
-          type: "object",
-          properties: {
-            skills: { type: "array", items: { type: "string" } },
-            yearsOfExperience: { type: "number" },
-            education: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  degree: { type: "string" },
-                  field: { type: "string" }
-                },
-                required: ["degree", "field"],
-                additionalProperties: false
-              }
-            }
-          },
-          required: ["skills", "yearsOfExperience", "education"],
-          additionalProperties: false
-        },
-        job: {
-          type: ["object", "null"],
-          properties: {
-            hardSkills: { type: "array", items: { type: "string" } },
-            niceToHaveSkills: { type: "array", items: { type: "string" } },
-            minYearsOfExperience: { type: "number" },
-            educationRequirement: { type: "string" }
-          },
-          required: ["hardSkills", "niceToHaveSkills", "minYearsOfExperience", "educationRequirement"],
-          additionalProperties: false
-        }
-      },
-      required: ["candidate", "job"],
-      additionalProperties: false
-    }
-  };
-
-  const openai = getOpenAIClient();
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-2024-08-06",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
-    ],
-    temperature: 0,
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: schema.name,
-        schema: schema.schema as any,
-        strict: true
-      }
-    }
+  const { result: response } = await callWithUsageTracking("ats_scoring", undefined, async (provider) => {
+    return provider.send({
+      system: systemPrompt,
+      messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+      tools: [],
+      temperature: 0,
+    });
   });
 
-  const parsed = JSON.parse(response.choices[0].message.content || "{}");
+  const parsed = parseJsonResponse<any>(textOf(response.content));
   if (!jobText) {
     parsed.job = null;
   }
@@ -263,7 +230,10 @@ export async function generateNarrative(
   extraction: AtsExtractionResult,
   breakdown: AtsScoreBreakdown
 ): Promise<AtsNarrative> {
-  const systemPrompt = `You are an expert ATS feedback generator. Based ONLY on the provided JSON data (extracted facts and computed score breakdown), generate 3 short, actionable arrays of strings: strengths, missing keywords, and improvement suggestions. Do not make up facts not present in the JSON. Keep it professional and concise.`;
+  const systemPrompt = `You are an expert ATS feedback generator. Based ONLY on the provided JSON data (extracted facts and computed score breakdown), generate 3 short, actionable arrays of strings: strengths, missing keywords, and improvement suggestions. Do not make up facts not present in the JSON. Keep it professional and concise.
+
+Output strictly valid JSON (no markdown fences, no explanation) matching this exact schema:
+{"strengths": ["string"], "missingKeywords": ["string"], "improvementSuggestions": ["string"]}`;
 
   const userPrompt = `
 EXTRACTION FACT DATA:
@@ -273,37 +243,14 @@ COMPUTED BREAKDOWN:
 ${JSON.stringify(breakdown, null, 2)}
 `;
 
-  const schema = {
-    name: "generate_narrative",
-    schema: {
-      type: "object",
-      properties: {
-        strengths: { type: "array", items: { type: "string" }, description: "3-4 short sentences highlighting strengths" },
-        missingKeywords: { type: "array", items: { type: "string" }, description: "List of missing required or nice-to-have skills" },
-        improvementSuggestions: { type: "array", items: { type: "string" }, description: "2-3 actionable suggestions for the resume" }
-      },
-      required: ["strengths", "missingKeywords", "improvementSuggestions"],
-      additionalProperties: false
-    }
-  };
-
-  const openai = getOpenAIClient();
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-2024-08-06",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
-    ],
-    temperature: 0,
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: schema.name,
-        schema: schema.schema as any,
-        strict: true
-      }
-    }
+  const { result: response } = await callWithUsageTracking("ats_scoring", undefined, async (provider) => {
+    return provider.send({
+      system: systemPrompt,
+      messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+      tools: [],
+      temperature: 0,
+    });
   });
 
-  return JSON.parse(response.choices[0].message.content || "{}") as AtsNarrative;
+  return parseJsonResponse<AtsNarrative>(textOf(response.content));
 }
