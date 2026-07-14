@@ -6,8 +6,8 @@ import { AiProvider, AiMessage, AiTool } from "@/lib/ai/provider";
 import { estimateCost } from "@/lib/ai/pricing";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
-import { buildProviderFromDbKey } from "@/server/services/aiProvider";
-import { getProviderByName, getActiveProviderAsync } from "@/lib/ai/index";
+import { buildProviderFromDbKey, getActiveProviderWithFallback } from "@/server/services/aiProvider";
+import { getProviderByName } from "@/lib/ai/index";
 
 const ALLOW_GLOBAL_FALLBACK = process.env.ALLOW_GLOBAL_AI_FALLBACK === 'true'; // default false for production
 
@@ -85,6 +85,7 @@ async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?:
 export async function getProviderForAutomation(
   automationId: string,
   excludeKeyIds?: Set<string>,
+  excludeProviderNames?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -115,6 +116,9 @@ export async function getProviderForAutomation(
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
       if (!keyRow || !keyRow.is_enabled) continue;
+      // Skip this key's provider if it already returned a rate-limit error
+      // in the current call chain.
+      if (excludeProviderNames?.has(keyRow.provider)) continue;
       const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
       if (blockedStatuses.includes(keyRow.status)) continue;
 
@@ -155,6 +159,8 @@ export async function getProviderForAutomation(
         };
       }
     } else if (route.provider) {
+      // Skip this named provider if it already returned a rate-limit error.
+      if (excludeProviderNames?.has(route.provider)) continue;
       const envProvider = getProviderByName(route.provider);
       if (envProvider) {
         return {
@@ -170,6 +176,7 @@ export async function getProviderForAutomation(
       const dbKeys = await listEnabledAiKeys();
       for (const key of dbKeys) {
         if (excludeKeyIds?.has(key.id)) continue;
+        if (excludeProviderNames?.has(key.provider)) continue;
         if (key.provider !== route.provider) continue;
         const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
         if (blockedStatuses.includes(key.status)) continue;
@@ -216,17 +223,24 @@ export async function getProviderForAutomation(
     }
   }
 
-  // 3. Fall back to global env-based chain
+  // 3. Fall back to global env-based chain, then DB keys if the env
+  //    provider is excluded (e.g. rate-limited).
   if (!ALLOW_GLOBAL_FALLBACK) {
-    throw new Error("All configured routes failed and global fallback is disabled.");
+    throw new Error("All configured routes failed and global fallback is disabled. Configure a route for this automation in /admin/ai → Agents & Routing.");
   }
 
-  const global = await getActiveProviderAsync();
-  if (global) {
+  const providerNames: Array<"anthropic" | "openai" | "nvidia" | "google" | "google_vertex_proxy" | "glm" | "mock"> = [
+    "anthropic", "nvidia", "google_vertex_proxy", "google", "openai", "glm",
+  ];
+
+  for (const name of providerNames) {
+    if (excludeProviderNames?.has(name)) continue;
+    const envProv = getProviderByName(name);
+    if (!envProv) continue;
     await recordUsageEvent({
       automationId,
       aiKeyId: null,
-      provider: global.name,
+      provider: name,
       model: null,
       outcome: "success",
       latencyMs: 0,
@@ -240,10 +254,38 @@ export async function getProviderForAutomation(
       attemptNumber: null,
       routeRank: null,
     });
-
     return {
-      provider: global.provider,
-      name: global.name,
+      provider: envProv.provider,
+      name,
+      aiKeyId: null,
+      automationId,
+      routeRank: null,
+    };
+  }
+
+  // 4. Last resort — DB-managed keys
+  const dbFallback = await getActiveProviderWithFallback();
+  if (dbFallback && !excludeProviderNames?.has(dbFallback.name)) {
+    await recordUsageEvent({
+      automationId,
+      aiKeyId: null,
+      provider: dbFallback.name,
+      model: null,
+      outcome: "success",
+      latencyMs: 0,
+      inputTokens: null,
+      outputTokens: null,
+      errorMessage: null,
+      errorCode: "global_emergency_fallback",
+      userId: null,
+      workflowId: null,
+      applicationId: null,
+      attemptNumber: null,
+      routeRank: null,
+    });
+    return {
+      provider: dbFallback.provider,
+      name: dbFallback.name,
       aiKeyId: null,
       automationId,
       routeRank: null,
@@ -302,6 +344,11 @@ export interface CallContext {
  * Wrapper that resolves a provider via D-AI.2.1, calls fn, and records a usage event.
  * Handles both success and failure paths. Token/cost fields populated from provider
  * response usage when available.
+ *
+ * On rate-limit / quota errors, the function automatically retries with the next
+ * available provider in the fallback chain, skipping the one that returned the error.
+ * It retries up to MAX_RETRIES times before giving up.
+ *
  * Returns both the user's result and provider metadata.
  */
 export async function callWithUsageTracking<T>(
@@ -310,100 +357,153 @@ export async function callWithUsageTracking<T>(
   fn: (provider: AiProvider) => Promise<T>,
   excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
-  const resolved = await getProviderForAutomation(automationId, excludeKeyIds);
-  if (!resolved) {
-    throw new Error(`No AI provider available for automation: ${automationId}`);
-  }
 
-  const start = Date.now();
-  let outcome: "success" | "failure" | "timeout" = "success";
-  let errorMessage: string | null = null;
-  let errorCode: string | null = null;
-  let inputTokens: number | null = null;
-  let outputTokens: number | null = null;
+  const MAX_RETRIES = 3;
+  const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
+  const excludedProviders = new Set<string>();
 
-  let capturedUsage: { input_tokens: number; output_tokens: number } | null = null;
+  let lastError: Error | null = null;
+  let lastResolved: AutomationRouteResult | null = null;
 
-  const wrappedProvider: AiProvider = {
-    send: async (opts) => {
-      const response = await resolved.provider.send(opts);
-      if (response.usage) {
-        capturedUsage = response.usage;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const resolved = await getProviderForAutomation(
+      automationId,
+      excludedKeyIds,
+      attempt > 0 ? excludedProviders : undefined,
+    );
+
+    if (!resolved) {
+      if (lastError) {
+        if (lastError instanceof AiRouteCallError) throw lastError;
+        throw new AiRouteCallError(
+          lastError.message || "No AI provider available",
+          {
+            aiKeyId: lastResolved?.aiKeyId ?? null,
+            provider: lastResolved?.name ?? "unknown",
+            model: lastResolved?.model ?? null,
+            routeRank: lastResolved?.routeRank ?? null,
+            errorCode: classifyErrorCode(lastError),
+          }
+        );
       }
-      return response;
-    },
-  };
-
-  try {
-    const result = await fn(wrappedProvider);
-
-    if (capturedUsage) {
-      const usage: { input_tokens: number; output_tokens: number } = capturedUsage;
-      inputTokens = usage.input_tokens;
-      outputTokens = usage.output_tokens;
+      throw new Error(`No AI provider available for automation: ${automationId}`);
     }
 
-    const latencyMs = Date.now() - start;
-    outcome = "success";
+    lastResolved = resolved;
+    const start = Date.now();
+    let outcome: "success" | "failure" | "timeout" = "success";
+    let errorMessage: string | null = null;
+    let errorCode: string | null = null;
+    let inputTokens: number | null = null;
+    let outputTokens: number | null = null;
+    let capturedUsage: { input_tokens: number; output_tokens: number } | null = null;
 
-    await recordUsageEvent({
-      automationId,
-      aiKeyId: resolved.aiKeyId,
-      provider: resolved.name,
-      model: resolved.model ?? null,
-      outcome,
-      latencyMs,
-      inputTokens,
-      outputTokens,
-      errorMessage,
-      errorCode,
-      userId: ctx?.userId ?? null,
-      workflowId: ctx?.workflowId ?? null,
-      applicationId: ctx?.applicationId ?? null,
-      attemptNumber: ctx?.attemptNumber ?? null,
-      routeRank: resolved.routeRank,
-    });
+    const wrappedProvider: AiProvider = {
+      send: async (opts) => {
+        const response = await resolved.provider.send(opts);
+        if (response.usage) {
+          capturedUsage = response.usage;
+        }
+        return response;
+      },
+    };
 
-    return { result, providerName: resolved.name, aiKeyId: resolved.aiKeyId, model: resolved.model ?? null, routeRank: resolved.routeRank, limitSkipped: resolved.limitSkipped };
-  } catch (err: any) {
-    const latencyMs = Date.now() - start;
-    errorMessage = err.message ?? "Unknown error";
-    outcome = latencyMs > 60000 ? "timeout" : "failure";
-    errorCode = classifyErrorCode(err);
+    try {
+      const result = await fn(wrappedProvider);
 
-    if (capturedUsage) {
-      const usage: { input_tokens: number; output_tokens: number } = capturedUsage;
-      inputTokens = usage.input_tokens;
-      outputTokens = usage.output_tokens;
+      if (capturedUsage) {
+        const u: { input_tokens: number; output_tokens: number } = capturedUsage;
+        inputTokens = u.input_tokens;
+        outputTokens = u.output_tokens;
+      }
+
+      const latencyMs = Date.now() - start;
+      outcome = "success";
+
+      await recordUsageEvent({
+        automationId,
+        aiKeyId: resolved.aiKeyId,
+        provider: resolved.name,
+        model: resolved.model ?? null,
+        outcome,
+        latencyMs,
+        inputTokens,
+        outputTokens,
+        errorMessage,
+        errorCode,
+        userId: ctx?.userId ?? null,
+        workflowId: ctx?.workflowId ?? null,
+        applicationId: ctx?.applicationId ?? null,
+        attemptNumber: ctx?.attemptNumber ?? null,
+        routeRank: resolved.routeRank,
+      });
+
+      return {
+        result,
+        providerName: resolved.name,
+        aiKeyId: resolved.aiKeyId,
+        model: resolved.model ?? null,
+        routeRank: resolved.routeRank,
+        limitSkipped: resolved.limitSkipped,
+      };
+    } catch (err: any) {
+      lastError = err;
+      const latencyMs = Date.now() - start;
+      errorMessage = err.message ?? "Unknown error";
+      outcome = latencyMs > 60000 ? "timeout" : "failure";
+      errorCode = classifyErrorCode(err);
+
+      if (capturedUsage) {
+        const u: { input_tokens: number; output_tokens: number } = capturedUsage;
+        inputTokens = u.input_tokens;
+        outputTokens = u.output_tokens;
+      }
+
+      await recordUsageEvent({
+        automationId,
+        aiKeyId: resolved.aiKeyId,
+        provider: resolved.name,
+        model: resolved.model ?? null,
+        outcome,
+        latencyMs,
+        inputTokens,
+        outputTokens,
+        errorMessage,
+        errorCode,
+        userId: ctx?.userId ?? null,
+        workflowId: ctx?.workflowId ?? null,
+        applicationId: ctx?.applicationId ?? null,
+        attemptNumber: ctx?.attemptNumber ?? null,
+        routeRank: resolved.routeRank,
+      });
+
+      // On rate-limit / quota errors, exclude this provider and retry.
+      const isRetriable =
+        errorCode === "rate_limit" || errorCode === "auth_error";
+
+      if (isRetriable && attempt < MAX_RETRIES) {
+        if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
+        if (resolved.name) excludedProviders.add(resolved.name);
+        console.warn(
+          `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
+            `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
+        );
+        continue;
+      }
+
+      break; // non-retriable or out of retries
     }
-
-    await recordUsageEvent({
-      automationId,
-      aiKeyId: resolved.aiKeyId,
-      provider: resolved.name,
-      model: resolved.model ?? null,
-      outcome,
-      latencyMs,
-      inputTokens,
-      outputTokens,
-      errorMessage,
-      errorCode,
-      userId: ctx?.userId ?? null,
-      workflowId: ctx?.workflowId ?? null,
-      applicationId: ctx?.applicationId ?? null,
-      attemptNumber: ctx?.attemptNumber ?? null,
-      routeRank: resolved.routeRank,
-    });
-
-    if (err instanceof AiRouteCallError) throw err;
-    throw new AiRouteCallError(err.message || "Provider call failed", {
-      aiKeyId: resolved.aiKeyId,
-      provider: resolved.name,
-      model: resolved.model ?? null,
-      routeRank: resolved.routeRank,
-      errorCode: classifyErrorCode(err),
-    });
   }
+
+  // Shouldn't get here, but just in case:
+  if (lastError instanceof AiRouteCallError) throw lastError;
+  throw new AiRouteCallError(lastError?.message || "Provider call failed", {
+    aiKeyId: lastResolved?.aiKeyId ?? null,
+    provider: lastResolved?.name ?? "unknown",
+    model: lastResolved?.model ?? null,
+    routeRank: lastResolved?.routeRank ?? null,
+    errorCode: lastError ? classifyErrorCode(lastError) : null,
+  });
 }
 
 function classifyErrorCode(err: any): string | null {

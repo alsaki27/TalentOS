@@ -3,13 +3,13 @@
 // POST -> add a new Apify token to the pool
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser, DESTRUCTIVE_MANAGER_ROLES } from "@/lib/auth";
+import { requireCurrentUser } from "@/lib/auth";
 import { listTokens, insertToken, deactivateToken, activateToken } from "@/server/repositories/jobAgentTokenRepository";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   try {
     const tokens = await listTokens();
@@ -20,7 +20,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   const body = await req.json();
   const token = String(body.token ?? "").trim();
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
 // PATCH -> toggle a token's is_active flag.
 // Body: { id: string, is_active: boolean }
 export async function PATCH(req: NextRequest) {
-  const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
+  const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   const body = await req.json();
   const id = String(body.id ?? "").trim();

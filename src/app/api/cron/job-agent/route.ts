@@ -29,12 +29,12 @@ export async function GET(req: NextRequest) {
 
   for (const cg of combinedGroups) {
     try {
-      const titles = getTitlesForGroups(cg.subGroupIds);
+      // roleGroups already expands to the full title list inside getSearchQueries();
+      // passing the same titles again as customKeywords would duplicate every query.
       const result = await executeRun({
         testMode: false,
         useAi: true,
         roleGroups: cg.subGroupIds,
-        customKeywords: titles,
       });
       results.push({ group: cg.label, runId: result.runId });
     } catch (err: any) {

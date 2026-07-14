@@ -66,12 +66,24 @@ export async function getTokenById(id: string): Promise<string | null> {
 
 /**
  * Add a new token to the pool.
+ * If no priority is supplied, assign the next available priority (1-based) so the
+ * UI's "lower runs first" convention stays consistent and priority-0 rows do not
+ * unexpectedly win rotation.
  */
 export async function insertToken(label: string | null, token: string, priority?: number): Promise<JobAgentTokenRow> {
   const encrypted = await encryptTokenSafe(token);
+
+  let resolvedPriority = priority;
+  if (resolvedPriority === undefined || resolvedPriority === null) {
+    const maxRow = await queryOne<{ max_priority: number | null }>(
+      "SELECT COALESCE(MAX(priority), 0) as max_priority FROM job_agent_apify_tokens"
+    );
+    resolvedPriority = (maxRow?.max_priority ?? 0) + 1;
+  }
+
   const row = await queryOne<JobAgentTokenRow>(
     `INSERT INTO job_agent_apify_tokens (label, token_encrypted, priority) VALUES ($1, $2, $3) RETURNING *`,
-    [label, encrypted, priority ?? 0]
+    [label, encrypted, resolvedPriority]
   );
   if (!row) throw new Error("Insert failed");
   return row;

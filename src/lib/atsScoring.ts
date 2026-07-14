@@ -1,20 +1,8 @@
-// This module previously called `new OpenAI(...)` directly against a
-// hardcoded, quota-exhausted OPENAI_API_KEY, bypassing the app's
-// multi-provider routing/key-management system - same root cause as
-// src/server/services/faloodAiService.ts and the Jobs page match-score
-// bug. Confirmed live: every ATS Score Analysis run 500'd with "429 You
-// exceeded your current quota." Routed through
-// callWithUsageTracking("ats_scoring", ...) instead. OpenAI's strict
-// json_schema response_format isn't part of the shared AiProvider
-// interface, so both calls now prompt for raw JSON and parse leniently
-// (fence-stripping), the same pattern every other routed AI feature uses.
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
-function parseJsonResponse<T>(raw: string): T {
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  return JSON.parse(cleaned || "{}") as T;
-}
+const AUTOMATION_EXTRACTION = "ats_extraction";
+const AUTOMATION_NARRATIVE = "ats_narrative";
 
 export type ResumeType = "base" | "tailored";
 
@@ -82,12 +70,6 @@ function levenshteinRatio(a: string, b: string): number {
   return 1 - dp[m][n] / Math.max(m, n);
 }
 
-/**
- * Cross-check the AI's missing-keyword list against the actual candidate skills
- * extracted from the resume. Filters out any keyword that fuzzy-matches a skill
- * already present in the candidate's data, preventing false "missing" reports
- * caused by AI hallucination or inconsistent text vs. structured-data sourcing.
- */
 export function filterMissingKeywords(
   narrative: AtsNarrative,
   candidateSkills: string[]
@@ -190,36 +172,54 @@ export function computeDeterministicScore(
   };
 }
 
-export async function extractStructuredData(resumeText: string, jobText?: string): Promise<AtsExtractionResult> {
-  const systemPrompt = `You are an expert ATS extraction parser. Your goal is to extract structured facts from the given resume and job description. Do NOT hallucinate. Do NOT calculate scores. Only extract what is explicitly written.
+function safeJsonParse(raw: string): any {
+  const stripped = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  return JSON.parse(stripped);
+}
 
-Output strictly valid JSON (no markdown fences, no explanation) matching this exact schema:
-{
-  "candidate": {
-    "skills": ["string"],
-    "yearsOfExperience": number,
-    "education": [{"degree": "string", "field": "string"}]
-  },
-  "job": {"hardSkills": ["string"], "niceToHaveSkills": ["string"], "minYearsOfExperience": number, "educationRequirement": "string"} or null
-}`;
+export async function extractStructuredData(resumeText: string, jobText?: string): Promise<AtsExtractionResult> {
+  const systemPrompt =
+    "You are an expert ATS extraction parser. Your goal is to extract structured facts from the given resume and job description. Do NOT hallucinate. Do NOT calculate scores. Only extract what is explicitly written.";
 
   const userPrompt = `
 RESUME:
 ${resumeText.substring(0, 5000)}
 
 ${jobText ? `JOB DESCRIPTION:\n${jobText.substring(0, 3000)}` : ""}
-`;
 
-  const { result: response } = await callWithUsageTracking("ats_scoring", undefined, async (provider) => {
-    return provider.send({
-      system: systemPrompt,
-      messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
-      tools: [],
-      temperature: 0,
-    });
-  });
+Return ONLY valid JSON (no markdown, no explanation) matching this exact schema:
+{
+  "candidate": {
+    "skills": ["string", ...],
+    "yearsOfExperience": number,
+    "education": [{"degree": "string", "field": "string"}, ...]
+  },
+  "job": ${jobText ? '{ "hardSkills": ["string", ...], "niceToHaveSkills": ["string", ...], "minYearsOfExperience": number, "educationRequirement": "string" }' : "null"}
+}`;
 
-  const parsed = parseJsonResponse<any>(textOf(response.content));
+  const { result, providerName, model } = await callWithUsageTracking(
+    AUTOMATION_EXTRACTION,
+    undefined,
+    async (provider) => {
+      const response = await provider.send({
+        system: systemPrompt,
+        messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+        tools: [],
+        temperature: 0,
+      });
+      return safeJsonParse(textOf(response.content));
+    }
+  );
+
+  console.log(
+    `[atsScoring] extractStructuredData via ${providerName}${model ? `/${model}` : ""}`
+  );
+
+  const parsed = result;
   if (!jobText) {
     parsed.job = null;
   }
@@ -230,10 +230,8 @@ export async function generateNarrative(
   extraction: AtsExtractionResult,
   breakdown: AtsScoreBreakdown
 ): Promise<AtsNarrative> {
-  const systemPrompt = `You are an expert ATS feedback generator. Based ONLY on the provided JSON data (extracted facts and computed score breakdown), generate 3 short, actionable arrays of strings: strengths, missing keywords, and improvement suggestions. Do not make up facts not present in the JSON. Keep it professional and concise.
-
-Output strictly valid JSON (no markdown fences, no explanation) matching this exact schema:
-{"strengths": ["string"], "missingKeywords": ["string"], "improvementSuggestions": ["string"]}`;
+  const systemPrompt =
+    "You are an expert ATS feedback generator. Based ONLY on the provided JSON data (extracted facts and computed score breakdown), generate 3 short, actionable arrays of strings: strengths, missing keywords, and improvement suggestions. Do not make up facts not present in the JSON. Keep it professional and concise.";
 
   const userPrompt = `
 EXTRACTION FACT DATA:
@@ -241,16 +239,31 @@ ${JSON.stringify(extraction, null, 2)}
 
 COMPUTED BREAKDOWN:
 ${JSON.stringify(breakdown, null, 2)}
-`;
 
-  const { result: response } = await callWithUsageTracking("ats_scoring", undefined, async (provider) => {
-    return provider.send({
-      system: systemPrompt,
-      messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
-      tools: [],
-      temperature: 0,
-    });
-  });
+Return ONLY valid JSON (no markdown, no explanation) matching this exact schema:
+{
+  "strengths": ["3-4 short sentences highlighting strengths", ...],
+  "missingKeywords": ["list of missing required or nice-to-have skills", ...],
+  "improvementSuggestions": ["2-3 actionable suggestions for the resume", ...]
+}`;
 
-  return parseJsonResponse<AtsNarrative>(textOf(response.content));
+  const { result, providerName, model } = await callWithUsageTracking(
+    AUTOMATION_NARRATIVE,
+    undefined,
+    async (provider) => {
+      const response = await provider.send({
+        system: systemPrompt,
+        messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+        tools: [],
+        temperature: 0,
+      });
+      return safeJsonParse(textOf(response.content));
+    }
+  );
+
+  console.log(
+    `[atsScoring] generateNarrative via ${providerName}${model ? `/${model}` : ""}`
+  );
+
+  return result as AtsNarrative;
 }

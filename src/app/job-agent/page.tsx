@@ -202,18 +202,18 @@ export default function JobAgentPage() {
     {/* ── Run Dashboard ── */}
     <div className="card" style={{ marginBottom: 16 }}>
       <h2 className="section-title">Run Dashboard</h2>
-      
-      {runs.find(r => r.status === "running") && (
-        <LiveFeedBoard 
-          runId={runs.find(r => r.status === "running")!.id} 
-          onComplete={() => load()} 
+
+      {runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") && (
+        <LiveFeedBoard
+          runId={runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing")!.id}
+          onComplete={() => load()}
         />
       )}
 
       {loading ? <TableSkeleton cols={10} /> : runs.length === 0 ? (
         <p className="muted">No runs yet. Select groups and click Run Now.</p>
       ) : (
-        <table className="table" style={{ marginTop: runs.find(r => r.status === "running") ? 32 : 0 }}>
+        <table className="table" style={{ marginTop: runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") ? 32 : 0 }}>
           <thead><tr><th>Date</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
           <tbody>
             {runs.map((run) => (
@@ -228,9 +228,9 @@ export default function JobAgentPage() {
                 <td style={{ color: "#1e40af" }}>{run.worthy_count}</td>
                 <td style={{ color: "#991b1b" }}>{run.skip_count}</td>
                 <td>
-                  <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" ? "badge-warning" : "badge-danger"}`}
-                    style={run.status === "running" ? { animation: "pulse 1.5s infinite" } : undefined}>
-                    {run.status === "running" ? "⏳ scraping..." : run.status}
+                  <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" || run.status === "processing" ? "badge-warning" : "badge-danger"}`}
+                    style={run.status === "running" || run.status === "processing" ? { animation: "pulse 1.5s infinite" } : undefined}>
+                    {run.status === "running" ? "⏳ scraping..." : run.status === "pending" ? "⏳ pending..." : run.status === "processing" ? "⚙ classifying..." : run.status}
                   </span>
                   {run.error && <div className="form-error" style={{ fontSize: 11 }}>{run.error}</div>}
                 </td>

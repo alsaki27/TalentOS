@@ -1,21 +1,36 @@
 // Neon serverless driver for Cloudflare Workers
-// Updated for @neondatabase/serverless v1.x API
-// Uses lazy initialization + robust error handling
+// Uses lazy initialization + robust error handling.
+// The @neondatabase/serverless driver connects via HTTP (not raw TCP), so
+// it works in Cloudflare Workers, Next.js Edge, and Node.js without pg-native.
+//
+// IMPORTANT: do NOT pass Next.js fetch-extensions like { cache: "no-store" }
+// in fetchOptions. The Neon driver passes fetchOptions directly to the global
+// fetch() call, and non-standard fields cause "TypeError: fetch failed" on
+// runtimes where fetch hasn't been patched (e.g. plain Node with undici).
 
 import { neon, NeonQueryFunction } from "@neondatabase/serverless";
 
 let _sql: NeonQueryFunction<false, false> | null = null;
 
 function getDatabaseUrl(): string {
-  const url = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
-  if (!url) {
+  const raw = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
+  if (!raw) {
     const err = new Error(
       "DATABASE_URL or NEON_DATABASE_URL is not configured. Set it in your environment or Cloudflare secrets."
     );
     console.error("[DB] FATAL: Missing DATABASE_URL");
     throw err;
   }
-  return url;
+  // The Neon HTTP driver connects over HTTPS via the pooler — it does not
+  // open a raw TCP socket.  Strip raw-Postgres-only params that cause the
+  // driver to reject the URL:
+  const url = new URL(raw);
+  url.searchParams.delete("channel_binding");  // TLS channel binding – TCP only
+  const sanitized = url.toString();
+  if (sanitized !== raw) {
+    console.log("[DB] Stripped TCP-only params from DATABASE_URL for HTTP transport");
+  }
+  return sanitized;
 }
 
 function getSql(): NeonQueryFunction<false, false> {
@@ -23,7 +38,10 @@ function getSql(): NeonQueryFunction<false, false> {
     try {
       const url = getDatabaseUrl();
       console.log(`[DB] Initializing Neon connection (host: ${new URL(url).hostname})`);
-      _sql = neon(url, { fetchOptions: { cache: "no-store" } });
+      _sql = neon(url, {
+        // arrayMode: false (default) returns rows as objects
+        // fullResults: false (default) returns just the rows array from .query()
+      });
     } catch (e: any) {
       console.error("[DB] FATAL: Failed to initialize Neon driver:", e.message);
       throw e;
@@ -32,10 +50,8 @@ function getSql(): NeonQueryFunction<false, false> {
   return _sql;
 }
 
-// Export the raw sql instance for consumers that need it
 export { getSql as sql };
 
-// Typed query helper — uses v1.x .query() method for string-based queries
 export async function query<T = any>(
   queryText: string,
   params?: unknown[]
@@ -45,28 +61,26 @@ export async function query<T = any>(
     const result = (await sql.query(queryText, params)) as T[];
     return result;
   } catch (e: any) {
+    const msg = e instanceof Error ? e.message : String(e);
     console.error("[DB] Query failed:", queryText.slice(0, 200));
-    console.error("[DB] Error:", e.message || e);
+    console.error("[DB] Error:", msg);
     throw e;
   }
 }
 
-// Single row query
 export async function queryOne<T = any>(
   queryText: string,
   params?: unknown[]
 ): Promise<T | null> {
   try {
     const results = await query<T>(queryText, params);
-    return results[0] ?? null;
+    return results.length > 0 ? results[0] : null;
   } catch (e: any) {
     console.error("[DB] queryOne failed:", queryText.slice(0, 200));
-    console.error("[DB] Error:", e.message || e);
     throw e;
   }
 }
 
-// Insert/Update/Delete (returns affected rows)
 export async function execute(
   queryText: string,
   params?: unknown[]
@@ -74,15 +88,16 @@ export async function execute(
   try {
     const sql = getSql();
     const result = await sql.query(queryText, params, { fullResults: true });
-    return { rowCount: typeof result.rowCount === "number" ? result.rowCount : 0 };
+    const rc = typeof result === "object" && result !== null && "rowCount" in result
+      ? (result as any).rowCount
+      : 0;
+    return { rowCount: typeof rc === "number" ? rc : 0 };
   } catch (e: any) {
     console.error("[DB] Execute failed:", queryText.slice(0, 200));
-    console.error("[DB] Error:", e.message || e);
     throw e;
   }
 }
 
-// Health check — verify connectivity
 export async function testConnection(): Promise<{
   ok: boolean;
   timestamp: string;
@@ -98,7 +113,6 @@ export async function testConnection(): Promise<{
       version: result[0]?.version ?? "unknown",
     };
   } catch (e: any) {
-    console.error("[DB] Health check failed:", e.message || e);
-    return { ok: false, timestamp: "", error: e.message || String(e) };
+    return { ok: false, timestamp: "", error: e instanceof Error ? e.message : String(e) };
   }
 }
