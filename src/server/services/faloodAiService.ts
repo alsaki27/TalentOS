@@ -3,10 +3,14 @@
 // OpenAI directly via a raw process.env.OPENAI_API_KEY, bypassing this app's
 // entire multi-provider routing/key-management system entirely. Confirmed
 // live: that key's OpenAI account is out of billing quota
-// (insufficient_quota), so every chat message failed. Routed through the
-// same callWithUsageTracking("falood_ai", ...) mechanism every other AI
-// feature in the app uses instead - gets automatic fallback, usage
-// tracking, and shows up in the AI Control Center like everything else.
+// (insufficient_quota), so every chat message failed. Routed through
+// callWithUsageTracking(...) - the same mechanism every other AI feature in
+// the app uses - to get automatic fallback, usage tracking, and visibility
+// in the AI Control Center. getFaloodSuggestions (the chat) uses the
+// "base_resume_studio" automation (the same one the CLI-style base resume
+// editor uses, configured with a working key at /admin/ai -> Agents &
+// Routing) after the dedicated "falood_ai" automation's only configured
+// route hit the same exhausted OpenAI key.
 
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
@@ -123,7 +127,7 @@ ${jobDescription || "Not provided yet, infer from chat context."}${candidateCont
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n\n");
 
-  const { result: response } = await callWithUsageTracking("falood_ai", { userId }, async (provider) => {
+  const { result: response } = await callWithUsageTracking("base_resume_studio", { userId }, async (provider) => {
     return provider.send({
       system: `${SUGGESTIONS_SYSTEM_PROMPT}\n\n${conversationContext}`,
       messages: [{ role: "user", content: [{ type: "text", text: conversationText || "Please review my resume and suggest improvements." }] }],

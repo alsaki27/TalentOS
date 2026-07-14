@@ -263,6 +263,9 @@ async function parseUploadedResumeForBaseSeeding(resume: { id: string; filename:
     !parsed.education.length &&
     !parsed.certifications.length
   ) {
+    if (parsed.parse_error) {
+      throw new Error(`We found an uploaded resume, but the parser failed: ${parsed.parse_error}`);
+    }
     throw new Error("We found an uploaded resume, but the parser couldn't extract structured resume data from it.");
   }
 
