@@ -21,6 +21,26 @@ reintroduce both:
    because a stray '+' in the base64 alphabet created a regex word boundary
    next to a coincidental 3-letter run. `looks_like_binary_blob()` guards
    against this by whitespace density, not by trusting the field name.
+3. `job_model_json`'s real description keys are `description_plain` and
+   `description_html`, not the `description`/`content`/etc keys originally
+   assumed. A 2,000-row sample of US active postings showed 1,821 rows
+   carrying real description text under these two keys, and the extractor
+   was silently returning "" for 1,572 of them (86%) — every keyword search
+   in this repo before this fix was degraded to title/department-only
+   matching for most postings, with no error or log line indicating it.
+   `extract_description_text()` now checks both.
+
+Also in this module: `extract_years_required()` and `extract_location_text()`,
+used for the optional `max_years_experience` and `location_filter` params on
+`run_keyword_export()`. Read their docstrings before trusting their output —
+neither is backed by a structured dataset field. Years-required is a regex
+grep over description text (absence of a stated number is NOT treated as
+"under the cap" being violated — it's kept, not dropped). Location filtering
+is a plain substring match against whatever free-text location string the
+ATS happened to provide — the dataset has NO zip code or lat/long fields, so
+there is no true geocoded radius calculation available here. If you need a
+real N-mile-radius filter, you need to add real geocoding (a places API) on
+top of this, not trust text-matching alone to be geographically precise.
 
 The Hugging Face Bucket is NOT plain-HTTPS-fetchable (confirmed: /resolve/
 URLs 404, the web file-tree doesn't render nested paths). It only works
@@ -66,6 +86,29 @@ def looks_like_binary_blob(text: str) -> bool:
     return whitespace_ratio < 0.05
 
 
+def _strip_html(html: str) -> str:
+    return re.sub(r"<[^>]+>", " ", html)
+
+
+# Bug #3 (found while building the accounting/finance track): job_model_json's actual
+# keys are description_plain / description_html, not description/description_text/
+# descriptionText/content/raw_description as originally assumed. A 2,000-row sample of
+# US active postings on 2026-07-13 showed 1,821 rows carrying real description text
+# under these two keys, and the extractor was returning "" for 1,572 of them (86%) —
+# silently degrading every prior keyword search in this repo to title/department-only
+# matching for most postings, without any error or log line saying so. Fixed by checking
+# these keys too, with description_html run through _strip_html() first.
+DESCRIPTION_TEXT_KEYS = (
+    "description",
+    "description_text",
+    "descriptionText",
+    "description_plain",
+    "content",
+    "raw_description",
+)
+DESCRIPTION_HTML_KEYS = ("description_html",)
+
+
 def extract_description_text(row: pd.Series) -> str:
     """Pulls whatever description text is available from the full variant's JSON columns."""
     for col in ("job_model_json", "entire_json"):
@@ -78,10 +121,16 @@ def extract_description_text(row: pd.Series) -> str:
             continue
         if not isinstance(data, dict):
             continue
-        for key in ("description", "description_text", "descriptionText", "content", "raw_description"):
+        for key in DESCRIPTION_TEXT_KEYS:
             val = data.get(key)
             if isinstance(val, str) and val.strip() and not looks_like_binary_blob(val):
                 return val
+        for key in DESCRIPTION_HTML_KEYS:
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                stripped = _strip_html(val)
+                if stripped.strip() and not looks_like_binary_blob(stripped):
+                    return stripped
     return ""
 
 
@@ -113,6 +162,74 @@ SENIOR_TITLE_PATTERN = re.compile(
 
 def is_senior_title(title: str) -> bool:
     return bool(SENIOR_TITLE_PATTERN.search(str(title or "")))
+
+
+# Years-of-experience heuristic. The dataset has NO structured years-required field —
+# this greps the description text for common ways postings state one ("5+ years",
+# "3-5 years", "minimum of 2 years", "at least 4 years experience") and returns the
+# HIGHEST number found. A posting that states no number at all returns None and is
+# NOT excluded by max_years_experience filtering — absence of a stated requirement is
+# not evidence it needs more experience than the cap; many genuine entry-level postings
+# simply don't state a number.
+YEARS_EXPERIENCE_PATTERN = re.compile(
+    r"(?:"
+    r"(\d{1,2})\s*\+\s*years|"                                    # "5+ years"
+    r"(\d{1,2})\s*(?:-|to)\s*(\d{1,2})\s*years|"                  # "3-5 years" / "3 to 5 years"
+    r"(?:minimum\s+(?:of\s+)?|at\s+least\s+)(\d{1,2})\s*years|"   # "minimum of 3 years" / "at least 4 years"
+    r"(\d{1,2})\s*years?\s*(?:of\s+)?(?:relevant\s+|related\s+|professional\s+|prior\s+)?experience"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def extract_years_required(text: str) -> int | None:
+    if not text:
+        return None
+    found: list[int] = []
+    for m in YEARS_EXPERIENCE_PATTERN.finditer(text):
+        for g in m.groups():
+            if g:
+                try:
+                    found.append(int(g))
+                except ValueError:
+                    pass
+    return max(found) if found else None
+
+
+def extract_location_text(row: pd.Series) -> str:
+    """Concatenates every location-ish string found across job_model_json / entire_json,
+    across the different ATS schema shapes seen in this dataset (normalized
+    job_model_json.location is a dict with city/state/raw_location_text; some raw
+    entire_json payloads instead carry a plain 'City, ST' string under 'location', or a
+    business-unit descriptor under jobRequisitionLocation.descriptor). Used for substring
+    matching against a target metro area — the dataset has no zip/lat-long, so this is a
+    text-match proxy, not a geocoded radius calculation. See module docstring for the
+    caveat this implies."""
+    parts: list[str] = []
+    for col in ("job_model_json", "entire_json"):
+        raw = row.get(col)
+        if raw is None:
+            continue
+        try:
+            data = raw if isinstance(raw, dict) else json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        loc = data.get("location")
+        if isinstance(loc, str):
+            parts.append(loc)
+        elif isinstance(loc, dict):
+            for key in ("raw_location_text", "city", "state", "postal_code"):
+                val = loc.get(key)
+                if isinstance(val, str):
+                    parts.append(val)
+        req_loc = data.get("jobRequisitionLocation")
+        if isinstance(req_loc, dict):
+            descriptor = req_loc.get("descriptor")
+            if isinstance(descriptor, str):
+                parts.append(descriptor)
+    return " | ".join(p for p in parts if p)
 
 
 def load_and_filter_one_day(
@@ -191,6 +308,8 @@ DEFAULT_OUTPUT_COLUMNS = {
     "workplace_type": "Workplace Type",
     "country": "Country",
     "is_remote": "Remote",
+    "location_text": "Location (raw)",
+    "years_required": "Years Required (extracted)",
     "posted_at": "Posted At",
     "apply_url": "Apply URL",
     "matched_keywords": "Matched Keywords",
@@ -225,6 +344,8 @@ def run_keyword_export(
     extra_output_columns: dict[str, str] | None = None,
     drop_senior_titles: bool = False,
     countries: list[str] | None = None,
+    max_years_experience: int | None = None,
+    location_filter: dict | None = None,
 ) -> pd.DataFrame | None:
     """Runs a full keyword-filtered pull across `days` trailing daily deltas and writes
     an .xlsx. Returns the exported DataFrame (empty-safe: None if nothing matched).
@@ -275,8 +396,49 @@ def run_keyword_export(
         print(f"[{log_prefix}] Filtered to countries {countries} -> {len(matches):,} remaining "
               f"(from {before:,}).")
 
+    if max_years_experience is not None or location_filter is not None:
+        # Recomputed on the (small) already-keyword-matched set, not the full day's data —
+        # cheap here even though extract_description_text is the "slow part" earlier.
+        matches["description_text_extracted"] = matches.apply(extract_description_text, axis=1)
+        matches["years_required"] = (
+            matches["title"].fillna("") + " | " + matches["description_text_extracted"]
+        ).apply(extract_years_required)
+        matches["location_text"] = matches.apply(extract_location_text, axis=1)
+
+    if max_years_experience is not None:
+        before = len(matches)
+        # Keep rows with no stated requirement (None) — absence isn't evidence of a high bar.
+        matches = matches[
+            matches["years_required"].isna() | (matches["years_required"] <= max_years_experience)
+        ].copy()
+        print(f"[{log_prefix}] Dropped {before - len(matches):,} postings stating more than "
+              f"{max_years_experience} years required -> {len(matches):,} remaining.")
+
+    if location_filter is not None:
+        before = len(matches)
+        remote_ok = location_filter.get("remote_ok", True)
+        local_contains = [s.lower() for s in location_filter.get("local_contains", [])]
+
+        def keep_row(row) -> bool:
+            if remote_ok:
+                wt = str(row.get("workplace_type", "")).strip().lower()
+                if wt == "remote" or bool(row.get("is_remote")):
+                    return True
+            if local_contains:
+                loc = str(row.get("location_text", "")).lower()
+                if any(s in loc for s in local_contains):
+                    return True
+            return False
+
+        matches = matches[matches.apply(keep_row, axis=1)].copy()
+        print(f"[{log_prefix}] Filtered to remote_ok={remote_ok} or location contains "
+              f"{location_filter.get('local_contains')} -> {len(matches):,} remaining (from {before:,}). "
+              f"NOTE: this is a text-substring proxy on whatever location string the ATS provided, not a "
+              f"geocoded radius calculation — the dataset has no zip/lat-long. See openjobdata_common.py "
+              f"module docstring.")
+
     if matches.empty:
-        print(f"[{log_prefix}] Nothing left after seniority/country filtering. Nothing to export.")
+        print(f"[{log_prefix}] Nothing left after filtering. Nothing to export.")
         return None
 
     matches = join_company_metadata(fs, matches, log_prefix)
