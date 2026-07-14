@@ -82,14 +82,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Per-candidate resume overrides (candidate_id -> { base_resume_id, resume_id,
+  // resume_url, resume_filename }). When logging multiple candidates for the
+  // same job in one request, each candidate's OWN base resume/uploaded file
+  // must be used - a single shared resume_url/base_resume_id previously got
+  // applied identically to every candidate in the batch (i.e. effectively to
+  // nobody but whichever one candidate it actually belonged to). Falls back
+  // to the flat singular fields below for existing single-candidate callers.
+  const candidateResumes: Record<string, { base_resume_id?: string | null; resume_id?: string | null; resume_url?: string | null; resume_filename?: string | null }> =
+    body.candidate_resumes && typeof body.candidate_resumes === "object" ? body.candidate_resumes : {};
+
   try {
     const data = await createApplications(newCandidateIds.map((candidateId) => ({
       candidate_id: candidateId,
       job_id: body.job_id ?? null,
       status,
-      resume_url: body.resume_url ?? null,
-      resume_filename: body.resume_filename ?? null,
-      resume_id: body.resume_id ?? null,
+      resume_url: candidateResumes[candidateId]?.resume_url ?? body.resume_url ?? null,
+      resume_filename: candidateResumes[candidateId]?.resume_filename ?? body.resume_filename ?? null,
+      resume_id: candidateResumes[candidateId]?.resume_id ?? body.resume_id ?? null,
       follow_up_at: followUpAt,
       next_action: nextAction,
       follow_up_source: followUpSource,
@@ -153,8 +163,9 @@ export async function POST(req: NextRequest) {
 
     if (body.job_id) {
       for (const application of data ?? []) {
+        const preferredBaseResumeId = candidateResumes[application.candidate_id]?.base_resume_id ?? body.base_resume_id ?? undefined;
         await backgroundDispatch(
-          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, body.base_resume_id ?? undefined).catch((err) => {
+          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, preferredBaseResumeId ?? undefined).catch((err) => {
             console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
           })
         );
