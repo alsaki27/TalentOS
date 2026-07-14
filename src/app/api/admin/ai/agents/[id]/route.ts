@@ -85,7 +85,7 @@ export async function PATCH(
   if (response) return response;
 
   const auto = await queryOne<any>(
-    "SELECT id FROM ai_automations WHERE id = $1",
+    "SELECT id, label FROM ai_automations WHERE id = $1",
     [params.id]
   );
   if (!auto) {
@@ -103,8 +103,8 @@ export async function PATCH(
 
   const display_name = typeof body.display_name === "string" ? body.display_name.trim() : undefined;
   const system_prompt = typeof body.system_prompt === "string" ? body.system_prompt : undefined;
-  const prompt_version = typeof body.prompt_version === "number" ? body.prompt_version : undefined;
-  const output_schema_version = typeof body.output_schema_version === "number" ? body.output_schema_version : undefined;
+  const prompt_version = body.prompt_version != null ? String(body.prompt_version) : undefined;
+  const output_schema_version = body.output_schema_version != null ? String(body.output_schema_version) : undefined;
 
   let temperature: number | undefined;
   if (body.temperature !== undefined) {
@@ -218,6 +218,7 @@ export async function PATCH(
     };
 
     if (display_name !== undefined) addField("display_name", display_name);
+    else addField("display_name", auto.label || params.id); // NOT NULL constraint — fall back to automation label
     if (system_prompt !== undefined) addField("system_prompt", system_prompt);
     if (prompt_version !== undefined) addField("prompt_version", prompt_version);
     if (output_schema_version !== undefined) addField("output_schema_version", output_schema_version);

@@ -165,22 +165,23 @@ export async function PUT(
     const sql = getSql();
 
     try {
-      const queries = [
-        sql.query("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]),
-        ...inputRoutes.map((r) =>
-          sql.query(
-            `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
-             VALUES ($1, $2, $3, $4, true, $5)`,
-            [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
-          )
-        ),
-        sql.query(
-          "UPDATE ai_automations SET route_version = $1, updated_at = NOW() WHERE id = $2",
-          [newVersion, params.id]
-        ),
-      ];
-
-      await sql.transaction(queries);
+      await sql.transaction((tx) => {
+        const queries = [
+          tx.query("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]),
+          ...inputRoutes.map((r) =>
+            tx.query(
+              `INSERT INTO ai_automation_routes (automation_id, ai_key_id, rank, model_override, is_enabled, updated_by)
+               VALUES ($1, $2, $3, $4, true, $5)`,
+              [params.id, r.ai_key_id, r.rank, r.model_override ?? null, userId]
+            )
+          ),
+          tx.query(
+            "UPDATE ai_automations SET route_version = $1, updated_at = NOW() WHERE id = $2",
+            [newVersion, params.id]
+          ),
+        ];
+        return queries;
+      });
     } catch (insertErr: any) {
       console.error("[routes:PUT] transaction failed:", insertErr?.message);
       return NextResponse.json(

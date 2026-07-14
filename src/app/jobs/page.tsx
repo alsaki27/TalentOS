@@ -265,6 +265,8 @@ export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("");
+  const [pageError, setPageError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -400,6 +402,70 @@ export default function JobsPage() {
   useEffect(() => { kickCategorization(); }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  function goToPage(inputVal: string) {
+    const n = parseInt(inputVal);
+    if (isNaN(n) || n < 1) {
+      setPageError("Enter a valid page number");
+      return;
+    }
+    if (n > totalPages) {
+      setPageError(`Page must be 1–${totalPages}`);
+      return;
+    }
+    setPageError("");
+    setPageInput("");
+    load(n);
+  }
+
+  function renderPagination(options: { marginTop: number; marginBottom: number }) {
+    if (total <= 0) return null;
+    return (
+      <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: 6, marginTop: options.marginTop, marginBottom: options.marginBottom }}>
+        <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
+        {(() => {
+          const pages: Array<number | string> = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pages.push(i);
+          } else if (page <= 4) {
+            pages.push(1, 2, 3, 4, 5, "...", totalPages);
+          } else if (page >= totalPages - 3) {
+            pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+          } else {
+            pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
+          }
+          return pages.map((entry, index) => (
+            <button
+              key={`${entry}-${index}`}
+              className={entry === page ? "btn-primary" : ""}
+              onClick={() => typeof entry === "number" && entry !== page ? load(entry) : undefined}
+              disabled={loading || entry === "..."}
+              style={{
+                minWidth: 36, textAlign: "center",
+                cursor: entry === "..." || entry === page ? "default" : "pointer",
+                padding: "6px 12px", background: entry === "..." ? "transparent" : undefined,
+                border: entry === "..." ? "none" : undefined, opacity: entry === "..." ? 0.7 : undefined,
+              }}
+            >{entry}</button>
+          ));
+        })()}
+        <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+        <span className="muted" style={{ marginLeft: 16, fontSize: 13 }}>Page</span>
+        <input
+          type="number"
+          min={1}
+          max={totalPages}
+          value={pageInput}
+          onChange={(e) => { setPageInput(e.target.value); setPageError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") goToPage(pageInput); }}
+          placeholder={`1–${totalPages}`}
+          style={{ width: 70, padding: "5px 8px", fontSize: 13 }}
+        />
+        <button onClick={() => goToPage(pageInput)} style={{ padding: "5px 12px", fontSize: 13 }}>Go</button>
+        {pageError && <span className="form-error" style={{ fontSize: 12, marginLeft: 6 }}>{pageError}</span>}
+      </div>
+    );
+  }
 
   function togglePostedSort() {
     setPostedSort((prev) => (prev === "desc" ? "asc" : prev === "asc" ? "" : "desc"));
@@ -770,6 +836,8 @@ export default function JobsPage() {
         </div>
       )}
 
+      {renderPagination({ marginTop: 0, marginBottom: 16 })}
+
       {loading ? (
         <TableSkeleton cols={8} />
       ) : total === 0 ? (
@@ -940,44 +1008,7 @@ export default function JobsPage() {
         </div>
       )}
 
-      {total > 0 && (
-        <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: 8, marginTop: 24, marginBottom: 24 }}>
-          <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
-          {(() => {
-            const pages: Array<number | string> = [];
-            if (totalPages <= 7) {
-              for (let i = 1; i <= totalPages; i++) pages.push(i);
-            } else if (page <= 4) {
-              pages.push(1, 2, 3, 4, 5, "...", totalPages);
-            } else if (page >= totalPages - 3) {
-              pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
-            } else {
-              pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
-            }
-
-            return pages.map((entry, index) => (
-              <button
-                key={`${entry}-${index}`}
-                className={entry === page ? "btn-primary" : ""}
-                onClick={() => typeof entry === "number" && entry !== page ? load(entry) : undefined}
-                disabled={loading || entry === "..."}
-                style={{
-                  minWidth: 36,
-                  textAlign: "center",
-                  cursor: entry === "..." || entry === page ? "default" : "pointer",
-                  padding: "6px 12px",
-                  background: entry === "..." ? "transparent" : undefined,
-                  border: entry === "..." ? "none" : undefined,
-                  opacity: entry === "..." ? 0.7 : undefined,
-                }}
-              >
-                {entry}
-              </button>
-            ));
-          })()}
-          <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
-        </div>
-      )}
+      {renderPagination({ marginTop: 32, marginBottom: 0 })}
 
       {showAdd && (
         <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(1); kickCategorization(); }} />
