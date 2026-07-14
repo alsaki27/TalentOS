@@ -190,6 +190,7 @@ async function analyzeJDWithAI(
     "Analyze this job description and extract structured keywords for resume tailoring. Return ONLY a JSON object with no markdown fences, no extra text.",
     "Extract ONLY what is explicitly stated in the text below - do not invent skills, tools, or requirements that aren't there. If a field has nothing to extract, return an empty array (or null for title/company/location) rather than guessing.",
     "Use the JD's own exact wording, not paraphrases - ATS keyword matching is largely literal string matching, so \"AWS\" extracted as \"cloud computing\" defeats the point.",
+    "Keep multi-word phrases intact (\"fiber network design\", not \"fiber\" + \"design\"), and when the JD uses both an acronym and its spelled-out form - or clearly means both - include BOTH as separate entries (e.g., \"OSP\" and \"Outside Plant\"); ATS systems frequently match only one form.",
     "The JSON must have these exact keys:",
     "requiredSkills: array of strings",
     "preferredSkills: array of strings",

@@ -30,6 +30,9 @@ const PROMPTING_RULES = [
   "Respect any prior rejected keywords or forbidden claims noted in context.",
   "Do not optimize for one-page fit during base resume creation — that only matters during final application prep (a later phase).",
   "If you are not confident a claim is true, flag it as a risk in your message instead of inventing supporting detail.",
+  "Completeness is the point of a base resume: capture EVERY evidenced skill, tool, certification, and role from the evidence bank and uploaded resume, using each tool's exact product name and casing (e.g. \"Vetro FiberMap\", \"AutoCAD\") — downstream tailoring can only select from what exists here, so an evidenced skill missing from the base resume is invisible to every future application.",
+  "Bullet craft: open every bullet with a strong, specific action verb (past tense for past roles, present for the current one), state what was done at what scope with what outcome, and include real numbers (counts, %, $, route miles, timelines, team size) wherever the evidence contains them — never invent a number. No first-person pronouns, no filler (\"passionate\", \"results-driven\", \"dynamic\"), no two consecutive bullets in a role opening with the same verb.",
+  "When the same fact appears in both the uploaded resume and the evidence bank with different detail, keep the more specific, more quantified version.",
 ].map((r, i) => `${i + 1}. ${r}`).join("\n");
 
 const SKARION_STYLE_GUIDE = `Skarion resume format:

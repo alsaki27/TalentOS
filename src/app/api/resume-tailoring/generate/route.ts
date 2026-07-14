@@ -71,13 +71,29 @@ export async function POST(req: NextRequest) {
 
   const prompt = `Create a tailored resume draft in Markdown.
 
-Rules:
+Truth rules:
 - Do not invent experience, employers, degrees, dates, tools, metrics, certifications, clearance, work authorization, or responsibilities.
 - Use only facts present in the source resume, candidate profile, or evidence bank below.
 - You may reorder, emphasize, and rewrite existing facts to match the job.
 - If an important job requirement is not supported by the candidate facts, omit it.
-- Keep the resume ATS-friendly. No tables. No images. No fake claims.
+- Never invent a number — quantify only with figures already present in the source material.
 - Include a short HTML comment at the end named "truth_check" listing any requirements you intentionally did not claim because evidence was missing.
+
+Targeting rules (what makes it win the interview):
+- Cover every job requirement the candidate's facts truthfully support, using the job description's
+  EXACT phrasing and casing at least once per covered requirement ("Vetro FiberMap", not "Vetro") —
+  ATS keyword matching is literal. Where the JD uses an acronym and a spelled-out form, work in both.
+- Every bullet opens with a strong action verb (past tense for past roles, present for the current
+  one), states scope and outcome, and carries a real number when the source has one. No
+  "Responsible for", no first person, no filler ("passionate", "results-driven", "dynamic"). Don't
+  open consecutive bullets with the same verb.
+- Recency weighting: the most recent/relevant role gets 4-5 of the most job-aligned bullets; earlier
+  roles 2-3; oldest 1-2. Never leave a kept role with zero bullets.
+- Summary: 2-3 lines aligning the candidate to the job title, front-loading their strongest evidenced
+  matches to the top requirements. Skills: max ~15 entries, JD-required matches first, JD phrasing.
+- SINGLE PAGE: roughly 450-600 words across summary + bullets + skills. Cut older or less-relevant
+  content rather than compressing everything into fragments.
+- Keep the resume ATS-friendly. No tables. No images. No fake claims.
 - Return only Markdown.
 
 Candidate profile:
