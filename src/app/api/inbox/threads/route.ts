@@ -13,6 +13,7 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url);
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
+  const needsReplyFilter = url.searchParams.get("needsReply") === "true";
 
   let candidates: any[] = [];
   let sql = `SELECT id, name, email, avatar_url FROM candidates`;
@@ -29,8 +30,28 @@ export async function GET(req: NextRequest) {
 
   let lastMessages: any[] = [];
   let unreadRows: any[] = [];
+  let needsReplyRows: any[] = [];
   lastMessages = await query<any>(`SELECT candidate_id, body, created_at FROM candidate_messages WHERE candidate_id::text = ANY($1) ORDER BY created_at DESC`, [candidateIds]);
   unreadRows = await query<any>(`SELECT candidate_id FROM candidate_messages WHERE candidate_id::text = ANY($1) AND direction = 'inbound' AND read_at IS NULL`, [candidateIds]);
+
+  needsReplyRows = await query<any>(
+    `SELECT m.candidate_id
+     FROM candidate_messages m
+     WHERE m.candidate_id::text = ANY($1)
+       AND m.direction = 'inbound' AND m.read_at IS NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM candidate_messages o
+         WHERE o.candidate_id = m.candidate_id
+           AND (o.status = 'sent' OR (o.direction = 'outbound' AND o.status IS NULL))
+           AND (
+             (o.gmail_thread_id IS NOT NULL AND o.gmail_thread_id = m.gmail_thread_id)
+             OR (o.gmail_thread_id IS NULL AND m.gmail_thread_id IS NULL AND o.subject = m.subject)
+           )
+           AND o.created_at > m.created_at
+       )
+     GROUP BY m.candidate_id`,
+    [candidateIds]
+  );
 
   const lastMessageMap: Record<string, { body: string; created_at: string }> = {};
   for (const msg of lastMessages) {
@@ -44,7 +65,9 @@ export async function GET(req: NextRequest) {
     unreadMap[row.candidate_id] = (unreadMap[row.candidate_id] || 0) + 1;
   }
 
-  const threads = candidates.map((c: any) => ({
+  const needsReplySet = new Set(needsReplyRows.map((r: any) => r.candidate_id));
+
+  let threads = candidates.map((c: any) => ({
     id: c.id,
     name: c.name,
     email: c.email ?? null,
@@ -52,7 +75,12 @@ export async function GET(req: NextRequest) {
     last_message: lastMessageMap[c.id]?.body ?? null,
     last_message_at: lastMessageMap[c.id]?.created_at ?? null,
     unread_count: unreadMap[c.id] ?? 0,
+    needs_reply: needsReplySet.has(c.id),
   }));
+
+  if (needsReplyFilter) {
+    threads = threads.filter((t: any) => t.needs_reply);
+  }
 
   return NextResponse.json({ threads });
 }

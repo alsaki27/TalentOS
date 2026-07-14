@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
      FROM candidate_messages cm
      LEFT JOIN candidates c ON cm.candidate_id = c.id
      WHERE cm.candidate_id = $1
+       AND (cm.status IS NULL OR cm.direction = 'inbound' OR cm.status = 'sent')
      ORDER BY cm.created_at ASC`,
     [candidateId]
   );

@@ -30,6 +30,7 @@ on:
           - ai-usage-rollup
           - job-agent
           - email-queue
+          - gmail-sync
           - run-all
 
 jobs:
@@ -207,6 +208,23 @@ jobs:
       - name: Call Email queue
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/email-queue")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  gmail-sync:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'gmail-sync' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Gmail sync
+    steps:
+      - name: Call Gmail sync
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/gmail-sync")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

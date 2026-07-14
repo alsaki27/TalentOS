@@ -11,6 +11,7 @@ interface CandidateThread {
   last_message: string | null;
   last_message_at: string | null;
   unread_count: number;
+  needs_reply: boolean;
 }
 
 interface CandidateMessage {
@@ -32,16 +33,23 @@ export default function InboxPage() {
   const [candidate, setCandidate] = useState<CandidateThread | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [needsReplyFilter, setNeedsReplyFilter] = useState(false);
   const [compose, setCompose] = useState("");
   const [composeSubject, setComposeSubject] = useState("");
   const [channel, setChannel] = useState<"email" | "in_app">("in_app");
   const [templates, setTemplates] = useState<{ id: string; name: string }[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [sending, setSending] = useState(false);
+  const [showPendingDrafts, setShowPendingDrafts] = useState(false);
+  const [pendingDrafts, setPendingDrafts] = useState<Record<string, any>[]>([]);
+  const [draftsLoading, setDraftsLoading] = useState(false);
   const refreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function loadThreads() {
-    const res = await fetch(`/api/inbox/threads?search=${encodeURIComponent(search)}`, { cache: "no-store" });
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    if (needsReplyFilter) params.set("needsReply", "true");
+    const res = await fetch(`/api/inbox/threads?${params.toString()}`, { cache: "no-store" });
     const data = await res.json();
     setThreads(data.threads ?? []);
     setLoading(false);
@@ -69,7 +77,7 @@ export default function InboxPage() {
     }
   }
 
-  useEffect(() => { loadThreads(); }, [search]);
+  useEffect(() => { loadThreads(); }, [search, needsReplyFilter]);
 
   useEffect(() => {
     if (selectedId) {
@@ -112,6 +120,41 @@ export default function InboxPage() {
     }
   }
 
+  async function loadPendingDrafts() {
+    setDraftsLoading(true);
+    setShowPendingDrafts(true);
+    const res = await fetch("/api/candidate-messages/pending-drafts", { cache: "no-store" });
+    if (res.ok) {
+      const data = await res.json();
+      setPendingDrafts(data.drafts ?? []);
+    }
+    setDraftsLoading(false);
+  }
+
+  async function approveDraft(draftId: string) {
+    const res = await fetch(`/api/candidate-messages/${draftId}/approve`, { method: "POST" });
+    const data = await res.json();
+    if (res.ok) {
+      loadPendingDrafts();
+      if (selectedId) loadMessages(selectedId);
+    } else if (res.status === 409 && data.needsReconnect) {
+      alert("Candidate must re-connect Gmail to grant send permission: " + (data.email || "unknown"));
+    } else {
+      alert(data.error || "Failed to approve draft.");
+    }
+  }
+
+  async function rejectDraft(draftId: string) {
+    if (!confirm("Reject this draft? It will not be sent.")) return;
+    const res = await fetch(`/api/candidate-messages/${draftId}/reject`, { method: "POST" });
+    if (res.ok) {
+      loadPendingDrafts();
+    } else {
+      const data = await res.json();
+      alert(data.error || "Failed to reject draft.");
+    }
+  }
+
   const filteredThreads = threads.filter(
     (t) => t.name.toLowerCase().includes(search.toLowerCase()) || (t.email ?? "").toLowerCase().includes(search.toLowerCase())
   );
@@ -126,8 +169,30 @@ export default function InboxPage() {
             placeholder="Search candidates…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ fontSize: 13 }}
+            style={{ fontSize: 13, marginBottom: 8 }}
           />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={loadPendingDrafts}
+              style={{ fontSize: 12 }}
+            >
+              Pending drafts
+            </button>
+            <button
+              onClick={() => setNeedsReplyFilter((v) => !v)}
+              style={{ fontSize: 12, fontWeight: needsReplyFilter ? 600 : 400 }}
+            >
+              Needs reply
+            </button>
+            {showPendingDrafts && (
+              <button
+                onClick={() => { setShowPendingDrafts(false); setSelectedId(null); }}
+                style={{ fontSize: 12 }}
+              >
+                Back to inbox
+              </button>
+            )}
+          </div>
         </div>
         <div style={{ flex: 1, overflow: "auto" }}>
           {loading ? (
@@ -148,6 +213,7 @@ export default function InboxPage() {
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                   <span style={{ fontWeight: 600, fontSize: 13 }}>{t.name}</span>
+                  {t.needs_reply && <span className="badge badge-interview" style={{ fontSize: 10 }}>reply</span>}
                   {t.unread_count > 0 && <span className="nav-badge">{t.unread_count}</span>}
                 </div>
                 <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>
@@ -164,7 +230,42 @@ export default function InboxPage() {
 
       {/* Main pane */}
       <div style={{ display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-        {!selectedId || !candidate ? (
+        {showPendingDrafts ? (
+          <div style={{ flex: 1, overflow: "auto", padding: 16 }}>
+            <h2 style={{ marginBottom: 16, fontSize: 16 }}>Pending Drafts</h2>
+            {draftsLoading ? (
+              <div className="empty">Loading drafts…</div>
+            ) : pendingDrafts.length === 0 ? (
+              <div className="empty">No pending drafts.</div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {pendingDrafts.map((d: any) => (
+                  <div key={d.id} className="card" style={{ padding: 16 }}>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                      {d.candidate_name || "Unknown"} — Draft
+                    </div>
+                    {d.subject && (
+                      <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 14 }}>
+                        {d.subject}
+                      </div>
+                    )}
+                    <div style={{ marginBottom: 12, fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 100, overflow: "hidden" }}>
+                      {d.body}
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn-primary" onClick={() => approveDraft(d.id)}>
+                        Approve &amp; Send
+                      </button>
+                      <button onClick={() => rejectDraft(d.id)}>
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : !selectedId || !candidate ? (
           <div className="empty" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
             Select a candidate to view the conversation.
           </div>

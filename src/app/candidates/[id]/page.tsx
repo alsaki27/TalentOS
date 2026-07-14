@@ -141,6 +141,8 @@ export default function CandidateProfilePage() {
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [rotateResult, setRotateResult] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"Overview" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Applications">("Overview");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -548,6 +550,29 @@ export default function CandidateProfilePage() {
     setTimeout(() => setLinkCopied(false), 2000);
   }
 
+  async function rotatePortalLink() {
+    if (!candidate) return;
+    setRotating(true);
+    setRotateResult(null);
+    try {
+      const res = await fetch(`/api/candidates/${candidate.id}/portal-token/rotate`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        const newUrl = `${window.location.origin}${data.portalUrl}`;
+        navigator.clipboard.writeText(newUrl);
+        setRotateResult(newUrl);
+        load();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Failed to rotate portal link.");
+      }
+    } catch {
+      alert("Network error rotating portal link.");
+    } finally {
+      setRotating(false);
+    }
+  }
+
   function toggleAppSelected(id: string) {
     setSelectedApps((prev) => {
       const next = new Set(prev);
@@ -580,6 +605,9 @@ export default function CandidateProfilePage() {
         <h1>{candidate.name}</h1>
         <div style={{ display: "flex", gap: 10 }}>
           <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy candidate portal link"}</button>
+          <button onClick={rotatePortalLink} disabled={rotating}>
+            {rotating ? "Rotating…" : "Rotate portal link"}
+          </button>
           <button onClick={() => setShowEdit(true)}>Edit profile</button>
         </div>
       </div>

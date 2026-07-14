@@ -6,7 +6,17 @@ export const GMAIL_SCOPES = [
   "email",
   "profile",
   "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send",
 ];
+
+export function hasGmailSendScope(scopes: string[] | string | null): boolean {
+  if (!scopes) return false;
+  const list = Array.isArray(scopes) ? scopes : scopes.split(/\s+/);
+  return list.some((s) =>
+    s === "https://www.googleapis.com/auth/gmail.send" ||
+    s === "https://mail.google.com/"
+  );
+}
 
 export function googleRedirectUri(origin: string) {
   return process.env.GOOGLE_OAUTH_REDIRECT_URI || `${origin}/api/integrations/gmail/callback`;

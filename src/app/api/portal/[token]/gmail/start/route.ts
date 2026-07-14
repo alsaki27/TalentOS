@@ -1,21 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
-import { queryOne, execute } from "@/server/db/neon";
+import { execute } from "@/server/db/neon";
+import { requireCandidateByToken } from "@/lib/portalAuth";
 
 export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
-  const candidate = await queryOne<{ id: string; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
-    "SELECT id, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1",
-    [params.token]
-  );
-  if (!candidate) {
-    return NextResponse.json({ error: "Portal link not found." }, { status: 404 });
-  }
-  if (
-    candidate.portal_token_revoked_at
-    || (candidate.portal_token_expires_at && new Date(candidate.portal_token_expires_at).getTime() < Date.now())
-  ) {
-    return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
-  }
+  const { candidate, response } = await requireCandidateByToken(params.token);
+  if (response) return response;
 
   const url = new URL(req.url);
   const state = newOAuthState();
