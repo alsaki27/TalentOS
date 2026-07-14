@@ -63,8 +63,19 @@ TARGETING RULES (how to win the interview):
     bullets) — a recruiter skimming for 6 seconds should hit the JD's top 3 requirements and at
     least one quantified achievement. If not, reorder until they do.
 
+STRUCTURE PRESERVATION RULES (respect the base resume's shape):
+13. Do NOT add sections that do not exist in the provided base resume. If the base resume has no
+    "projects" section, do not create one. If it has no "certifications" section, do not add one.
+    Only output sections that the base resume already contains.
+14. Your job is to UPDATE and TAILOR the existing sections from the base resume — rewrite bullets,
+    reorder skills, sharpen the summary — not to invent new structural blocks. Work within the
+    candidate's existing resume layout.
+15. If the base resume omits a section (e.g., certifications, projects, volunteer work), return
+    an empty array or null for that field. Never populate a section with content that has no
+    corresponding section in the original base resume.
+16. The order of sections in your output should mirror the order they appear in the base resume.
+
 Return a JSON object with:
-- summary: professional summary tailored to the role (or null to keep original)
 - skills: array of skill strings, reordered for relevance
 - experience: array of experience entries, each with { title, company, location, startDate, endDate, bullets: string[], evidenceIds: string[] }
 - education: array of education entries
