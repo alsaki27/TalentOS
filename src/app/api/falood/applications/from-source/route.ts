@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
          (job_description, company_name, skills, resume_data, chat_history)
        VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [jobTitle || null, companyName || null, JSON.stringify(skills), JSON.stringify(resumeData), JSON.stringify([])]
+      [jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([])]
     );
     if (!created) throw new Error("Failed to create falood_saved_applications row");
 
