@@ -1,26 +1,18 @@
 // src/app/api/falood/extract-skills/route.ts
-// TypeScript port of resumify-next/api/ai.py /api/extract-skills endpoint
+// Extracts required skills + company name from a pasted JD for the Falood
+// tailor studio. Routed through the app's real AI provider system
+// (src/server/services/faloodAiService.ts) instead of a hardcoded,
+// quota-exhausted OpenAI key - see that file for why.
 
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUserContext } from "@/lib/auth";
+import { extractSkillsFromJobDescription } from "@/server/services/faloodAiService";
+import { sanitizeApiError } from "@/lib/utils";
 
-export const runtime = "nodejs";
-
-interface OpenAiChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: string | null;
-    };
-  }>;
-}
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: "OPENAI_API_KEY not configured on the server." },
-      { status: 500 }
-    );
-  }
+  const currentUser = await getCurrentUserContext();
 
   let body: any;
   try {
@@ -34,53 +26,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Missing job description" }, { status: 400 });
   }
 
-  const systemPrompt = `You are an expert at extracting information from job descriptions.
-Your goal is to extract the explicitly required or preferred skills as an array of concise strings (e.g., "Python", "React"), AND to extract the name of the hiring company. If the company name is not found, return null.
-
-Output strictly valid JSON in the following format:
-{
-    "companyName": "Company Name",
-    "skills": ["Skill 1", "Skill 2"]
-}`;
-
   try {
-    const model = process.env.FALOOD_OPENAI_MODEL || "gpt-5.4-mini";
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: jobDescription },
-        ],
-        temperature: 0.3,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText || `OpenAI API error (${response.status})`);
-    }
-
-    const data = (await response.json()) as OpenAiChatCompletionResponse;
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      return NextResponse.json({ error: "Empty response from AI" }, { status: 500 });
-    }
-
-    try {
-      const skillsData = JSON.parse(content);
-      return NextResponse.json(skillsData);
-    } catch {
-      return NextResponse.json({ error: "Failed to parse AI response" }, { status: 500 });
-    }
+    const skillsData = await extractSkillsFromJobDescription(jobDescription, currentUser?.profile.user_id);
+    return NextResponse.json(skillsData);
   } catch (e: any) {
-    console.error("Error calling OpenAI API:", e);
-    return NextResponse.json({ error: e.message || "OpenAI API error" }, { status: 500 });
+    console.error("[falood/extract-skills] AI call failed:", e);
+    return NextResponse.json({ error: sanitizeApiError(e) }, { status: 500 });
   }
 }
