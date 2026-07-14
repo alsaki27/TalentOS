@@ -270,6 +270,7 @@ export default function JobsPage() {
   const [showImport, setShowImport] = useState(false);
   const [showImportAts, setShowImportAts] = useState(false);
   const [showApplyFor, setShowApplyFor] = useState<Job | null>(null);
+  const [showBulkApply, setShowBulkApply] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -764,6 +765,7 @@ export default function JobsPage() {
       {selected.size > 0 && (
         <div className="bulk-bar">
           <span>{selected.size} selected</span>
+          <button onClick={() => setShowBulkApply(true)}>Log selected to candidate</button>
           <button className="btn-danger" onClick={deleteSelected}>Delete selected</button>
         </div>
       )}
@@ -789,7 +791,7 @@ export default function JobsPage() {
                 </th>
                 <th>Match Scores</th>
                 <th>Applicants</th>
-                <th></th>
+                <th style={{ position: "sticky", right: 0, background: "var(--surface)", zIndex: 2 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -927,7 +929,7 @@ export default function JobsPage() {
                       </div>
                     )}
                   </td>
-                  <td style={{ display: "flex", gap: 6 }}>
+                  <td style={{ display: "flex", gap: 6, position: "sticky", right: 0, background: "var(--surface)", zIndex: 1 }}>
                     <button onClick={() => setShowApplyFor(job)}>Log application</button>
                     <button onClick={() => deleteOne(job.id)}>Delete</button>
                   </td>
@@ -992,6 +994,13 @@ export default function JobsPage() {
           job={showApplyFor}
           onClose={() => setShowApplyFor(null)}
           onLogged={() => { setShowApplyFor(null); load(page); }}
+        />
+      )}
+      {showBulkApply && (
+        <BulkLogApplicationModal
+          jobs={jobs.filter((j) => selected.has(j.id))}
+          onClose={() => setShowBulkApply(false)}
+          onLogged={() => { setShowBulkApply(false); setSelected(new Set()); load(page); }}
         />
       )}
     </>
@@ -1845,6 +1854,180 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           <button className="btn-primary" onClick={submit} disabled={saving || candidateIds.size === 0} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving || candidateIds.size === 0 ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving || candidateIds.size === 0 ? 0.7 : 1 }}>
             {saving ? "Saving..." : `Create ${candidateIds.size} ticket${candidateIds.size !== 1 ? "s" : ""}`}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Logs the same candidate against every selected job in one go - the bulk
+// "N selected -> Log selected to candidate" action. Single-candidate by
+// design (that's the whole point: many jobs, one person), unlike
+// LogApplicationModal's single-job/many-candidates shape, and skips its
+// per-job match-score UI since that doesn't cleanly generalize across
+// multiple jobs.
+function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onClose: () => void; onLogged: () => void }) {
+  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
+  const [users, setUsers] = useState<TeamUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
+  const [candidateId, setCandidateId] = useState("");
+  const [status, setStatus] = useState("assigned");
+  const [assignedToUserId, setAssignedToUserId] = useState("");
+  const [assignmentDueAt, setAssignmentDueAt] = useState("");
+  const [assignmentNote, setAssignmentNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [results, setResults] = useState<{ job: Job; ok: boolean; message?: string }[] | null>(null);
+
+  useEffect(() => {
+    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        const list = Array.isArray(data) ? data : data.items || [];
+        list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
+        setCandidates(list);
+      })
+      .catch(() => setCandidates([]));
+    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then(setUsers);
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
+  }, []);
+
+  async function submit() {
+    if (!candidateId) { setError("Select a candidate."); return; }
+    const assignmentStatus = status === "assigned" || status === "stacked";
+    if (assignmentStatus && !assignedToUserId) {
+      setError("Choose an application owner for assigned or stacked tickets.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const candidate = candidates.find((c) => c.id === candidateId);
+    const assignedToUser = users.find((u) => u.user_id === assignedToUserId);
+
+    // Sequential, not Promise.all: this is a real write per job against a
+    // shared candidate+job uniqueness constraint - firing them all at once
+    // risks the same races /api/applications already guards against
+    // one-at-a-time (duplicate-application 409s, etc.), and per-job results
+    // are shown below either way so there's no UX cost to going one at a time.
+    const outcomes: { job: Job; ok: boolean; message?: string }[] = [];
+    for (const job of jobs) {
+      try {
+        const res = await fetch("/api/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidate_ids: [candidateId],
+            job_id: job.id,
+            status,
+            resume_url: candidate?.resume_url ?? null,
+            resume_filename: candidate?.resume_filename ?? null,
+            assigned_by: currentUser?.display_name || currentUser?.email || null,
+            assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
+            assigned_by_user_id: currentUser?.user_id ?? null,
+            assigned_to_user_id: assignedToUserId || null,
+            assignment_due_at: assignmentDueAt || null,
+            assignment_note: assignmentNote || null,
+            next_action: assignmentStatus ? "Apply to this job" : null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        outcomes.push({ job, ok: res.ok, message: res.ok ? undefined : data.error || "Something went wrong." });
+      } catch (err: any) {
+        outcomes.push({ job, ok: false, message: err?.message || "Network error" });
+      }
+    }
+    setSaving(false);
+    setResults(outcomes);
+    if (outcomes.every((o) => o.ok)) onLogged();
+  }
+
+  const failedCount = results ? results.filter((r) => !r.ok).length : 0;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "95vw", maxWidth: "600px", padding: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid var(--border)", paddingBottom: "16px" }}>
+          <h2 style={{ margin: 0, fontSize: "1.25rem", color: "var(--ink)" }}>
+            Log {jobs.length} job{jobs.length !== 1 ? "s" : ""} to one candidate
+          </h2>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer" }}>✕</button>
+        </div>
+
+        <div style={{ maxHeight: "20vh", overflowY: "auto", marginBottom: "16px", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
+          {jobs.map((j) => (
+            <div key={j.id} style={{ fontSize: "13px", padding: "2px 0", color: "var(--ink-soft)" }}>{j.title} — {j.company || "—"}</div>
+          ))}
+        </div>
+
+        <div className="field-group">
+          <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Candidate</label>
+          <select value={candidateId} onChange={(e) => setCandidateId(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            <option value="">Choose a candidate…</option>
+            {candidates.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Status</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            <option value="assigned">Assigned</option>
+            <option value="stacked">Stacked</option>
+            <option value="applied">Applied</option>
+          </select>
+        </div>
+
+        {(status === "assigned" || status === "stacked") && (
+          <div className="field-group" style={{ marginTop: "16px" }}>
+            <label>Owner</label>
+            <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+              <option value="">Choose an owner…</option>
+              {users.map((u) => (
+                <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Due date (optional)</label>
+          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }} />
+        </div>
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Assignment note</label>
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." style={{ width: "100%", padding: "10px 12px", borderRadius: "6px", border: "1px solid var(--border)", resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+
+        {error && <p style={{ color: "var(--danger)", fontSize: "14px", marginTop: "12px" }}>{error}</p>}
+
+        {results && (
+          <div style={{ marginTop: "16px", padding: "10px 12px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            {failedCount === 0 ? (
+              <p style={{ margin: 0, color: "var(--success, #2a6f4f)" }}>All {results.length} tickets created.</p>
+            ) : (
+              <>
+                <p style={{ margin: "0 0 6px", color: "var(--danger)" }}>{failedCount} of {results.length} failed:</p>
+                {results.filter((r) => !r.ok).map((r) => (
+                  <div key={r.job.id} style={{ fontSize: "13px", color: "var(--ink-soft)" }}>{r.job.title}: {r.message}</div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+          <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>
+            {results ? "Close" : "Cancel"}
+          </button>
+          {(!results || failedCount > 0) && (
+            <button className="btn-primary" onClick={submit} disabled={saving || !candidateId} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving || !candidateId ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving || !candidateId ? 0.7 : 1 }}>
+              {saving ? "Logging..." : `Log ${jobs.length} ticket${jobs.length !== 1 ? "s" : ""}`}
+            </button>
+          )}
         </div>
       </div>
     </div>
