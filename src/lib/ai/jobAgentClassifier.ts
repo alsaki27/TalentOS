@@ -1,10 +1,14 @@
 // src/lib/ai/jobAgentClassifier.ts
 // AI classification module for the Job Agent.
-// Same single-shot JSON generation pattern as jobCategorization.ts.
-// Provides a regex-based fallback when AI is unavailable or for budget runs.
+// Reads its behavior from the AI Control Center (ai_agent_configs / ai_automation_routes
+// for automation_id = "job_categorization"). Falls back to a deterministic regex
+// classifier if AI is disabled, misconfigured, or fails at runtime.
 
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
+
+const AUTOMATION_ID = "job_categorization";
 
 export interface ClassificationResult {
   seniority: "entry" | "mid" | "senior" | "executive" | "unknown";
@@ -35,33 +39,88 @@ const FALSE_POSITIVE_COMPANIES = new Set([
   "splice", // music-tech company frequently matched by "Splice Engineer" query
 ]);
 
-function buildPrompt(input: ClassifyInput): string {
-  return [
-    "You are a strict job-posting classifier for a recruiting agent. The agent searches Google Jobs with specific role titles and must decide whether each result is actually relevant.",
-    "",
-    "CRITICAL RULES:",
-    `- Role group "A" (OSP / Fiber): ALL seniority levels are wanted. Never assign "skip" just because the title sounds senior.`,
-    `- Role groups "B" through "L": entry-level candidates are preferred. Assign "skip" to titles containing clear senior signals (senior, sr, lead, principal, staff, director, expert, III, IV, V, head of, chief). Managers are also skipped UNLESS the title is explicitly a hybrid like "project manager-drafter".`,
-    `- Relevance / false positives: If the company name or job title clearly does not match the intended domain, set is_false_positive = true. Example: a "Splice Engineer" query returning a role at Splice (the music-tech company) is a false positive.`,
-    "- Industry: do NOT reject based on industry. Candidates relocate and industries vary.",
-    "",
-    "TIER DEFINITIONS:",
-    "- best: direct title match + correct seniority + real domain fit + high confidence.",
-    "- medium: reasonably relevant but slightly broader title or lower confidence.",
-    "- worthy: tangential or hard-to-verify fit — keep for manual review.",
-    "- skip: wrong seniority, false positive, or clearly unrelated role.",
-    "",
-    "Respond with ONLY this JSON object, no markdown fences, no other text:",
-    '{"seniority":"entry"|"mid"|"senior"|"executive"|"unknown","tier":"best"|"medium"|"worthy"|"skip","tier_reason":"short reason","is_false_positive":boolean,"false_positive_reason":string|null,"relevance_score":number 0.00-1.00,"keywords":["max 4 precise skills"]}',
-    "",
+const DEFAULT_SYSTEM_PROMPT =
+  "You are a strict, literal job-posting classifier. Respond with raw JSON only.";
+
+const DEFAULT_USER_PROMPT_PREAMBLE = `You are a strict job-posting classifier for a recruiting agent. The agent searches Google Jobs with specific role titles and must decide whether each result is actually relevant.
+
+CRITICAL RULES:
+- Role group "A" (OSP / Fiber): ALL seniority levels are wanted. Never assign "skip" just because the title sounds senior.
+- Role groups "B" through "L": entry-level candidates are preferred. Assign "skip" to titles containing clear senior signals (senior, sr, lead, principal, staff, director, expert, III, IV, V, head of, chief). Managers are also skipped UNLESS the title is explicitly a hybrid like "project manager-drafter".
+- Relevance / false positives: If the company name or job title clearly does not match the intended domain, set is_false_positive = true. Example: a "Splice Engineer" query returning a role at Splice (the music-tech company) is a false positive.
+- Industry: do NOT reject based on industry. Candidates relocate and industries vary.
+
+TIER DEFINITIONS:
+- best: direct title match + correct seniority + real domain fit + high confidence.
+- medium: reasonably relevant but slightly broader title or lower confidence.
+- worthy: tangential or hard-to-verify fit — keep for manual review.
+- skip: wrong seniority, false positive, or clearly unrelated role.
+
+Respond with ONLY this JSON object, no markdown fences, no other text:
+{"seniority":"entry"|"mid"|"senior"|"executive"|"unknown","tier":"best"|"medium"|"worthy"|"skip","tier_reason":"short reason","is_false_positive":boolean,"false_positive_reason":string|null,"relevance_score":number 0.00-1.00,"keywords":["max 4 precise skills"]}`;
+
+interface AgentConfigSnapshot {
+  systemPrompt: string | null;
+  userPromptPreamble: string | null;
+  temperature: number | null;
+  maxOutputTokens: number | null;
+  timeoutMs: number | null;
+  isActive: boolean;
+}
+
+async function loadConfig(): Promise<AgentConfigSnapshot> {
+  try {
+    const row = await findAgentConfigByAutomationId(AUTOMATION_ID);
+    if (!row) {
+      return {
+        systemPrompt: DEFAULT_SYSTEM_PROMPT,
+        userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
+        temperature: 0.2,
+        maxOutputTokens: 2048,
+        timeoutMs: null,
+        isActive: true,
+      };
+    }
+    return {
+        systemPrompt: row.system_prompt || DEFAULT_SYSTEM_PROMPT,
+        userPromptPreamble: row.system_prompt ? null : DEFAULT_USER_PROMPT_PREAMBLE,
+        // The AI Control Center lets admins override the system prompt. When they do,
+        // we trust it fully and do not prepend our own rules. If they haven't set one,
+        // we keep the built-in rules that make the Job Agent's tier logic correct.
+        temperature: row.temperature ?? 0.2,
+        maxOutputTokens: row.max_output_tokens ?? 2048,
+        timeoutMs: row.timeout_ms ?? null,
+        isActive: row.is_active,
+      };
+  } catch (err) {
+    console.warn(`[jobAgentClassifier] Could not load ${AUTOMATION_ID} config:`, (err as Error).message);
+    return {
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
+      temperature: 0.2,
+      maxOutputTokens: 2048,
+      timeoutMs: null,
+      isActive: true,
+    };
+  }
+}
+
+function buildPrompt(input: ClassifyInput, config: AgentConfigSnapshot): string {
+  const roleLine = `Role group: ${input.role_group} (${input.role_group_label})`;
+  const jobLines = [
     "Job title:",
     input.title,
     input.company_name ? `Company name: ${input.company_name}` : null,
     `Search query that produced this result: ${input.search_query}`,
-    `Role group: ${input.role_group} (${input.role_group_label})`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+    roleLine,
+  ].filter(Boolean);
+
+  if (config.userPromptPreamble) {
+    return [config.userPromptPreamble, "", ...jobLines].join("\n");
+  }
+
+  // Admin-supplied system prompt only; keep the job facts in the user message.
+  return jobLines.join("\n");
 }
 
 function parseAiJson(raw: string): ClassificationResult {
@@ -93,21 +152,40 @@ function parseAiJson(raw: string): ClassificationResult {
 }
 
 /**
- * AI classifier. Uses the existing provider routing + usage tracking.
+ * AI classifier. Routes through the AI Control Center (automation_id = "job_categorization"),
+ * so the model/key/temperature can be changed from /admin/ai without editing code.
  */
 export async function classifyWithAi(input: ClassifyInput): Promise<ClassificationResult> {
-  const { result } = await callWithUsageTracking(
-    "job_categorization",
+  const config = await loadConfig();
+
+  if (!config.isActive) {
+    throw new Error(`Automation ${AUTOMATION_ID} is disabled in AI Control Center`);
+  }
+
+  const system = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  const userText = buildPrompt(input, config);
+
+  const { result, providerName, model, aiKeyId, routeRank } = await callWithUsageTracking(
+    AUTOMATION_ID,
     undefined,
     async (provider) => {
       const response = await provider.send({
-        system: "You are a strict, literal job-posting classifier. Respond with raw JSON only.",
-        messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(input) }] }],
+        system,
+        messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
         tools: [],
+        temperature: config.temperature ?? 0.2,
+        maxTokens: config.maxOutputTokens ?? 2048,
+        timeoutMs: config.timeoutMs ?? undefined,
       });
       return parseAiJson(textOf(response.content));
     }
   );
+
+  console.log(
+    `[jobAgentClassifier] classified "${input.title}" via ${providerName}${model ? `/${model}` : ""} ` +
+      `(key=${aiKeyId ?? "env"}, rank=${routeRank ?? "n/a"}) -> tier=${result.tier}`
+  );
+
   return result;
 }
 

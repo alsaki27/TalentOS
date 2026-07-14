@@ -3,10 +3,14 @@
 // OpenAI directly via a raw process.env.OPENAI_API_KEY, bypassing this app's
 // entire multi-provider routing/key-management system entirely. Confirmed
 // live: that key's OpenAI account is out of billing quota
-// (insufficient_quota), so every chat message failed. Routed through the
-// same callWithUsageTracking("falood_ai", ...) mechanism every other AI
-// feature in the app uses instead - gets automatic fallback, usage
-// tracking, and shows up in the AI Control Center like everything else.
+// (insufficient_quota), so every chat message failed. Routed through
+// callWithUsageTracking(...) - the same mechanism every other AI feature in
+// the app uses - to get automatic fallback, usage tracking, and visibility
+// in the AI Control Center. getFaloodSuggestions (the chat) uses the
+// "base_resume_studio" automation (the same one the CLI-style base resume
+// editor uses, configured with a working key at /admin/ai -> Agents &
+// Routing) after the dedicated "falood_ai" automation's only configured
+// route hit the same exhausted OpenAI key.
 
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
@@ -38,13 +42,51 @@ async function buildCandidateContext(candidateId: string | undefined): Promise<s
   }
 }
 
-function parseJsonResponse<T>(raw: string): T {
-  const cleaned = raw
+function stripFences(raw: string): string {
+  return raw
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim();
-  return JSON.parse(cleaned) as T;
+}
+
+function safeJsonParse(text: string): any | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+// The model is asked to return strict JSON, but it doesn't always comply -
+// when it declines to make a change (e.g. because doing so would fabricate
+// something not in the resume/evidence), it replies in plain prose like
+// "I cannot add that because...". A raw JSON.parse on that throws a
+// SyntaxError and 500s the whole request, so the user just sees a generic
+// error instead of the model's actual reasoning. Parse defensively: accept
+// clean JSON, dig a JSON object out of surrounding prose if present, and
+// otherwise treat the whole response as a conversational reply to show in
+// the chat (with no suggestions to apply).
+function parseSuggestionsResponse(raw: string): { suggestions: FaloodSuggestion[]; reply?: string } {
+  const cleaned = stripFences(raw);
+
+  const direct = safeJsonParse(cleaned);
+  if (direct && Array.isArray(direct.suggestions)) {
+    return { suggestions: direct.suggestions as FaloodSuggestion[] };
+  }
+
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start !== -1 && end > start) {
+    const embedded = safeJsonParse(cleaned.slice(start, end + 1));
+    if (embedded && Array.isArray(embedded.suggestions)) {
+      const prose = cleaned.slice(0, start).trim();
+      return { suggestions: embedded.suggestions as FaloodSuggestion[], reply: prose || undefined };
+    }
+  }
+
+  // Pure conversational reply / refusal — surface it, don't crash.
+  return { suggestions: [], reply: cleaned || "I couldn't produce any suggestions for that." };
 }
 
 const SUGGESTIONS_SYSTEM_PROMPT = `You are an expert resume optimizer and career coach. Your job is to propose specific, actionable resume edits that the user can accept or reject.
@@ -109,7 +151,7 @@ export async function getFaloodSuggestions(
   messages: { role: string; content: string }[],
   userId?: string,
   candidateId?: string
-): Promise<{ suggestions: FaloodSuggestion[] }> {
+): Promise<{ suggestions: FaloodSuggestion[]; reply?: string }> {
   const candidateContext = await buildCandidateContext(candidateId);
   const conversationContext = `
 CURRENT RESUME JSON (the draft being edited - suggestions target this):
@@ -123,7 +165,7 @@ ${jobDescription || "Not provided yet, infer from chat context."}${candidateCont
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n\n");
 
-  const { result: response } = await callWithUsageTracking("falood_ai", { userId }, async (provider) => {
+  const { result: response } = await callWithUsageTracking("base_resume_studio", { userId }, async (provider) => {
     return provider.send({
       system: `${SUGGESTIONS_SYSTEM_PROMPT}\n\n${conversationContext}`,
       messages: [{ role: "user", content: [{ type: "text", text: conversationText || "Please review my resume and suggest improvements." }] }],
@@ -131,7 +173,7 @@ ${jobDescription || "Not provided yet, infer from chat context."}${candidateCont
     });
   });
 
-  return parseJsonResponse<{ suggestions: FaloodSuggestion[] }>(textOf(response.content));
+  return parseSuggestionsResponse(textOf(response.content));
 }
 
 const EXTRACT_SKILLS_SYSTEM_PROMPT = `You are an expert at extracting information from job descriptions.
@@ -155,5 +197,11 @@ export async function extractSkillsFromJobDescription(
     });
   });
 
-  return parseJsonResponse<{ companyName: string | null; skills: string[] }>(textOf(response.content));
+  // Same defensive handling as the suggestions path: a non-JSON reply must
+  // degrade to an empty result, not throw and 500 the request.
+  const parsed = safeJsonParse(stripFences(textOf(response.content)));
+  return {
+    companyName: typeof parsed?.companyName === "string" ? parsed.companyName : null,
+    skills: Array.isArray(parsed?.skills) ? parsed.skills.filter((s: unknown) => typeof s === "string") : [],
+  };
 }

@@ -592,13 +592,13 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                     </Button>
                 </div>
 
-                <div className="flex flex-col xl:flex-row gap-4" style={{ maxWidth: 1800, margin: '0 auto' }}>
+                <div className="flex flex-col xl:flex-row gap-4 xl:overflow-x-auto print:overflow-visible" style={{ maxWidth: 1800, margin: '0 auto' }}>
                     {/* Form Panel */}
                     <div className={cn(
                         "w-full lg:w-[600px] xl:w-[500px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
                         "lg:block",
                         showPreview ? "hidden lg:flex" : "flex"
-                    )} style={{ height: 750 }}>
+                    )} style={{ height: 750, flexShrink: 0 }}>
                         <div style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center' }}>
                                 <Button variant={activePanel === 'form' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('form')} style={{ borderRadius: 0, padding: '12px 24px' }}>Content</Button>
@@ -617,7 +617,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                         "print:w-full print:h-auto print:shadow-none print:rounded-none print:block print:overflow-visible",
                         "lg:flex",
                         showPreview ? "flex" : "hidden lg:flex"
-                    )} style={{ height: 750 }}>
+                    )} style={{ height: 750, minWidth: 620, flexShrink: 0 }}>
                         <div className="print:hidden" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0 }}>
                             {!isNew && (
                                 <span className="text-xs text-muted-foreground mr-auto">
@@ -658,7 +658,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                         <div className={cn(
                             "w-full xl:w-[400px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
                             "hidden xl:flex"
-                        )} style={{ height: 750 }}>
+                        )} style={{ height: 750, flexShrink: 0 }}>
                             <div style={{ flex: 1, overflow: 'hidden', padding: 8 }}>
                                 <AiSuggestions />
                             </div>

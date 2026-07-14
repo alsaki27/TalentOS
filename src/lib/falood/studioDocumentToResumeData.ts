@@ -126,7 +126,7 @@ function normalizeResumifyNative(d: any): ResumeData {
   return {
     personalInfo: {
       fullName: asString(personalInfo.fullName),
-      jobTitle: asString(personalInfo.jobTitle) || experience[0]?.jobTitle || "",
+      jobTitle: asString(personalInfo.jobTitle),
       email: asString(personalInfo.email),
       phone: asString(personalInfo.phone),
       location: asString(personalInfo.location),
@@ -179,8 +179,6 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     description: "",
     bulletPoints: bulletTexts(e?.bullets),
   }));
-  const mostRecentTitle = experience[0]?.jobTitle ?? "";
-
   const education = asArray<NonNullable<StudioDocumentLike["education"]>[number]>(d.education).map((e) => ({
     id: uid("edu"),
     degree: e?.degree ?? "",
@@ -219,7 +217,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
   return {
     personalInfo: {
       fullName: header.fullName ?? "",
-      jobTitle: mostRecentTitle,
+      jobTitle: "",
       email: header.email ?? "",
       phone: header.phone ?? "",
       location: header.location ?? "",

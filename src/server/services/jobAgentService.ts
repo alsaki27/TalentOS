@@ -16,6 +16,35 @@ const POLL_INTERVAL_MS = 15_000;
 const POLL_TIMEOUT_MS = 15 * 60_000;
 const CLASSIFICATION_DELAY_MS = 300;
 
+/**
+ * Map UI-friendly date intervals to the exact enum values the Apify actor expects.
+ * The actor's datePosted enum is: ["any", "today", "3days", "week", "month"].
+ * Passing anything else (e.g. "7 days") silently breaks filtering.
+ */
+const VALID_DATE_POSTED_VALUES = new Set(["any", "today", "3days", "week", "month"]);
+
+function toApifyDatePosted(input: string | undefined | null): string {
+  if (!input) return "today";
+  const normalized = input.toLowerCase().trim();
+  const map: Record<string, string> = {
+    today: "today",
+    "2 days": "3days",
+    "3days": "3days",
+    "3 days": "3days",
+    "7 days": "week",
+    week: "week",
+    "30 days": "month",
+    month: "month",
+    any: "any",
+  };
+  const mapped = map[normalized];
+  if (mapped && VALID_DATE_POSTED_VALUES.has(mapped)) return mapped;
+  // Defensive fallback: if the input already matches the actor's enum, pass it through.
+  if (VALID_DATE_POSTED_VALUES.has(normalized)) return normalized;
+  console.warn(`[jobAgentService] Unrecognized datePosted "${input}", defaulting to "today"`);
+  return "today";
+}
+
 export interface ExecuteRunOptions {
   testMode?: boolean;
   useAi?: boolean;
@@ -100,7 +129,7 @@ export async function executeRunFromRecord(
       const apifyInput = {
         searchQueries,
         maxResults,
-        datePosted: options.dateInterval ?? "today",
+        datePosted: toApifyDatePosted(options.dateInterval),
         employmentType: "any",
         proxyCountry: "US",
       };
@@ -260,15 +289,52 @@ async function dedupeAcrossRunsAndJobs(jobs: NormalizedJob[]): Promise<{ uniqueJ
 interface ClassifiedJob extends NormalizedJob { role_group: string | null; role_group_label: string | null; seniority_guess: string; tier: string; tier_reason: string; ai_keywords: string[]; relevance_score: number; is_false_positive: boolean; }
 
 async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<ClassifiedJob[]> {
+  if (jobs.length === 0) return [];
+
+  // Process in parallel batches of CONCURRENCY to keep total time reasonable.
+  // 500 jobs @ 5s AI call + batch overhead ≈ 100 seconds with 5 concurrent.
+  const CONCURRENCY = 5;
   const classified: ClassifiedJob[] = [];
-  for (let i = 0; i < jobs.length; i++) {
-    const job = jobs[i];
-    const group = job.search_query_used ? getGroupForSearchQuery(job.search_query_used) : undefined;
-    const gid = group?.id ?? null; const gl = group ? getGroupLabel(group.id) : null;
-    const c = await classifyJob({ title: job.job_title, company_name: job.company_name, search_query: job.search_query_used ?? job.job_title, role_group: gid ?? "?", role_group_label: gl ?? "Unknown" }, { useAi });
-    classified.push({ ...job, role_group: gid, role_group_label: gl, seniority_guess: c.seniority, tier: c.tier, tier_reason: c.tier_reason, ai_keywords: c.keywords, relevance_score: c.relevance_score, is_false_positive: c.is_false_positive });
-    if (i < jobs.length - 1) await new Promise((r) => setTimeout(r, CLASSIFICATION_DELAY_MS));
+
+  for (let batchStart = 0; batchStart < jobs.length; batchStart += CONCURRENCY) {
+    const batch = jobs.slice(batchStart, batchStart + CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (job) => {
+        const group = job.search_query_used ? getGroupForSearchQuery(job.search_query_used) : undefined;
+        const gid = group?.id ?? null;
+        const gl = group ? getGroupLabel(group.id) : null;
+        const c = await classifyJob(
+          {
+            title: job.job_title,
+            company_name: job.company_name,
+            search_query: job.search_query_used ?? job.job_title,
+            role_group: gid ?? "?",
+            role_group_label: gl ?? "Unknown",
+          },
+          { useAi }
+        );
+        return {
+          ...job,
+          role_group: gid,
+          role_group_label: gl,
+          seniority_guess: c.seniority,
+          tier: c.tier,
+          tier_reason: c.tier_reason,
+          ai_keywords: c.keywords,
+          relevance_score: c.relevance_score,
+          is_false_positive: c.is_false_positive,
+        };
+      })
+    );
+    classified.push(...batchResults);
+
+    // Small inter-batch pause to avoid hammering the AI provider,
+    // but not the 300ms-per-job delay that made large runs take hours.
+    if (batchStart + CONCURRENCY < jobs.length) {
+      await new Promise((r) => setTimeout(r, CLASSIFICATION_DELAY_MS));
+    }
   }
+
   return classified;
 }
 

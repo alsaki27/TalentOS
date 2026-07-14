@@ -33,7 +33,7 @@ interface Suggestion {
     suggested: string | string[] | SkillCategory[] | EducationEntry[];
     targetId?: string; // ID of the experience item or skill category
     subId?: string; // ID of the specific skill category if needed
-    status?: 'accepted' | 'rejected' | 'pending';
+    status?: 'accepted' | 'rejected' | 'pending' | 'failed';
 }
 
 interface ChatMessage {
@@ -147,6 +147,8 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     }, [messages]);
 
     const applySuggestionToResumeData = useCallback((resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
+        const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
         if (suggestion.type === 'summary') {
             return { ...resumeData, summary: (suggestion.suggested as string) ?? '' };
         }
@@ -175,33 +177,67 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             };
         }
 
-        if (suggestion.type === 'experience' && suggestion.targetId) {
-            const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
-            const updatedExperience = resumeData.experience.map(exp => {
-                if (exp.id !== suggestion.targetId) return exp;
+        // The AI is asked (see SUGGESTIONS_SYSTEM_PROMPT in faloodAiService.ts)
+        // to always set targetId to the matching experience/skill-category id,
+        // but confirmed live across real conversations: it frequently omits it
+        // (100% missing in one real session, ~4% across all sessions for
+        // "experience" and up to a third for "skill"). Requiring an exact
+        // targetId match made every one of those "Accept" clicks a silent
+        // no-op - the chat marked the suggestion accepted but resumeData never
+        // changed. Below, targetId is used as a hint when present and valid,
+        // but matching falls back to locating suggestion.original (or, for
+        // skills, just picking an unambiguous category) so acceptance still
+        // works without it.
+        if (suggestion.type === 'experience') {
+            const newText = (suggestion.suggested as string) ?? '';
+            if (!newText) return resumeData;
 
-                let targetIndex = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
-                if (targetIndex === -1 && suggestion.original) {
+            const byTargetId = suggestion.targetId
+                ? resumeData.experience.find(exp => exp.id === suggestion.targetId)
+                : undefined;
+            const candidates = byTargetId ? [byTargetId] : resumeData.experience;
+
+            let matchedExpId: string | null = null;
+            let matchedBulletIndex = -1;
+            for (const exp of candidates) {
+                let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+                if (idx === -1 && suggestion.original) {
                     const normalizedOriginal = normalize(suggestion.original);
-                    targetIndex = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
+                    idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
                 }
+                if (idx !== -1) {
+                    matchedExpId = exp.id;
+                    matchedBulletIndex = idx;
+                    break;
+                }
+            }
 
-                if (targetIndex === -1) return exp;
+            if (matchedExpId === null) return resumeData;
 
+            const updatedExperience = resumeData.experience.map(exp => {
+                if (exp.id !== matchedExpId) return exp;
                 const updatedBullets = [...exp.bulletPoints];
-                updatedBullets[targetIndex] = (suggestion.suggested as string) ?? '';
+                updatedBullets[matchedBulletIndex] = newText;
                 return { ...exp, bulletPoints: updatedBullets };
             });
 
             return { ...resumeData, experience: updatedExperience };
         }
 
-        if (suggestion.type === 'experience_add' && suggestion.targetId) {
+        if (suggestion.type === 'experience_add') {
             const newBullet = (suggestion.suggested as string)?.trim();
             if (!newBullet) return resumeData;
 
+            // No original text to locate against for a brand-new bullet - fall
+            // back to the most recent (first) role, which is what a tailoring
+            // conversation is about the overwhelming majority of the time.
+            const target = (suggestion.targetId
+                ? resumeData.experience.find(exp => exp.id === suggestion.targetId)
+                : undefined) ?? resumeData.experience[0];
+            if (!target) return resumeData;
+
             const updatedExperience = resumeData.experience.map(exp => {
-                if (exp.id !== suggestion.targetId) return exp;
+                if (exp.id !== target.id) return exp;
                 if (exp.bulletPoints.includes(newBullet)) return exp;
                 return { ...exp, bulletPoints: [...exp.bulletPoints, newBullet] };
             });
@@ -209,27 +245,39 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             return { ...resumeData, experience: updatedExperience };
         }
 
-        if (suggestion.type === 'experience_remove' && suggestion.targetId) {
+        if (suggestion.type === 'experience_remove') {
             const original = suggestion.original || (typeof suggestion.suggested === 'string' ? suggestion.suggested : '');
             if (!original) return resumeData;
-
-            const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
             const normalizedOriginal = normalize(original);
 
+            const byTargetId = suggestion.targetId
+                ? resumeData.experience.find(exp => exp.id === suggestion.targetId)
+                : undefined;
+            const hasMatch = (byTargetId ? [byTargetId] : resumeData.experience)
+                .some(exp => exp.bulletPoints.some(bp => normalize(bp) === normalizedOriginal));
+            if (!hasMatch) return resumeData;
+
             const updatedExperience = resumeData.experience.map(exp => {
-                if (exp.id !== suggestion.targetId) return exp;
+                if (byTargetId && exp.id !== byTargetId.id) return exp;
                 return { ...exp, bulletPoints: exp.bulletPoints.filter(bp => normalize(bp) !== normalizedOriginal) };
             });
 
             return { ...resumeData, experience: updatedExperience };
         }
 
-        if (suggestion.type === 'skill' && suggestion.targetId) {
+        if (suggestion.type === 'skill') {
             const newSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
             if (newSkills.length === 0) return resumeData;
 
-            const updatedCategories = resumeData.skills.categorized.map(cat => {
-                if (cat.id !== suggestion.targetId) return cat;
+            const categories = resumeData.skills.categorized;
+            if (categories.length === 0) return resumeData;
+
+            const targetCatId = (suggestion.targetId && categories.some(c => c.id === suggestion.targetId))
+                ? suggestion.targetId
+                : categories[0].id;
+
+            const updatedCategories = categories.map(cat => {
+                if (cat.id !== targetCatId) return cat;
                 const uniqueNewSkills = newSkills.filter(s => !cat.skills.includes(s));
                 return { ...cat, skills: [...cat.skills, ...uniqueNewSkills] };
             });
@@ -243,15 +291,17 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             };
         }
 
-        if (suggestion.type === 'skill_remove' && suggestion.targetId) {
+        if (suggestion.type === 'skill_remove') {
             const removeSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
             const removeSet = new Set(removeSkills.map(s => s.trim().toLowerCase()).filter(Boolean));
             if (removeSet.size === 0) return resumeData;
 
-            const updatedCategories = resumeData.skills.categorized.map(cat => {
-                if (cat.id !== suggestion.targetId) return cat;
-                return { ...cat, skills: cat.skills.filter(s => !removeSet.has(s.trim().toLowerCase())) };
-            });
+            // Removal is unambiguous without targetId - just strip matching
+            // skill names from whichever category actually contains them.
+            const updatedCategories = resumeData.skills.categorized.map(cat => ({
+                ...cat,
+                skills: cat.skills.filter(s => !removeSet.has(s.trim().toLowerCase())),
+            }));
 
             return {
                 ...resumeData,
@@ -299,14 +349,22 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
     const handleAccept = (suggestion: Suggestion, messageId: string) => {
         const nextResumeData = applySuggestionToResumeData(state.resumeData, suggestion);
-        importResumeData(nextResumeData);
+        // applySuggestionToResumeData returns the input unchanged (same
+        // content, new top-level object) whenever it can't find a match -
+        // detect that instead of always marking the suggestion "accepted",
+        // which previously hid every failed match from the user entirely.
+        const applied = JSON.stringify(nextResumeData) !== JSON.stringify(state.resumeData);
+
+        if (applied) {
+            importResumeData(nextResumeData);
+        }
 
         setChatHistory(messages.map(msg => {
             if (msg.id !== messageId || !msg.suggestions) return msg;
             return {
                 ...msg,
                 suggestions: msg.suggestions.map((s: Suggestion) =>
-                    s.id === suggestion.id ? { ...s, status: 'accepted' } : s
+                    s.id === suggestion.id ? { ...s, status: applied ? 'accepted' : 'failed' } : s
                 )
             };
         }));
@@ -324,18 +382,23 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
         if (pending.length === 0) return;
 
-        const nextResumeData = pending.reduce((acc, { suggestion }) => {
-            return applySuggestionToResumeData(acc, suggestion);
-        }, state.resumeData);
+        const resultStatus = new Map<string, 'accepted' | 'failed'>();
+        let acc = state.resumeData;
+        for (const { suggestion } of pending) {
+            const next = applySuggestionToResumeData(acc, suggestion);
+            const applied = JSON.stringify(next) !== JSON.stringify(acc);
+            resultStatus.set(suggestion.id, applied ? 'accepted' : 'failed');
+            if (applied) acc = next;
+        }
 
-        importResumeData(nextResumeData);
+        importResumeData(acc);
 
         setChatHistory(messages.map(msg => {
             if (!msg.suggestions) return msg;
             return {
                 ...msg,
                 suggestions: msg.suggestions.map((s: Suggestion) =>
-                    (s.status ?? 'pending') === 'pending' ? { ...s, status: 'accepted' } : s
+                    resultStatus.has(s.id) ? { ...s, status: resultStatus.get(s.id)! } : s
                 ),
             };
         }));
@@ -374,7 +437,14 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             // of a hardcoded generic message that hides what actually broke.
             throw new Error(data?.error || 'Failed to get suggestions from AI');
         }
-        return (data.suggestions || []) as Suggestion[];
+        // `reply` is the model's own message when it responded conversationally
+        // instead of (or alongside) suggestions - e.g. declining to add
+        // something it has no evidence for. Show it verbatim so the user knows
+        // why nothing was proposed, rather than a generic canned line.
+        return {
+            suggestions: (data.suggestions || []) as Suggestion[],
+            reply: typeof data.reply === 'string' ? data.reply : undefined,
+        };
     }, [state.resumeData, candidateId]);
 
     const handleSendMessage = async () => {
@@ -406,7 +476,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                 role: m.role,
                 content: m.content
             }));
-            const newSuggestions: Suggestion[] = await fetchAiSuggestions(
+            const { suggestions: newSuggestions, reply } = await fetchAiSuggestions(
                 apiMessages,
                 state.jobDescription || currentInput
             );
@@ -414,9 +484,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             const aiMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: newSuggestions.length > 0
-                    ? 'I have initialized some suggestions for you based on our conversation.'
-                    : 'I acknowledged that. Is there anything specific on the resume you would like to work on?',
+                content: reply
+                    ? reply
+                    : newSuggestions.length > 0
+                        ? 'I have initialized some suggestions for you based on our conversation.'
+                        : 'I acknowledged that. Is there anything specific on the resume you would like to work on?',
                 suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
             };
 
@@ -461,13 +533,15 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         ];
 
         fetchAiSuggestions(apiMessages, jobDescription)
-            .then((newSuggestions) => {
+            .then(({ suggestions: newSuggestions, reply }) => {
                 const aiMsg: ChatMessage = {
                     id: (Date.now() + 1).toString(),
                     role: 'assistant',
-                    content: newSuggestions.length > 0
-                        ? 'Here are some initial suggestions based on your resume and the job description.'
-                        : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
+                    content: reply
+                        ? reply
+                        : newSuggestions.length > 0
+                            ? 'Here are some initial suggestions based on your resume and the job description.'
+                            : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
                     suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
                 };
                 setChatHistory([...messages, aiMsg]);
@@ -538,12 +612,14 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                 <Card key={suggestion.id} className={cn(
                                                     "border shadow-sm overflow-hidden transition-all",
                                                     suggestion.status === 'accepted' ? "opacity-50 bg-green-50/30 border-green-200" :
-                                                        suggestion.status === 'rejected' ? "opacity-40 bg-red-50/30 border-red-100 grayscale" : ""
+                                                        suggestion.status === 'rejected' ? "opacity-40 bg-red-50/30 border-red-100 grayscale" :
+                                                            suggestion.status === 'failed' ? "bg-amber-50/30 border-amber-300" : ""
                                                 )}>
                                                     <CardHeader className="p-3 pb-2 bg-muted/30 border-b flex flex-row items-center justify-between space-y-0">
                                                         <CardTitle className="text-sm leading-tight">{suggestion.title}</CardTitle>
                                                         {suggestion.status === 'accepted' && <Badge variant="outline" className="text-[10px] text-green-600 border-green-200 bg-green-50">Accepted</Badge>}
                                                         {suggestion.status === 'rejected' && <Badge variant="outline" className="text-[10px] text-red-600 border-red-200 bg-red-50">Rejected</Badge>}
+                                                        {suggestion.status === 'failed' && <Badge variant="outline" className="text-[10px] text-amber-700 border-amber-300 bg-amber-50">Couldn&apos;t apply</Badge>}
                                                     </CardHeader>
                                                     <CardContent className="p-3 text-xs space-y-3">
                                                         <div className="flex justify-between items-start">
@@ -644,7 +720,13 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                         </div>
                                                     </CardContent>
 
-                                                    {(!suggestion.status || suggestion.status === 'pending') && (
+                                                    {suggestion.status === 'failed' && (
+                                                        <p className="px-3 pb-2 text-[11px] text-amber-700">
+                                                            Couldn&apos;t find this exact text in the resume (it may have already changed). You can retry, reject, or edit it manually.
+                                                        </p>
+                                                    )}
+
+                                                    {(!suggestion.status || suggestion.status === 'pending' || suggestion.status === 'failed') && (
                                                         <CardFooter className="p-2 flex justify-end gap-2 bg-muted/10 border-t">
                                                             <Button
                                                                 variant="ghost"
@@ -659,7 +741,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                                 className="h-7 text-xs px-3 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
                                                                 onClick={() => handleAccept(suggestion, msg.id)}
                                                             >
-                                                                Accept Change
+                                                                {suggestion.status === 'failed' ? 'Retry' : 'Accept Change'}
                                                             </Button>
                                                         </CardFooter>
                                                     )}

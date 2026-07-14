@@ -81,7 +81,20 @@ export function buildProviderFromDbKey(
       // removed instead of hard-failing.
       const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
       const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET || apiKey;
-      if (!proxyUrl || !proxySecret) return null;
+      if (!proxyUrl || !proxySecret) {
+        // A configured, enabled, healthy Vertex-Proxy route can still be
+        // unusable if this host lacks the proxy env vars (e.g. a local dev
+        // server whose .env.local doesn't carry the Cloudflare Worker
+        // secrets). Returning null here silently skips the route and lets
+        // routing fall through to the next rank / global fallback - which
+        // surfaces downstream as a baffling "why is it using OpenAI" error.
+        // Log loudly so the misconfiguration is diagnosable at the source.
+        console.warn(
+          `[aiProvider] google_vertex_proxy route skipped: missing ${!proxyUrl ? "GOOGLE_VERTEX_PROXY_URL" : "GOOGLE_VERTEX_PROXY_SECRET"} in this environment. ` +
+            `The routed Vertex Proxy key cannot be used here; routing will fall back to a lower-rank route or the global fallback provider.`
+        );
+        return null;
+      }
       return {
         send({ system, messages, tools, temperature, maxTokens }) {
           return callVertexProxy({

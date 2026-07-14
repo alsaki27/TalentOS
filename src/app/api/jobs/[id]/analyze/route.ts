@@ -4,21 +4,17 @@ import { queryOne } from "@/server/db/neon";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 
-function parseJsonResponse<T>(raw: string): T {
-  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  return JSON.parse(cleaned || "{}") as T;
-}
+const AUTOMATION_ID = "jd_analysis";
 
-// Previously called `new OpenAI(...)` directly against a hardcoded, quota-
-// exhausted OPENAI_API_KEY - same root cause as the Jobs match-score, ATS
-// scoring, and autofill-form bugs. Routed through
-// callWithUsageTracking("job_ai_analyze", ...).
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
   try {
-    const job = await queryOne(`SELECT id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization FROM jobs WHERE id = $1`, [params.id]);
+    const job = await queryOne(
+      `SELECT id, description_text, notes, employment_type, seniority_level, salary_range, work_authorization FROM jobs WHERE id = $1`,
+      [params.id]
+    );
 
     if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
@@ -27,8 +23,11 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
       return NextResponse.json({ error: "No description text to analyze" }, { status: 400 });
     }
 
-    const systemPrompt = `You are an elite, top 1% expert HR data analyst AI with 100% precision. Analyze the entire job description text (including 'Basic Qualifications' and 'Preferred Qualifications') and extract the specified fields.
-Return the result strictly as a JSON object (no markdown fences, no explanation) matching this exact schema:
+    const systemPrompt =
+      "You are an elite, top 1% expert HR data analyst AI with 100% precision. Analyze the entire job description text and extract the specified fields. Reply with valid JSON only, no markdown, no explanation.";
+
+    const userPrompt = `Analyze the entire job description text (including 'Basic Qualifications' and 'Preferred Qualifications') and extract the specified fields.
+Return the result strictly as a JSON object matching this exact schema:
 {
   "employment_type": "string or null (e.g., Full-time, Contract)",
   "experience_required": "string or null (Deeply analyze the text to find ANY mention of experience required, including spelled-out numbers like 'Three or more years of experience' or implicit seniority. Summarize it concisely, e.g., '3+ years', 'Entry level', 'Senior'. If no experience is mentioned whatsoever, return null.)",
@@ -39,17 +38,31 @@ Return the result strictly as a JSON object (no markdown fences, no explanation)
   "qualifications": ["string", "string"],
   "job_summary": "string (A 2-3 line concise summary of the role)"
 }
-Do not hallucinate data. If a field is not mentioned, return null or an empty array. Be absolutely unbiased, highly rigorous, and double-check qualifications for experience requirements.`;
+Do not hallucinate data. If a field is not mentioned, return null or an empty array. Be absolutely unbiased, highly rigorous, and double-check qualifications for experience requirements.
 
-    const { result: aiResponse } = await callWithUsageTracking("job_ai_analyze", undefined, async (provider) => {
-      return provider.send({
-        system: systemPrompt,
-        messages: [{ role: "user", content: [{ type: "text", text: fullText }] }],
-        tools: [],
-      });
-    });
+JOB DESCRIPTION:
+${fullText}`;
 
-    const parsedData = parseJsonResponse<any>(textOf(aiResponse.content));
+    const { result, providerName, model } = await callWithUsageTracking(
+      AUTOMATION_ID,
+      undefined,
+      async (provider) => {
+        const response = await provider.send({
+          system: systemPrompt,
+          messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+          tools: [],
+        });
+        const raw = textOf(response.content);
+        const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+        return JSON.parse(stripped);
+      }
+    );
+
+    console.log(
+      `[job-analyze] analyzed job ${params.id} via ${providerName}${model ? `/${model}` : ""}`
+    );
+
+    const parsedData = result;
 
     const updates: any = {
       parsed_description: parsedData
@@ -62,12 +75,14 @@ Do not hallucinate data. If a field is not mentioned, return null or an empty ar
       updates.work_authorization = parsedData.work_auth;
     }
 
-    let updatedJob: any;
     const keys = Object.keys(updates);
     const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
     const values = Object.values(updates);
     values.push(params.id);
-    updatedJob = await queryOne(`UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`, values);
+    const updatedJob = await queryOne(
+      `UPDATE jobs SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
+      values
+    );
 
     return NextResponse.json(updatedJob);
   } catch (error: any) {

@@ -11,6 +11,7 @@ import {
   listStagedJobs,
   bulkUpdateStagedJobStatus,
   updateRunStatus,
+  getRunById,
   type JobAgentStagedJobRow,
 } from "@/server/repositories/jobAgentRunRepository";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
@@ -58,33 +59,47 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
 
 /**
  * Import approved staged jobs into the main jobs table.
+ *
+ * Behavior:
+ * - approveAll: import every non-skip, non-duplicate, non-imported staged job.
+ * - tier: mark every staged job in that tier as approved, then import it.
+ * - jobIds: mark the specified staged jobs as approved, then import them.
  */
 export async function importApprovedJobs(
   runId: string,
   options: ImportApprovedJobsOptions = {}
 ): Promise<{ imported: number; skipped: number }> {
-  // Determine which staged jobs to import.
-  const filters: { importStatus: string; tier?: string; jobIds?: string[] } = {
-    importStatus: "approved",
-  };
-
   if (options.approveAll) {
-    // approveAll means import every non-skip, non-duplicate staged job for this run
+    // approveAll means import every non-skip, non-duplicate, non-imported staged job
     // regardless of current status. Pull them directly.
     const all = await listStagedJobs(runId, { pageSize: 10000 });
     const importable = all.items.filter(
-      (j) => j.tier !== "skip" && !j.is_false_positive && !j.is_duplicate
+      (j) => j.tier !== "skip" && !j.is_false_positive && !j.is_duplicate && j.import_status !== "imported"
     );
-    const result = await importRows(runId, importable);
-    return result;
+    return importRows(runId, importable);
   }
 
+  // For tier/jobIds approvals, first mark the target jobs as approved, then import.
+  // This fixes the bug where the UI "Approve All Best" found zero rows because they
+  // were still in import_status = 'staged'.
   if (options.tier) {
-    filters.tier = options.tier;
+    await bulkUpdateStagedJobStatus(runId, "approved", {
+      tier: options.tier,
+      excludeImportStatus: "imported",
+    });
   }
   if (options.jobIds && options.jobIds.length > 0) {
-    filters.jobIds = options.jobIds;
+    await bulkUpdateStagedJobStatus(runId, "approved", {
+      jobIds: options.jobIds,
+      excludeImportStatus: "imported",
+    });
   }
+
+  const filters: { importStatus: string; tier?: string; jobIds?: string[] } = {
+    importStatus: "approved",
+  };
+  if (options.tier) filters.tier = options.tier;
+  if (options.jobIds && options.jobIds.length > 0) filters.jobIds = options.jobIds;
 
   const approved = await listStagedJobs(runId, { ...filters, pageSize: 10000 });
   return importRows(runId, approved.items);
@@ -135,10 +150,12 @@ async function importRows(
     await bulkUpdateStagedJobStatus(runId, "imported", { jobIds: importedStagedIds });
   }
 
-  // Update run counts.
+  // Update run counts incrementally so multiple partial imports (e.g. Best, then Medium)
+  // do not overwrite each other.
+  const currentRun = await getRunById(runId);
   const run = await updateRunStatus(runId, {
-    imported_count: importedStagedIds.length,
-    skipped_count: duplicates,
+    imported_count: (currentRun?.imported_count ?? 0) + importedStagedIds.length,
+    skipped_count: (currentRun?.skipped_count ?? 0) + duplicates,
   });
 
   // Trigger AI categorization in the background for newly imported jobs.

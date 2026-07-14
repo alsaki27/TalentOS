@@ -236,6 +236,41 @@ button:disabled {
   background: #235c41;
 }
 
+.dropdown-wrapper {
+  display: inline-block;
+}
+
+/* Appearance only — no position rules here. Callers inside a scrolling
+   container (e.g. .table-shell's overflow-x: auto, which per spec forces
+   overflow-y: auto too) must render this via a portal with inline
+   position: fixed coordinates, or it will be silently clipped since it's
+   still a DOM descendant of the clipped ancestor. See RowActionsMenu in
+   src/app/candidates/[id]/page.tsx. */
+.dropdown-menu {
+  z-index: 20;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+}
+
+.dropdown-header {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
 .dropdown-item {
   display: block;
   width: 100%;
@@ -251,6 +286,19 @@ button:disabled {
 
 .dropdown-item:hover {
   background-color: var(--bg);
+}
+
+.dropdown-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.dropdown-item-danger {
+  color: var(--danger);
+}
+
+.dropdown-item-danger:hover {
+  background-color: rgba(248, 113, 113, 0.12);
 }
 
 input,
