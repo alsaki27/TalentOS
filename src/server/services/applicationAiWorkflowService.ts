@@ -529,7 +529,23 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         break;
       } catch (err: any) {
         lastError = err;
-        if (err instanceof AiRouteCallError && err.aiKeyId) {
+        // Only blacklist the key/route for a real provider-side failure
+        // (auth, rate limit, timeout, server error - anything classifyErrorCode
+        // in routing.ts recognizes). callWithUsageTracking wraps EVERY error
+        // thrown inside fn - including an agent's own content-validation
+        // rejection (e.g. Final Polish's "wiped the entire experience section
+        // ... rejecting") - into an AiRouteCallError carrying the key that was
+        // used, indistinguishable from an actual API failure. Blacklisting on
+        // that meant one bad generation exhausted BOTH configured routes
+        // (neither route was actually broken) and the 3rd fallback attempt hit
+        // an empty route list, throwing the generic "All configured routes
+        // failed and global fallback is disabled" - which overwrote the real,
+        // useful validation error as the stage's recorded last_error. Confirmed
+        // live via ai_usage_events: the true error was a content rejection, not
+        // a routing/key problem, on both the primary and backup key. Errors
+        // with no classifiable errorCode (validation/business-logic throws)
+        // now just retry the same route instead of blacklisting it.
+        if (err instanceof AiRouteCallError && err.aiKeyId && err.errorCode) {
           failedKeyIds.add(err.aiKeyId);
         }
         resolvedKeyId = null;
