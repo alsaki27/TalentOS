@@ -397,6 +397,7 @@ export function TailorResumeModal({
           skills: [],
           resumeData: finalResumeData,
           chatHistory: [{ id: "meta-candidate", role: "assistant", content: "", candidateId, candidateName: resolvedCandidateName }],
+          candidateId,
         }),
       });
       const created = await createRes.json().catch(() => ({}));

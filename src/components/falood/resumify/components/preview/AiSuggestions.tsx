@@ -16,13 +16,21 @@ interface SkillCategory {
     skills: string[];
 }
 
+interface EducationEntry {
+    id?: string;
+    degree: string;
+    institution: string;
+    location?: string;
+    graduationYear?: string;
+}
+
 interface Suggestion {
     id: string;
-    type: 'experience' | 'experience_add' | 'experience_remove' | 'skill' | 'skill_remove' | 'summary' | 'skill_reorg' | 'personal_info';
+    type: 'experience' | 'experience_add' | 'experience_remove' | 'skill' | 'skill_remove' | 'summary' | 'skill_reorg' | 'personal_info' | 'education_add';
     title: string;
     description: string;
     original?: string;
-    suggested: string | string[] | SkillCategory[];
+    suggested: string | string[] | SkillCategory[] | EducationEntry[];
     targetId?: string; // ID of the experience item or skill category
     subId?: string; // ID of the specific skill category if needed
     status?: 'accepted' | 'rejected' | 'pending';
@@ -35,7 +43,7 @@ interface ChatMessage {
     suggestions?: Suggestion[];
 }
 
-export const AiSuggestions: React.FC = () => {
+export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candidateId }) => {
     const { state, importResumeData, setChatHistory, setJobDescription } = useResume();
     const { chatHistory: messages, jobDescription } = state;
     const [input, setInput] = useState('');
@@ -254,6 +262,26 @@ export const AiSuggestions: React.FC = () => {
             };
         }
 
+        if (suggestion.type === 'education_add') {
+            const newEntries = Array.isArray(suggestion.suggested) ? (suggestion.suggested as EducationEntry[]) : [];
+            if (newEntries.length === 0) return resumeData;
+
+            const existingKeys = new Set(resumeData.education.map(e => `${e.degree}|${e.institution}`.toLowerCase()));
+            const toAdd = newEntries
+                .filter(e => e && e.degree && e.institution)
+                .filter(e => !existingKeys.has(`${e.degree}|${e.institution}`.toLowerCase()))
+                .map(e => ({
+                    id: e.id || `edu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    degree: e.degree,
+                    institution: e.institution,
+                    location: e.location || '',
+                    graduationYear: e.graduationYear || '',
+                }));
+
+            if (toAdd.length === 0) return resumeData;
+            return { ...resumeData, education: [...resumeData.education, ...toAdd] };
+        }
+
         if (suggestion.type === 'skill_reorg') {
             const newCategories = suggestion.suggested as SkillCategory[];
             if (!Array.isArray(newCategories)) return resumeData;
@@ -335,17 +363,19 @@ export const AiSuggestions: React.FC = () => {
             body: JSON.stringify({
                 resume: state.resumeData,
                 jobDescription: jd,
-                messages: apiMessages
+                messages: apiMessages,
+                candidateId: candidateId || undefined,
             }),
         });
 
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            throw new Error('Failed to get suggestions from AI');
+            // Surface the real server error (e.g. an AI provider failure) instead
+            // of a hardcoded generic message that hides what actually broke.
+            throw new Error(data?.error || 'Failed to get suggestions from AI');
         }
-
-        const data = await response.json();
         return (data.suggestions || []) as Suggestion[];
-    }, [state.resumeData]);
+    }, [state.resumeData, candidateId]);
 
     const handleSendMessage = async () => {
         if (!input.trim()) return;
@@ -396,7 +426,7 @@ export const AiSuggestions: React.FC = () => {
             const errorMsg: ChatMessage = {
                 id: (Date.now() + 1).toString(),
                 role: 'assistant',
-                content: 'Sorry, I encountered an error. Please ensure the backend server is running.'
+                content: `Sorry, I ran into an error: ${error instanceof Error ? error.message : String(error)}`
             };
             setChatHistory([...newMessages, errorMsg]);
         } finally {
@@ -582,6 +612,15 @@ export const AiSuggestions: React.FC = () => {
                                                                                                 </Badge>
                                                                                             ))}
                                                                                         </div>
+                                                                                    </div>
+                                                                                );
+                                                                            }
+                                                                            if ('degree' in s && 'institution' in s) {
+                                                                                return (
+                                                                                    <div key={idx} className="flex flex-col gap-0.5 mt-1 mb-1">
+                                                                                        <span className="font-semibold">{s.degree}</span>
+                                                                                        <span className="text-muted-foreground">{s.institution}{s.location ? ` — ${s.location}` : ''}</span>
+                                                                                        {s.graduationYear && <span className="text-muted-foreground">{s.graduationYear}</span>}
                                                                                     </div>
                                                                                 );
                                                                             }

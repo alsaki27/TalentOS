@@ -27,6 +27,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const fileInputRef = useRef<HTMLInputElement>(null);
     const lastSavedSnapshotRef = useRef<string | null>(null);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+    const [candidateId, setCandidateId] = useState<string | null>(null);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -42,6 +43,13 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 if (json.success && json.data) {
                     dispatch({ type: 'IMPORT_RESUME_DATA', payload: json.data.resumeData });
                     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: json.data.jobDescription || '' });
+                    // candidateId may also be embedded in a legacy "meta-candidate"
+                    // chatHistory entry (how this was stashed before candidate_id
+                    // was a real column) - fall back to that for older sessions.
+                    const legacyCandidateId = Array.isArray(json.data.chatHistory)
+                        ? json.data.chatHistory.find((m: any) => m?.id === 'meta-candidate')?.candidateId
+                        : null;
+                    setCandidateId(json.data.candidateId || legacyCandidateId || null);
 
                     // Pre-seed the chat with a system message about the job
                     const systemMsg = {
@@ -290,7 +298,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                             </p>
                         </div>
                         <div style={{ flex: 1, overflow: 'hidden', padding: 8 }}>
-                            <AiSuggestions />
+                            <AiSuggestions candidateId={candidateId} />
                         </div>
                     </div>
                 </div>

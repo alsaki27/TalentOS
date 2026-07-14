@@ -23,13 +23,14 @@ export async function POST(req: NextRequest) {
   const resumeData = body.resume;
   const jobDescription = body.jobDescription;
   const messages: { role: string; content: string }[] = body.messages ?? [];
+  const candidateId: string | undefined = body.candidateId;
 
   if (!resumeData) {
     return NextResponse.json({ error: "Missing resume data" }, { status: 400 });
   }
 
   try {
-    const suggestionsData = await getFaloodSuggestions(resumeData, jobDescription, messages, currentUser?.profile.user_id);
+    const suggestionsData = await getFaloodSuggestions(resumeData, jobDescription, messages, currentUser?.profile.user_id, candidateId);
     return NextResponse.json(suggestionsData);
   } catch (e: any) {
     console.error("[falood/suggestions] AI call failed:", e);

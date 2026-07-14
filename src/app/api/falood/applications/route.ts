@@ -35,7 +35,8 @@ export async function GET(req: NextRequest) {
       const row = await queryOne<any>(
         `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
                 job_description AS "jobDescription", company_name AS "companyName",
-                skills, resume_data AS "resumeData", chat_history AS "chatHistory"
+                skills, resume_data AS "resumeData", chat_history AS "chatHistory",
+                candidate_id AS "candidateId"
          FROM falood_saved_applications WHERE id = $1`,
         [id]
       );
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { jobDescription, companyName, skills, resumeData, chatHistory } = body;
+    const { jobDescription, companyName, skills, resumeData, chatHistory, candidateId } = body;
 
     if (!resumeData) {
       return NextResponse.json({ success: false, error: "Missing resumeData" }, { status: 400 });
@@ -70,8 +71,8 @@ export async function POST(req: NextRequest) {
 
     const row = await queryOne<any>(
       `INSERT INTO falood_saved_applications
-         (job_description, company_name, skills, resume_data, chat_history)
-       VALUES ($1, $2, $3, $4, $5)
+         (job_description, company_name, skills, resume_data, chat_history, candidate_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id, created_at AS "createdAt"`,
       [
         jobDescription || null,
@@ -79,6 +80,7 @@ export async function POST(req: NextRequest) {
         skills || [],
         JSON.stringify(resumeData),
         JSON.stringify(chatHistory || []),
+        candidateId || null,
       ]
     );
 

@@ -32,12 +32,14 @@ export async function POST(req: NextRequest) {
     let jobTitle = "";
     let companyName = "";
     let skills: string[] = [];
+    let candidateId: string | null = null;
 
     if (source === "application_resume_version") {
-      const row = await queryOne<{ content: any; job_title: string | null; job_company: string | null }>(
+      const row = await queryOne<{ content: any; job_title: string | null; job_company: string | null; candidate_id: string | null }>(
         `SELECT arv.content,
                 j.title AS job_title,
-                j.company AS job_company
+                j.company AS job_company,
+                COALESCE(arv.candidate_id, a.candidate_id) AS candidate_id
          FROM application_resume_versions arv
          LEFT JOIN applications a ON a.id = arv.application_id
          LEFT JOIN jobs j ON j.id = COALESCE(arv.job_id, a.job_id)
@@ -48,14 +50,16 @@ export async function POST(req: NextRequest) {
       content = row.content;
       jobTitle = row.job_title ?? "";
       companyName = row.job_company ?? "";
+      candidateId = row.candidate_id;
     } else {
-      const row = await queryOne<{ content: any; target_industry: string | null }>(
-        `SELECT content, target_industry FROM base_resumes WHERE id = $1`,
+      const row = await queryOne<{ content: any; target_industry: string | null; candidate_id: string | null }>(
+        `SELECT content, target_industry, candidate_id FROM base_resumes WHERE id = $1`,
         [id]
       );
       if (!row) return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
       content = row.content;
       companyName = row.target_industry ?? "";
+      candidateId = row.candidate_id;
     }
 
     const parsedContent = typeof content === "string" ? JSON.parse(content) : content;
@@ -64,10 +68,10 @@ export async function POST(req: NextRequest) {
 
     const created = await queryOne<{ id: string }>(
       `INSERT INTO falood_saved_applications
-         (job_description, company_name, skills, resume_data, chat_history)
-       VALUES ($1, $2, $3, $4, $5)
+         (job_description, company_name, skills, resume_data, chat_history, candidate_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING id`,
-      [jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([])]
+      [jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([]), candidateId]
     );
     if (!created) throw new Error("Failed to create falood_saved_applications row");
 
