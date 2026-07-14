@@ -1571,9 +1571,12 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [status, setStatus] = useState("assigned");
   const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
   const [resumeId, setResumeId] = useState("");
-  const [baseResumes, setBaseResumes] = useState<{ id: string; name: string; status: string }[]>([]);
-  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
-  const [baseResumesLoading, setBaseResumesLoading] = useState(false);
+  // Per-candidate base resume options/selection, keyed by candidate id - each
+  // selected candidate gets their own selector so a multi-select batch never
+  // shares one candidate's base resume with everyone else in the batch.
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<Record<string, { id: string; name: string; status: string }[]>>({});
+  const [selectedBaseResumeIds, setSelectedBaseResumeIds] = useState<Record<string, string>>({});
+  const [baseResumesLoading, setBaseResumesLoading] = useState<Record<string, boolean>>({});
   const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
@@ -1606,21 +1609,45 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   useEffect(() => {
     setResumeId("");
-    setBaseResumes([]);
-    setSelectedBaseResumeId("");
-    if (candidateIds.size !== 1) { setResumeVariants([]); return; }
-    const [candidateId] = Array.from(candidateIds);
-    fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
-    // Fetch base resumes for the selected candidate
-    setBaseResumesLoading(true);
-    fetch(`/api/base-resumes?candidateId=${candidateId}`)
-      .then((r) => r.ok ? r.json() : [])
-      .then((data: { id: string; name: string; status: string }[]) => {
-        setBaseResumes(data);
-        if (data.length > 0) setSelectedBaseResumeId(data[0].id);
-      })
-      .catch(() => setBaseResumes([]))
-      .finally(() => setBaseResumesLoading(false));
+    if (candidateIds.size !== 1) { setResumeVariants([]); }
+    else {
+      const [candidateId] = Array.from(candidateIds);
+      fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    }
+
+    // Fetch base resumes for every newly selected candidate (cached across
+    // toggles so re-checking a candidate doesn't re-fetch or reset their pick).
+    const toFetch = Array.from(candidateIds).filter((id) => !(id in candidateBaseResumes));
+    if (toFetch.length === 0) return;
+    setBaseResumesLoading((prev) => {
+      const next = { ...prev };
+      toFetch.forEach((id) => { next[id] = true; });
+      return next;
+    });
+    Promise.all(toFetch.map(async (id) => {
+      const data: { id: string; name: string; status: string }[] = await fetch(`/api/base-resumes?candidateId=${id}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .catch(() => []);
+      return [id, data] as const;
+    })).then((entries) => {
+      setCandidateBaseResumes((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id, data]) => { next[id] = data; });
+        return next;
+      });
+      setSelectedBaseResumeIds((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id, data]) => {
+          if (!next[id] && data.length > 0) next[id] = data[0].id;
+        });
+        return next;
+      });
+      setBaseResumesLoading((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id]) => { next[id] = false; });
+        return next;
+      });
+    });
   }, [candidateIds]);
 
   function toggleCandidate(id: string) {
@@ -1681,8 +1708,6 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     setSaving(true);
     setError("");
     const selectedIds = Array.from(candidateIds);
-    const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
-    const variant = resumeVariants.find((r) => r.id === resumeId);
     const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
     const assignmentStatus = status === "assigned" || status === "stacked";
     if (assignmentStatus && !assignedToUserId) {
@@ -1690,6 +1715,24 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       setError("Choose an application owner for assigned or stacked tickets.");
       return;
     }
+
+    // Resolve each selected candidate's OWN base resume individually, using
+    // whatever they (or the default, most-recent one) picked in their own
+    // selector - logging multiple people at once previously sent one shared
+    // base_resume_id/resume for the whole batch (effectively only ever
+    // matching one candidate, if any), instead of using each person's own.
+    const candidateResumes: Record<string, { base_resume_id: string | null; resume_id: string | null; resume_url: string | null; resume_filename: string | null }> = {};
+    for (const id of selectedIds) {
+      const candidate = candidates.find((c) => c.id === id);
+      const variant = selectedIds.length === 1 ? resumeVariants.find((r) => r.id === resumeId) : undefined;
+      candidateResumes[id] = {
+        base_resume_id: selectedBaseResumeIds[id] ?? null,
+        resume_id: variant?.id ?? null,
+        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
+        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+      };
+    }
+
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1697,11 +1740,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         candidate_ids: selectedIds,
         job_id: job.id,
         status,
-        resume_id: variant?.id ?? null,
-        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
-        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        candidate_resumes: candidateResumes,
         source_type: "base_resume",
-        base_resume_id: selectedBaseResumeId || null,
         assigned_by: currentUser?.display_name || currentUser?.email || null,
         assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
         assigned_by_user_id: currentUser?.user_id ?? null,
@@ -1843,31 +1883,47 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
 
 
-        {candidateIds.size === 1 && (
+        {candidateIds.size > 0 && (
           <div className="field-group" style={{ marginTop: "16px" }}>
             <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
-              Base Resume
+              Base Resume{candidateIds.size > 1 ? "s" : ""}
             </label>
-            {baseResumesLoading ? (
-              <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
-            ) : baseResumes.length > 0 ? (
-              <select
-                value={selectedBaseResumeId}
-                onChange={(e) => setSelectedBaseResumeId(e.target.value)}
-                style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
-              >
-                {baseResumes.map((br) => (
-                  <option key={br.id} value={br.id}>
-                    {br.name} ({br.status})
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warning, #b45309)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
-                <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
-                No base resumes found for this candidate. The AI workflow will create one automatically.
-              </div>
-            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {Array.from(candidateIds).map((id) => {
+                const candidate = candidates.find((c) => c.id === id);
+                const bases = candidateBaseResumes[id] ?? [];
+                const loading = baseResumesLoading[id];
+                return (
+                  <div key={id}>
+                    {candidateIds.size > 1 && (
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink-soft)", marginBottom: "4px" }}>
+                        {candidate?.name ?? id}
+                      </div>
+                    )}
+                    {loading ? (
+                      <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
+                    ) : bases.length > 0 ? (
+                      <select
+                        value={selectedBaseResumeIds[id] ?? ""}
+                        onChange={(e) => setSelectedBaseResumeIds((prev) => ({ ...prev, [id]: e.target.value }))}
+                        style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
+                      >
+                        {bases.map((br) => (
+                          <option key={br.id} value={br.id}>
+                            {br.name} ({br.status})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warning, #b45309)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                        <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                        No base resumes found for this candidate. The AI workflow will create one automatically.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
