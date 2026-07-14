@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     if (id) {
       const row = await queryOne<any>(
         `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
-                job_description AS "jobDescription", company_name AS "companyName",
+                name, job_description AS "jobDescription", company_name AS "companyName",
                 skills, resume_data AS "resumeData", chat_history AS "chatHistory",
                 candidate_id AS "candidateId"
          FROM falood_saved_applications WHERE id = $1`,
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
 
     const rows = await query<any>(
       `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
-              job_description AS "jobDescription", company_name AS "companyName",
+              name, job_description AS "jobDescription", company_name AS "companyName",
               skills, resume_data AS "resumeData", chat_history AS "chatHistory"
        FROM falood_saved_applications ORDER BY updated_at DESC`
     );
@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { jobDescription, companyName, skills, resumeData, chatHistory, candidateId } = body;
+    const { name, jobDescription, companyName, skills, resumeData, chatHistory, candidateId } = body;
 
     if (!resumeData) {
       return NextResponse.json({ success: false, error: "Missing resumeData" }, { status: 400 });
@@ -71,10 +71,11 @@ export async function POST(req: NextRequest) {
 
     const row = await queryOne<any>(
       `INSERT INTO falood_saved_applications
-         (job_description, company_name, skills, resume_data, chat_history, candidate_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (name, job_description, company_name, skills, resume_data, chat_history, candidate_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id, created_at AS "createdAt"`,
       [
+        name || null,
         jobDescription || null,
         companyName || null,
         skills || [],
@@ -102,6 +103,11 @@ export async function PATCH(req: NextRequest) {
     const body = await req.json();
     const updates: string[] = [];
     const values: unknown[] = [];
+
+    if ("name" in body) {
+      updates.push(`name = $${values.length + 1}`);
+      values.push(body.name || null);
+    }
 
     if ("jobDescription" in body) {
       updates.push(`job_description = $${values.length + 1}`);
@@ -139,7 +145,7 @@ export async function PATCH(req: NextRequest) {
        SET ${updates.join(", ")}
        WHERE id = $${values.length + 1}
        RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
-                 job_description AS "jobDescription", company_name AS "companyName",
+                 name, job_description AS "jobDescription", company_name AS "companyName",
                  skills, resume_data AS "resumeData", chat_history AS "chatHistory"`,
       [...values, id]
     );

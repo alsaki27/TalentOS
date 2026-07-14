@@ -221,12 +221,12 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
                 <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" style={{ display: 'none' }} />
 
-                <div className="flex flex-col xl:flex-row gap-4">
+                <div className="flex flex-col xl:flex-row gap-4 xl:overflow-x-auto print:overflow-visible">
                     {showEditor && (
                         <div className={cn(
                             "w-full xl:w-[520px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
                             "xl:flex"
-                        )} style={{ height: 780 }}>
+                        )} style={{ height: 780, flexShrink: 0 }}>
                             <div style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', gap: 8 }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -276,7 +276,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     )}
 
                     {/* Resume Preview */}
-                    <div className="flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:w-full print:shadow-none print:rounded-none print:block print:overflow-visible" style={{ height: 780 }}>
+                    <div className="flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:w-full print:shadow-none print:rounded-none print:block print:overflow-visible" style={{ height: 780, minWidth: 620, flexShrink: 0 }}>
                         <div
                             id="resume-print-area"
                             data-page-format={state.resumeData.pageFormat}
@@ -287,7 +287,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     </div>
 
                     {/* AI Suggestions Panel */}
-                    <div className="w-full lg:w-[440px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780 }}>
+                    <div className="w-full lg:w-[440px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780, flexShrink: 0 }}>
                         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <Sparkles size={16} style={{ color: 'var(--accent)' }} />

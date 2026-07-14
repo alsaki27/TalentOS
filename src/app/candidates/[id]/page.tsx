@@ -1,7 +1,8 @@
 // src/app/candidates/[id]/page.tsx
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
@@ -105,6 +106,7 @@ interface TailoredResumeEntry {
   id: string;
   createdAt: string;
   updatedAt: string;
+  name?: string | null;
   jobDescription: string | null;
   companyName: string | null;
   skills: string[];
@@ -123,6 +125,188 @@ interface TailoredResumeEntry {
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
+}
+
+function tailoredResumeDisplayName(t: TailoredResumeEntry): string {
+  if (t.name && t.name.trim()) return t.name.trim();
+  const jd = (t.jobDescription || "").trim();
+  const firstLine = jd.split("\n")[0] || "";
+  if (firstLine.toLowerCase().startsWith("title:")) return firstLine.replace(/^title:\s*/i, "").trim();
+  return t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
+}
+
+interface RowAction {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
+// Rendered via a portal into document.body with viewport-fixed coordinates
+// rather than position: absolute inside the row. This table sits in a
+// .table-shell (overflow-x: auto, which per spec forces overflow-y: auto too)
+// — a plain absolutely-positioned dropdown is a DOM descendant of that
+// scroll container and gets silently clipped no matter what position value
+// it uses, unless it's moved out of that subtree entirely.
+function RowActionsMenu({ actions }: { actions: RowAction[] }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onOutsideEvent(e: MouseEvent | Event) {
+      const target = e.target as Node;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutsideEvent);
+    window.addEventListener("scroll", onOutsideEvent, true);
+    window.addEventListener("resize", onOutsideEvent);
+    return () => {
+      document.removeEventListener("mousedown", onOutsideEvent);
+      window.removeEventListener("scroll", onOutsideEvent, true);
+      window.removeEventListener("resize", onOutsideEvent);
+    };
+  }, [open]);
+
+  function toggle() {
+    if (!open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setCoords({ top: rect.bottom + 4, left: rect.right });
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        className="btn-compact btn-sm"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label="More actions"
+        onClick={toggle}
+      >
+        ⋯
+      </button>
+      {open && coords && typeof document !== "undefined" && createPortal(
+        <div
+          ref={menuRef}
+          className="dropdown-menu"
+          style={{ position: "fixed", top: coords.top, left: coords.left, transform: "translateX(-100%)" }}
+        >
+          {actions.map((a) => (
+            <button
+              key={a.label}
+              className={`dropdown-item${a.danger ? " dropdown-item-danger" : ""}`}
+              disabled={a.disabled}
+              onClick={() => {
+                setOpen(false);
+                a.onClick();
+              }}
+            >
+              {a.loading ? "⟳ Working…" : a.label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+function NamePromptModal({
+  title,
+  description,
+  label,
+  initialValue,
+  confirmLabel,
+  saving,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description?: string;
+  label: string;
+  initialValue: string;
+  confirmLabel: string;
+  saving: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>{title}</h2>
+        {description && (
+          <p className="muted" style={{ marginTop: -6, marginBottom: 12 }}>{description}</p>
+        )}
+        <div className="field-group">
+          <label>{label}</label>
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && value.trim()) onConfirm(value.trim());
+            }}
+          />
+        </div>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onCancel}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={() => onConfirm(value.trim())}
+            disabled={saving || !value.trim()}
+          >
+            {saving ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDeleteModal({
+  title,
+  message,
+  confirmLabel = "Delete",
+  saving,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  saving: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 380 }}>
+        <h2>{title}</h2>
+        <p className="muted" style={{ marginTop: -6 }}>{message}</p>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onCancel}>Cancel</button>
+          <button className="btn-danger" onClick={onConfirm} disabled={saving}>
+            {saving ? "Deleting…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function CandidateProfilePage() {
@@ -154,6 +338,16 @@ export default function CandidateProfilePage() {
   const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeEntry[]>([]);
   const [tailoredResumesLoading, setTailoredResumesLoading] = useState(false);
   const [resumeActionLoading, setResumeActionLoading] = useState<string | null>(null);
+  const [resumeNameModal, setResumeNameModal] = useState<
+    | { kind: "base"; mode: "rename" | "duplicate"; item: BaseResumeSummary; error?: string }
+    | { kind: "tailored"; mode: "rename" | "duplicate"; item: TailoredResumeEntry; error?: string }
+    | null
+  >(null);
+  const [resumeDeleteModal, setResumeDeleteModal] = useState<
+    | { kind: "base"; item: BaseResumeSummary; error?: string }
+    | { kind: "tailored"; item: TailoredResumeEntry; error?: string }
+    | null
+  >(null);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
   const [showParseModal, setShowParseModal] = useState(false);
   const [parseModalText, setParseModalText] = useState("");
@@ -222,6 +416,68 @@ export default function CandidateProfilePage() {
     if (res.ok) loadBaseResumes();
   }
 
+  async function submitBaseResumeRename(b: BaseResumeSummary, name: string) {
+    setResumeActionLoading(`${b.id}:rename`);
+    try {
+      const res = await fetch(`/api/base-resumes/${b.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to rename base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitBaseResumeDuplicate(b: BaseResumeSummary, name: string) {
+    if (!candidate) return;
+    setResumeActionLoading(`${b.id}:duplicate`);
+    try {
+      const res = await fetch("/api/base-resumes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: candidate.id,
+          name,
+          startingSource: "duplicate",
+          sourceBaseResumeId: b.id,
+        }),
+      });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitBaseResumeDelete(b: BaseResumeSummary) {
+    setResumeActionLoading(`${b.id}:delete`);
+    try {
+      const res = await fetch(`/api/base-resumes/${b.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeDeleteModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeDeleteModal((m) => (m ? { ...m, error: data?.error || "Failed to delete base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
   async function loadTailoredResumes() {
     if (!id) return;
     setTailoredResumesLoading(true);
@@ -267,6 +523,7 @@ export default function CandidateProfilePage() {
           id: v.id,
           createdAt: v.created_at,
           updatedAt: v.updated_at,
+          name: v.title ?? null,
           jobDescription: v.target_jobs?.jobs?.title ?? null,
           companyName: v.target_jobs?.jobs?.company ?? null,
           skills: [],
@@ -327,6 +584,111 @@ export default function CandidateProfilePage() {
       }
     };
     input.click();
+  }
+
+  async function submitTailoredResumeRename(t: TailoredResumeEntry, name: string) {
+    setResumeActionLoading(`${t.id}:rename`);
+    try {
+      const res = t.isAiGenerated
+        ? await fetch(`/api/application-resume-versions/${t.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: name }),
+          })
+        : await fetch(`/api/falood/applications?id=${t.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+      if (res.ok) {
+        await loadTailoredResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to rename tailored resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitTailoredResumeDuplicate(t: TailoredResumeEntry, name: string) {
+    setResumeActionLoading(`${t.id}:duplicate`);
+    try {
+      if (t.isAiGenerated) {
+        const res = await fetch(`/api/application-resume-versions/${t.id}/duplicate`, { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate tailored resume" } : m));
+          return;
+        }
+      } else {
+        const getRes = await fetch(`/api/falood/applications?id=${t.id}`, { cache: "no-store" });
+        const getJson = await getRes.json().catch(() => ({}));
+        if (!getRes.ok || !getJson?.success) {
+          setResumeNameModal((m) => (m ? { ...m, error: getJson?.error || "Failed to load tailored resume to duplicate" } : m));
+          return;
+        }
+        const source = getJson.data;
+        const res = await fetch("/api/falood/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            jobDescription: source.jobDescription,
+            companyName: source.companyName,
+            skills: source.skills,
+            resumeData: source.resumeData,
+            chatHistory: source.chatHistory,
+            candidateId: source.candidateId ?? id,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate tailored resume" } : m));
+          return;
+        }
+      }
+      await loadTailoredResumes();
+      setResumeNameModal(null);
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitTailoredResumeDelete(t: TailoredResumeEntry) {
+    setResumeActionLoading(`${t.id}:delete`);
+    try {
+      const res = t.isAiGenerated
+        ? await fetch(`/api/application-resume-versions/${t.id}`, { method: "DELETE" })
+        : await fetch(`/api/falood/applications?id=${t.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await loadTailoredResumes();
+        setResumeDeleteModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeDeleteModal((m) => (m ? { ...m, error: data?.error || "Failed to delete tailored resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  function handleResumeNameModalConfirm(name: string) {
+    if (!resumeNameModal) return;
+    if (resumeNameModal.kind === "base") {
+      if (resumeNameModal.mode === "rename") submitBaseResumeRename(resumeNameModal.item, name);
+      else submitBaseResumeDuplicate(resumeNameModal.item, name);
+    } else {
+      if (resumeNameModal.mode === "rename") submitTailoredResumeRename(resumeNameModal.item, name);
+      else submitTailoredResumeDuplicate(resumeNameModal.item, name);
+    }
+  }
+
+  function handleResumeDeleteModalConfirm() {
+    if (!resumeDeleteModal) return;
+    if (resumeDeleteModal.kind === "base") submitBaseResumeDelete(resumeDeleteModal.item);
+    else submitTailoredResumeDelete(resumeDeleteModal.item);
   }
 
   async function parseWithMarkitdown(resumeId: string) {
@@ -915,7 +1277,7 @@ export default function CandidateProfilePage() {
                         )}
                       </td>
                       <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
-                      <td>
+                      <td style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <button
                           className="row-link"
                           style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
@@ -923,6 +1285,28 @@ export default function CandidateProfilePage() {
                         >
                           Open in studio
                         </button>
+                        <RowActionsMenu
+                          actions={[
+                            {
+                              label: "Rename",
+                              loading: resumeActionLoading === `${b.id}:rename`,
+                              onClick: () => setResumeNameModal({ kind: "base", mode: "rename", item: b }),
+                            },
+                            {
+                              label: "Duplicate",
+                              loading: resumeActionLoading === `${b.id}:duplicate`,
+                              onClick: () => setResumeNameModal({ kind: "base", mode: "duplicate", item: b }),
+                            },
+                            ...(isManager
+                              ? [{
+                                  label: "Delete",
+                                  danger: true,
+                                  loading: resumeActionLoading === `${b.id}:delete`,
+                                  onClick: () => setResumeDeleteModal({ kind: "base", item: b }),
+                                }]
+                              : []),
+                          ]}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -965,11 +1349,7 @@ export default function CandidateProfilePage() {
                 </thead>
                 <tbody>
                   {tailoredResumes.map((t) => {
-                    const jd = (t.jobDescription || "").trim();
-                    const firstLine = jd.split("\n")[0] || "";
-                    const title = firstLine.toLowerCase().startsWith("title:")
-                      ? firstLine.replace(/^title:\s*/i, "").trim()
-                      : t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
+                    const title = tailoredResumeDisplayName(t);
                     const company = t.companyName || "—";
                     return (
                       <tr key={t.id}>
@@ -998,7 +1378,7 @@ export default function CandidateProfilePage() {
                           )}
                         </td>
                         <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
-                        <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <td style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                           <button
                             className="row-link"
                             style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
@@ -1024,6 +1404,28 @@ export default function CandidateProfilePage() {
                               </button>
                             </>
                           )}
+                          <RowActionsMenu
+                            actions={[
+                              {
+                                label: "Rename",
+                                loading: resumeActionLoading === `${t.id}:rename`,
+                                onClick: () => setResumeNameModal({ kind: "tailored", mode: "rename", item: t }),
+                              },
+                              {
+                                label: "Duplicate",
+                                loading: resumeActionLoading === `${t.id}:duplicate`,
+                                onClick: () => setResumeNameModal({ kind: "tailored", mode: "duplicate", item: t }),
+                              },
+                              ...(isManager
+                                ? [{
+                                    label: "Delete",
+                                    danger: true,
+                                    loading: resumeActionLoading === `${t.id}:delete`,
+                                    onClick: () => setResumeDeleteModal({ kind: "tailored", item: t }),
+                                  }]
+                                : []),
+                            ]}
+                          />
                         </td>
                       </tr>
                     );
@@ -1204,6 +1606,35 @@ export default function CandidateProfilePage() {
           text={parseModalText}
           setText={setParseModalText}
           loading={parsingMarkitdown}
+        />
+      )}
+      {resumeNameModal && (
+        <NamePromptModal
+          title={resumeNameModal.mode === "rename" ? "Rename resume" : "Duplicate resume"}
+          description={resumeNameModal.mode === "duplicate" ? "Creates a new, independent copy with this name." : undefined}
+          label="Name"
+          initialValue={
+            resumeNameModal.mode === "rename"
+              ? resumeNameModal.kind === "base"
+                ? resumeNameModal.item.name
+                : tailoredResumeDisplayName(resumeNameModal.item)
+              : `${resumeNameModal.kind === "base" ? resumeNameModal.item.name : tailoredResumeDisplayName(resumeNameModal.item)} (Copy)`
+          }
+          confirmLabel={resumeNameModal.mode === "rename" ? "Save" : "Duplicate"}
+          saving={resumeActionLoading === `${resumeNameModal.item.id}:${resumeNameModal.mode}`}
+          error={resumeNameModal.error}
+          onCancel={() => setResumeNameModal(null)}
+          onConfirm={handleResumeNameModalConfirm}
+        />
+      )}
+      {resumeDeleteModal && (
+        <ConfirmDeleteModal
+          title={resumeDeleteModal.kind === "base" ? "Delete base resume" : "Delete tailored resume"}
+          message={`Delete "${resumeDeleteModal.kind === "base" ? resumeDeleteModal.item.name : tailoredResumeDisplayName(resumeDeleteModal.item)}"? This cannot be undone.`}
+          saving={resumeActionLoading === `${resumeDeleteModal.item.id}:delete`}
+          error={resumeDeleteModal.error}
+          onCancel={() => setResumeDeleteModal(null)}
+          onConfirm={handleResumeDeleteModalConfirm}
         />
       )}
       {tailorContext && (
