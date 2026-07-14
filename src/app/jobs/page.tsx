@@ -813,13 +813,22 @@ export default function JobsPage() {
                       <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
                     ) : job.company || "—"}
                   </td>
-                  <td>
+                  <td style={{ maxWidth: 260 }}>
                     {job.category_status === "pending" ? (
                       <span className="muted">Categorizing…</span>
                     ) : job.category_status === "failed" ? (
                       <span className="badge" title="AI categorization failed">Failed</span>
                     ) : (
                       <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
+                        {/* Without a width cap on the <td>, this flex-wrap never
+                            actually engages - a row with several/long tags (e.g.
+                            searching "osp") just keeps growing the column
+                            instead of wrapping, blowing the whole table past its
+                            scroll container's width and pushing the Actions
+                            column (Log application/Delete) off-screen to the
+                            right with no visible scrollbar cue. Confirmed live:
+                            table width jumped from 1050px (fits, no scroll) to
+                            1668px after searching "osp". */}
                         <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
                           {(job.category_tags || []).map((tag, idx) => (
                             <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
