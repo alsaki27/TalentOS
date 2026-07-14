@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, type ResumeData } from "@/components/falood/resumify/types/resume";
+import { type ResumeData } from "@/components/falood/resumify/types/resume";
+import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 
 interface BaseResume {
   id: string;
@@ -27,100 +28,6 @@ interface JobOption {
   title: string;
   company: string | null;
   applicationId?: string;
-}
-
-function normalizeSkillsForFalood(skills: any): ResumeData["skills"] {
-  if (!skills) {
-    return { mode: "categorized", simple: [], categorized: [] };
-  }
-
-  if (Array.isArray(skills)) {
-    const allStrings = skills.every((s: any) => typeof s === "string");
-    if (allStrings) {
-      const validSkills = skills.filter((s: any) => typeof s === "string" && s.trim());
-      return {
-        mode: "categorized",
-        simple: [],
-        categorized: validSkills.length > 0
-          ? [{ id: "skills-technical", name: "Technical Skills", skills: validSkills }]
-          : [],
-      };
-    }
-    const categorized = skills
-      .filter((s: any) => s && typeof s === "object" && !Array.isArray(s))
-      .map((s: any) => ({
-        id: s.id || Math.random().toString(),
-        name: s.title || s.name || "",
-        skills: Array.isArray(s.skills) ? s.skills : [],
-      }))
-      .filter((c) => c.name && c.skills.length > 0);
-    return { mode: "categorized", simple: [], categorized };
-  }
-
-  if (typeof skills === "object" && skills !== null) {
-    if (skills.mode === "simple" || skills.mode === "categorized") {
-      return skills as ResumeData["skills"];
-    }
-    const categorized = Object.entries(skills)
-      .filter(([, value]) => Array.isArray(value))
-      .map(([key, value]) => ({
-        id: `skills-${key}`,
-        name: key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        skills: (value as any[]).filter((v: any) => typeof v === "string" && v.trim()),
-      }))
-      .filter((c) => c.skills.length > 0);
-    return { mode: "categorized", simple: [], categorized };
-  }
-
-  return { mode: "categorized", simple: [], categorized: [] };
-}
-
-function buildCustomSectionsForBuilder(old: any): ResumeData["customSections"] {
-  const importedSections = Array.isArray(old.customSections)
-    ? old.customSections
-        .map((section: any, index: number) => {
-          const content = Array.isArray(section?.bullets)
-            ? section.bullets
-                .map((bullet: any) => bullet?.text || bullet)
-                .filter(Boolean)
-                .join("\n")
-            : typeof section?.content === "string"
-              ? section.content.trim()
-              : "";
-          if (!content) return null;
-          const lines = content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
-          return {
-            id: section?.id || `custom-${index}`,
-            title: section?.title || `Custom Section ${index + 1}`,
-            content,
-            type: lines.length > 1 ? "bullets" : "paragraph",
-            visible: section?.visible ?? true,
-            order: index,
-            placement: section?.placement || "right",
-          };
-        })
-        .filter((section: ResumeData["customSections"][number] | null): section is ResumeData["customSections"][number] => Boolean(section))
-    : [];
-
-  const certificationLines = Array.isArray(old.certifications)
-    ? old.certifications
-        .map((cert: any) => [cert?.name, cert?.issuer, cert?.date].filter(Boolean).join(" | "))
-        .filter(Boolean)
-    : [];
-
-  if (certificationLines.length > 0) {
-    importedSections.push({
-      id: "certifications",
-      title: "Certifications",
-      content: certificationLines.join("\n"),
-      type: "bullets",
-      visible: true,
-      order: importedSections.length,
-      placement: "right",
-    });
-  }
-
-  return importedSections;
 }
 
 export function TailorResumeModal({
@@ -213,102 +120,6 @@ export function TailorResumeModal({
     ].filter(Boolean).join("\n\n");
   }
 
-  function convertOldFormatToNew(old: any): ResumeData {
-    if (!old || typeof old !== "object") {
-      return {
-        personalInfo: {
-          fullName: "",
-          jobTitle: "",
-          email: "",
-          phone: "",
-          location: "",
-          website: "",
-          linkedin: "",
-          github: "",
-          profileImage: "",
-          birthDate: "",
-        },
-        summary: "",
-        experience: [],
-        education: [],
-        projects: [],
-        skills: { mode: "simple", simple: [], categorized: [] },
-        customSections: [],
-        sections: DEFAULT_SECTIONS,
-        colors: DEFAULT_COLORS,
-        template: "business-professional",
-        pageFormat: "letter",
-        fontSize: "medium",
-        fontFamily: "Inter",
-        pagePadding: DEFAULT_PAGE_PADDING,
-      };
-    }
-
-    if (old.personalInfo) return old as ResumeData;
-
-    return {
-      personalInfo: {
-        fullName: old.header?.fullName || "",
-        jobTitle: "",
-        email: old.header?.email || "",
-        phone: old.header?.phone || "",
-        location: old.header?.location || "",
-        website: old.header?.portfolio || old.header?.website || "",
-        linkedin: old.header?.linkedin || "",
-        github: old.header?.github || "",
-        profileImage: "",
-        birthDate: "",
-      },
-      summary: old.summary?.text || "",
-      experience: Array.isArray(old.experience)
-        ? old.experience.map((e: any) => ({
-            id: e.id || Math.random().toString(),
-            jobTitle: e.title || "",
-            company: e.company || "",
-            location: e.location || "",
-            startDate: e.startDate || "",
-            endDate: e.endDate || "",
-            current: !e.endDate,
-            description: "",
-            bulletPoints: Array.isArray(e.bullets) ? e.bullets.map((b: any) => b.text || b) : [],
-          }))
-        : [],
-      education: Array.isArray(old.education)
-        ? old.education.map((e: any) => ({
-            id: e.id || Math.random().toString(),
-            degree: e.degree || "",
-            institution: e.school || "",
-            location: "",
-            graduationYear: e.graduationDate || "",
-          }))
-        : [],
-      skills: normalizeSkillsForFalood(old.skills),
-      projects: Array.isArray(old.projects)
-        ? old.projects.map((p: any) => ({
-            id: p.id || Math.random().toString(),
-            title: p.title || p.name || "",
-            description:
-              p.description ||
-              (Array.isArray(p.bullets)
-                ? p.bullets.map((b: any) => b?.text || b).filter(Boolean).join("\n")
-                : "") ||
-              "",
-            technologies: Array.isArray(p.technologies) ? p.technologies.filter(Boolean) : [],
-            liveUrl: p.liveUrl || p.url || "",
-            githubUrl: "",
-          }))
-        : [],
-      customSections: buildCustomSectionsForBuilder(old),
-      sections: DEFAULT_SECTIONS,
-      colors: DEFAULT_COLORS,
-      template: "business-professional",
-      pageFormat: "letter",
-      fontSize: "medium",
-      fontFamily: "Inter",
-      pagePadding: DEFAULT_PAGE_PADDING,
-    };
-  }
-
   const jobSelectRef = useRef<HTMLSelectElement>(null);
 
   async function linkJobToCandidate(job: any) {
@@ -380,7 +191,14 @@ export function TailorResumeModal({
       if (!baseRes.ok) throw new Error(base.error || "Could not load base resume.");
       if (!jobRes.ok) throw new Error(job.error || "Could not load job details.");
 
-      const resumeData = convertOldFormatToNew(base.content);
+      // Was a second, hand-rolled content converter duplicating
+      // studioDocumentToResumeData.ts's logic but without its later fixes
+      // (asArray guards, dual-shape detection) - confirmed live: a
+      // Resumify-native base resume tailored through this modal produced a
+      // saved application with resumeData.education === [] despite the
+      // source base resume having a populated education array. Sharing the
+      // one hardened converter avoids this drifting out of sync again.
+      const resumeData = studioDocumentToResumeData(base.content);
       const resolvedCandidateName = candidateName.trim() || candidate?.name || "";
       const finalResumeData: ResumeData = {
         ...resumeData,
