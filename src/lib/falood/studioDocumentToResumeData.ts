@@ -56,6 +56,16 @@ function bulletTexts(bullets: { text?: string }[] | string[] | undefined): strin
     .filter((t): t is string => typeof t === "string" && t.length > 0);
 }
 
+// Base resumes in particular can predate this shape (hand-authored, CLI-built,
+// or from an older version of the app) - `?? []` only guards null/undefined,
+// not a wrong-but-truthy value (an object, a string) landing in a field this
+// code assumes is an array. Confirmed live: "(t.skills ?? []).map is not a
+// function" crashing the studio bridge for a real candidate's data. Every
+// array field is read through this instead.
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
 let idCounter = 0;
 function uid(prefix: string): string {
   idCounter = (idCounter + 1) % 1_000_000;
@@ -63,52 +73,53 @@ function uid(prefix: string): string {
 }
 
 export function studioDocumentToResumeData(doc: StudioDocumentLike | null | undefined): ResumeData {
-  const d = doc ?? {};
-  const header = d.header ?? {};
-  const mostRecentTitle = d.experience?.[0]?.title ?? "";
+  const d = doc && typeof doc === "object" ? doc : {};
+  const header = d.header && typeof d.header === "object" ? d.header : {};
 
   const summaryText = typeof d.summary === "string" ? d.summary : d.summary?.text ?? "";
 
-  const experience = (d.experience ?? []).map((e) => ({
+  const experience = asArray<NonNullable<StudioDocumentLike["experience"]>[number]>(d.experience).map((e) => ({
     id: uid("exp"),
-    jobTitle: e.title ?? "",
-    company: e.company ?? "",
-    location: e.location ?? "",
-    startDate: e.startDate ?? "",
-    endDate: e.endDate ?? "",
-    current: !e.endDate,
+    jobTitle: e?.title ?? "",
+    company: e?.company ?? "",
+    location: e?.location ?? "",
+    startDate: e?.startDate ?? "",
+    endDate: e?.endDate ?? "",
+    current: !e?.endDate,
     description: "",
-    bulletPoints: bulletTexts(e.bullets),
+    bulletPoints: bulletTexts(e?.bullets),
   }));
+  const mostRecentTitle = experience[0]?.jobTitle ?? "";
 
-  const education = (d.education ?? []).map((e) => ({
+  const education = asArray<NonNullable<StudioDocumentLike["education"]>[number]>(d.education).map((e) => ({
     id: uid("edu"),
-    degree: e.degree ?? "",
-    institution: e.school ?? "",
-    location: e.location ?? "",
-    graduationYear: e.graduationDate ?? "",
+    degree: e?.degree ?? "",
+    institution: e?.school ?? "",
+    location: e?.location ?? "",
+    graduationYear: e?.graduationDate ?? "",
   }));
 
-  const projects = (d.projects ?? []).map((p) => ({
+  const projects = asArray<NonNullable<StudioDocumentLike["projects"]>[number]>(d.projects).map((p) => ({
     id: uid("proj"),
-    title: p.title ?? "",
-    description: p.description ?? "",
+    title: p?.title ?? "",
+    description: p?.description ?? "",
     technologies: [] as string[],
   }));
 
-  const skillGroups = d.skills ?? [];
+  const skillGroups = asArray<NonNullable<StudioDocumentLike["skills"]>[number]>(d.skills);
   const categorized = skillGroups.map((g) => ({
     id: uid("skg"),
-    name: g.title ?? "Skills",
-    skills: g.skills ?? [],
+    name: g?.title ?? "Skills",
+    skills: asArray<string>(g?.skills),
   }));
 
   const customSections: ResumeData["customSections"] = [];
-  if (d.certifications && d.certifications.length > 0) {
+  const certifications = asArray<NonNullable<StudioDocumentLike["certifications"]>[number]>(d.certifications);
+  if (certifications.length > 0) {
     customSections.push({
       id: uid("cs"),
       title: "Certifications",
-      content: d.certifications.map((c) => [c.name, c.issuer, c.date].filter(Boolean).join(" — ")).join("\n"),
+      content: certifications.map((c) => [c?.name, c?.issuer, c?.date].filter(Boolean).join(" — ")).join("\n"),
       type: "bullets",
       visible: true,
       order: DEFAULT_SECTIONS.length + 1,
