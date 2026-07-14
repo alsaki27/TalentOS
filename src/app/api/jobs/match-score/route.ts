@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
-import OpenAI from "openai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
+import { textOf } from "@/lib/ai/provider";
 
 
 async function storeErrorScore(job_id: string, candidate_id: string, reasoning: string) {
@@ -23,11 +24,6 @@ export async function POST(req: NextRequest) {
   let candidate_id = "";
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
-      return NextResponse.json({ error: "OPENAI_API_KEY is missing. Configure it to enable match scoring." }, { status: 500 });
-    }
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
     const body = await req.json();
     job_id = body.job_id;
     candidate_id = body.candidate_id;
@@ -66,8 +62,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(finalScoreRecord);
     }
 
-    // 4. Generate Score via OpenAI
-    const prompt = `You are an unbiased, expert technical recruiter evaluating a candidate's fit for a job.
+    // 4. Generate Score via the app's routed AI provider — this previously
+    // called `new OpenAI(...)` directly against a hardcoded, quota-exhausted
+    // OPENAI_API_KEY, bypassing the multi-provider routing/key-management
+    // system every other AI feature uses (same root cause and same fix as
+    // src/server/services/faloodAiService.ts). Confirmed live: every "Gen
+    // Score" click failed with "429 You exceeded your current quota."
+    const systemPrompt = `You are an unbiased, expert technical recruiter evaluating a candidate's fit for a job.
 You must return your evaluation strictly as a JSON object with the following keys:
 - "score": Integer from 0-100 representing the overall match.
 - "skills_match": Integer from 0-100 representing hard skills overlap.
@@ -80,22 +81,25 @@ Strictness Rules:
 3. Calculate the match score rigorously based on the exact overlap of required skills, exact years of experience, and responsibilities.
 4. Be realistic and extremely strict. A perfect 100 should only happen if the candidate meets every single requirement perfectly.
 
-Job Description:
+Output strictly valid JSON (no markdown fences, no explanation).`;
+
+    const userPrompt = `Job Description:
 ${jobDescText}
 
 Candidate Base Resume (JSON):
-${JSON.stringify(latestBaseResume.content)}
-`;
+${JSON.stringify(latestBaseResume.content)}`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
+    const { result: response } = await callWithUsageTracking("job_match_score", undefined, async (provider) => {
+      return provider.send({
+        system: systemPrompt,
+        messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
+        tools: [],
+        temperature: 0.1,
+      });
     });
 
-    const resultText = response.choices[0].message.content || "{}";
-    const resultJson = JSON.parse(resultText);
+    const rawText = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const resultJson = JSON.parse(rawText || "{}");
 
     // Ensure types
     const score = parseInt(resultJson.score) || 0;
