@@ -30,10 +30,18 @@ export async function GET(request: NextRequest) {
               c.name AS candidate_name,
               w.config_snapshot -> 'job' ->> 'title' AS job_title,
               w.config_snapshot -> 'job' ->> 'company' AS job_company,
-              a.tailored_resume_version_id
+              a.tailored_resume_version_id,
+              hp.ats_score, hp.role_fit_score
        FROM application_ai_workflows w
        JOIN applications a ON a.id = w.application_id
        JOIN candidates c ON c.id = a.candidate_id
+       LEFT JOIN LATERAL (
+         SELECT (data ->> 'atsScore')::numeric AS ats_score,
+                (data ->> 'roleFitScore')::numeric AS role_fit_score
+         FROM application_ai_artifacts
+         WHERE workflow_id = w.id AND automation_id = 'application_hiring_panel'
+         ORDER BY created_at DESC LIMIT 1
+       ) hp ON true
        WHERE w.status IN ('queued', 'running', 'waiting', 'failed')
           OR (w.status IN ('completed', 'cancelled') AND w.updated_at >= NOW() - INTERVAL '2 hours')
        ORDER BY w.updated_at DESC

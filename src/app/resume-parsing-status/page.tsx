@@ -19,6 +19,8 @@ interface WorkflowCard {
   job_title: string | null;
   job_company: string | null;
   tailored_resume_version_id: string | null;
+  ats_score: number | null;
+  role_fit_score: number | null;
 }
 
 interface ColumnDef {
@@ -68,6 +70,12 @@ function formatCardTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function scoreBadgeColor(score: number): "success" | "warning" | "danger" {
+  if (score >= 7) return "success";
+  if (score >= 4) return "warning";
+  return "danger";
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -328,6 +336,21 @@ const BoardCard = memo(function BoardCard({
       {wf.match_reason && (
         <div className="muted" style={{ fontSize: 10, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {wf.match_score != null ? `Score ${wf.match_score}: ` : ""}{wf.match_reason}
+        </div>
+      )}
+
+      {(wf.ats_score != null || wf.role_fit_score != null) && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+          {wf.ats_score != null && (
+            <span className={`badge badge-${scoreBadgeColor(wf.ats_score)}`} style={{ fontSize: 9 }}>
+              ATS {wf.ats_score}/10
+            </span>
+          )}
+          {wf.role_fit_score != null && (
+            <span className={`badge badge-${scoreBadgeColor(wf.role_fit_score)}`} style={{ fontSize: 9 }}>
+              Fit {wf.role_fit_score}/10
+            </span>
+          )}
         </div>
       )}
 
