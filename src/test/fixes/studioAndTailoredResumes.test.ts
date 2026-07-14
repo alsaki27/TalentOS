@@ -98,6 +98,12 @@ describe("Bug 2: AI resume versions merged into Tailored Resumes tab", () => {
   ): any[] {
     const faloodTailored = faloodRows.filter((a) => (a.jobDescription || "").trim().length > 0);
 
+    // isAiGenerated is what the UI now branches on to decide whether "Open
+    // in studio" needs to bridge through POST /api/falood/applications/from-source
+    // (AI-pipeline entries, whose content lives in application_resume_versions,
+    // not falood_saved_applications) before opening /falood/studio/tailor/[id] -
+    // see src/lib/falood/openStudio.ts. There is no per-entry studioLink
+    // anymore; every entry opens the same chatbot studio.
     const aiTailored = aiVersions
       .filter((v) => v.source_type === "ai_agent" || v.source_type === "base_resume")
       .map((v) => ({
@@ -110,7 +116,6 @@ describe("Bug 2: AI resume versions merged into Tailored Resumes tab", () => {
         resumeData: null,
         chatHistory: [],
         isAiGenerated: v.source_type === "ai_agent",
-        studioLink: `/falood/studio/application/${v.id}`,
         sourceType: v.source_type,
         atsScore: v.ats_score,
       }));
@@ -134,15 +139,14 @@ describe("Bug 2: AI resume versions merged into Tailored Resumes tab", () => {
     expect(merged.length).toBe(2); // falood + ai_agent (manual excluded)
     const aiEntry = merged.find((m) => m.id === "arv1");
     expect(aiEntry).toBeDefined();
-    expect(aiEntry.isAiGenerated).toBe(true);
-    expect(aiEntry.studioLink).toBe("/falood/studio/application/arv1");
+    expect(aiEntry.isAiGenerated).toBe(true); // "Open in studio" bridges via from-source before navigating
     expect(aiEntry.atsScore).toBe(8.5);
     expect(aiEntry.jobDescription).toBe("Senior React Dev");
     expect(aiEntry.companyName).toBe("TechCorp");
 
     const faloodEntry = merged.find((m) => m.id === "fal1");
     expect(faloodEntry).toBeDefined();
-    expect(faloodEntry.studioLink).toBeUndefined(); // no override — uses default /tailor/ link
+    expect(faloodEntry.isAiGenerated).toBeUndefined(); // native falood_saved_applications row — opens tailor studio directly, no bridge
   });
 
   it("excludes non-ai_agent and non-base_resume source types", () => {
