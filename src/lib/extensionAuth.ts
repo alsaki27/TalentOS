@@ -12,6 +12,7 @@ export const EXTENSION_SCOPES = {
   readinessRead: "extension:readiness:read",
   evidenceWrite: "extension:evidence:write",
   adaptersRead: "extension:adapters:read",
+  resumeRead: "extension:resume:read",
 } as const;
 
 export type ExtensionScope = typeof EXTENSION_SCOPES[keyof typeof EXTENSION_SCOPES];
@@ -21,6 +22,37 @@ interface ExtensionKeyRow {
   label: string;
   scopes: string[];
   candidate_id: string | null;
+}
+
+const CORS_ALLOWED_HEADERS =
+  "Authorization, Content-Type, Idempotency-Key, X-TalentOS-Client";
+
+export function getExtensionCorsHeaders(request: NextRequest): Record<string, string> {
+  const origin = request.headers.get("origin") || "*";
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": CORS_ALLOWED_HEADERS,
+    "Access-Control-Allow-Credentials": "true",
+  };
+}
+
+export function withExtensionCors(
+  handler: (request: NextRequest, ...args: any[]) => Promise<NextResponse>
+) {
+  return async (request: NextRequest, ...args: any[]): Promise<NextResponse> => {
+    const corsHeaders = getExtensionCorsHeaders(request);
+
+    if (request.method === "OPTIONS") {
+      return new NextResponse(null, { status: 204, headers: corsHeaders });
+    }
+
+    const response = await handler(request, ...args);
+    Object.entries(corsHeaders).forEach(([key, value]) => {
+      response.headers.set(key, value);
+    });
+    return response;
+  };
 }
 
 function errorResponse(code: string, message: string, status: number, details: Record<string, unknown> = {}) {

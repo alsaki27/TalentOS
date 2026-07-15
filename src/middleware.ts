@@ -58,6 +58,27 @@ function isExtensionApiPath(pathname: string) {
   return pathname.startsWith("/api/extension/v1/");
 }
 
+function getExtensionCorsResponse(req: NextRequest): NextResponse {
+  const origin = req.headers.get("origin") || "*";
+  if (req.method === "OPTIONS") {
+    return new NextResponse(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key, X-TalentOS-Client",
+        "Access-Control-Allow-Credentials": "true",
+      },
+    });
+  }
+  const res = NextResponse.next();
+  res.headers.set("Access-Control-Allow-Origin", origin);
+  res.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-TalentOS-Client");
+  res.headers.set("Access-Control-Allow-Credentials", "true");
+  return res;
+}
+
 // An external job-crawler bot has no session cookie either — same bearer-secret
 // pattern as cron, scoped to only the two endpoints it actually calls (not /status or
 // /stream, which stay behind normal staff auth). Route itself re-checks the key too.
@@ -76,7 +97,7 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
-  if (isExtensionApiPath(pathname)) return NextResponse.next();
+  if (isExtensionApiPath(pathname)) return getExtensionCorsResponse(req);
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
 
