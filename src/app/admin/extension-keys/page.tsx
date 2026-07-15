@@ -18,6 +18,7 @@ const ALL_SCOPES = [
   { value: "extension:readiness:read", label: "Readiness Read" },
   { value: "extension:evidence:write", label: "Evidence Write" },
   { value: "extension:adapters:read", label: "Adapters Read" },
+  { value: "extension:resume:read", label: "Resume Read" },
 ];
 
 export default function ExtensionKeysAdminPage() {

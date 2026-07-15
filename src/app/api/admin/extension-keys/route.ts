@@ -14,6 +14,7 @@ const VALID_SCOPES = [
   "extension:readiness:read",
   "extension:evidence:write",
   "extension:adapters:read",
+  "extension:resume:read",
 ];
 
 async function sha256(input: string): Promise<string> {
