@@ -14,7 +14,14 @@ const mockListEnabledAiKeys = vi.fn().mockResolvedValue([]);
 const mockGetAiKeyWithDecryptedKey = vi.fn().mockResolvedValue(null);
 const mockBuildProviderFromDbKey = vi.fn().mockReturnValue(null);
 const mockGetProviderByName = vi.fn().mockReturnValue(null);
-const mockGetActiveProviderAsync = vi.fn();
+// routing.ts's last-resort step (getProviderForAutomation, step 4) calls
+// getActiveProviderWithFallback from @/server/services/aiProvider directly -
+// not getActiveProviderAsync from @/lib/ai/index (that function isn't
+// imported by routing.ts at all). The mock previously only stubbed the
+// unused one, so every test actually fell through to the real
+// getActiveProviderWithFallback, which isn't mocked at all - "No export is
+// defined" from vitest, masking whatever each test's scenario intended.
+const mockGetActiveProviderWithFallback = vi.fn().mockResolvedValue(null);
 
 // Mock Neon
 vi.mock("@/server/db/neon", () => ({
@@ -32,12 +39,12 @@ vi.mock("@/server/repositories/aiKeyRepository", () => ({
 // Mock aiProvider
 vi.mock("@/server/services/aiProvider", () => ({
   buildProviderFromDbKey: mockBuildProviderFromDbKey,
+  getActiveProviderWithFallback: mockGetActiveProviderWithFallback,
 }));
 
-// Mock getProviderByName and getActiveProviderAsync
+// Mock getProviderByName
 vi.mock("@/lib/ai/index", () => ({
   getProviderByName: mockGetProviderByName,
-  getActiveProviderAsync: mockGetActiveProviderAsync,
 }));
 
 describe("callWithUsageTracking error paths", () => {
@@ -46,7 +53,7 @@ describe("callWithUsageTracking error paths", () => {
   });
 
   it("throws when no provider can be resolved for an automation", async () => {
-    mockGetActiveProviderAsync.mockResolvedValue(null);
+    mockGetActiveProviderWithFallback.mockResolvedValue(null);
 
     const { callWithUsageTracking } = await import("@/lib/ai/routing");
     await expect(
@@ -58,7 +65,7 @@ describe("callWithUsageTracking error paths", () => {
 
   it("records usage event on successful call", async () => {
     const mockSend = vi.fn().mockResolvedValue({ content: [], stopReason: "end_turn" });
-    mockGetActiveProviderAsync.mockResolvedValue({
+    mockGetActiveProviderWithFallback.mockResolvedValue({
       provider: { send: mockSend },
       name: "anthropic",
     });
@@ -81,7 +88,7 @@ describe("callWithUsageTracking error paths", () => {
   });
 
   it("records usage event on failed call", async () => {
-    mockGetActiveProviderAsync.mockResolvedValue({
+    mockGetActiveProviderWithFallback.mockResolvedValue({
       provider: { send: vi.fn().mockRejectedValue(new Error("API error")) },
       name: "nvidia",
     });
