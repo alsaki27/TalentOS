@@ -459,7 +459,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     system_prompt: agentConfig?.system_prompt ?? undefined,
     temperature: Number.isFinite(parsedTemperature) ? parsedTemperature : undefined,
     max_output_tokens: agentConfig?.max_output_tokens ?? AGENT_CONFIG_DEFAULTS[agentId]?.maxOutputTokens,
-    timeout_ms: agentConfig?.timeout_ms ?? undefined,
+    timeout_ms: agentConfig?.timeout_ms ?? AGENT_CONFIG_DEFAULTS[agentId]?.timeoutMs,
   };
 
   const previousRuns = await listStageRuns(workflowId);
@@ -514,7 +514,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         // (providers don't accept an abort signal), but it does let the
         // pipeline move on, record a clear timeout error, and retry/fail
         // cleanly instead of hanging past the claim TTL with no diagnostic.
-        const timeoutMs = agentOptions.timeout_ms ?? 90_000;
+        const timeoutMs = agentOptions.timeout_ms ?? 300_000;
         const callResult = await Promise.race([
           callWithUsageTracking(
             agentId,

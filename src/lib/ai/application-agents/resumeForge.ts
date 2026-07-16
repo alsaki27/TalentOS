@@ -14,13 +14,26 @@ export async function runResumeForge(
   const jobAnalysis = ctx.previousOutputs["application_job_lens"]?.data ?? {};
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
+  const baseContent = (ctx.baseResume as any)?.content ?? {};
+  const baseExperience = baseContent?.experience ?? [];
+  const promptText = buildResumeForgePrompt(ctx.job, ctx.baseResume, ctx.evidence, jobAnalysis, ctx.verifiedSkills);
+
   console.log("[Agent:ResumeForge] ── INPUT ────────────────────────────────────");
-  console.log("[Agent:ResumeForge] jobAnalysis (from JobLens):", JSON.stringify(jobAnalysis, null, 2));
-  console.log("[Agent:ResumeForge] baseResume.id:", ctx.baseResume.id);
-  console.log("[Agent:ResumeForge] baseResume.experience (count):", ctx.baseResume.experience?.length ?? "undefined");
-  console.log("[Agent:ResumeForge] baseResume.skills:", ctx.baseResume.skills);
+  console.log("[Agent:ResumeForge] baseResume raw DB fields:", Object.keys(ctx.baseResume as any));
+  console.log("[Agent:ResumeForge] baseResume.content.experience (count):", baseExperience.length);
+  baseExperience.forEach((exp: any, i: number) => {
+    console.log(`[Agent:ResumeForge]   exp[${i}] title: ${exp.title} @ ${exp.company}`);
+    console.log(`[Agent:ResumeForge]   exp[${i}] bullets (count): ${exp.bullets?.length ?? 0}`);
+    (exp.bullets ?? []).forEach((b: any, j: number) => {
+      const bulletText = typeof b === "string" ? b : b?.text ?? JSON.stringify(b);
+      console.log(`[Agent:ResumeForge]     bullet[${j}]: ${bulletText?.slice(0, 120)}`);
+    });
+  });
+  console.log("[Agent:ResumeForge] baseResume.content JSON char count:", JSON.stringify(baseContent).length);
+  console.log("[Agent:ResumeForge] prompt BASE RESUME section (first 3000 chars sent to AI):");
+  const baseResumeSection = promptText.slice(promptText.indexOf("BASE RESUME:"), promptText.indexOf("EVIDENCE BANK:"));
+  console.log(baseResumeSection.slice(0, 3000));
   console.log("[Agent:ResumeForge] evidence (count):", ctx.evidence.length);
-  console.log("[Agent:ResumeForge] evidence:", JSON.stringify(ctx.evidence, null, 2));
   console.log("[Agent:ResumeForge] verifiedSkills:", ctx.verifiedSkills);
   console.log("[Agent:ResumeForge] ───────────────────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
@@ -33,7 +46,7 @@ export async function runResumeForge(
         content: [
           {
             type: "text",
-            text: buildResumeForgePrompt(ctx.job, ctx.baseResume, ctx.evidence, jobAnalysis, ctx.verifiedSkills),
+            text: promptText,
           },
         ],
       },
