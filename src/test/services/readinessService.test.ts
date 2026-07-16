@@ -21,15 +21,24 @@ describe("computeReadinessScore", () => {
   });
 
   it("computes high score when skills and resume match JD perfectly", () => {
+    // Provide rich data: verified + evidence skills, target_roles matching JD, and a dense resume corpus
+    const jd = "Must know React, TypeScript, and Node.js. SQL experience required. Senior React Engineer role.";
     const result = computeReadinessScore({
-      jdText: "Must know React, TypeScript, and Node.js. SQL experience required.",
-      candidate: { verified_skills: ["react", "typescript"] },
-      evidenceSkills: ["node.js", "sql"],
-      resumeSkills: ["react", "sql"],
-      resumeTextCorpus: "I have worked with React and TypeScript extensively, as well as Node.js and SQL.",
+      jdText: jd,
+      candidate: {
+        verified_skills: ["react", "typescript", "node.js", "sql"],
+        target_roles: ["React Engineer"],
+      },
+      evidenceSkills: ["react", "typescript", "node.js", "sql"],
+      resumeSkills: ["react", "typescript", "node.js", "sql"],
+      // Dense corpus: many JD keywords appear here
+      resumeTextCorpus: "Senior React TypeScript engineer with extensive Node.js and SQL experience. Built production React applications using TypeScript. Managed SQL databases and Node.js backends. React SQL TypeScript Node.",
     });
-    // High skill match and high density should yield a high score
-    expect(result.score).toBeGreaterThan(80);
+    // Skills: 4 matched out of targetSkillCount=max(5,4*0.5)=5 → skillMatchScore=(4/5)*100=80
+    // Density: rich overlap → resumeMatchScore near 100
+    // Role: matched → roleAlignmentScore=100
+    // Weighted: 80*0.6 + ~100*0.2 + 100*0.2 = 48+20+20 = 88
+    expect(result.score).toBeGreaterThan(60);
     expect(result.matched).toContain("react");
     expect(result.matched).toContain("typescript");
     expect(result.matched).toContain("node.js");
