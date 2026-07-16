@@ -17,7 +17,7 @@ export async function runResumeForge(
   console.log("[Agent:ResumeForge] ── INPUT ────────────────────────────────────");
   console.log("[Agent:ResumeForge] jobAnalysis (from JobLens):", JSON.stringify(jobAnalysis, null, 2));
   console.log("[Agent:ResumeForge] baseResume.id:", ctx.baseResume.id);
-  console.log("[Agent:ResumeForge] baseResume.experience (count):", ctx.baseResume.experience.length);
+  console.log("[Agent:ResumeForge] baseResume.experience (count):", ctx.baseResume.experience?.length ?? "undefined");
   console.log("[Agent:ResumeForge] baseResume.skills:", ctx.baseResume.skills);
   console.log("[Agent:ResumeForge] evidence (count):", ctx.evidence.length);
   console.log("[Agent:ResumeForge] evidence:", JSON.stringify(ctx.evidence, null, 2));
