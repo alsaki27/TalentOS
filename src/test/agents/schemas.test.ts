@@ -72,7 +72,7 @@ describe("JobAnalysisSchema", () => {
 describe("ResumeDraftSchema", () => {
   const validDraft = {
     summary: "Experienced engineer",
-    skills: ["TypeScript", "React"],
+    skills: [{ title: "Languages & Frameworks", skills: ["TypeScript", "React"] }],
     experience: [{
       title: "Senior Engineer",
       company: "Tech Co",
@@ -95,7 +95,7 @@ describe("ResumeDraftSchema", () => {
     const result = ResumeDraftSchema.parse(validDraft);
     expect("error" in result).toBe(false);
     if (!("error" in result)) {
-      expect(result.skills).toContain("TypeScript");
+      expect(result.skills[0]?.skills).toContain("TypeScript");
       expect(result.experience).toHaveLength(1);
       expect(result.experience[0].evidenceIds).toEqual(["ev-1", "ev-2"]);
       expect(result.truthRisks).toHaveLength(1);
@@ -213,7 +213,7 @@ describe("FinalResumeSchema", () => {
   it("parses valid FinalResumeV1", () => {
     const result = FinalResumeSchema.parse({
       summary: "Final summary",
-      skills: ["React"],
+      skills: [{ title: "Languages & Frameworks", skills: ["React"] }],
       experience: [],
       education: [],
       certifications: [],
