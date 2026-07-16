@@ -46,12 +46,23 @@ function tokenize(text: string): string[] {
     .filter(Boolean);
 }
 
-// Check if a multi-word phrase exists in a text
+// Check if a multi-word phrase exists in a text.
+// Handles real-world JD text where skills appear at sentence ends (e.g. "requires SQL. Experience...")
+// Strategy: keep internal periods like in 'node.js', but strip trailing sentence-ending periods
+// (a period NOT followed by an alphanumeric character is a sentence boundary, not part of a skill name).
+function normForPhrase(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9.#+]/g, ' ')      // collapse punctuation/whitespace to spaces (keep periods)
+    .replace(/\.(?![a-z0-9#+])/g, ' ')  // strip sentence-ending periods (not followed by alphanum)
+    .replace(/\s+/g, ' ')               // collapse multiple spaces
+    .trim();
+}
+
 function phraseExists(text: string, phrase: string): boolean {
-  // Normalize both by replacing non-alphanumeric with spaces, then check inclusion
-  const normText = text.toLowerCase().replace(/[^a-z0-9.#+]/g, ' ');
-  const normPhrase = phrase.toLowerCase().replace(/[^a-z0-9.#+]/g, ' ').trim();
-  return normText.includes(` ${normPhrase} `) || normText.startsWith(`${normPhrase} `) || normText.endsWith(` ${normPhrase}`) || normText === normPhrase;
+  const normText = ' ' + normForPhrase(text) + ' ';
+  const normPhrase = normForPhrase(phrase);
+  return normText.includes(` ${normPhrase} `);
 }
 
 /**
