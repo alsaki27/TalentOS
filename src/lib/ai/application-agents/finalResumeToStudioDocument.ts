@@ -97,22 +97,18 @@ function mapEducation(edu: FinalResumeV1["education"]) {
   }));
 }
 
-function mapSkills(skills: string[], baseContent: any) {
-  const groups: { id: string; title: string; skills: string[] }[] = [];
+function mapSkills(skills: FinalResumeV1["skills"], baseContent: any) {
   if (skills.length > 0) {
-    groups.push({ id: uid("skg"), title: "Skills", skills: [...skills] });
+    return skills.map((g) => ({ id: uid("skg"), title: g.title, skills: [...g.skills] }));
   }
+  // Fall back to the base resume's own categorized groups only if the agent pipeline
+  // returned nothing at all (e.g. an older run predating the categorized-skills fix).
   const baseSkills: any[] = Array.isArray(baseContent?.skills) ? baseContent.skills : [];
-  if (baseSkills.length > 0 && groups.length === 0) {
-    for (const g of baseSkills) {
-      groups.push({
-        id: uid("skg"),
-        title: g?.title ?? "Skills",
-        skills: Array.isArray(g?.skills) ? g.skills.filter((s: any) => typeof s === "string") : [],
-      });
-    }
-  }
-  return groups;
+  return baseSkills.map((g) => ({
+    id: uid("skg"),
+    title: g?.title ?? "Skills",
+    skills: Array.isArray(g?.skills) ? g.skills.filter((s: any) => typeof s === "string") : [],
+  }));
 }
 
 function mapCertifications(certs: string[], baseContent: any) {

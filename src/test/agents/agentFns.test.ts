@@ -74,7 +74,7 @@ describe("runResumeForge", () => {
   it("validates valid resume draft output", async () => {
     const validDraft = {
       summary: "Experienced engineer",
-      skills: ["Go"],
+      skills: [{ title: "Languages", skills: ["Go"] }],
       experience: [{ title: "Engineer", company: "C", bullets: ["Built things"], evidenceIds: [] }],
       education: [],
       certifications: [],
@@ -93,7 +93,7 @@ describe("runResumeForge", () => {
 
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     const result = await runResumeForge({}, provider, ctx);
-    expect(result.skills).toContain("Go");
+    expect(result.skills[0]?.skills).toContain("Go");
     expect(result.changeLog).toHaveLength(1);
   });
 
@@ -148,7 +148,7 @@ describe("runHiringPanel", () => {
 describe("runFinalPolish", () => {
   it("validates valid final resume output", async () => {
     const provider = mockProvider(JSON.stringify({
-      summary: "Final", skills: ["Go"], experience: [], education: [],
+      summary: "Final", skills: [{ title: "Languages", skills: ["Go"] }], experience: [], education: [],
       certifications: [], projects: [], appliedIssueIds: ["r1"],
       rejectedIssueIds: [], unresolvedWarnings: [],
       finalQaScore: 9, exportReady: true,

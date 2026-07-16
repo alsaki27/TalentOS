@@ -29,7 +29,11 @@ const MOCK_JOB_ANALYSIS: JobAnalysisV1 = {
 
 const MOCK_RESUME_DRAFT: ResumeDraftV1 = {
   summary: "Experienced software engineer with 5+ years building scalable web applications using TypeScript, React, and Node.js.",
-  skills: ["TypeScript", "React", "Node.js", "PostgreSQL", "AWS", "Docker", "GraphQL", "Git"],
+  skills: [
+    { title: "Languages & Frameworks", skills: ["TypeScript", "React", "Node.js"] },
+    { title: "Infrastructure & Data", skills: ["PostgreSQL", "AWS", "Docker", "GraphQL"] },
+    { title: "Tools", skills: ["Git"] },
+  ],
   experience: [
     {
       title: "Senior Software Engineer",
@@ -98,7 +102,11 @@ const MOCK_REVIEW_SCORE: ReviewScoreV1 = {
 
 const MOCK_FINAL_RESUME: FinalResumeV1 = {
   summary: "Experienced software engineer with 5+ years building scalable web applications using TypeScript, React, and Node.js. Proven track record of leading teams and delivering high-impact SaaS products.",
-  skills: ["TypeScript", "React", "Node.js", "PostgreSQL", "AWS", "Docker", "GraphQL", "Git"],
+  skills: [
+    { title: "Languages & Frameworks", skills: ["TypeScript", "React", "Node.js"] },
+    { title: "Infrastructure & Data", skills: ["PostgreSQL", "AWS", "Docker", "GraphQL"] },
+    { title: "Tools", skills: ["Git"] },
+  ],
   experience: [
     {
       title: "Senior Software Engineer",

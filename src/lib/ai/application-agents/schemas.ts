@@ -88,9 +88,14 @@ export interface ExperienceEntry {
   evidenceIds: string[];
 }
 
+export interface SkillGroup {
+  title: string;
+  skills: string[];
+}
+
 export interface ResumeDraftV1 {
   summary: string | null;
-  skills: string[];
+  skills: SkillGroup[];
   experience: ExperienceEntry[];
   education: {
     degree: string;
@@ -104,6 +109,27 @@ export interface ResumeDraftV1 {
   missingRequirements: string[];
   excludedKeywords: string[];
   truthRisks: { risk: string; severity: "low" | "medium" | "high" }[];
+}
+
+// Accepts the categorized shape ({title, skills}[]) the agents are now prompted to return.
+// Also accepts a flat string[] as a fallback (wrapped into one "Skills" group) so an agent
+// that ignores the categorized instruction still produces a valid, renderable result instead
+// of failing validation outright.
+function parseSkillGroups(v: unknown): SkillGroup[] {
+  if (!Array.isArray(v)) return [];
+  if (v.every((x) => typeof x === "string")) {
+    const flat = v as string[];
+    return flat.length > 0 ? [{ title: "Skills", skills: flat }] : [];
+  }
+  const groups: SkillGroup[] = [];
+  for (const g of v) {
+    if (!isRecord(g)) continue;
+    const title = expectString(g.title, "title");
+    const skills = expectStringArray(g.skills, "skills");
+    if (!title || !skills) continue;
+    groups.push({ title, skills });
+  }
+  return groups;
 }
 
 function parseExperienceEntry(v: unknown): ExperienceEntry | null {
@@ -124,7 +150,7 @@ function parseExperienceEntry(v: unknown): ExperienceEntry | null {
 export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
   parse(input: unknown): ResumeDraftV1 | { error: string } {
     if (!isRecord(input)) return { error: "ResumeDraftV1 must be an object" };
-    const skills = expectStringArray(input.skills, "skills");
+    const skills = parseSkillGroups(input.skills);
     const experience = Array.isArray(input.experience) ? input.experience.map(parseExperienceEntry).filter((e): e is ExperienceEntry => e !== null) : [];
     const truthRisks: { risk: string; severity: "low" | "medium" | "high" }[] = [];
     if (Array.isArray(input.truthRisks)) {
@@ -137,7 +163,7 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
     }
     return {
       summary: expectString(input.summary, "summary"),
-      skills: skills ?? [],
+      skills,
       experience,
       education: Array.isArray(input.education) ? input.education.filter((e: unknown): e is { degree: string; school: string; field: string | null; graduationDate: string | null } => {
         if (!isRecord(e)) return false;
@@ -231,7 +257,7 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
 
 export interface FinalResumeV1 {
   summary: string | null;
-  skills: string[];
+  skills: SkillGroup[];
   experience: ExperienceEntry[];
   education: { degree: string; school: string; field: string | null; graduationDate: string | null }[];
   certifications: string[];
@@ -248,7 +274,7 @@ export const FinalResumeSchema: Schema<FinalResumeV1> = {
     if (!isRecord(input)) return { error: "FinalResumeV1 must be an object" };
     return {
       summary: expectString(input.summary, "summary"),
-      skills: expectStringArray(input.skills, "skills") ?? [],
+      skills: parseSkillGroups(input.skills),
       experience: Array.isArray(input.experience) ? input.experience.map(parseExperienceEntry).filter((e): e is ExperienceEntry => e !== null) : [],
       education: Array.isArray(input.education) ? input.education.filter((e: unknown): e is { degree: string; school: string; field: string | null; graduationDate: string | null } => {
         if (!isRecord(e)) return false;
