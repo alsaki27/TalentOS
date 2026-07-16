@@ -54,3 +54,8 @@ export async function POST(request: NextRequest) {
     }
   })(request);
 }
+
+export async function OPTIONS(request: NextRequest) {
+  return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
+}
+

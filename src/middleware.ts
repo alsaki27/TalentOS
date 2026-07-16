@@ -97,7 +97,10 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
-  if (isExtensionApiPath(pathname)) return getExtensionCorsResponse(req);
+  // Extension API paths: skip middleware auth entirely — each route handler
+  // authenticates via its own authenticateExtension() call and handles CORS
+  // via withExtensionCors(). Intercepting here drops CORS headers on Cloudflare Workers.
+  if (isExtensionApiPath(pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
 
