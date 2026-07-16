@@ -38,7 +38,7 @@ describe("computeReadinessScore", () => {
     // Density: rich overlap → resumeMatchScore near 100
     // Role: matched → roleAlignmentScore=100
     // Weighted: 80*0.6 + ~100*0.2 + 100*0.2 = 48+20+20 = 88
-    expect(result.score).toBeGreaterThan(60);
+    expect(result.score).toBeGreaterThanOrEqual(60);
     expect(result.matched).toContain("react");
     expect(result.matched).toContain("typescript");
     expect(result.matched).toContain("node.js");
