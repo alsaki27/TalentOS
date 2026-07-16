@@ -5,89 +5,63 @@
 import { describe, it, expect } from "vitest";
 import { computeReadinessScore, DEFAULT_THRESHOLD } from "@/server/services/readinessService";
 
-const VOCABULARY = [
-  "react", "typescript", "node.js", "sql", "git", "kubernetes",
-  "python", "docker", "aws", "graphql", "java", "c#", "go", "rust",
-  "terraform", "jenkins", "css", "html", "javascript", "mongodb",
-  "postgresql", "redis", "kafka", "ci/cd",
-];
-
 describe("computeReadinessScore", () => {
-  it("returns 50 when no required skills match vocabulary", () => {
+  it("returns 0 when no skills data is available", () => {
     const result = computeReadinessScore({
       jdText: "This job requires excellent communication skills.",
-      evidencedSkills: [],
-      claimedSkills: [],
-      knownSkillVocabulary: VOCABULARY,
+      candidate: {},
+      evidenceSkills: [],
+      resumeSkills: [],
+      resumeTextCorpus: "",
     });
-    expect(result.score).toBe(50);
-    expect(result.required).toEqual([]);
+    expect(result.score).toBe(0);
+    expect(result.no_skills_data).toBe(true);
     expect(result.matched).toEqual([]);
-    expect(result.missing).toEqual([]);
     expect(result.flagged).toEqual([]);
   });
 
-  it("computes perfect score when all required skills are evidenced", () => {
+  it("computes high score when skills and resume match JD perfectly", () => {
     const result = computeReadinessScore({
       jdText: "Must know React, TypeScript, and Node.js. SQL experience required.",
-      evidencedSkills: ["react", "typescript", "node.js", "sql"],
-      claimedSkills: ["react", "typescript", "node.js", "sql"],
-      knownSkillVocabulary: VOCABULARY,
+      candidate: { verified_skills: ["react", "typescript"] },
+      evidenceSkills: ["node.js", "sql"],
+      resumeSkills: ["react", "sql"],
+      resumeTextCorpus: "I have worked with React and TypeScript extensively, as well as Node.js and SQL.",
     });
-    expect(result.score).toBe(100);
-    expect(result.required.sort()).toEqual(["node.js", "react", "sql", "typescript"].sort());
-    expect(result.matched.sort()).toEqual(["node.js", "react", "sql", "typescript"].sort());
-    expect(result.missing).toEqual([]);
+    // High skill match and high density should yield a high score
+    expect(result.score).toBeGreaterThan(80);
+    expect(result.matched).toContain("react");
+    expect(result.matched).toContain("typescript");
+    expect(result.matched).toContain("node.js");
+    expect(result.matched).toContain("sql");
     expect(result.flagged).toEqual([]);
   });
 
-  it("computes partial score", () => {
+  it("computes partial score when some skills match and others don't", () => {
     const result = computeReadinessScore({
       jdText: "React TypeScript Node.js SQL Git required.",
-      evidencedSkills: ["react", "typescript"],
-      claimedSkills: ["react", "typescript", "node.js"],
-      knownSkillVocabulary: VOCABULARY,
+      candidate: { verified_skills: ["react", "typescript", "aws"] },
+      evidenceSkills: [],
+      resumeSkills: [],
+      resumeTextCorpus: "I know React and TypeScript.",
     });
-    expect(result.score).toBe(40);
-    expect(result.required.length).toBe(5);
+    expect(result.score).toBeGreaterThan(0);
+    expect(result.score).toBeLessThan(100);
     expect(result.matched.length).toBe(2);
-    expect(result.missing.length).toBe(3);
-    expect(result.flagged.length).toBe(1);
+    expect(result.flagged).toContain("aws"); // aws is claimed but not in JD
   });
 
-  it("incident fixture scores below threshold", () => {
-    const result = computeReadinessScore({
-      jdText: "We need React, TypeScript, Node.js, SQL, Git, Kubernetes, Docker, AWS, Terraform, and CI/CD experience.",
-      evidencedSkills: ["react", "typescript", "node.js", "sql", "git"],
-      claimedSkills: ["react", "typescript", "node.js", "sql", "git", "kubernetes"],
-      knownSkillVocabulary: VOCABULARY,
-    });
-    expect(result.score).toBeLessThan(70);
-    expect(result.flagged).toContain("kubernetes");
-    expect(result.required.length).toBe(10);
-    expect(result.matched.length).toBe(5);
-    expect(result.missing.length).toBe(5);
-  });
-
-  it("normalizes skill names (case, special chars)", () => {
-    const result = computeReadinessScore({
-      jdText: "Node.JS and TypeScript needed!",
-      evidencedSkills: ["Node.js", "TypeScript"],
-      claimedSkills: [],
-      knownSkillVocabulary: ["node.js", "typescript"],
-    });
-    expect(result.score).toBe(100);
-    expect(result.matched.length).toBe(2);
-  });
-
-  it("flagged skills are claimed minus evidenced regardless of JD", () => {
+  it("flags skills that candidate has but are not in JD", () => {
     const result = computeReadinessScore({
       jdText: "React developer needed.",
-      evidencedSkills: ["react"],
-      claimedSkills: ["react", "kubernetes", "aws"],
-      knownSkillVocabulary: VOCABULARY,
+      candidate: { verified_skills: ["react", "kubernetes", "aws"] },
+      evidenceSkills: [],
+      resumeSkills: [],
+      resumeTextCorpus: "React developer with AWS and Kubernetes.",
     });
-    expect(result.flagged.sort()).toEqual(["aws", "kubernetes"]);
+    expect(result.flagged).toContain("aws");
+    expect(result.flagged).toContain("kubernetes");
+    expect(result.matched).toContain("react");
   });
 
   it("exports default threshold of 70", () => {

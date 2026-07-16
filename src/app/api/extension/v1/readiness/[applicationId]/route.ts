@@ -77,9 +77,12 @@ export async function GET(
 
       const result = computeReadinessScore({
         jdText,
-        evidencedSkills: evidenced,
-        claimedSkills: verifiedSkills,
-        knownSkillVocabulary: vocabulary,
+        candidate: {
+          verified_skills: verifiedSkills,
+        },
+        evidenceSkills: evidenceSkills,
+        resumeSkills: resumeSkills,
+        resumeTextCorpus: JSON.stringify(resumeRow?.parsed_json || ""),
       });
 
       return NextResponse.json({
