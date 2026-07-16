@@ -77,9 +77,12 @@ export async function GET(
 
       const result = computeReadinessScore({
         jdText,
-        evidencedSkills: evidenced,
-        claimedSkills: verifiedSkills,
-        knownSkillVocabulary: vocabulary,
+        candidate: {
+          verified_skills: verifiedSkills,
+        },
+        evidenceSkills: evidenceSkills,
+        resumeSkills: resumeSkills,
+        resumeTextCorpus: JSON.stringify(resumeRow?.parsed_json || ""),
       });
 
       return NextResponse.json({
@@ -91,4 +94,8 @@ export async function GET(
       return extensionError("internal_error", String(err), 500);
     }
   })(request);
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
 }
