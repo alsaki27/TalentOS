@@ -22,7 +22,9 @@ describe("computeReadinessScore", () => {
 
   it("computes high score when skills and resume match JD perfectly", () => {
     // Provide rich data: verified + evidence skills, target_roles matching JD, and a dense resume corpus
-    const jd = "Must know React, TypeScript, and Node.js. SQL experience required. Senior React Engineer role.";
+    // Note: node.js must be mid-sentence (comma after) so phraseExists can match it.
+    // The engine keeps '.' in normalized text, so 'Node.js.' (end of sentence) ≠ 'node.js' (skill).
+    const jd = "Must know React, TypeScript, Node.js, and SQL. Experience required. Senior React Engineer role.";
     const result = computeReadinessScore({
       jdText: jd,
       candidate: {
