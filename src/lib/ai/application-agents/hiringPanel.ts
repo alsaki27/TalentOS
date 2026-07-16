@@ -14,6 +14,13 @@ export async function runHiringPanel(
   const jobAnalysis = ctx.previousOutputs["application_job_lens"]?.data ?? {};
   const draft = ctx.previousOutputs["application_resume_forge"]?.data ?? {};
 
+  // ── DEBUG: Hiring Panel ──────────────────────────────────────────
+  console.log("[Agent:HiringPanel] ── INPUT ────────────────────────────────────");
+  console.log("[Agent:HiringPanel] jobAnalysis (from JobLens):", JSON.stringify(jobAnalysis, null, 2));
+  console.log("[Agent:HiringPanel] draft (from ResumeForge):", JSON.stringify(draft, null, 2));
+  console.log("[Agent:HiringPanel] ───────────────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
+
   const response = await provider.send({
     system: options.system_prompt ?? "You are Hiring Panel, an AI that grades resumes. Return only valid JSON.",
     messages: [
@@ -38,5 +45,12 @@ export async function runHiringPanel(
   const parsed = JSON.parse(stripped);
   const validated = ReviewScoreSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Hiring Panel output validation failed: ${validated.error}`);
+
+  // ── DEBUG: Hiring Panel ──────────────────────────────────────────
+  console.log("[Agent:HiringPanel] ── OUTPUT ───────────────────────────────────");
+  console.log("[Agent:HiringPanel] validated review:", JSON.stringify(validated, null, 2));
+  console.log("[Agent:HiringPanel] ───────────────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
+
   return validated;
 }
