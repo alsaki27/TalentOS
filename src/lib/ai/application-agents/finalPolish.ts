@@ -15,6 +15,14 @@ export async function runFinalPolish(
   const draft = ctx.previousOutputs["application_resume_forge"]?.data ?? {};
   const review = ctx.previousOutputs["application_hiring_panel"]?.data ?? {};
 
+  // ── DEBUG: Final Polish ─────────────────────────────────────────
+  console.log("[Agent:FinalPolish] ── INPUT ────────────────────────────────────");
+  console.log("[Agent:FinalPolish] jobAnalysis (from JobLens):", JSON.stringify(jobAnalysis, null, 2));
+  console.log("[Agent:FinalPolish] draft (from ResumeForge):", JSON.stringify(draft, null, 2));
+  console.log("[Agent:FinalPolish] review (from HiringPanel):", JSON.stringify(review, null, 2));
+  console.log("[Agent:FinalPolish] ───────────────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
+
   const response = await provider.send({
     system: options.system_prompt ?? "You are Final Polish, an AI that applies reviewer feedback and produces a final resume. Return only valid JSON.",
     messages: [
@@ -39,6 +47,15 @@ export async function runFinalPolish(
   const parsed = JSON.parse(stripped);
   const validated = FinalResumeSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Final Polish output validation failed: ${validated.error}`);
+
+  // ── DEBUG: Final Polish ─────────────────────────────────────────
+  console.log("[Agent:FinalPolish] ── OUTPUT ───────────────────────────────────");
+  console.log("[Agent:FinalPolish] validated final resume:", JSON.stringify(validated, null, 2));
+  console.log("[Agent:FinalPolish] exportReady:", validated.exportReady);
+  console.log("[Agent:FinalPolish] experience count:", validated.experience.length);
+  console.log("[Agent:FinalPolish] experience roles with 0 bullets:", validated.experience.filter((e) => e.bullets.length === 0).map((e) => e.title));
+  console.log("[Agent:FinalPolish] ───────────────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
 
   // Defense in depth against the exact failure the prompt now explicitly
   // forbids: confirmed live, the model can satisfy the single-page word

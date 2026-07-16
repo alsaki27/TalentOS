@@ -11,6 +11,12 @@ export async function runJobLens(
   provider: AiProvider,
   ctx: AgentContext
 ): Promise<JobAnalysisV1> {
+  // ── DEBUG: Job Lens ─────────────────────────────────────────────
+  console.log("[Agent:JobLens] ── INPUT ──────────────────────────────────────");
+  console.log("[Agent:JobLens] job:", JSON.stringify(ctx.job, null, 2));
+  console.log("[Agent:JobLens] ────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
+
   const response = await provider.send({
     system: options.system_prompt ?? "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
     messages: [
@@ -27,5 +33,12 @@ export async function runJobLens(
   const parsed = JSON.parse(stripped);
   const validated = JobAnalysisSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Job Lens output validation failed: ${validated.error}`);
+
+  // ── DEBUG: Job Lens ─────────────────────────────────────────────
+  console.log("[Agent:JobLens] ── OUTPUT ─────────────────────────────────────");
+  console.log("[Agent:JobLens] validated output:", JSON.stringify(validated, null, 2));
+  console.log("[Agent:JobLens] ────────────────────────────────────────────────");
+  // ────────────────────────────────────────────────────────────────
+
   return validated;
 }
