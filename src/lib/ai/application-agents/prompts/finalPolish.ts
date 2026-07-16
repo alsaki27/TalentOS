@@ -43,8 +43,11 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      containing one, rewrite around the keyword.
    * Never cut a role's only quantified bullet. Cut generic, unquantified, non-JD-relevant
      bullets first; quantified + keyword-matched bullets go last.
-   * NEVER generate a professional summary. The summary field must always be null. Keep the
-     skills list categorized or within ~15 entries, required-skill matches first.
+   * NEVER generate a professional summary. The summary field must always be null. The skills
+     output MUST stay in the same categorized-group structure the draft used — an array of
+     { title, skills[] } groups, never flattened into one list or one generic "Skills" bucket.
+     Within that structure, keep the total entry count across all categories to ~15, with
+     required-skill matches first in their category.
 8. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
@@ -57,7 +60,8 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 
 Return a JSON object with:
 - summary: ALWAYS null
-- skills: final skill list
+- skills: final array of { title: string, skills: string[] } category groups (see rule 7) —
+  NOT a flat array of strings
 - experience: final experience entries with evidenceIds
 - education: final education entries
 - certifications: final certifications

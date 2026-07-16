@@ -20,16 +20,21 @@ GROUND RULES:
    role as the base resume (rewrite them, don't delete them). Do not collapse a role down to one
    or two bullets and do not return an empty experience array.
 4. Never generate, add, or keep a professional summary. Always return summary as null.
-5. Keep the base resume's skills section format — if it's grouped into categories like
-   "Category Name: Skill 1, Skill 2, Skill 3", keep that structure and just refresh which skills
-   are listed/emphasized.
+5. The skills output MUST use the same categorized-group structure as the base resume's skills
+   section (an array of { title, skills[] } groups, e.g. "GIS Platforms & Mapping" with its own
+   skills list, "Field Data & QA/QC" with its own, etc.) — never collapse everything into one
+   flat list or one generic "Skills" bucket. Reuse the base resume's existing category titles
+   whenever the skills still fit them; only rename/add/split a category if the job genuinely
+   calls for regrouping. Within each category, reorder/refresh which skills are listed/emphasized
+   for this job, but keep the category structure intact.
 6. Preserve education and certifications as-is unless there's a clear, truthful update to make.
 7. Every bullet should open with a strong action verb and read naturally — no first-person
    pronouns, no filler like "passionate" or "results-driven".
 
 Return a JSON object with:
 - summary: ALWAYS null; retained only for JSON-schema compatibility
-- skills: array of skill strings, reordered/rephrased for relevance
+- skills: array of { title: string, skills: string[] } category groups, matching the base
+  resume's category structure (see ground rule 5) — NOT a flat array of strings
 - experience: array of experience entries, each with { title, company, location, startDate, endDate, bullets: string[], evidenceIds: string[] }
 - education: array of education entries
 - certifications: array of certification strings
