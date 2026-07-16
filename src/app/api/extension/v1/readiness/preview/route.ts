@@ -1,12 +1,12 @@
 // POST /api/extension/v1/readiness/preview
 // Scope: extension:readiness:read
 // Computes readiness against a provided JD text, using the key's associated candidate's
-// verified skills, evidence, AND the candidate's latest parsed resume skills.
+// verified skills, evidence, AND a specific resume (or latest if none provided).
 
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, checkIdempotencyKey, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
-import { computeReadinessScore } from "@/server/services/readinessService";
+import { computeReadinessScore, extractAllResumeText } from "@/server/services/readinessService";
 
 function extractResumeSkills(parsedJson: Record<string, unknown> | null): string[] {
   if (!parsedJson) return [];
@@ -20,7 +20,6 @@ function extractResumeSkills(parsedJson: Record<string, unknown> | null): string
     else if (typeof s === "object" && s && "name" in s) str = String((s as any).name);
     if (!str) continue;
 
-    // Split category-tagged skills like "OSP: AutoCAD, FTTx" into individual terms
     str.split(/[:,\s]+/).forEach((t) => {
       const trimmed = t.trim();
       if (trimmed && trimmed.length > 1) tokens.push(trimmed);
@@ -41,7 +40,7 @@ export async function POST(request: NextRequest) {
 
     try {
       const body = await req.json();
-      const { jdText } = body;
+      const { jdText, candidateId, resumeId } = body;
 
       if (!jdText || typeof jdText !== "string") {
         return extensionError("validation_error", "jdText is required and must be a string.", 400);
@@ -49,44 +48,52 @@ export async function POST(request: NextRequest) {
 
       const key = (auth as { key: { candidate_id: string | null } }).key;
 
-      let candidateId = key.candidate_id;
-      if (!candidateId) {
-        const bodyCandidateId = (body as any).candidateId;
-        if (bodyCandidateId) candidateId = bodyCandidateId;
-      }
+      let targetCandidateId = key.candidate_id || candidateId;
 
-      if (!candidateId) {
+      if (!targetCandidateId) {
         return extensionError("validation_error", "No candidate associated with this API key. Pass candidateId in the body.", 400);
       }
 
-      const candidate = await queryOne<{ verified_skills: string[] }>(
-        `SELECT verified_skills FROM candidates WHERE id = $1`,
-        [candidateId]
+      const candidate = await queryOne<{ verified_skills: string[], target_roles: string[] }>(
+        `SELECT verified_skills, target_roles FROM candidates WHERE id = $1`,
+        [targetCandidateId]
       );
       if (!candidate) return extensionError("not_found", "Candidate not found.", 404);
 
       const verifiedSkills: string[] = candidate.verified_skills ?? [];
+      const targetRoles: string[] = candidate.target_roles ?? [];
 
       const evidenceRows = await query<{ skill: string }>(
         `SELECT DISTINCT unnest(related_skills) AS skill FROM candidate_evidence WHERE candidate_id = $1`,
-        [candidateId]
+        [targetCandidateId]
       );
       const evidenceSkills = evidenceRows.map((r: any) => r.skill).filter(Boolean);
 
-      const resumeRow = await queryOne<{ parsed_json: Record<string, unknown> | null }>(
-        `SELECT parsed_json FROM resumes WHERE candidate_id = $1 ORDER BY is_original_upload DESC, created_at DESC LIMIT 1`,
-        [candidateId]
-      );
+      let resumeRow;
+      if (resumeId) {
+        resumeRow = await queryOne<{ parsed_json: Record<string, unknown> | null }>(
+          `SELECT parsed_json FROM resumes WHERE id = $1 AND candidate_id = $2`,
+          [resumeId, targetCandidateId]
+        );
+      } else {
+        resumeRow = await queryOne<{ parsed_json: Record<string, unknown> | null }>(
+          `SELECT parsed_json FROM resumes WHERE candidate_id = $1 ORDER BY is_original_upload DESC, created_at DESC LIMIT 1`,
+          [targetCandidateId]
+        );
+      }
+      
       const resumeSkills = extractResumeSkills(resumeRow?.parsed_json ?? null);
-
-      const evidenced = Array.from(new Set([...verifiedSkills, ...evidenceSkills, ...resumeSkills]));
-      const vocabulary = evidenced.length > 0 ? evidenced : verifiedSkills;
+      const resumeTextCorpus = extractAllResumeText(resumeRow?.parsed_json ?? null);
 
       const result = computeReadinessScore({
         jdText,
-        evidencedSkills: evidenced,
-        claimedSkills: verifiedSkills,
-        knownSkillVocabulary: vocabulary,
+        candidate: {
+          verified_skills: verifiedSkills,
+          target_roles: targetRoles
+        },
+        evidenceSkills,
+        resumeSkills,
+        resumeTextCorpus
       });
 
       return NextResponse.json({
@@ -103,4 +110,3 @@ export async function POST(request: NextRequest) {
 export async function OPTIONS(request: NextRequest) {
   return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
 }
-

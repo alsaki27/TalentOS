@@ -410,3 +410,19 @@ npm run dev
 5. **Neon HTTP driver** — Uses HTTP connection (not TCP), works in both Cloudflare Workers and Node.js
 6. **Migrations location** — Job agent migrations in `/migrations/`, not `/neon/migrations/`
 7. **Branch tracking** — `istiaque-updates` tracks `origin/neon-cloudflare-migration`, not `origin/main`
+
+---
+
+## Session 4 — Extension Integration Handover (July 15, 2026)
+
+**Key Integration Updates:**
+1. **API Endpoints & Auth:** All 3 extensions (Job Capture, Resume QA, Apply Copilot) now hit `/api/extension/v1/*` routes using Bearer tokens. CORS is handled smoothly via `middleware.ts`.
+2. **Job Capture (v0.3.0):** Scrapes job postings and inserts directly into the `jobs` table (`source = "extension"`), avoiding staging. Deduplicates by `apply_url`. ATS presence is noted in the `notes` column. Candidate ID is optional.
+3. **Resume QA (v0.3.0):** Uses `/api/extension/v1/readiness/preview`. Now successfully extracts and incorporates skills from uploaded resume PDFs (`resumes.parsed_json.skills`) into its readiness scoring (along with verified and evidence-backed skills).
+4. **Apply Copilot (v0.3.0):** Auto-fills ATS forms. Retrieves the candidate's resume via a newly added `/api/extension/v1/resume-download/route.ts` proxy endpoint to bypass CORS and securely maps the file directly into ATS file inputs using `DataTransfer`.
+5. **Extension Architecture:** Completely rewrote the background script message passing. All 3 extensions now use a *single* `onMessage` listener per extension to prevent MV3 async listener deadlocks.
+
+**Setup/Testing:**
+- The extension options "Server URL" should point to `http://localhost:3000/api/extension/v1` for local testing.
+- Make sure API Keys from `/admin/extension-keys` are provided to the extensions. Copilot requires a candidate-bound key.
+- Job Capture jobs missing AI categorization likely hit OpenAI 429 quota errors in `processPendingCategorization`, which sets `category_status` to `"failed"`.
