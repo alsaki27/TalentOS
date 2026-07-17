@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { insertStaged } from "@/server/repositories/jobCeoStagingRepository";
 import { createRun, bumpRunCounts } from "@/server/repositories/jobCeoRunRepository";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
@@ -38,8 +39,16 @@ export async function POST(req: NextRequest) {
     const staged = await insertStaged(runId, jobs as any[]);
     await bumpRunCounts(runId, { ingested_count: staged });
 
+    // Registered with ctx.waitUntil via backgroundDispatch so it survives
+    // past this response instead of racing it - a plain un-awaited fetch
+    // here was confirmed (on the resume-agent pipeline this mirrors) to get
+    // killed before the dispatch endpoint's invocation ever ran.
     const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
-    fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch(() => {});
+    await backgroundDispatch(
+      fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) => {
+        console.error("[Job CEO] Ingest dispatch self-fetch failed:", err);
+      })
+    );
 
     return NextResponse.json({ runId, staged });
   } catch (err) {
