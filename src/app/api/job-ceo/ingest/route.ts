@@ -5,9 +5,14 @@ import { createRun, bumpRunCounts } from "@/server/repositories/jobCeoRunReposit
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  // Fails closed: this endpoint accepts externally-sourced job data (the
+  // OpenJobData GitHub Actions runner), so a missing secret must reject
+  // every caller, not silently accept them. The prior `if (secret && ...)`
+  // check skipped auth entirely whenever JOB_CEO_INGEST_SECRET wasn't
+  // configured yet - exactly the state before an operator has set it.
   const authHeader = req.headers.get("authorization") || "";
   const secret = process.env.JOB_CEO_INGEST_SECRET;
-  if (secret && authHeader !== `Bearer ${secret}`) {
+  if (!secret || authHeader !== `Bearer ${secret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
