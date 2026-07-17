@@ -63,7 +63,7 @@ function getSourceStageFor(runStatus: JobCeoRunStatus): string | null {
   }
 }
 
-async function callAgent(
+export async function callAgent(
   automationId: string,
   ctx: JobCeoAgentContext,
   fn: (provider: AiProvider) => Promise<unknown>

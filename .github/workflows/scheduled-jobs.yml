@@ -14,6 +14,7 @@ on:
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
     - cron: '0 0 * * *'    # Job agent scrape – daily at 00:00 UTC
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
+    - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
   workflow_dispatch:
     inputs:
       job:
@@ -33,6 +34,7 @@ on:
           - email-queue
           - run-all
           - job-ceo-dispatch
+          - job-description-enrichment
 
 jobs:
   dispatch-workflows:
@@ -226,6 +228,23 @@ jobs:
       - name: Call JOB CEO dispatch
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/dispatch")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  job-description-enrichment:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/15 * * * *') ||
+      github.event.inputs.job == 'job-description-enrichment' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Job description enrichment
+    steps:
+      - name: Call description enrichment
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/enrich")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

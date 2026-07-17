@@ -13,8 +13,28 @@ The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources job
 | **QA Bouncer** | `job_ceo_qa` | Filters raw jobs on a quality/relevance matrix |
 | **Deep Fetch** | `job_ceo_deep_fetch` | Scrapes full JD text from source URLs |
 | **Matchmaker** | `job_ceo_matchmaker` | Matches jobs to candidates (>=90%), drafts outreach |
+| **Description Enricher** | `job_ceo_enricher` | Backfills full descriptions for already-logged jobs with thin/missing text, on its own cron |
 
 All agents use `gemini-2.5-pro` as primary model with `gemini-2.5-flash` fallback.
+
+### Why descriptions can come out thin, and how Description Enricher fixes it
+
+Deep Fetch only ever touches `job_ceo_staging` rows, once, during ingest — and it's
+gated entirely on `source_url` being present. OpenJobData rows don't reliably carry
+a working direct URL (depends on the dataset's own column layout), and even when a
+URL exists, a single failed fetch (bot-blocked site, JS-rendered page, transient
+error) leaves the thin description permanent — nothing ever revisits a `jobs` row
+after it's logged.
+
+Description Enricher is a separate agent that runs independently of the ingest
+pipeline, on its own 15-minute cron (`job-description-enrichment` in
+`scheduled-jobs.yml`). It scans the **live** `jobs` table — any source, not just
+OpenJobData — for rows with a `source_url`/`apply_url` but `description_text`
+under 500 characters, retries the fetch + extraction, and writes the result back
+via `jobs.description_enrich_attempts`/`description_enriched_at`. Capped at 3
+attempts per job so a genuinely dead link doesn't get retried forever. A manual
+"Enrich Descriptions" button on `/job-ceo` pulls a batch forward immediately
+instead of waiting for the next tick.
 
 ## Data Flow
 
@@ -40,6 +60,8 @@ All agents use `gemini-2.5-pro` as primary model with `gemini-2.5-flash` fallbac
 | POST | `/api/job-ceo/proposals` | Admin/Internal | Create proposal |
 | POST | `/api/job-ceo/proposals/[id]/approve` | Admin | Apply proposal to config |
 | POST | `/api/job-ceo/proposals/[id]/reject` | Admin | Reject proposal |
+| POST | `/api/job-ceo/enrich` | Admin/Manager | Manually run one enrichment batch |
+| GET | `/api/job-ceo/enrich` | Bearer (`CRON_SECRET`) | Cron-triggered enrichment batch |
 
 ## Configuration Proposals
 
@@ -72,6 +94,6 @@ wrangler secret put JOB_CEO_INGEST_SECRET
 ## Important Notes
 
 - **Matchmaker drafts outreach only** — never sends. Outreach drafts are stored in activity logs.
-- **All new SQL is idempotent** — migration `034_job_ceo.sql` auto-runs on deploy.
+- **All new SQL is idempotent** — migrations `034_job_ceo.sql` and `035_job_description_enricher.sql` auto-run on deploy.
 - **Never pushes to main** — this layer lives on `saki-new-agent-layer`.
 - **Existing Apify `/job-agent` system is untouched** — this is a parallel, additive layer.

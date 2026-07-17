@@ -6,7 +6,8 @@ export type JobCeoAgentId =
   | "job_ceo_scout"
   | "job_ceo_qa"
   | "job_ceo_deep_fetch"
-  | "job_ceo_matchmaker";
+  | "job_ceo_matchmaker"
+  | "job_ceo_enricher";
 
 export const JOB_CEO_AGENT_IDS: JobCeoAgentId[] = [
   "job_ceo_orchestrator",
@@ -14,6 +15,7 @@ export const JOB_CEO_AGENT_IDS: JobCeoAgentId[] = [
   "job_ceo_qa",
   "job_ceo_deep_fetch",
   "job_ceo_matchmaker",
+  "job_ceo_enricher",
 ];
 
 export interface JobCeoAgentMeta {
@@ -53,6 +55,12 @@ export const JOB_CEO_AGENT_METAS: Record<JobCeoAgentId, JobCeoAgentMeta> = {
     displayName: "Matchmaker",
     sequenceNumber: 4,
     description: "Matches jobs to candidates, logs + drafts outreach",
+  },
+  job_ceo_enricher: {
+    id: "job_ceo_enricher",
+    displayName: "Description Enricher",
+    sequenceNumber: 5,
+    description: "Backfills full job descriptions for logged jobs with thin/missing text, on a cron",
   },
 };
 

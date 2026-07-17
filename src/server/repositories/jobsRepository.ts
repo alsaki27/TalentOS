@@ -413,3 +413,67 @@ export async function listAllJobsForFuzzyDedupe(): Promise<{ title: string; comp
     "SELECT title, company, location FROM jobs WHERE title IS NOT NULL"
   );
 }
+
+// ───────────────────────────────────────────────────────────────
+// Description Enricher (job_ceo_enricher) — backfills thin/missing
+// description_text on already-logged jobs, from any source. Capped at 3
+// attempts so a job whose URL genuinely can't be scraped (dead link, hard
+// bot-block) doesn't get retried forever. No row-locking here: query()/
+// execute() each run as their own auto-committed statement (see
+// finalizationService.ts's explicit sql.transaction() for the one place
+// this codebase actually needs cross-statement locking) - fine for a
+// small-batch, infrequent cron where the worst case of a double-claim is
+// one redundant AI call, not data corruption.
+// ───────────────────────────────────────────────────────────────
+
+export interface EnrichmentCandidate {
+  id: string;
+  title: string | null;
+  company: string | null;
+  source_url: string | null;
+  apply_url: string | null;
+  description_text: string | null;
+}
+
+export async function findJobsNeedingEnrichment(limit: number): Promise<EnrichmentCandidate[]> {
+  return query<EnrichmentCandidate>(
+    `SELECT id, title, company, source_url, apply_url, description_text
+     FROM jobs
+     WHERE is_active = true
+       AND description_enrich_attempts < 3
+       AND (source_url IS NOT NULL OR apply_url IS NOT NULL)
+       AND (description_text IS NULL OR length(description_text) < 500)
+     ORDER BY description_enrich_attempts ASC, last_seen_at DESC NULLS LAST
+     LIMIT $1`,
+    [limit]
+  );
+}
+
+export async function countJobsNeedingEnrichment(): Promise<number> {
+  const row = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text as count FROM jobs
+     WHERE is_active = true
+       AND description_enrich_attempts < 3
+       AND (source_url IS NOT NULL OR apply_url IS NOT NULL)
+       AND (description_text IS NULL OR length(description_text) < 500)`
+  );
+  return row ? parseInt(row.count, 10) : 0;
+}
+
+export async function recordEnrichmentAttempt(
+  id: string,
+  patch: { description_text?: string; requirements?: Record<string, unknown> }
+): Promise<void> {
+  const fields = ["description_enrich_attempts = description_enrich_attempts + 1", "description_enriched_at = NOW()"];
+  const values: unknown[] = [];
+  let idx = 1;
+  if (patch.description_text !== undefined) {
+    fields.push(`description_text = $${idx++}`);
+    values.push(patch.description_text);
+  }
+  values.push(id);
+  await execute(
+    `UPDATE jobs SET ${fields.join(", ")} WHERE id = $${idx}`,
+    values
+  );
+}

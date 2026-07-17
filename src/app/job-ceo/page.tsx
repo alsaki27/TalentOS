@@ -39,6 +39,8 @@ export default function JobCeoPage() {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [triggering, setTriggering] = useState(false);
   const [needsDispatch, setNeedsDispatch] = useState(false);
+  const [enriching, setEnriching] = useState(false);
+  const [enrichResult, setEnrichResult] = useState<{ processed: number; enriched: number; pendingAfter: number } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchRuns() {
@@ -76,6 +78,23 @@ export default function JobCeoPage() {
     }
   }
 
+  // Description Enricher runs on its own 15-min cron in the background; this
+  // button just lets someone pull a batch forward manually instead of
+  // waiting for the next tick.
+  async function handleEnrich() {
+    setEnriching(true);
+    try {
+      const res = await fetch("/api/job-ceo/enrich", { method: "POST" });
+      if (res.ok) {
+        setEnrichResult(await res.json());
+      }
+    } catch {
+      // ignore
+    } finally {
+      setEnriching(false);
+    }
+  }
+
   const activeRuns = runs.filter((r) => isLive(r.status));
   const hasActive = activeRuns.length > 0;
 
@@ -108,6 +127,14 @@ export default function JobCeoPage() {
             Proposals
           </Link>
           <button
+            onClick={handleEnrich}
+            disabled={enriching}
+            title="Backfill full descriptions for logged jobs with thin/missing text (also runs automatically every 15 min)"
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors disabled:opacity-50"
+          >
+            {enriching ? "Enriching..." : "Enrich Descriptions"}
+          </button>
+          <button
             onClick={handleTrigger}
             disabled={triggering}
             className="px-4 py-1.5 text-sm font-medium rounded-md bg-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50"
@@ -116,6 +143,15 @@ export default function JobCeoPage() {
           </button>
         </div>
       </div>
+
+      {enrichResult && (
+        <div className="mb-6 p-3 rounded-lg border border-border bg-bg flex items-center gap-4 text-sm">
+          <span className="text-ink-soft">Description Enricher:</span>
+          <span className="text-ink">{enrichResult.enriched} of {enrichResult.processed} enriched this batch</span>
+          <span className="text-ink-soft">·</span>
+          <span className="text-ink-soft">{enrichResult.pendingAfter} jobs still pending</span>
+        </div>
+      )}
 
       {hasActive && (
         <div className="mb-6">

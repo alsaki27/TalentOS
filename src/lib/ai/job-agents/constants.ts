@@ -49,4 +49,14 @@
     minimumScore: 0,
     outputSchemaVersion: "MatchmakerResultV1",
   },
+  job_ceo_enricher: {
+    displayName: "Description Enricher",
+    temperature: 0.3,
+    maxOutputTokens: 32768,
+    timeoutMs: 60000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+    outputSchemaVersion: "DeepFetchResultV1",
+  },
 } as const;
