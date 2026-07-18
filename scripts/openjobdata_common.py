@@ -331,25 +331,23 @@ def write_xlsx(export_df: pd.DataFrame, output_path: Path, sheet_name: str) -> N
         ws.freeze_panes = "A2"
 
 
-def run_keyword_export(
+def _scan_and_filter(
     keywords: list[str],
-    days: int = 1,
-    end_date: str | None = None,
-    variant: str = "full",
-    keywords_only_title: bool = False,
-    output_path: Path | None = None,
-    output_stub: str = "jobs",
-    sheet_name: str = "Jobs",
-    log_prefix: str = "openjobdata",
-    extra_output_columns: dict[str, str] | None = None,
-    drop_senior_titles: bool = False,
-    countries: list[str] | None = None,
-    max_years_experience: int | None = None,
-    location_filter: dict | None = None,
-) -> pd.DataFrame | None:
-    """Runs a full keyword-filtered pull across `days` trailing daily deltas and writes
-    an .xlsx. Returns the exported DataFrame (empty-safe: None if nothing matched).
-    This is the single entry point every CLI tool in this family should call."""
+    days: int,
+    end_date: str | None,
+    variant: str,
+    keywords_only_title: bool,
+    log_prefix: str,
+    drop_senior_titles: bool,
+    countries: list[str] | None,
+    max_years_experience: int | None,
+    location_filter: dict | None,
+) -> tuple[pd.DataFrame | None, list[str]]:
+    """Shared core: scans `days` trailing daily deltas, keyword-matches, dedupes
+    same-job-multiple-days, applies the optional seniority/country/years/location
+    filters, and joins company metadata. Returns (matches_df_or_None, date_strs) —
+    every keyword-search/ingest tool in this family should call this rather than
+    re-implementing the scan+filter steps, per this module's docstring."""
     if days < 1:
         raise ValueError("days must be >= 1")
 
@@ -369,8 +367,8 @@ def run_keyword_export(
     matches = pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame()
 
     if matches.empty:
-        print(f"[{log_prefix}] No postings matched across the window. Nothing to export.")
-        return None
+        print(f"[{log_prefix}] No postings matched across the window.")
+        return None, date_strs
 
     # A job can appear in more than one day's delta (e.g. updated after posting). Keep the
     # most recent delta row per job id so the export doesn't duplicate the same posting.
@@ -438,10 +436,40 @@ def run_keyword_export(
               f"module docstring.")
 
     if matches.empty:
-        print(f"[{log_prefix}] Nothing left after filtering. Nothing to export.")
-        return None
+        print(f"[{log_prefix}] Nothing left after filtering.")
+        return None, date_strs
 
     matches = join_company_metadata(fs, matches, log_prefix)
+    return matches, date_strs
+
+
+def run_keyword_export(
+    keywords: list[str],
+    days: int = 1,
+    end_date: str | None = None,
+    variant: str = "full",
+    keywords_only_title: bool = False,
+    output_path: Path | None = None,
+    output_stub: str = "jobs",
+    sheet_name: str = "Jobs",
+    log_prefix: str = "openjobdata",
+    extra_output_columns: dict[str, str] | None = None,
+    drop_senior_titles: bool = False,
+    countries: list[str] | None = None,
+    max_years_experience: int | None = None,
+    location_filter: dict | None = None,
+) -> pd.DataFrame | None:
+    """Runs a full keyword-filtered pull across `days` trailing daily deltas and writes
+    an .xlsx. Returns the exported DataFrame (empty-safe: None if nothing matched).
+    This is the entry point CLI/spreadsheet tools in this family should call — for
+    pushing results straight into TalentOS instead, use run_keyword_ingest()."""
+    matches, date_strs = _scan_and_filter(
+        keywords, days, end_date, variant, keywords_only_title, log_prefix,
+        drop_senior_titles, countries, max_years_experience, location_filter,
+    )
+    if matches is None:
+        print(f"[{log_prefix}] Nothing to export.")
+        return None
 
     output_columns = dict(DEFAULT_OUTPUT_COLUMNS)
     if extra_output_columns:
@@ -461,3 +489,66 @@ def run_keyword_export(
     write_xlsx(export_df, output_path, sheet_name)
     print(f"[{log_prefix}] Wrote {len(export_df):,} rows to {output_path}")
     return export_df
+
+
+# Maps a matched row to the exact JSON contract POST /api/job-agent/openjobdata-ingest
+# expects per job. Keep in sync with that route's per-job field list — every field here
+# has a home in the jobs table (see sql/01_schema.sql) or job_agent_staged_jobs, so
+# nothing openjobdata provides gets silently dropped on the way into TalentOS.
+def _row_to_ingest_job(row: pd.Series) -> dict:
+    description_text = extract_description_text(row)
+    location_text = extract_location_text(row)
+    workplace_type = str(row.get("workplace_type", "") or "").strip().lower()
+    is_remote = bool(row.get("is_remote")) or workplace_type == "remote"
+
+    posted_at = row.get("posted_at")
+    posted_at_str = None
+    if posted_at is not None and not pd.isna(posted_at):
+        try:
+            posted_at_str = pd.to_datetime(posted_at, utc=True).strftime("%Y-%m-%d")
+        except (TypeError, ValueError):
+            posted_at_str = None
+
+    return {
+        "title": row.get("title") or None,
+        "company": row.get("company_name") or None,
+        "company_website": row.get("company_website") or None,
+        "industry": row.get("industry") or None,
+        "location": location_text or None,
+        "country": row.get("country") or None,
+        "employment_type": row.get("employment_type") or None,
+        "is_remote": is_remote,
+        "posted_at": posted_at_str,
+        "apply_url": row.get("apply_url") or None,
+        "external_job_id": str(row.get("id")) if row.get("id") is not None else None,
+        "description_text": description_text or None,
+    }
+
+
+def run_keyword_ingest(
+    keywords: list[str],
+    days: int = 1,
+    end_date: str | None = None,
+    variant: str = "full",
+    keywords_only_title: bool = False,
+    log_prefix: str = "openjobdata-ingest",
+    drop_senior_titles: bool = False,
+    countries: list[str] | None = None,
+    max_years_experience: int | None = None,
+    location_filter: dict | None = None,
+) -> list[dict]:
+    """Same scan+filter pipeline as run_keyword_export, but returns a list of plain
+    dicts matching POST /api/job-agent/openjobdata-ingest's per-job contract instead
+    of writing an .xlsx — the entry point for scripts/openjobdata_ingest.py to push
+    results straight into TalentOS's job_agent staging pipeline."""
+    matches, _ = _scan_and_filter(
+        keywords, days, end_date, variant, keywords_only_title, log_prefix,
+        drop_senior_titles, countries, max_years_experience, location_filter,
+    )
+    if matches is None:
+        return []
+
+    jobs = [_row_to_ingest_job(row) for _, row in matches.iterrows()]
+    jobs = [j for j in jobs if j["title"]]
+    print(f"[{log_prefix}] Built {len(jobs):,} normalized job rows for ingest.")
+    return jobs
