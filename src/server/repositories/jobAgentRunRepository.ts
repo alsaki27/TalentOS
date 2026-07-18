@@ -60,6 +60,12 @@ export interface JobAgentStagedJobRow {
   import_status: string;
   imported_job_id: string | null;
   created_at: string;
+  // openjobdata-sourced fields — null for Apify-sourced rows.
+  description_text: string | null;
+  company_website: string | null;
+  external_job_id: string | null;
+  country: string | null;
+  industry: string | null;
 }
 
 const RUN_COLUMNS = `
@@ -74,7 +80,7 @@ const RUN_COLUMNS = `
 export async function createRun(
   configId: string,
   roleGroups: string[],
-  tokenId: string
+  tokenId: string | null
 ): Promise<JobAgentRunRow> {
   const row = await queryOne<JobAgentRunRow>(
     `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
@@ -200,6 +206,7 @@ export async function insertStagedJobs(
     "employment_type", "search_query_used", "role_group", "role_group_label",
     "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
     "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
+    "description_text", "company_website", "external_job_id", "country", "industry",
   ];
   const values: (string | number | boolean | string[] | null)[] = [];
   const placeholders: string[] = [];
