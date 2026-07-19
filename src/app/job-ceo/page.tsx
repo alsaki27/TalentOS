@@ -107,7 +107,7 @@ export default function JobCeoPage() {
 
   useEffect(() => {
     if (needsDispatch) {
-      fetch("/api/job-ceo/dispatch", { method: "POST" }).catch(() => {});
+      fetch("/api/job-ceo/kick", { method: "POST" }).catch(() => {});
       setNeedsDispatch(false);
     }
   }, [needsDispatch]);

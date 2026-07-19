@@ -1,4 +1,4 @@
-import { query } from "./src/server/db/neon.ts";
+import { query } from "./src/server/db/neon";
 
 async function main() {
   try {

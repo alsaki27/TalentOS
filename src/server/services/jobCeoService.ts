@@ -15,6 +15,7 @@ import { loadCandidateSummaries } from "@/lib/ai/job-agents/loadCandidateSummari
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import { listAllJobsForFuzzyDedupe, createJob } from "@/server/repositories/jobsRepository";
+import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import {
   createRun,
   findRunById,
@@ -106,7 +107,7 @@ export async function startRun(input: StartRunInput): Promise<JobCeoRunRow> {
 }
 
 export async function processQaBatch(runId: string): Promise<{ processed: number; kept: number }> {
-  const batch = await claimNextStagedBatch("ingested", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, kept: 0 };
 
   let processed = 0;
@@ -150,7 +151,7 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
 }
 
 export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number }> {
-  const batch = await claimNextStagedBatch("qa_passed", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, researched: 0 };
 
   let processed = 0;
@@ -193,7 +194,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
 }
 
 export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number }> {
-  const batch = await claimNextStagedBatch("researched", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "researched", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0 };
 
   const existingJobs = await listAllJobsForFuzzyDedupe();
@@ -240,19 +241,34 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
       const highMatches = matchResult.matches.filter((m) => m.score >= 90);
 
       if (highMatches.length > 0 && !isDuplicate) {
+        let parsedRaw: Record<string, any> = {};
+        if (row.raw && typeof row.raw === "object") parsedRaw = row.raw;
+        if (typeof row.raw === "string") { try { parsedRaw = JSON.parse(row.raw); } catch (e) {} }
+
         const jobRow: Record<string, unknown> = {
           title: row.title,
           company: row.company,
           location: row.location,
-          source: "openjobdata",
+          source: parsedRaw.source ?? "openjobdata",
           source_url: row.source_url,
           description_text: row.description_text,
           raw_source_payload: row.raw ?? null,
           external_job_id: row.external_job_id,
           is_active: true,
+          salary_min: parsedRaw.salary_min ?? null,
+          salary_max: parsedRaw.salary_max ?? null,
+          salary_range: parsedRaw.salary_range ?? null,
+          employment_type: parsedRaw.employment_type ?? null,
+          seniority_level: parsedRaw.seniority_level ?? null,
+          posted_at: parsedRaw.posted_at ?? null,
+          apply_url: parsedRaw.apply_url ?? null,
+          company_website: parsedRaw.company_website ?? null,
+          notes: parsedRaw.notes ?? null,
         };
 
         const created = await createJob(jobRow);
+        await syncCompanyDirectoryFromJobs([created]);
+
 
         for (const m of highMatches) {
           await logActivity({
@@ -327,14 +343,16 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
     const result = await processQaBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "ingested");
 
+    let transitioned = false;
     if (!hasMore || Number(hasMore.count) <= 0) {
       await updateRunStatus(run.id, "qa", { last_error: undefined });
+      transitioned = true;
     }
 
-    const needsMore = result.processed >= BATCH_SIZE;
+    const needsMore = result.processed >= BATCH_SIZE || transitioned;
 
     return {
-      dispatched: result.processed > 0,
+      dispatched: result.processed > 0 || transitioned,
       runId: run.id,
       stage: "qa",
       count: result.processed,
@@ -346,14 +364,16 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
     const result = await processDeepFetchBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "qa_passed");
 
+    let transitioned = false;
     if (!hasMore || Number(hasMore.count) <= 0) {
       await updateRunStatus(run.id, "deep_fetch", { last_error: undefined });
+      transitioned = true;
     }
 
-    const needsMore = result.processed >= BATCH_SIZE || ((hasMore && Number(hasMore.count) > 0) ? true : false);
+    const needsMore = result.processed >= BATCH_SIZE || transitioned;
 
     return {
-      dispatched: result.processed > 0,
+      dispatched: result.processed > 0 || transitioned,
       runId: run.id,
       stage: "deep_fetch",
       count: result.processed,
@@ -365,8 +385,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
     const result = await processMatchmakerBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "researched");
 
+    let transitioned = false;
     if (!hasMore || Number(hasMore.count) <= 0) {
       await updateRunStatus(run.id, "matchmaking", { last_error: undefined });
+      transitioned = true;
 
       await logActivity({
         type: "job_ceo_run_completed",
@@ -376,10 +398,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       });
     }
 
-    const needsMore = result.processed >= BATCH_SIZE || ((hasMore && Number(hasMore.count) > 0) ? true : false);
+    const needsMore = result.processed >= BATCH_SIZE || transitioned;
 
     return {
-      dispatched: result.processed > 0,
+      dispatched: result.processed > 0 || transitioned,
       runId: run.id,
       stage: "matchmaking",
       count: result.processed,
@@ -397,7 +419,7 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       entityId: run.id,
     });
 
-    return { dispatched: true, runId: run.id, stage: "completed", count: 1, needsDispatch: false };
+    return { dispatched: true, runId: run.id, stage: "completed", count: 1, needsDispatch: true };
   }
 
   return { dispatched: false, runId: null, stage: null, count: 0, needsDispatch: false };
@@ -408,8 +430,12 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
 
   if (result.needsDispatch) {
     const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+    const cronSecret = process.env.CRON_SECRET;
     await backgroundDispatch(
-      fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) =>
+      fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+        method: "POST",
+        headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
+      }).catch((err) =>
         console.error("[Job CEO] Dispatch chain self-fetch failed:", err)
       )
     );

@@ -1,4 +1,4 @@
-﻿import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne, execute } from "@/server/db/neon";
 import type { StagedJob, StagedJobStage } from "@/lib/ai/job-agents/types";
 
 export interface StagedJobRow {
@@ -65,16 +65,17 @@ export async function insertStaged(
 }
 
 export async function claimNextStagedBatch(
+  runId: string,
   stage: StagedJobStage,
   limit: number
 ): Promise<StagedJobRow[]> {
   return query<StagedJobRow>(
     `WITH next_batch AS (
       SELECT id FROM job_ceo_staging
-      WHERE stage = $1
+      WHERE stage = $2 AND run_id = $1
         AND (claim_expires_at IS NULL OR claim_expires_at < NOW())
       ORDER BY created_at ASC
-      LIMIT $2
+      LIMIT $3
       FOR UPDATE SKIP LOCKED
     )
     UPDATE job_ceo_staging s
@@ -84,7 +85,7 @@ export async function claimNextStagedBatch(
     FROM next_batch n
     WHERE s.id = n.id
     RETURNING s.*`,
-    [stage, limit]
+    [runId, stage, limit]
   );
 }
 

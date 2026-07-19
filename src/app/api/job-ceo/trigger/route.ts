@@ -28,8 +28,12 @@ export async function POST(req: NextRequest) {
     // here was confirmed (on the resume-agent pipeline this mirrors) to get
     // killed before the dispatch endpoint's invocation ever ran.
     const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+    const cronSecret = process.env.CRON_SECRET;
     await backgroundDispatch(
-      fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) => {
+      fetch(`${baseUrl}/api/job-ceo/dispatch`, { 
+        method: "POST",
+        headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
+      }).catch((err) => {
         console.error("[Job CEO] Trigger dispatch self-fetch failed:", err);
       })
     );
