@@ -238,7 +238,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     sections: DEFAULT_SECTIONS,
     colors: DEFAULT_COLORS,
     template: "business-professional",
-    pageFormat: "letter",
+    pageFormat: "a4",
     fontSize: 10,
     fontFamily: "Inter",
     pagePadding: DEFAULT_PAGE_PADDING,

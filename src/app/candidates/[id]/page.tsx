@@ -785,7 +785,7 @@ export default function CandidateProfilePage() {
       },
       {
         styleId: "skarion_compact_professional",
-        pageFormat: "letter",
+        pageFormat: "a4",
         fontFamily: "Calibri",
         fontSize: 10.5,
         marginTop: 0.5,
