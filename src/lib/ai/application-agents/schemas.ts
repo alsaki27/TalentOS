@@ -296,3 +296,67 @@ export const FinalResumeSchema: Schema<FinalResumeV1> = {
     };
   },
 };
+
+// ── CopilotFillPlanV1 ──
+
+export interface FillInstruction {
+  selector: string;
+  fieldType: "text" | "select" | "radio" | "checkbox" | "date" | "file" | "skip" | "ai_answer";
+  value: string | boolean;
+  confidence: "high" | "medium" | "low";
+  reasoning: string;
+}
+
+export interface CopilotFillPlanV1 {
+  instructions: FillInstruction[];
+}
+
+export const CopilotFillPlanSchema: Schema<CopilotFillPlanV1> = {
+  parse(input: unknown): CopilotFillPlanV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotFillPlanV1 must be an object" };
+    
+    const instructions: FillInstruction[] = [];
+    if (Array.isArray(input.instructions)) {
+      for (const inst of input.instructions) {
+        if (!isRecord(inst) || typeof inst.selector !== "string" || typeof inst.reasoning !== "string") {
+          return { error: `Invalid FillInstruction: missing selector or reasoning` };
+        }
+        if (!["text", "select", "radio", "checkbox", "date", "file", "skip", "ai_answer"].includes(inst.fieldType as string)) {
+          return { error: `Invalid fieldType: ${inst.fieldType}` };
+        }
+        if (!["high", "medium", "low"].includes(inst.confidence as string)) {
+          return { error: `Invalid confidence: ${inst.confidence}` };
+        }
+        instructions.push({
+          selector: inst.selector,
+          fieldType: inst.fieldType as any,
+          value: typeof inst.value === "boolean" ? inst.value : String(inst.value ?? ""),
+          confidence: inst.confidence as any,
+          reasoning: inst.reasoning
+        });
+      }
+    }
+    return { instructions };
+  }
+};
+
+// ── CopilotAnswerV1 ──
+
+export interface CopilotAnswerV1 {
+  answer: string;
+  confidence: "high" | "medium" | "low";
+}
+
+export const CopilotAnswerSchema: Schema<CopilotAnswerV1> = {
+  parse(input: unknown): CopilotAnswerV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotAnswerV1 must be an object" };
+    
+    const answer = expectString(input.answer, "answer");
+    const confidence = expectString(input.confidence, "confidence");
+    
+    if (answer === null) return { error: "answer is required" };
+    if (!["high", "medium", "low"].includes(confidence as string)) return { error: "confidence must be high, medium, or low" };
+    
+    return { answer, confidence: confidence as any };
+  }
+};

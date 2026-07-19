@@ -29,6 +29,7 @@ export default function JobAgentPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [cleaningUp, setCleaningUp] = useState(false);
 
   const [selectedRoleGroups, setSelectedRoleGroups] = useState<Set<string>>(new Set());
   const [selectedKeywordGroups, setSelectedKeywordGroups] = useState<Set<string>>(new Set());
@@ -82,6 +83,18 @@ export default function JobAgentPage() {
       load();
     } catch (err: any) { setError(err.message); }
     finally { setRunning(false); }
+  }
+
+  async function clearStuckRuns() {
+    setCleaningUp(true); setError(""); setMessage("");
+    try {
+      const res = await fetch("/api/job-agent/runs/cleanup", { method: "POST" });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "Cleanup failed");
+      setMessage(d.cleanedUp > 0 ? `Cleared ${d.cleanedUp} stuck run(s).` : "No stuck runs found.");
+      load();
+    } catch (err: any) { setError(err.message); }
+    finally { setCleaningUp(false); }
   }
 
   // Keyword group CRUD
@@ -201,11 +214,31 @@ export default function JobAgentPage() {
 
     {/* ── Run Dashboard ── */}
     <div className="card" style={{ marginBottom: 16 }}>
-      <h2 className="section-title">Run Dashboard</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Run Dashboard</h2>
+        <button
+          onClick={clearStuckRuns}
+          disabled={cleaningUp}
+          style={{ fontSize: 12, padding: "4px 10px", opacity: 0.7 }}
+          title="Mark all stuck running/pending/processing runs as failed"
+        >
+          {cleaningUp ? "Clearing…" : "🧹 Clear Stuck Runs"}
+        </button>
+      </div>
 
-      {runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") && (
+      {/* Only show the live feed board for runs started within the last 30 minutes.
+          Old stuck runs should NOT trigger the spinner forever. */}
+      {runs.find((r) => {
+        if (!(r.status === "running" || r.status === "pending" || r.status === "processing")) return false;
+        const ageMs = Date.now() - new Date(r.started_at).getTime();
+        return ageMs < 30 * 60 * 1000; // 30 minutes
+      }) && (
         <LiveFeedBoard
-          runId={runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing")!.id}
+          runId={runs.find((r) => {
+            if (!(r.status === "running" || r.status === "pending" || r.status === "processing")) return false;
+            const ageMs = Date.now() - new Date(r.started_at).getTime();
+            return ageMs < 30 * 60 * 1000;
+          })!.id}
           onComplete={() => load()}
         />
       )}
