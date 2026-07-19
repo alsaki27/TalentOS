@@ -112,6 +112,30 @@ export async function updateRunStatus(
 }
 
 /**
+ * Atomic conditional status transition -- distributed mutex for processing.
+ * Only applies when the run is currently in fromStatus.
+ * Returns true if this caller won (row was updated), false otherwise.
+ */
+export async function transitionRunStatus(
+  id: string,
+  fromStatus: string,
+  updates: Partial<Omit<JobAgentRunRow, "id" | "created_at">>
+): Promise<boolean> {
+  const keys = Object.keys(updates).filter((k) => (updates as any)[k] !== undefined);
+  if (keys.length === 0) throw new Error("No fields to update");
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = keys.map((k) => (updates as any)[k]);
+  values.push(id, fromStatus);
+  const row = await queryOne<JobAgentRunRow>(
+    `UPDATE job_agent_runs SET ${setClause}
+     WHERE id = $${keys.length + 1} AND status = $${keys.length + 2}
+     RETURNING id`,
+    values
+  );
+  return row !== null && row !== undefined;
+}
+
+/**
  * List recent runs, optionally filtered by configId.
  */
 export async function listRuns(
@@ -129,13 +153,32 @@ export async function listRuns(
 }
 
 /**
- * List all runs currently in 'running' state.
+ * List all runs currently in an active state (running or pending, waiting for Apify metadata).
  */
 export async function listRunningRuns(): Promise<JobAgentRunRow[]> {
   const rows = await query<JobAgentRunRow>(
-    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE status = 'running'`
+    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE status IN ('running', 'pending', 'processing')`
   );
   return rows;
+}
+
+/**
+ * Mark any run stuck in running/pending/processing for more than the given
+ * threshold as failed. This prevents the dashboard from showing the live-feed
+ * spinner forever when a run dies mid-flight (e.g. Cloudflare timeout).
+ * Returns the number of runs cleaned up.
+ */
+export async function cleanupStuckRuns(thresholdMinutes = 30): Promise<number> {
+  const res = await execute(
+    `UPDATE job_agent_runs
+     SET status = 'failed',
+         error = 'Run timed out — automatically marked failed after ${thresholdMinutes} minutes',
+         completed_at = NOW()
+     WHERE status IN ('running', 'pending', 'processing')
+       AND started_at < NOW() - INTERVAL '${thresholdMinutes} minutes'
+     RETURNING id`
+  );
+  return res.rowCount ?? 0;
 }
 
 /**

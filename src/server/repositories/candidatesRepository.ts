@@ -23,6 +23,10 @@ export interface CandidateRow {
   location_preference: string | null;
   work_mode_preference: string | null;
   available_start_date: string | null;
+  eeo_gender: string | null;
+  eeo_race: string | null;
+  eeo_veteran: string | null;
+  eeo_disability: string | null;
   created_at: string | null;
   updated_at: string | null;
 }

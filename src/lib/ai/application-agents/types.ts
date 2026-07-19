@@ -9,13 +9,17 @@ export type ApplicationAgentId =
   | "application_job_lens"
   | "application_resume_forge"
   | "application_hiring_panel"
-  | "application_final_polish";
+  | "application_final_polish"
+  | "copilot_fill_planner"
+  | "copilot_question_answerer";
 
 export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
   "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
+  "copilot_fill_planner",
+  "copilot_question_answerer"
 ];
 
 export interface ApplicationAgentMeta {
@@ -49,6 +53,18 @@ export const APPLICATION_AGENT_METAS: Record<ApplicationAgentId, ApplicationAgen
     displayName: "Final Polish",
     sequenceNumber: 4,
     description: "Apply approved feedback and run final QA",
+  },
+  copilot_fill_planner: {
+    id: "copilot_fill_planner",
+    displayName: "Copilot Fill Planner",
+    sequenceNumber: 5,
+    description: "Plan auto-fill for extension",
+  },
+  copilot_question_answerer: {
+    id: "copilot_question_answerer",
+    displayName: "Copilot Question Answerer",
+    sequenceNumber: 6,
+    description: "Answer custom application questions",
   },
 };
 
