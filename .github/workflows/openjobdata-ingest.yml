@@ -6,9 +6,14 @@ on:
   workflow_dispatch:
     inputs:
       limit:
-        description: 'Max rows to fetch from parquet'
+        description: 'Max jobs to ingest'
         required: false
-        default: '500'
+        default: '2000'
+        type: string
+      since:
+        description: 'Earliest posted_at date to include (YYYY-MM-DD)'
+        required: false
+        default: '2026-07-12'
         type: string
 
 jobs:
@@ -25,9 +30,9 @@ jobs:
         run: pip install huggingface_hub pandas pyarrow requests
 
       - name: Run OpenJobData ingest
-        run: python scripts/openjobdata_ingest.py ${{ inputs.limit || '500' }}
+        run: python scripts/openjobdata_ingest.py
         env:
-          HF_DATASET: ${{ vars.OPENJOBDATA_HF_DATASET }}
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          LIMIT: ${{ inputs.limit || '2000' }}
+          SINCE_DATE: ${{ inputs.since || '2026-07-12' }}
           INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}

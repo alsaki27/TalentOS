@@ -6,114 +6,122 @@
 
 ---
 
-## ⚠️ Read this before doing anything
+## OpenJobData is real — verified
 
-1. **"OpenJobData" is not a real, specific dataset.** It's the generic name this project's docs use for "whatever daily-updated job-postings parquet dataset on HuggingFace gets configured." No dataset literally named `OpenJobData` exists on the HF Hub (verified by search). Before this pipeline can pull anything real, a real dataset id must be set as the GitHub repo variable `OPENJOBDATA_HF_DATASET` (e.g. `some-org/some-dataset`). If that's not set yet, check first — `gh variable list --repo alsaki27/TalentOS` — and set it if needed before triggering:
-   ```bash
-   gh variable set OPENJOBDATA_HF_DATASET --repo alsaki27/TalentOS --body "org/dataset-name"
-   ```
-2. **Public job-postings datasets are historical snapshots, not live feeds.** Whatever real dataset gets configured will have real-world listing dates — realistically 2023–2025, not "this week." Do not expect or force a recent-date filter against it; report whatever date range the dataset actually has. (Checked one realistic candidate, `MichaelYitzchak/LinkedInJobPostings` on HF — its `listed_time` field decodes to April 2024. That's the well-known Kaggle LinkedIn dataset re-uploaded; not necessarily what gets used, just illustrative of the kind of dates to expect.)
-3. **Required secrets** (check with `gh secret list --repo alsaki27/TalentOS`; set if missing):
-   - `JOB_CEO_INGEST_SECRET` — shared bearer secret between the runner and the ingest endpoint.
-   - `HF_TOKEN` — only if the configured dataset is gated.
-   - `CRON_SECRET` — should already exist (used by every scheduled job in this repo); needed to call `/api/job-ceo/dispatch` and read run results as admin-equivalent.
-   These are GitHub Actions secrets, set via `gh secret set NAME --repo alsaki27/TalentOS`. The Cloudflare Worker side needs the matching `JOB_CEO_INGEST_SECRET` value too (`wrangler secret put JOB_CEO_INGEST_SECRET` — only the account owner can run this, it's not a GitHub secret).
+**OpenJobData (https://openjobdata.com) is a real, live, publicly-hosted job-postings
+source.** It is a Hugging Face **storage bucket** (not a standard "dataset" repo —
+that's why an HF dataset-search API call won't find it), at:
+
+```
+hf://buckets/Invicto69/Jobs-Dataset-bucket
+```
+
+No dataset ID to configure, no HF token needed (public bucket). Structure:
+
+```
+data/full/                    # complete base dataset, includes raw JSON payload
+data/minimal/                 # lightweight base dataset, no JSON columns
+data/full/changes/YYYY-MM-DD.parquet     # daily delta, full schema
+data/minimal/changes/YYYY-MM-DD.parquet  # daily delta, minimal schema
+data/companies/companies.parquet         # company_id -> name/website/industry/etc lookup
+```
+
+Jobs schema (minimal + full both have): `id` (compound `{unique_id}/{job_id}`),
+`job_id`, `company_id` (FK → companies.id), `title`, `department`, `employment_type`,
+`workplace_type`, `country`, `is_remote`, `posted_at` (tz-aware datetime), `apply_url`,
+`fetched_time`, `status` (`active`/`closed`), `close_time`. Full-only adds `entire_json`
+and `job_model_json` (raw scrape + normalized payload — heavy, not needed for a
+title/date/company pull). No free-text description field in minimal — that's why
+Deep Fetch / the Description Enricher agent exist, to pull full JD text from `apply_url`
+after a job is logged.
+
+Verified live on 2026-07-19: delta files exist for every date 2026-07-12 through
+2026-07-18 except **2026-07-16 (no file that day — a genuine gap in the source, not
+a bug)**, plus 2026-07-17 and 2026-07-18. Filtering those deltas to
+`posted_at >= 2026-07-12` + `status = 'active'` + title matching the 72 keywords
+below yielded **78 unique real jobs** as of this handoff.
+
+`scripts/openjobdata_ingest.py` already implements this correctly: reads the delta
+files for a date range via `HfFileSystem`, joins companies, filters on `posted_at`
+and the 72 keywords, dedupes on the bucket's own compound `id` + title/company
+signature, and POSTs to `/api/job-ceo/ingest`. Nothing further needs to be built to
+source real, recent data — just trigger it (or run it locally) and let it flow
+through the existing QA → Deep Fetch → Matchmaker pipeline.
+
+---
+
+## Required secrets
+
+Check with `gh secret list --repo alsaki27/TalentOS`; set if missing:
+- `JOB_CEO_INGEST_SECRET` — shared bearer secret between the runner and the ingest endpoint.
+- `CRON_SECRET` — should already exist; needed to call `/api/job-ceo/dispatch` and read run results as admin-equivalent.
+
+Set via `gh secret set NAME --repo alsaki27/TalentOS`. The Cloudflare Worker side needs
+the matching `JOB_CEO_INGEST_SECRET` value too (`wrangler secret put JOB_CEO_INGEST_SECRET`
+— only the account owner can run this, it's not a GitHub secret).
+
+No `OPENJOBDATA_HF_DATASET` variable and no `HF_TOKEN` are needed anymore — the bucket
+path is public and hardcoded into the script.
 
 ---
 
 ## The 3 domains, full keyword list (72 titles total)
 
-These are the exact `titles` arrays from `src/lib/jobAgentRoleLibrary.ts` (groups A, B, C) — the canonical role library this whole app already searches against.
-
-### OSP / Fiber (34)
-```
-OSP Design Engineer, Outside Plant Engineer, OSP Engineer, Fiber Design Engineer,
-FTTH Design Engineer, Fiber Optic Design Engineer, Telecom Design Engineer,
-Splice Engineer, Fiber Splicing Engineer, OSP Planning Engineer, OSP CAD Designer,
-Fiber Network Engineer, Fiber Construction Engineer, Outside Plant Designer,
-Telecommunications Engineer, Fiber Route Engineer, Aerial Fiber Design Engineer,
-Underground Fiber Design Engineer, Joint Use Engineer, Make Ready Engineer,
-Fiber Permitting Engineer, GIS Fiber Design Technician, OSP Project Engineer,
-Fiber Design Technician, OSP Field Engineer, Fiber Construction Manager,
-OSP Estimator, Telecom Infrastructure Engineer, Broadband Design Engineer,
-FTTx Design Engineer, Fiber Network Planner, OSP QC Engineer,
-Fiber Splice Technician, Broadband Network Engineer, Fiber Engineer
-```
-
-### CAD / Drafting (19)
-```
-AutoCAD Drafter, CAD Technician, CAD Designer, Drafter, Drafter I, Design Drafter,
-Civil CAD Drafter, Electrical CAD Drafter, Mechanical CAD Drafter, Structural Drafter,
-CAD Operator, Engineering Technician CAD, Utility Drafter, Land Surveying Drafter,
-Piping Designer, Site Design Technician, BIM Technician, Construction Drafter,
-Telecom Drafter, Drafting Technician
-```
-
-### GIS / Geospatial (19)
-```
-GIS Analyst, GIS Technician, GIS Specialist, GIS Coordinator, GIS Developer,
-GIS Mapping Technician, Geospatial Analyst, GIS Data Analyst, GIS Analyst I,
-GIS Technician I, Utility GIS Analyst, Telecom GIS Analyst, GIS Field Technician,
-Cartographer, Remote Sensing Analyst, GIS Database Technician, GIS QA/QC Analyst,
-Land Records GIS Analyst, Environmental GIS Analyst, GIS Support Specialist
-```
-
-(34 + 19 + 19 = **72 titles**. There are 9 more groups — D through L, ~142 more titles covering mechanical/electrical/civil/structural/architectural/MEP/piping/utility CAD and entry-level — in the same file if broader scope is ever wanted. Not included in this pull.)
+See `docs/keywords-osp-gis-cad.md` for the standalone list (same content, sourced from
+`src/lib/jobAgentRoleLibrary.ts` groups A–C, and hardcoded into `scripts/openjobdata_ingest.py`
+as `ROLE_KEYWORDS`).
 
 ---
 
 ## Step-by-step
 
-### 1. Confirm prerequisites are set (see warnings above)
+### 1. Confirm prerequisites are set
 ```bash
-gh variable list --repo alsaki27/TalentOS
 gh secret list --repo alsaki27/TalentOS
 ```
-If `OPENJOBDATA_HF_DATASET` is missing, this whole pipeline has nothing to pull from — stop and report that back rather than guessing a dataset.
 
 ### 2. Trigger the ingest workflow
 ```bash
 gh workflow run openjobdata-ingest.yml \
   --repo alsaki27/TalentOS \
   --ref saki-new-agent-layer \
-  -f limit=500
+  -f since=2026-07-12 \
+  -f limit=2000
 ```
 Watch it:
 ```bash
 gh run watch --repo alsaki27/TalentOS
 ```
-The runner (`scripts/openjobdata_ingest.py`) already:
-- Pulls the latest parquet from the configured dataset.
-- Fetches search terms from `GET /api/job-ceo/scout-terms` (Query Scout) to prefilter — as of this handoff, Query Scout is **not yet wired to the real 72-title role library above** (it falls back to a 4-term placeholder unless `jobCeoService.ts` is updated to pass `roleLibrary` in). If you want the search itself biased toward these exact 72 titles rather than the placeholder, either fix that wiring first, or post a batch directly (step 2b) instead of relying on the runner's own prefilter.
-- POSTs curated batches to `/api/job-ceo/ingest`, which creates a `job_ceo_runs` row and kicks off the QA → Deep Fetch → Matchmaker pipeline automatically.
+The runner (`scripts/openjobdata_ingest.py`):
+- Reads `data/minimal/changes/YYYY-MM-DD.parquet` for every date from `since` through today.
+- Filters `posted_at >= since`, `status = 'active'`, title matches one of the 72 role keywords.
+- Joins `data/companies/companies.parquet` for company name + career URL.
+- Dedupes on the bucket's compound `id`, then on a `title|company` signature.
+- POSTs batches to `/api/job-ceo/ingest`, which creates a `job_ceo_runs` row and kicks off QA → Deep Fetch → Matchmaker automatically.
 
-### 2b. (Alternative) Ingest a specific batch directly, bypassing the runner's own filtering
-If you already have job records from elsewhere matching these 72 titles and just want them run through this app's QA/Deep Fetch/Matchmaker pipeline:
+### 2b. (Alternative) Run it locally instead of via Actions
 ```bash
-curl -X POST https://skarion-talent-os.skarion-talentos.workers.dev/api/job-ceo/ingest \
-  -H "Authorization: Bearer $JOB_CEO_INGEST_SECRET" \
-  -H "Content-Type: application/json" \
-  -d '{"jobs": [{"title": "...", "company": "...", "source_url": "...", "snippet": "..."}, ...]}'
+pip install huggingface_hub pandas pyarrow requests
+INGEST_SECRET=<JOB_CEO_INGEST_SECRET> SINCE_DATE=2026-07-12 LIMIT=2000 \
+  python scripts/openjobdata_ingest.py
 ```
-Response is `{ runId, staged }` — save the `runId`.
 
 ### 3. Wait for the run to finish
 ```bash
 curl -s "https://skarion-talent-os.skarion-talentos.workers.dev/api/job-ceo/runs/<runId>" | python3 -m json.tool
 ```
-Poll until `run.status` is `completed` (or `failed` — check `run.last_error`). The dispatch loop advances on its own (self-chained + a 10-min GitHub Actions catch-up cron + the `/job-ceo` page's live poll if anyone has it open) — you can also nudge it directly:
+Poll until `run.status` is `completed` (or `failed` — check `run.last_error`). Nudge the dispatch loop directly if needed:
 ```bash
 curl -X POST https://skarion-talent-os.skarion-talentos.workers.dev/api/job-ceo/dispatch
 ```
 
 ### 4. Pull ALL jobs the run found (not just the ones that got logged)
-`GET /api/job-ceo/runs/[id]` only returns aggregate counts. **Use the new bulk endpoint** (added for this handoff) to get every individual job row, regardless of whether it cleared Matchmaker's ≥90% candidate-match bar:
 ```bash
 curl -s "https://skarion-talent-os.skarion-talentos.workers.dev/api/job-ceo/runs/<runId>/staging" \
   -H "Cookie: <admin session cookie>" \
   -o staging_dump.json
 ```
-(Requires admin/manager auth — use a logged-in session cookie, or add a bearer-secret path to that route if running fully unattended.) Response shape:
+Response shape:
 ```json
 { "run": {...}, "count": N, "jobs": [
   { "id": "...", "stage": "logged", "title": "...", "company": "...", "location": "...",
@@ -122,11 +130,10 @@ curl -s "https://skarion-talent-os.skarion-talentos.workers.dev/api/job-ceo/runs
 ] }
 ```
 
-### 5. Dedupe
-Two layers already exist, but do one more pass on export:
-- The runner script computes a lightweight signature per row before POSTing (title+company).
-- Matchmaker fuzzy-dedupes against the *existing* `jobs` table before logging a match (`listAllJobsForFuzzyDedupe`) — but that only prevents re-logging jobs already in `jobs`, it does **not** dedupe *within* the staging rows of a single run (e.g. the same posting appearing under two slightly different search terms).
-- **On export**, dedupe the `jobs` array from step 4 on `dedup_signature` (already stored on each staging row — `lower(title)+'|'+lower(company)`), keeping the row with the most-complete `description_text`.
+### 5. Dedupe on export
+The runner already dedupes before POSTing. On export, dedupe once more on
+`dedup_signature` (`lower(title)+'|'+lower(company)`, stored on each staging row),
+keeping the row with the most-complete `description_text`.
 
 ### 6. Export to Excel
 ```python
@@ -146,4 +153,8 @@ df.to_excel("openjobdata_osp_gis_cad_pull.xlsx", index=False, engine="openpyxl")
 ---
 
 ## What "done" looks like
-An `.xlsx` with one row per unique job across the OSP/GIS/CAD-Drafting searches, columns matching `job_ceo_staging` (title, company, location, source_url, description_text, qa_score, qa_reason, requirements, stage, match_results), deduplicated, with an honest note on what date range the source data actually covers (do not claim a recency the underlying dataset doesn't have).
+An `.xlsx` with one row per unique job across the OSP/GIS/CAD-Drafting searches, columns
+matching `job_ceo_staging` (title, company, location, source_url, description_text,
+qa_score, qa_reason, requirements, stage, match_results), deduplicated, covering real
+`posted_at` dates on/after 2026-07-12 (verified achievable — 78 matches found as of
+2026-07-19).

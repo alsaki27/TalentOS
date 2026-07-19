@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources jobs from **OpenJobData** (daily HuggingFace parquet), not Apify.
+The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources jobs from **OpenJobData** (https://openjobdata.com — a public, daily-updated Hugging Face storage bucket at `hf://buckets/Invicto69/Jobs-Dataset-bucket`), not Apify.
 
 ### Agents
 
@@ -73,12 +73,19 @@ The CEO can propose agent configuration changes. Proposals require human approva
 
 ## Required Setup
 
-### GitHub Variables
-- `OPENJOBDATA_HF_DATASET` — HuggingFace dataset ID (e.g. `username/dataset-name`)
+The OpenJobData bucket (`hf://buckets/Invicto69/Jobs-Dataset-bucket`) is public — no
+dataset ID or HF token to configure. `scripts/openjobdata_ingest.py` reads
+`data/minimal/changes/YYYY-MM-DD.parquet` delta files directly via `HfFileSystem`,
+joins `data/companies/companies.parquet` for company names, filters titles against
+the 72 OSP/CAD/GIS keywords in `docs/keywords-osp-gis-cad.md`, and filters
+`posted_at >= SINCE_DATE`.
 
 ### GitHub Secrets
 - `JOB_CEO_INGEST_SECRET` — Shared secret for ingest authentication
-- `HF_TOKEN` — HuggingFace API token (only if dataset is gated)
+
+### Workflow inputs (`.github/workflows/openjobdata-ingest.yml`, manual dispatch)
+- `since` — earliest `posted_at` date to include, `YYYY-MM-DD` (default `2026-07-12`)
+- `limit` — max jobs to ingest (default `2000`)
 
 ### Cloudflare Worker Secrets
 ```bash
