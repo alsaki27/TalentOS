@@ -24,6 +24,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
   };
 
   const getFontSizePx = () => `${((typeof fontSize === 'number' ? fontSize : 10) * 1.333).toFixed(2)}px`;
+  const getHeadingSize = () => (typeof fontSize === 'number' && fontSize > 12) ? 'text-base' : 'text-sm';
 
   const formatUrl = (url: string | undefined) => {
     if (!url) return '';
