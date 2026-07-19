@@ -23,7 +23,7 @@ import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 
 const DEFAULT_FORMATTING: ResumeFormatting = {
   styleId: "default",
-  pageFormat: "letter",
+  pageFormat: "a4",
   fontFamily: "Helvetica",
   fontSize: 10.5,
   marginTop: 0.5,
