@@ -58,7 +58,7 @@ const initialResumeData: ResumeData = {
   colors: DEFAULT_COLORS,
   template: 'business-professional',
   pageFormat: 'a4',
-  fontSize: 'small',
+  fontSize: 10,
   fontFamily: 'Inter',
   pagePadding: DEFAULT_PAGE_PADDING
 };

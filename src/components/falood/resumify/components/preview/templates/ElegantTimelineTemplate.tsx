@@ -23,21 +23,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
     );
   };
 
-  const getFontSizePx = () => {
-    switch (fontSize) {
-      case 'small': return '14px';
-      case 'large': return '18px';
-      default: return '14px';
-    }
-  };
-
-  const getHeadingSize = () => {
-    switch (fontSize) {
-      case 'small': return 'text-sm';
-      case 'large': return 'text-base';
-      default: return 'text-sm';
-    }
-  };
+  const getFontSizePx = () => `${((typeof fontSize === 'number' ? fontSize : 10) * 1.333).toFixed(2)}px`;
 
   const formatUrl = (url: string | undefined) => {
     if (!url) return '';
