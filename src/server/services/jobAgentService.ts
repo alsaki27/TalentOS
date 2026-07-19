@@ -268,7 +268,9 @@ function normalizeItem(item: ApifyDatasetItem): NormalizedJob {
 
 function parseSalary(s: string | null) { if (!s) return { salaryMin: null as number | null, salaryMax: null as number | null }; const m = s.match(/\$?([\d,]+(?:\.\d+)?)\s*[–\-]\s*\$?([\d,]+(?:\.\d+)?)/); if (!m) return { salaryMin: null, salaryMax: null }; const min = parseFloat(m[1].replace(/,/g, "")); const max = parseFloat(m[2].replace(/,/g, "")); return { salaryMin: Number.isFinite(min) ? min : null, salaryMax: Number.isFinite(max) ? max : null }; }
 
-function dedupHash(title: string, company: string | null, location: string | null): string { return `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+export function dedupHash(title: string, company: string | null, location: string | null): string { return `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+
+export function normalizeForFuzzyMatch(s: string | null): string { return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 
 function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; duplicateCount: number } { const seen = new Set<string>(); const deduped: NormalizedJob[] = []; let dc = 0; for (const item of items) { const n = normalizeItem(item); if (!n.job_title) continue; if (seen.has(n.hash)) { dc++; continue; } seen.add(n.hash); deduped.push(n); } return { deduped, duplicateCount: dc }; }
 
@@ -339,7 +341,7 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
 }
 
 function toStagedJobRow(runId: string, job: ClassifiedJob): Omit<JobAgentStagedJobRow, "id" | "created_at"> {
-  return { run_id: runId, job_title: job.job_title, company_name: job.company_name, location: job.location, salary_range: job.salary_range, salary_min: job.salary_min, salary_max: job.salary_max, date_posted: job.date_posted, via_platform: job.via_platform, source_url: job.source_url, apply_link: job.apply_link, is_remote: job.is_remote, employment_type: job.employment_type, search_query_used: job.search_query_used, role_group: job.role_group, role_group_label: job.role_group_label, seniority_guess: job.seniority_guess, tier: job.tier, tier_reason: job.tier_reason, ai_keywords: job.ai_keywords, relevance_score: job.relevance_score, is_false_positive: job.is_false_positive, dedup_hash: job.hash, is_duplicate: job.raw._duplicate === true, import_status: "staged", imported_job_id: null };
+  return { run_id: runId, job_title: job.job_title, company_name: job.company_name, location: job.location, salary_range: job.salary_range, salary_min: job.salary_min, salary_max: job.salary_max, date_posted: job.date_posted, via_platform: job.via_platform, source_url: job.source_url, apply_link: job.apply_link, is_remote: job.is_remote, employment_type: job.employment_type, search_query_used: job.search_query_used, role_group: job.role_group, role_group_label: job.role_group_label, seniority_guess: job.seniority_guess, tier: job.tier, tier_reason: job.tier_reason, ai_keywords: job.ai_keywords, relevance_score: job.relevance_score, is_false_positive: job.is_false_positive, dedup_hash: job.hash, is_duplicate: job.raw._duplicate === true, import_status: "staged", imported_job_id: null, description_text: null, company_website: null, external_job_id: null, country: null, industry: null };
 }
 
 export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {

@@ -15,13 +15,7 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
     return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}`;
   };
 
-  const getFontSizePx = () => {
-    switch (fontSize) {
-      case 'small': return '14px';
-      case 'large': return '18px';
-      default: return '14px';
-    }
-  };
+  const getFontSizePx = () => `${((typeof fontSize === 'number' ? fontSize : 10) * 1.333).toFixed(2)}px`;
 
   // Get custom sections by type
   const getCustomSectionsByTitle = (titleMatch: string) => {

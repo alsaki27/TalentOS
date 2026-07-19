@@ -40,12 +40,25 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
     .filter(Boolean)
     .join("\n");
 
+  // via_platform tags which pipeline produced this row ('openjobdata' or an Apify
+  // platform string) — source should reflect the real origin, not be hardcoded to
+  // the historical Apify-only value.
+  const source = staged.via_platform === "openjobdata" ? "openjobdata" : "apify_job_agent";
+
+  // country/industry have no dedicated jobs columns — preserved here rather than
+  // dropped, matching every other field openjobdata provides.
+  const extras: Record<string, unknown> = {};
+  if (staged.country) extras.country = staged.country;
+  if (staged.industry) extras.industry = staged.industry;
+  const rawSourcePayload = Object.keys(extras).length > 0 ? extras : null;
+
   return {
     title: staged.job_title,
     company: staged.company_name ?? null,
     location: staged.location ?? null,
-    source: "apify_job_agent",
+    source,
     source_url: staged.source_url ?? null,
+    apply_url: staged.apply_link ?? null,
     employment_type: staged.employment_type ?? null,
     seniority_level: staged.seniority_guess ?? null,
     salary_min: staged.salary_min ?? null,
@@ -54,6 +67,10 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
     posted_at: parsePostedAt(staged.date_posted),
     is_active: true,
     notes,
+    description_text: staged.description_text ?? null,
+    company_website: staged.company_website ?? null,
+    external_job_id: staged.external_job_id ?? null,
+    raw_source_payload: rawSourcePayload ? JSON.stringify(rawSourcePayload) : null,
   };
 }
 

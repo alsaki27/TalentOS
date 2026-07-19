@@ -93,7 +93,7 @@ export interface ResumeData {
   colors: ResumeColors;
   template: TemplateType;
   pageFormat: 'letter' | 'a4';
-  fontSize: 'small' | 'medium' | 'large';
+  fontSize: number;
   fontFamily: string;
   pagePadding: number;
 }

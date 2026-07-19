@@ -103,11 +103,10 @@ export const ColorCustomizer: React.FC = () => {
     { value: 'Helvetica', label: 'Helvetica' }
   ];
 
-  const fontSizeOptions = [
-    { value: 'small', label: 'Small (Default)' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'large', label: 'Large' }
-  ];
+  const fontSizeOptions = Array.from({ length: 11 }, (_, i) => i + 6).map(pt => ({
+    value: pt,
+    label: `${pt} pt`,
+  }));
 
   return (
     <div className="space-y-6">
@@ -143,15 +142,15 @@ export const ColorCustomizer: React.FC = () => {
             <div className="space-y-2">
               <Label>Font Size</Label>
               <Select 
-                value={fontSize || 'small'} 
-                onValueChange={(value) => updateFontSize(value as 'small' | 'medium' | 'large')}
+                value={String(typeof fontSize === 'number' ? fontSize : 10)} 
+                onValueChange={(value) => updateFontSize(Number(value))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select size" />
                 </SelectTrigger>
                 <SelectContent>
                   {fontSizeOptions.map((size) => (
-                    <SelectItem key={size.value} value={size.value}>
+                    <SelectItem key={size.value} value={String(size.value)}>
                       {size.label}
                     </SelectItem>
                   ))}

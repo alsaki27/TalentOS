@@ -1,0 +1,66 @@
+name: OpenJobData Nightly Ingest (Job Agent)
+
+# Nightly "broad net" ingestion — scans openjobdata.com's daily delta for every
+# Job Agent role group and pushes matches into TalentOS's job_agent staging
+# pipeline (POST /api/job-agent/openjobdata-ingest), where they're deduped,
+# AI-classified, and staged for review exactly like an Apify run. Apify stays
+# reserved for on-demand/real-time recruiter searches — see comparison_report.md
+# for the reasoning (openjobdata has no pagination cap and costs $0/job; Apify
+# is real-time but capped at a few hundred results per query and costs ~$0.003
+# per result).
+#
+# Why a GitHub Actions job and not a Cloudflare cron route: the dataset is a
+# Hugging Face Storage Bucket, reachable only through the Python huggingface_hub
+# client (hf:// scheme) — no plain-HTTPS or Node/edge path exists to it. See
+# scripts/openjobdata_common.py's module docstring for the full explanation.
+# This is the same reason scripts/openjobdata_export.py / the sibling
+# openjobdata-osp-export.yml workflow also run here rather than as a Worker cron.
+
+on:
+  schedule:
+    # 09:30 UTC daily — 30 min after openjobdata-osp-export.yml's own daily
+    # refresh check, so both jobs aren't racing the dataset's daily publish window.
+    - cron: "30 9 * * *"
+  workflow_dispatch:
+    inputs:
+      role_group:
+        description: "Role group id (A-L), or 'all' for every group."
+        required: false
+        default: "all"
+      days:
+        description: "Number of trailing days to scan (default: 1)."
+        required: false
+        default: "1"
+      dry_run:
+        description: "If true, scan and print counts but don't POST to TalentOS."
+        required: false
+        default: "false"
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-openjobdata.txt
+
+      - name: Run ingest
+        env:
+          # Same production Worker URL deploy.yml already uses directly (not
+          # treated as a secret elsewhere in this repo) — override via the
+          # TALENTOS_INGEST_URL repo secret if that ever changes.
+          TALENTOS_INGEST_URL: ${{ secrets.TALENTOS_INGEST_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          ARGS=(--role-group "${{ github.event.inputs.role_group || 'all' }}")
+          DAYS="${{ github.event.inputs.days || '1' }}"
+          ARGS+=(--days "$DAYS")
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/openjobdata_ingest.py "${ARGS[@]}"
