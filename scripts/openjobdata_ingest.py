@@ -7,9 +7,10 @@ No dataset id / HF token is needed — the bucket is public and its path is fixe
 
 Reads the daily minimal-schema delta files (data/minimal/changes/YYYY-MM-DD.parquet)
 for every date in [SINCE_DATE, today], joins company names from data/companies/companies.parquet,
-filters titles against the 72 OSP/CAD/GIS role keywords (docs/keywords-osp-gis-cad.md,
-sourced from src/lib/jobAgentRoleLibrary.ts groups A-C), dedupes, and POSTs batches to
-/api/job-ceo/ingest.
+filters titles on OSP/Fiber/Telecom/CAD/GIS/BIM domain terms (see matches_role() --
+root-term matching, not literal-phrase matching against the 72 titles in
+docs/keywords-osp-gis-cad.md, since real postings almost never use those exact templated
+phrases verbatim), dedupes, and POSTs batches to /api/job-ceo/ingest.
 
 Environment variables:
   INGEST_SECRET  - JOB_CEO_INGEST_SECRET bearer token (required)
@@ -19,6 +20,7 @@ Environment variables:
 """
 
 import os
+import re
 import sys
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -30,6 +32,22 @@ from huggingface_hub import HfFileSystem
 
 BUCKET_PREFIX = "buckets/Invicto69/Jobs-Dataset-bucket"
 COMPANIES_PATH = f"{BUCKET_PREFIX}/data/companies/companies.parquet"
+
+# Short acronyms (osp/gis/cad/bim/ftth/fttx) collide with common English words as
+# bare substrings -- "osp" hides inside "hOSPital", "cad" inside "aCADemic"/"deCADe",
+# "gis" inside "reGIStered"/"loGIStics"/"methodoloGISt". These MUST be word-boundary
+# matched (\b...\b), never naive `in` substring checks. Longer, domain-specific words
+# (fiber, telecom, drafter, etc.) don't have this collision problem and are safe as
+# plain substrings.
+_BOUNDED_ROOTS = ["osp", "gis", "cad", "bim", "ftth", "fttx"]
+_SAFE_ROOTS = [
+    "fiber optic", "fiber network", "fiber design", "fiber splic", "fiber route",
+    "fiber technician", "fiber construction", "fiber engineer", "fiber permit",
+    "telecom", "broadband", "splice", "splicing", "outside plant",
+    "geospatial", "cartograph", "remote sensing", "drafter", "drafting",
+    "autocad", "piping designer", "structural drafter", "utility drafter",
+]
+_BOUNDED_RE = re.compile(r"\b(?:" + "|".join(_BOUNDED_ROOTS) + r")\b", re.IGNORECASE)
 
 ROLE_KEYWORDS = [
     # OSP / Fiber (34)
@@ -63,7 +81,15 @@ def matches_role(title: Any) -> bool:
     if not isinstance(title, str) or not title:
         return False
     title_lower = title.lower()
-    return any(kw.lower() in title_lower for kw in ROLE_KEYWORDS)
+    # "fiberglass" is a substring false-positive on the bare word "fiber" -- exclude it
+    # explicitly since it's a real, common, unrelated job category (composites/insulation).
+    if "fiberglass" in title_lower:
+        title_lower = title_lower.replace("fiberglass", "")
+    if any(root in title_lower for root in _SAFE_ROOTS):
+        return True
+    if _BOUNDED_RE.search(title):
+        return True
+    return False
 
 
 def load_companies(fs: HfFileSystem) -> Dict[int, Dict[str, Any]]:
