@@ -35,15 +35,6 @@ DECLARE
   a_id text;
 BEGIN
   FOREACH a_id IN ARRAY agent_ids LOOP
-    IF NOT EXISTS (SELECT 1 FROM ai_automation_routes WHERE automation_id = a_id AND rank = 1) THEN
-      INSERT INTO ai_automation_routes (automation_id, ai_key_id, provider, rank, is_enabled, model_override)
-      VALUES (a_id, '4315b676-6f41-4566-8373-915bfc733c0a', 'google_vertex_proxy', 1, true, 'gemini-2.5-pro');
-    END IF;
-
-    IF NOT EXISTS (SELECT 1 FROM ai_automation_routes WHERE automation_id = a_id AND rank = 2) THEN
-      INSERT INTO ai_automation_routes (automation_id, ai_key_id, provider, rank, is_enabled, model_override)
-      VALUES (a_id, '1732e13f-af87-41cc-969a-c2c56821a713', 'google', 2, true, 'gemini-2.5-flash');
-    END IF;
   END LOOP;
 END $$;
 
