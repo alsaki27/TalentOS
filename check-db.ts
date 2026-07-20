@@ -1,4 +1,4 @@
-import { query } from "./src/server/db/neon.ts";
+import { query } from "./src/server/db/neon";
 
 async function check() {
   const runs = await query("SELECT id, status, ingested_count, kept_count, last_error FROM job_ceo_runs WHERE status != 'completed' ORDER BY created_at ASC LIMIT 10");

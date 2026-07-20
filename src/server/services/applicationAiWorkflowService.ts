@@ -792,6 +792,7 @@ function getAgentFn(id: ApplicationAgentId) {
     case "application_resume_forge": return runResumeForge;
     case "application_hiring_panel": return runHiringPanel;
     case "application_final_polish": return runFinalPolish;
+    default: throw new Error(`Unknown agent ID: ${id}`);
   }
 }
 
@@ -801,6 +802,7 @@ function getSchemaVersion(id: ApplicationAgentId): string {
     case "application_resume_forge": return SCHEMA_VERSIONS.resumeDraft;
     case "application_hiring_panel": return SCHEMA_VERSIONS.reviewScore;
     case "application_final_polish": return SCHEMA_VERSIONS.finalResume;
+    default: throw new Error(`Unknown agent ID: ${id}`);
   }
 }
 
