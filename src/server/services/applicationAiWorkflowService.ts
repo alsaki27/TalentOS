@@ -786,7 +786,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
 }
 
-function getAgentFn(id: ApplicationAgentId) {
+function getAgentFn(id: ApplicationAgentId): (options: AgentOptions, provider: AiProvider, ctx: AgentContext) => Promise<any> {
   switch (id) {
     case "application_job_lens": return runJobLens;
     case "application_resume_forge": return runResumeForge;

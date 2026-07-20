@@ -39,9 +39,12 @@ export default function JobCeoProposalsPage() {
       const res = await fetch(`/api/job-ceo/proposals/${id}/approve`, { method: "POST" });
       if (res.ok) {
         await fetchProposals();
+      } else {
+        const data = await res.json().catch(() => null);
+        alert("Failed to approve: " + (data?.error || res.statusText));
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      alert("Failed to approve: " + err.message);
     }
   }
 
@@ -50,9 +53,12 @@ export default function JobCeoProposalsPage() {
       const res = await fetch(`/api/job-ceo/proposals/${id}/reject`, { method: "POST" });
       if (res.ok) {
         await fetchProposals();
+      } else {
+        const data = await res.json().catch(() => null);
+        alert("Failed to reject: " + (data?.error || res.statusText));
       }
-    } catch {
-      // ignore
+    } catch (err: any) {
+      alert("Failed to reject: " + err.message);
     }
   }
 
