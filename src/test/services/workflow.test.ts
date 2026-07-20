@@ -140,6 +140,8 @@ describe("applicationAiWorkflowService", () => {
       "application_resume_forge",
       "application_hiring_panel",
       "application_final_polish",
+      "copilot_fill_planner",
+      "copilot_question_answerer",
     ]);
   });
 });
