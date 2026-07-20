@@ -60,6 +60,12 @@ export interface JobAgentStagedJobRow {
   import_status: string;
   imported_job_id: string | null;
   created_at: string;
+  // openjobdata-sourced fields — null for Apify-sourced rows.
+  description_text: string | null;
+  company_website: string | null;
+  external_job_id: string | null;
+  country: string | null;
+  industry: string | null;
 }
 
 const RUN_COLUMNS = `
@@ -74,7 +80,7 @@ const RUN_COLUMNS = `
 export async function createRun(
   configId: string,
   roleGroups: string[],
-  tokenId: string
+  tokenId: string | null
 ): Promise<JobAgentRunRow> {
   const row = await queryOne<JobAgentRunRow>(
     `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
@@ -106,6 +112,30 @@ export async function updateRunStatus(
 }
 
 /**
+ * Atomic conditional status transition -- distributed mutex for processing.
+ * Only applies when the run is currently in fromStatus.
+ * Returns true if this caller won (row was updated), false otherwise.
+ */
+export async function transitionRunStatus(
+  id: string,
+  fromStatus: string,
+  updates: Partial<Omit<JobAgentRunRow, "id" | "created_at">>
+): Promise<boolean> {
+  const keys = Object.keys(updates).filter((k) => (updates as any)[k] !== undefined);
+  if (keys.length === 0) throw new Error("No fields to update");
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = keys.map((k) => (updates as any)[k]);
+  values.push(id, fromStatus);
+  const row = await queryOne<JobAgentRunRow>(
+    `UPDATE job_agent_runs SET ${setClause}
+     WHERE id = $${keys.length + 1} AND status = $${keys.length + 2}
+     RETURNING id`,
+    values
+  );
+  return row !== null && row !== undefined;
+}
+
+/**
  * List recent runs, optionally filtered by configId.
  */
 export async function listRuns(
@@ -123,13 +153,32 @@ export async function listRuns(
 }
 
 /**
- * List all runs currently in 'running' state.
+ * List all runs currently in an active state (running or pending, waiting for Apify metadata).
  */
 export async function listRunningRuns(): Promise<JobAgentRunRow[]> {
   const rows = await query<JobAgentRunRow>(
-    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE status = 'running'`
+    `SELECT ${RUN_COLUMNS} FROM job_agent_runs WHERE status IN ('running', 'pending', 'processing')`
   );
   return rows;
+}
+
+/**
+ * Mark any run stuck in running/pending/processing for more than the given
+ * threshold as failed. This prevents the dashboard from showing the live-feed
+ * spinner forever when a run dies mid-flight (e.g. Cloudflare timeout).
+ * Returns the number of runs cleaned up.
+ */
+export async function cleanupStuckRuns(thresholdMinutes = 30): Promise<number> {
+  const res = await execute(
+    `UPDATE job_agent_runs
+     SET status = 'failed',
+         error = 'Run timed out — automatically marked failed after ${thresholdMinutes} minutes',
+         completed_at = NOW()
+     WHERE status IN ('running', 'pending', 'processing')
+       AND started_at < NOW() - INTERVAL '${thresholdMinutes} minutes'
+     RETURNING id`
+  );
+  return res.rowCount ?? 0;
 }
 
 /**
@@ -200,6 +249,7 @@ export async function insertStagedJobs(
     "employment_type", "search_query_used", "role_group", "role_group_label",
     "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
     "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
+    "description_text", "company_website", "external_job_id", "country", "industry",
   ];
   const values: (string | number | boolean | string[] | null)[] = [];
   const placeholders: string[] = [];

@@ -68,32 +68,46 @@ interface AgentConfigSnapshot {
   isActive: boolean;
 }
 
+// Module-level config cache — avoids a DB hit on every single job classification call.
+// Invalidates automatically after 5 minutes so admin AI Control Center changes take effect.
+let _configCache: AgentConfigSnapshot | null = null;
+let _configCacheExpiry = 0;
+const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 async function loadConfig(): Promise<AgentConfigSnapshot> {
+  // Return cached config if still valid — eliminates a DB roundtrip per job.
+  const now = Date.now();
+  if (_configCache && now < _configCacheExpiry) {
+    return _configCache;
+  }
+
   try {
     const row = await findAgentConfigByAutomationId(AUTOMATION_ID);
-    if (!row) {
-      return {
-        systemPrompt: DEFAULT_SYSTEM_PROMPT,
-        userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
-        temperature: 0.2,
-        maxOutputTokens: 2048,
-        timeoutMs: null,
-        isActive: true,
-      };
-    }
-    return {
-        systemPrompt: row.system_prompt || DEFAULT_SYSTEM_PROMPT,
-        userPromptPreamble: row.system_prompt ? null : DEFAULT_USER_PROMPT_PREAMBLE,
-        // The AI Control Center lets admins override the system prompt. When they do,
-        // we trust it fully and do not prepend our own rules. If they haven't set one,
-        // we keep the built-in rules that make the Job Agent's tier logic correct.
-        temperature: row.temperature ?? 0.2,
-        maxOutputTokens: row.max_output_tokens ?? 2048,
-        timeoutMs: row.timeout_ms ?? null,
-        isActive: row.is_active,
-      };
+    const snapshot: AgentConfigSnapshot = !row
+      ? {
+          systemPrompt: DEFAULT_SYSTEM_PROMPT,
+          userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
+          temperature: 0.2,
+          maxOutputTokens: 2048,
+          timeoutMs: null,
+          isActive: true,
+        }
+      : {
+          systemPrompt: row.system_prompt || DEFAULT_SYSTEM_PROMPT,
+          userPromptPreamble: row.system_prompt ? null : DEFAULT_USER_PROMPT_PREAMBLE,
+          temperature: row.temperature ?? 0.2,
+          maxOutputTokens: row.max_output_tokens ?? 2048,
+          timeoutMs: row.timeout_ms ?? null,
+          isActive: row.is_active,
+        };
+
+    _configCache = snapshot;
+    _configCacheExpiry = now + CONFIG_CACHE_TTL_MS;
+    return snapshot;
   } catch (err) {
     console.warn(`[jobAgentClassifier] Could not load ${AUTOMATION_ID} config:`, (err as Error).message);
+    // On error, return cached version if available (stale is better than crashing)
+    if (_configCache) return _configCache;
     return {
       systemPrompt: DEFAULT_SYSTEM_PROMPT,
       userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,

@@ -82,6 +82,10 @@ interface CandidateDetail {
   location_preference: string | null;
   work_mode_preference: string | null;
   available_start_date: string | null;
+  eeo_gender?: string | null;
+  eeo_race?: string | null;
+  eeo_veteran?: string | null;
+  eeo_disability?: string | null;
   portal_token: string;
   applications: Application[];
   resumes: Resume[];
@@ -785,7 +789,7 @@ export default function CandidateProfilePage() {
       },
       {
         styleId: "skarion_compact_professional",
-        pageFormat: "letter",
+        pageFormat: "a4",
         fontFamily: "Calibri",
         fontSize: 10.5,
         marginTop: 0.5,
@@ -1851,6 +1855,10 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
   const [locationPreference, setLocationPreference] = useState(candidate.location_preference ?? "");
   const [workModePreference, setWorkModePreference] = useState(candidate.work_mode_preference ?? "");
   const [availableStartDate, setAvailableStartDate] = useState(candidate.available_start_date ?? "");
+  const [eeoGender, setEeoGender] = useState(candidate.eeo_gender ?? "");
+  const [eeoRace, setEeoRace] = useState(candidate.eeo_race ?? "");
+  const [eeoVeteran, setEeoVeteran] = useState(candidate.eeo_veteran ?? "");
+  const [eeoDisability, setEeoDisability] = useState(candidate.eeo_disability ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -1874,6 +1882,10 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
         location_preference: locationPreference || null,
         work_mode_preference: workModePreference || null,
         available_start_date: availableStartDate || null,
+        eeo_gender: eeoGender || null,
+        eeo_race: eeoRace || null,
+        eeo_veteran: eeoVeteran || null,
+        eeo_disability: eeoDisability || null,
       }),
     });
     setSaving(false);
@@ -1943,6 +1955,24 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
         <div className="field-group">
           <label>Available start date</label>
           <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
+        </div>
+
+        <h3 style={{ marginTop: 24, marginBottom: 12, fontSize: 16 }}>Equal Employment Opportunity (EEO)</h3>
+        <div className="field-group">
+          <label>Gender</label>
+          <input value={eeoGender} onChange={(e) => setEeoGender(e.target.value)} placeholder="e.g. Male, Female, Decline to self-identify" />
+        </div>
+        <div className="field-group">
+          <label>Race / Ethnicity</label>
+          <input value={eeoRace} onChange={(e) => setEeoRace(e.target.value)} placeholder="e.g. Asian, White, Hispanic" />
+        </div>
+        <div className="field-group">
+          <label>Veteran Status</label>
+          <input value={eeoVeteran} onChange={(e) => setEeoVeteran(e.target.value)} placeholder="e.g. Protected Veteran, Not a Veteran" />
+        </div>
+        <div className="field-group">
+          <label>Disability Status</label>
+          <input value={eeoDisability} onChange={(e) => setEeoDisability(e.target.value)} placeholder="e.g. Yes, No, Decline to answer" />
         </div>
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}

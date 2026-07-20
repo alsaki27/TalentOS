@@ -37,6 +37,24 @@ export const AGENT_CONFIG_DEFAULTS = {
     approvalPolicy: "auto" as const,
     minimumScore: 0,
   },
+  copilot_fill_planner: {
+    displayName: "Copilot Fill Planner",
+    temperature: 0.1,
+    maxOutputTokens: 8192,
+    timeoutMs: 30_000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+  copilot_question_answerer: {
+    displayName: "Copilot Question Answerer",
+    temperature: 0.4,
+    maxOutputTokens: 2048,
+    timeoutMs: 20_000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
 } as const;
 
 export const SCHEMA_VERSIONS = {

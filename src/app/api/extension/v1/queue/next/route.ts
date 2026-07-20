@@ -15,13 +15,19 @@ export async function GET(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
 
     try {
-      const candidateId = req.nextUrl.searchParams.get("candidateId");
-      if (!candidateId) {
-        return extensionError("validation_error", "candidateId query parameter is required.", 400);
+      const paramCandidateId = req.nextUrl.searchParams.get("candidateId");
+      // @ts-ignore - auth is defined as ExtensionKeyRow or NextResponse
+      const candidateId = paramCandidateId || auth.candidate_id;
+
+      const queryParams: any[] = [];
+      let whereClause = `WHERE a.status = 'assigned' AND a.review_status = 'approved'`;
+      if (candidateId) {
+        whereClause += ` AND a.candidate_id = $1`;
+        queryParams.push(candidateId);
       }
 
       const application = await queryOne<any>(
-        `SELECT a.id AS application_id, j.title AS job_title, j.company,
+        `SELECT a.id AS application_id, a.candidate_id, j.title AS job_title, j.company,
                 j.apply_url, c.name, c.email, c.phone,
                 COALESCE(NULLIF(TRIM(COALESCE(c.city,'') || ', ' || COALESCE(c.country,'')), ''), c.location_preference) AS location,
                 c.work_authorization, c.linkedin_url, c.portfolio_url,
@@ -29,21 +35,20 @@ export async function GET(request: NextRequest) {
          FROM applications a
          JOIN jobs j ON a.job_id = j.id
          JOIN candidates c ON a.candidate_id = c.id
-         WHERE a.candidate_id = $1
-           AND a.status = 'assigned'
-           AND a.review_status = 'approved'
+         ${whereClause}
          ORDER BY a.priority DESC, a.created_at ASC
          LIMIT 1`,
-        [candidateId]
+        queryParams
       );
 
       if (!application) {
-        return extensionError("queue_empty", "No approved application tickets for this candidate.", 404);
+        return extensionError("queue_empty", "No approved application tickets available.", 404);
       }
 
       return NextResponse.json({
         ticket: {
           applicationId: application.application_id,
+          candidateId: application.candidate_id,
           jobTitle: application.job_title,
           company: application.company,
           applyUrl: application.apply_url,

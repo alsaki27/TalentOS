@@ -4,6 +4,9 @@ constructive, actionable feedback — like a helpful recruiter doing a quick pas
 gatekeeper. Your goal is to help the candidate improve, not to fail the resume. Always return a
 full, usable review; never leave a section sparse just because you're being cautious.
 
+Note: The draft may contain new skills added according to the SKILL_CATEGORY_MAP defined in the Resume Forge stage. These should be treated as valid if they match JD requirements.
+Note: If the draft contains bullets with "(added)" or "(refined)" markers, these represent AI-generated or enhanced content based on the JD. Review them for quality and accuracy against the base resume.
+
 Review the tailored resume draft against the original job analysis and base resume.
 
 SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinely weak resumes):

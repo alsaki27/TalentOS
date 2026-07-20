@@ -57,6 +57,17 @@ export default function JobAgentReviewPage() {
     fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); });
   }
 
+  async function singleApprove(jobId: string) {
+    setBusy(true);
+    const r = await fetch(`/api/job-agent/runs/${runId}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobIds: [jobId] }) });
+    const d = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setError(d.error || "Failed"); return; }
+    setMsg(`${d.imported ?? 0} imported, ${d.skipped ?? 0} skipped`);
+    loadJobs(page);
+    fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); });
+  }
+
   async function updateOne(jobId: string, s: string) { await fetch(`/api/job-agent/runs/${runId}/staged-jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId, status: s }) }); loadJobs(page); }
 
   const run = runs.find((r) => r.id === runId);
@@ -151,7 +162,7 @@ export default function JobAgentReviewPage() {
               const b = TIER[job.tier ?? ""] ?? TIER.worthy;
               const imp = job.import_status === "imported";
               const rej = job.import_status === "rejected";
-              const jobUrl = job.source_url || job.apply_link || "#";
+              const jobUrl = job.apply_link || job.source_url || "#";
               return (<tr key={job.id} style={{ opacity: imp ? 0.5 : rej ? 0.5 : 1 }}>
                 <td>
                   <a href={jobUrl} target="_blank" rel="noreferrer noopener" className="row-link">{job.job_title}</a>
@@ -166,7 +177,7 @@ export default function JobAgentReviewPage() {
                 <td>{pct(job.relevance_score)}</td>
                 <td style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                   {!imp && !rej && (<>
-                    <button onClick={() => updateOne(job.id, "approved")} style={{ color: "var(--success)" }}>Approve</button>
+                    <button onClick={() => singleApprove(job.id)} style={{ color: "var(--success)" }}>Approve</button>
                     <button onClick={() => updateOne(job.id, "rejected")} style={{ color: "var(--danger)" }}>Reject</button>
                   </>)}
                   {!imp && rej && (

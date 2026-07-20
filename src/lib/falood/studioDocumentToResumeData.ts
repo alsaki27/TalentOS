@@ -156,7 +156,7 @@ function normalizeResumifyNative(d: any): ResumeData {
     colors: d.colors && typeof d.colors === "object" ? d.colors : DEFAULT_COLORS,
     template: typeof d.template === "string" ? d.template : "business-professional",
     pageFormat: d.pageFormat === "a4" ? "a4" : "letter",
-    fontSize: ["small", "large"].includes(d.fontSize) ? d.fontSize : "medium",
+    fontSize: typeof d.fontSize === 'number' ? Math.min(16, Math.max(6, d.fontSize)) : d.fontSize === 'large' ? 12 : d.fontSize === 'medium' ? 11 : 10,
     fontFamily: asString(d.fontFamily) || "Inter",
     pagePadding: typeof d.pagePadding === "number" ? d.pagePadding : DEFAULT_PAGE_PADDING,
   };
@@ -238,8 +238,8 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     sections: DEFAULT_SECTIONS,
     colors: DEFAULT_COLORS,
     template: "business-professional",
-    pageFormat: "letter",
-    fontSize: "medium",
+    pageFormat: "a4",
+    fontSize: 10,
     fontFamily: "Inter",
     pagePadding: DEFAULT_PAGE_PADDING,
   };

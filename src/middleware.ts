@@ -94,6 +94,30 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
   return false;
 }
 
+// The nightly OpenJobData GitHub Actions workflow has no session cookie either —
+// same bearer-secret (CRON_SECRET) pattern as /api/cron/*, scoped to this one
+// endpoint. The route itself re-checks the secret too (defense in depth).
+function isOpenJobDataIngestAuthorized(req: NextRequest, pathname: string) {
+  if (pathname !== "/api/job-agent/openjobdata-ingest") return false;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
+}
+
+function isJobCeoAuthorized(req: NextRequest, pathname: string) {
+  if (pathname === "/api/job-ceo/dispatch" || pathname === "/api/job-ceo/enrich") {
+    const secret = process.env.CRON_SECRET;
+    if (!secret) return false;
+    return req.headers.get("authorization") === `Bearer ${secret}`;
+  }
+  if (pathname === "/api/job-ceo/ingest") {
+    const secret = process.env.JOB_CEO_INGEST_SECRET;
+    if (!secret) return false;
+    return req.headers.get("authorization") === `Bearer ${secret}`;
+  }
+  return false;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
@@ -103,6 +127,8 @@ export async function middleware(req: NextRequest) {
   if (isExtensionApiPath(pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
+  if (isOpenJobDataIngestAuthorized(req, pathname)) return NextResponse.next();
+  if (isJobCeoAuthorized(req, pathname)) return NextResponse.next();
 
   const token = req.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   const session = token ? await getVerifiedSession(token) : null;

@@ -1,0 +1,38 @@
+name: OpenJobData Ingest
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Max jobs to ingest'
+        required: false
+        default: '2000'
+        type: string
+      since:
+        description: 'Earliest posted_at date to include (YYYY-MM-DD)'
+        required: false
+        default: '2026-07-12'
+        type: string
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install huggingface_hub pandas pyarrow requests
+
+      - name: Run OpenJobData ingest
+        run: python scripts/openjobdata_ingest.py
+        env:
+          LIMIT: ${{ inputs.limit || '2000' }}
+          SINCE_DATE: ${{ inputs.since || '2026-07-12' }}
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}

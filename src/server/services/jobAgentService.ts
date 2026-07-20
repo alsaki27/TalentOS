@@ -1,6 +1,6 @@
-// src/server/services/jobAgentService.ts
+﻿// src/server/services/jobAgentService.ts
 // Orchestration service with auto token rotation.
-// No manual config inputs — tokens, budget limits, and actor params are automatic.
+// No manual config inputs ΓÇö tokens, budget limits, and actor params are automatic.
 
 import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/jobAgentConfigRepository";
 import { createRun, updateRunStatus, insertStagedJobs, getDedupHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
@@ -86,7 +86,7 @@ export async function createPendingRun(
   if (!config.is_active) throw new Error("Job Agent config is inactive.");
 
   const token = await rotateToken();
-  if (!token) throw new Error("No Apify tokens available — all exhausted or errored.");
+  if (!token) throw new Error("No Apify tokens available ΓÇö all exhausted or errored.");
 
   const roleGroups = validateRoleGroups(options.roleGroups ?? []);
   const customKw = options.customKeywords ?? [];
@@ -149,7 +149,7 @@ export async function executeRunFromRecord(
         await markTokenError(currentToken.id, message);
         const next = await rotateToken();
         if (!next) {
-          await updateRunStatus(runId, { status: "failed", error: "All tokens exhausted — no working Apify accounts available.", completed_at: new Date().toISOString() });
+          await updateRunStatus(runId, { status: "failed", error: "All tokens exhausted ΓÇö no working Apify accounts available.", completed_at: new Date().toISOString() });
           throw new Error("All tokens exhausted.");
         }
         currentToken = next;
@@ -217,7 +217,7 @@ export async function executeRun(options: ExecuteRunOptions = {}): Promise<Execu
   return executeRunFromRecord(runId, config, roleGroups, token, options);
 }
 
-// ── helpers ──
+// ΓöÇΓöÇ helpers ΓöÇΓöÇ
 
 function getSearchQueries(roleGroups: string[], testMode: boolean, customKeywords: string[]): string[] {
   const titles = getTitlesForGroups(roleGroups);
@@ -266,9 +266,11 @@ function normalizeItem(item: ApifyDatasetItem): NormalizedJob {
   return { hash: dedupHash(jobTitle, companyName, location), job_title: jobTitle, company_name: companyName, location, salary_range: salaryRange, salary_min: salaryMin, salary_max: salaryMax, date_posted: String(item.date_posted ?? item.posted_at ?? "").trim() || null, via_platform: String(item.via_platform ?? item.platform ?? "").trim() || null, source_url: String(item.source_url ?? item.url ?? "").trim() || null, apply_link: String(item.apply_link ?? item.apply_url ?? "").trim() || null, is_remote: typeof item.is_remote === "boolean" ? item.is_remote : typeof item.remote === "boolean" ? item.remote : null, employment_type: String(item.employment_type ?? "").trim() || null, search_query_used: String(item.search_query ?? item.searchQueryUsed ?? item.query ?? "").trim() || null, raw: item };
 }
 
-function parseSalary(s: string | null) { if (!s) return { salaryMin: null as number | null, salaryMax: null as number | null }; const m = s.match(/\$?([\d,]+(?:\.\d+)?)\s*[–\-]\s*\$?([\d,]+(?:\.\d+)?)/); if (!m) return { salaryMin: null, salaryMax: null }; const min = parseFloat(m[1].replace(/,/g, "")); const max = parseFloat(m[2].replace(/,/g, "")); return { salaryMin: Number.isFinite(min) ? min : null, salaryMax: Number.isFinite(max) ? max : null }; }
+function parseSalary(s: string | null) { if (!s) return { salaryMin: null as number | null, salaryMax: null as number | null }; const m = s.match(/\$?([\d,]+(?:\.\d+)?)\s*[ΓÇô\-]\s*\$?([\d,]+(?:\.\d+)?)/); if (!m) return { salaryMin: null, salaryMax: null }; const min = parseFloat(m[1].replace(/,/g, "")); const max = parseFloat(m[2].replace(/,/g, "")); return { salaryMin: Number.isFinite(min) ? min : null, salaryMax: Number.isFinite(max) ? max : null }; }
 
-function dedupHash(title: string, company: string | null, location: string | null): string { return `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+export function dedupHash(title: string, company: string | null, location: string | null): string { return `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+
+export function normalizeForFuzzyMatch(s: string | null): string { return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
 
 function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; duplicateCount: number } { const seen = new Set<string>(); const deduped: NormalizedJob[] = []; let dc = 0; for (const item of items) { const n = normalizeItem(item); if (!n.job_title) continue; if (seen.has(n.hash)) { dc++; continue; } seen.add(n.hash); deduped.push(n); } return { deduped, duplicateCount: dc }; }
 
@@ -292,7 +294,7 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
   if (jobs.length === 0) return [];
 
   // Process in parallel batches of CONCURRENCY to keep total time reasonable.
-  // 500 jobs @ 5s AI call + batch overhead ≈ 100 seconds with 5 concurrent.
+  // 500 jobs @ 5s AI call + batch overhead Γëê 100 seconds with 5 concurrent.
   const CONCURRENCY = 5;
   const classified: ClassifiedJob[] = [];
 
@@ -339,7 +341,7 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
 }
 
 function toStagedJobRow(runId: string, job: ClassifiedJob): Omit<JobAgentStagedJobRow, "id" | "created_at"> {
-  return { run_id: runId, job_title: job.job_title, company_name: job.company_name, location: job.location, salary_range: job.salary_range, salary_min: job.salary_min, salary_max: job.salary_max, date_posted: job.date_posted, via_platform: job.via_platform, source_url: job.source_url, apply_link: job.apply_link, is_remote: job.is_remote, employment_type: job.employment_type, search_query_used: job.search_query_used, role_group: job.role_group, role_group_label: job.role_group_label, seniority_guess: job.seniority_guess, tier: job.tier, tier_reason: job.tier_reason, ai_keywords: job.ai_keywords, relevance_score: job.relevance_score, is_false_positive: job.is_false_positive, dedup_hash: job.hash, is_duplicate: job.raw._duplicate === true, import_status: "staged", imported_job_id: null };
+  return { run_id: runId, job_title: job.job_title, company_name: job.company_name, location: job.location, salary_range: job.salary_range, salary_min: job.salary_min, salary_max: job.salary_max, date_posted: job.date_posted, via_platform: job.via_platform, source_url: job.source_url, apply_link: job.apply_link, is_remote: job.is_remote, employment_type: job.employment_type, search_query_used: job.search_query_used, role_group: job.role_group, role_group_label: job.role_group_label, seniority_guess: job.seniority_guess, tier: job.tier, tier_reason: job.tier_reason, ai_keywords: job.ai_keywords, relevance_score: job.relevance_score, is_false_positive: job.is_false_positive, dedup_hash: job.hash, is_duplicate: job.raw._duplicate === true, import_status: "staged", imported_job_id: null, description_text: null, company_website: null, external_job_id: null, country: null, industry: null };
 }
 
 export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {

@@ -15,6 +15,8 @@ import {
   type JobAgentStagedJobRow,
 } from "@/server/repositories/jobAgentRunRepository";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
+import { startRun, dispatchAndChain } from "@/server/services/jobCeoService";
+import { insertStaged } from "@/server/repositories/jobCeoStagingRepository";
 
 export interface ImportApprovedJobsOptions {
   tier?: "best" | "medium" | "worthy";
@@ -40,12 +42,25 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
     .filter(Boolean)
     .join("\n");
 
+  // via_platform tags which pipeline produced this row ('openjobdata' or an Apify
+  // platform string) — source should reflect the real origin, not be hardcoded to
+  // the historical Apify-only value.
+  const source = staged.via_platform === "openjobdata" ? "openjobdata" : "apify_job_agent";
+
+  // country/industry have no dedicated jobs columns — preserved here rather than
+  // dropped, matching every other field openjobdata provides.
+  const extras: Record<string, unknown> = {};
+  if (staged.country) extras.country = staged.country;
+  if (staged.industry) extras.industry = staged.industry;
+  const rawSourcePayload = Object.keys(extras).length > 0 ? extras : null;
+
   return {
     title: staged.job_title,
     company: staged.company_name ?? null,
     location: staged.location ?? null,
-    source: "apify_job_agent",
+    source,
     source_url: staged.source_url ?? null,
+    apply_url: staged.apply_link ?? null,
     employment_type: staged.employment_type ?? null,
     seniority_level: staged.seniority_guess ?? null,
     salary_min: staged.salary_min ?? null,
@@ -54,6 +69,10 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
     posted_at: parsePostedAt(staged.date_posted),
     is_active: true,
     notes,
+    description_text: staged.description_text ?? null,
+    company_website: staged.company_website ?? null,
+    external_job_id: staged.external_job_id ?? null,
+    raw_source_payload: rawSourcePayload ? JSON.stringify(rawSourcePayload) : null,
   };
 }
 
@@ -125,10 +144,31 @@ async function importRows(
   const { newRows, duplicates } = await filterNewJobs(candidates);
 
   let inserted: any[] = [];
+  let runRecord: any = null;
   if (newRows.length > 0) {
-    const rowsToInsert = newRows.map((c: any) => c._job_row as Record<string, unknown>);
-    inserted = await createJobs(rowsToInsert);
-    await syncCompanyDirectoryFromJobs(inserted);
+    // Apify -> Job CEO Bridge
+    runRecord = await startRun({
+      source: "apify_bridge",
+      triggerType: "job_agent_import"
+    });
+
+    const stagedInserts = newRows.map((c: any) => {
+      const row = c._job_row as Record<string, unknown>;
+      return {
+        run_id: runRecord.id,
+        stage: "qa_passed" as any, // Skip QA, you already approved it
+        title: row.title as string,
+        company: row.company as string,
+        location: row.location as string,
+        source_url: row.source_url as string,
+        external_job_id: row.external_job_id as string,
+        description_text: row.description_text as string,
+        raw: row, // Pass all the Apify fields (salary, etc.) so Matchmaker saves them
+      };
+    });
+
+    await insertStaged(runRecord.id, stagedInserts);
+    inserted = stagedInserts; // For the insertedByUrl map below
   }
 
   // Map inserted jobs back to staged job IDs and mark them imported.
@@ -159,9 +199,13 @@ async function importRows(
   });
 
   // Trigger AI categorization in the background for newly imported jobs.
-  if (importedStagedIds.length > 0) {
-    processPendingCategorization({ limit: 200, triggeredBy: "job_agent_import" }).catch((err) => {
-      console.error("[jobAgentImporter] categorization kickoff failed:", (err as Error).message);
+  // Not needed here anymore since they aren't in the jobs table yet. The Matchmaker
+  // or a background cron will handle it when they finally arrive in the jobs table.
+
+  if (runRecord) {
+    // Start the Deep Fetch -> Matchmaker chain immediately for the bridged jobs
+    dispatchAndChain().catch((err) => {
+      console.error("[jobAgentImporter] Bridge dispatch chain failed:", (err as Error).message);
     });
   }
 

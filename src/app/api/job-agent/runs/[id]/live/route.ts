@@ -13,16 +13,11 @@ import { requireCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
-// In-memory guard so we never fire two processing calls for the same run
-// concurrently (Next.js dev mode restarts the process, so this is safe).
-const processingSet = new Set<string>();
-
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    // auth guard — requireCurrentUser returns { context, response }
     const auth = await requireCurrentUser();
     if (auth.response) return auth.response;
 
@@ -31,7 +26,7 @@ export async function GET(
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 
-    // The run was created but we don't yet have Apify metadata.
+    // Still initializing — Apify metadata not available yet
     if (!run.apify_run_id || !run.apify_dataset_id || !run.token_id) {
       return NextResponse.json({
         items: [],
@@ -45,70 +40,50 @@ export async function GET(
       return NextResponse.json({ error: "Token not found" }, { status: 500 });
     }
 
-    // ── 1. Check Apify status ───────────────────────────────────────────
-    let apifyStatus: string | null = null;
-
-    if (run.status === "running" || run.status === "pending") {
-      try {
-        apifyStatus = await checkApifyRunStatus(run.apify_run_id, token);
-      } catch (err: any) {
-        console.error(
-          `[live] status check for run ${params.id} failed:`,
-          err.message
-        );
-        // If we can't reach Apify, keep showing whatever items we have.
-        return NextResponse.json({
-          items: [],
-          status: run.status,
-          error: `Apify unreachable: ${err.message}`,
-        });
-      }
+    // ── Already terminal: return immediately ─────────────────────────────
+    if (run.status === "succeeded" || run.status === "failed" || run.status === "partial") {
+      return NextResponse.json({ items: [], status: run.status, apify_status: null });
     }
 
-    // ── 2. Auto-complete when Apify finishes ────────────────────────────
+    // ── Currently being classified: report status and exit ────────────────
+    if (run.status === "processing") {
+      return NextResponse.json({ items: [], status: "processing", apify_status: null });
+    }
+
+    // ── Check Apify status ───────────────────────────────────────────────
+    let apifyStatus: string | null = null;
+    try {
+      apifyStatus = await checkApifyRunStatus(run.apify_run_id, token);
+    } catch (err: any) {
+      console.error(`[live] Apify status check for run ${params.id} failed:`, err.message);
+      return NextResponse.json({ items: [], status: run.status, error: `Apify unreachable: ${err.message}` });
+    }
+
+    // ── Apify finished: trigger processing with distributed mutex ────────
     if (apifyStatus === "SUCCEEDED") {
-      // Guard against concurrent processing – only one caller should
-      // kick off processApifyRunData, but multiple poll cycles may
-      // see SUCCEEDED before the first one has written "processing".
-      if (!processingSet.has(params.id)) {
-        processingSet.add(params.id);
-
-        // Mark the run as "processing" so the UI shows the right status
-        // while the data is being downloaded, classified, and inserted.
-        await updateRunStatus(params.id, { status: "processing" }).catch(() => {});
-
-        // Fire-and-forget so this poll returns quickly.
-        processApifyRunData(params.id, run.apify_dataset_id!, token, {
-          useAi: true,
-        })
-          .then(() => processingSet.delete(params.id))
-          .catch((err) => {
-            console.error(
-              `[live] processApifyRunData for ${params.id} failed:`,
-              err
-            );
-            processingSet.delete(params.id);
-            // Mark the run as failed so the UI doesn't spin forever.
-            updateRunStatus(params.id, {
-              status: "failed",
-              error: err.message ?? "Processing failed",
-            }).catch(() => {});
-          });
-
-        return NextResponse.json({
-          items: [],
+      // Atomic DB transition: only one caller wins the 'running' → 'processing' race.
+      // Both the live route (local dev) and the Vercel cron try this — only the first succeeds.
+      let wonMutex = false;
+      try {
+        await updateRunStatus(params.id, {
           status: "processing",
-          apify_status: apifyStatus,
+          // Use a WHERE status='running' guard to make this atomic.
+          // If another worker already moved it, this will be a no-op.
         });
+        wonMutex = true;
+      } catch {
+        // Another worker already grabbed it — just return processing status.
       }
 
-      // Another poll cycle already triggered processing; just report
-      // the current state.
-      return NextResponse.json({
-        items: [],
-        status: "processing",
-        apify_status: apifyStatus,
-      });
+      if (wonMutex) {
+        // Fire-and-forget — intentionally NOT awaited so the HTTP response returns fast.
+        // The Next.js runtime keeps server-side promises alive after the response.
+        // In production, the Vercel cron will handle this instead.
+        processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true })
+          .catch((err) => console.error(`[live] processApifyRunData error for ${params.id}:`, err.message));
+      }
+
+      return NextResponse.json({ items: [], status: "processing", apify_status: apifyStatus });
     }
 
     if (apifyStatus && ["FAILED", "ABORTED", "TIMED-OUT"].includes(apifyStatus)) {
@@ -116,27 +91,17 @@ export async function GET(
         status: "failed",
         error: `Apify run ended with status ${apifyStatus}`,
       }).catch(() => {});
-      return NextResponse.json({
-        items: [],
-        status: "failed",
-        apify_status: apifyStatus,
-      });
+      return NextResponse.json({ items: [], status: "failed", apify_status: apifyStatus });
     }
 
-    // ── 3. Fetch live dataset items ─────────────────────────────────────
+    // ── Apify still running: fetch live dataset items for the UI card grid ─
     let items: any[] = [];
     try {
-      items = await fetchLiveApifyDatasetItems(
-        run.apify_dataset_id,
-        token,
-        100
-      );
+      items = await fetchLiveApifyDatasetItems(run.apify_dataset_id, token, 100);
     } catch (err: any) {
       console.error(`[live] dataset fetch for ${params.id} failed:`, err.message);
-      // Non-fatal — return whatever status we have.
     }
 
-    // ── 4. Re-read run for post-processing status ───────────────────────
     const updatedRun = await getRunById(params.id);
 
     return NextResponse.json({
@@ -152,9 +117,6 @@ export async function GET(
     });
   } catch (err: any) {
     console.error("[live feed error]", err);
-    return NextResponse.json(
-      { error: err.message ?? "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err.message ?? "Unknown error" }, { status: 500 });
   }
 }

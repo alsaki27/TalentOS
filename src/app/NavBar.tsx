@@ -80,6 +80,7 @@ export default function NavBar() {
     { href: "/import-sources", label: "Import Sources", show: canManageSources },
     { href: "/audit", label: "Audit Log", show: isAdmin },
     { href: "/ops", label: "System Health", show: isAdmin },
+    { href: "/job-ceo", label: "Job CEO", show: canManageSources },
     { href: "/job-agent", label: "Job Agent", show: canManageSources },
     { href: "/job-agent/review", label: "Job Agent Review", show: canManageSources },
     { href: "/job-agent/tokens", label: "Job Agent Tokens", show: isAdmin },
