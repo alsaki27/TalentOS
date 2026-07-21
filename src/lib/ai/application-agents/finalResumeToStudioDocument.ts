@@ -111,11 +111,13 @@ function mapSkills(skills: FinalResumeV1["skills"], baseContent: any) {
   }));
 }
 
-function mapCertifications(certs: string[], baseContent: any) {
+function mapCertifications(certs: any[], baseContent: any) {
   const baseCerts: any[] = Array.isArray(baseContent?.certifications) ? baseContent.certifications : [];
   const out: { id: string; name: string; issuer?: string; date?: string }[] = [];
-  for (const c of certs) {
-    const match = baseCerts.find((b) => b?.name && b.name.toLowerCase() === c.toLowerCase());
+  for (const cert of certs) {
+    const c = typeof cert === 'string' ? cert : (cert && cert.name ? String(cert.name) : "");
+    if (!c) continue;
+    const match = baseCerts.find((b) => b?.name && typeof b.name === 'string' && b.name.toLowerCase() === c.toLowerCase());
     out.push({
       id: uid("cert"),
       name: c,

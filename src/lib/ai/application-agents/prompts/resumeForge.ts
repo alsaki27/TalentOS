@@ -28,10 +28,14 @@ function mergeSkills(baseCategories: any[], newSkills: string[]): any[] {
 }
 
 /** Score how many JD keywords appear in a bullet. */
-function scoreBullet(bullet: string, keywords: Set<string>): number {
+function scoreBullet(bullet: any, keywords: Set<any>): number {
    let score = 0;
+   const bStr = typeof bullet === 'string' ? bullet.toLowerCase() : "";
+   if (!bStr) return 0;
    keywords.forEach(kw => {
-      if (bullet.toLowerCase().includes(kw.toLowerCase())) score++;
+      const kStr = typeof kw === 'string' ? kw.toLowerCase() : 
+                   (kw && typeof kw === 'object' && kw.name ? String(kw.name).toLowerCase() : "");
+      if (kStr && bStr.includes(kStr)) score++;
    });
    return score;
 }
