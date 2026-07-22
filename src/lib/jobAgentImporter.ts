@@ -171,20 +171,11 @@ async function importRows(
     inserted = stagedInserts; // For the insertedByUrl map below
   }
 
-  // Map inserted jobs back to staged job IDs and mark them imported.
-  const insertedByUrl = new Map<string, string>(
-    inserted
-      .map((job: any) => [job.source_url as string, job.id as string] as [string, string])
-      .filter(([url]) => url)
-  );
-
-  const importedStagedIds: string[] = [];
-  for (const staged of stagedJobs) {
-    const jobId = staged.source_url ? insertedByUrl.get(staged.source_url) : undefined;
-    if (jobId) {
-      importedStagedIds.push(staged.id);
-    }
-  }
+  // Mark all inserted staged jobs as imported.
+  // We can just use the stagedJobs list that we successfully submitted to `job_ceo_staging`.
+  const importedStagedIds: string[] = stagedJobs
+    .filter(staged => newRows.some(row => row._staged_id === staged.id))
+    .map(staged => staged.id);
 
   if (importedStagedIds.length > 0) {
     await bulkUpdateStagedJobStatus(runId, "imported", { jobIds: importedStagedIds });

@@ -1,4 +1,4 @@
-﻿import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne, execute } from "@/server/db/neon";
 import type { JobCeoRunStatus } from "@/lib/ai/job-agents/types";
 
 export interface JobCeoRunRow {
@@ -11,6 +11,7 @@ export interface JobCeoRunRow {
   researched_count: number;
   matched_count: number;
   logged_count: number;
+  skipped_count: number;
   scout_terms: unknown;
   plan_notes: string | null;
   last_error: string | null;
@@ -72,13 +73,13 @@ export async function updateRunStatus(
 
 export async function bumpRunCounts(
   id: string,
-  deltas: { ingested_count?: number; kept_count?: number; researched_count?: number; matched_count?: number; logged_count?: number }
+  deltas: { ingested_count?: number; kept_count?: number; researched_count?: number; matched_count?: number; logged_count?: number; skipped_count?: number }
 ): Promise<void> {
   var sets: string[] = [];
   var values: unknown[] = [];
   var idx = 1;
 
-  var fields = ["ingested_count", "kept_count", "researched_count", "matched_count", "logged_count"] as const;
+  var fields = ["ingested_count", "kept_count", "researched_count", "matched_count", "logged_count", "skipped_count"] as const;
   for (var i = 0; i < fields.length; i++) {
     var f = fields[i];
     var d = deltas[f] as number | undefined;

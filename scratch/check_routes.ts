@@ -1,0 +1,1 @@
+import { query } from './src/server/db/neon.ts'; async function run() { const autos = await query('SELECT id, name FROM ai_automations'); console.log('Automations:', autos); const routes = await query('SELECT id, automation_id, provider, is_enabled FROM ai_automation_routes'); console.log('Routes:', routes); } run();

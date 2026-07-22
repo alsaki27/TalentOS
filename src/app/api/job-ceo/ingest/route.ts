@@ -1,16 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { insertStaged } from "@/server/repositories/jobCeoStagingRepository";
+import { insertStaged, checkAndRecordDedup } from "@/server/repositories/jobCeoStagingRepository";
 import { createRun, bumpRunCounts } from "@/server/repositories/jobCeoRunRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
-  // Fails closed: this endpoint accepts externally-sourced job data (the
-  // OpenJobData GitHub Actions runner), so a missing secret must reject
-  // every caller, not silently accept them. The prior `if (secret && ...)`
-  // check skipped auth entirely whenever JOB_CEO_INGEST_SECRET wasn't
-  // configured yet - exactly the state before an operator has set it.
+  // Fails closed: missing secret = always reject.
   const authHeader = req.headers.get("authorization") || "";
   const secret = process.env.JOB_CEO_INGEST_SECRET;
   if (!secret || authHeader !== `Bearer ${secret}`) {
@@ -26,32 +22,74 @@ export async function POST(req: NextRequest) {
 
   const jobs = body.jobs ?? [];
   if (!Array.isArray(jobs) || jobs.length === 0) {
-    return NextResponse.json({ error: "jobs array is required" }, { status: 400 });
+    return NextResponse.json({ error: "jobs array is required and must not be empty" }, { status: 400 });
   }
 
   try {
+    // Create run if not provided
     let runId = body.runId;
     if (!runId) {
-      const run = await createRun({ triggerType: "cron" });
+      const run = await createRun({ triggerType: "cron", source: "openjobdata" });
       runId = run.id;
     }
 
-    const staged = await insertStaged(runId, jobs as any[]);
-    await bumpRunCounts(runId, { ingested_count: staged });
+    // Build dedup signatures for all incoming jobs
+    const signaturesInput = jobs.map((j) => {
+      const title = (String(j.title ?? "")).toLowerCase().trim();
+      const company = (String(j.company ?? "")).toLowerCase().trim();
+      return {
+        signature: `${title}|${company}`,
+        title: String(j.title ?? ""),
+        company: String(j.company ?? ""),
+      };
+    });
 
-    // Registered with ctx.waitUntil via backgroundDispatch so it survives
-    // past this response instead of racing it - a plain un-awaited fetch
-    // here was confirmed (on the resume-agent pipeline this mirrors) to get
-    // killed before the dispatch endpoint's invocation ever ran.
-    const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) => {
-        console.error("[Job CEO] Ingest dispatch self-fetch failed:", err);
-      })
-    );
+    // Cross-run dedup: get only signatures not previously seen
+    const newSignatures = await checkAndRecordDedup(runId, signaturesInput);
 
-    return NextResponse.json({ runId, staged });
+    // Filter jobs to only the ones with new signatures
+    const dedupedJobs = jobs.filter((j) => {
+      const title = (String(j.title ?? "")).toLowerCase().trim();
+      const company = (String(j.company ?? "")).toLowerCase().trim();
+      const sig = `${title}|${company}`;
+      return newSignatures.has(sig);
+    });
+
+    const skipped = jobs.length - dedupedJobs.length;
+
+    // Insert the de-duplicated jobs
+    let staged = 0;
+    if (dedupedJobs.length > 0) {
+      staged = await insertStaged(runId, dedupedJobs as any[]);
+      await bumpRunCounts(runId, { ingested_count: staged, skipped_count: skipped });
+    } else {
+      // Still bump skipped count even if nothing new
+      if (skipped > 0) {
+        await bumpRunCounts(runId, { skipped_count: skipped });
+      }
+    }
+
+    // Trigger dispatch if we actually staged new jobs
+    if (staged > 0) {
+      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+      await backgroundDispatch(
+        fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) => {
+          console.error("[Job CEO] Ingest dispatch self-fetch failed:", err);
+        })
+      );
+    }
+
+    return NextResponse.json({
+      runId,
+      staged,
+      skipped,
+      total_received: jobs.length,
+      message: skipped > 0
+        ? `${staged} new jobs staged, ${skipped} duplicates skipped`
+        : `${staged} jobs staged`,
+    });
   } catch (err) {
+    console.error("[Job CEO] Ingest error:", err);
     return NextResponse.json({ error: (err as Error).message ?? String(err) }, { status: 500 });
   }
 }

@@ -39,8 +39,9 @@ function getSql(): NeonQueryFunction<false, false> {
       const url = getDatabaseUrl();
       console.log(`[DB] Initializing Neon connection (host: ${new URL(url).hostname})`);
       _sql = neon(url, {
-        // arrayMode: false (default) returns rows as objects
-        // fullResults: false (default) returns just the rows array from .query()
+        fetchOptions: {
+          cache: "no-store",
+        },
       });
     } catch (e: any) {
       console.error("[DB] FATAL: Failed to initialize Neon driver:", e.message);

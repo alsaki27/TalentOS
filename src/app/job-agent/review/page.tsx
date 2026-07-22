@@ -183,9 +183,10 @@ export default function JobAgentReviewPage() {
                   {!imp && rej && (
                     <button onClick={() => updateOne(job.id, "staged")} style={{ color: "var(--warning)" }}>Unreject</button>
                   )}
-                  {imp && job.imported_job_id && (
-                    <Link href={`/jobs/${job.imported_job_id}`} style={{ color: "var(--success)", fontSize: 13 }}>✓ Accepted — view</Link>
+                  {imp && (
+                    <span style={{ color: "var(--success)", fontSize: 13, fontWeight: 500 }}>✓ Sent to Job CEO</span>
                   )}
+
                 </td>
               </tr>);
             })}</tbody>

@@ -5,16 +5,22 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
-      limit:
-        description: 'Max jobs to ingest'
+      role_group:
+        description: 'Role group (A, B, C, D, or all)'
         required: false
-        default: '2000'
+        default: ''
         type: string
-      since:
-        description: 'Earliest posted_at date to include (YYYY-MM-DD)'
+      days:
+        description: 'Trailing days to scan'
         required: false
-        default: '2026-07-12'
+        default: ''
         type: string
+      dry_run:
+        description: 'Dry run (true/false)'
+        required: false
+        default: ''
+        type: string
+
 
 jobs:
   ingest:
@@ -29,10 +35,23 @@ jobs:
       - name: Install dependencies
         run: pip install huggingface_hub pandas pyarrow requests
 
+      - name: Fetch Job CEO Schedule
+        id: schedule
+        run: |
+          # Fetch dynamic schedule from the live database
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}/api/job-ceo/schedule")
+          echo "is_enabled=$(echo $RESPONSE | jq -r '.is_enabled')" >> $GITHUB_OUTPUT
+          echo "role_group=$(echo $RESPONSE | jq -r '.role_group')" >> $GITHUB_OUTPUT
+          echo "days_back=$(echo $RESPONSE | jq -r '.days_back')" >> $GITHUB_OUTPUT
+          echo "dry_run=$(echo $RESPONSE | jq -r '.dry_run')" >> $GITHUB_OUTPUT
+
       - name: Run OpenJobData ingest
+        if: steps.schedule.outputs.is_enabled == 'true' || github.event_name == 'workflow_dispatch'
         run: python scripts/openjobdata_ingest.py
         env:
-          LIMIT: ${{ inputs.limit || '2000' }}
-          SINCE_DATE: ${{ inputs.since || '2026-07-12' }}
+          ROLE_GROUP: ${{ github.event.inputs.role_group || steps.schedule.outputs.role_group || 'all' }}
+          DAYS: ${{ github.event.inputs.days || steps.schedule.outputs.days_back || '1' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || steps.schedule.outputs.dry_run || 'false' }}
           INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+

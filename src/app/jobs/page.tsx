@@ -1577,6 +1577,10 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   const [candidateBaseResumes, setCandidateBaseResumes] = useState<Record<string, { id: string; name: string; status: string }[]>>({});
   const [selectedBaseResumeIds, setSelectedBaseResumeIds] = useState<Record<string, string>>({});
   const [baseResumesLoading, setBaseResumesLoading] = useState<Record<string, boolean>>({});
+  // Per-candidate AI best-resume pick state
+  const [aiPickLoading, setAiPickLoading] = useState<Record<string, boolean>>({});
+  const [aiPickResults, setAiPickResults] = useState<Record<string, { best_resume_id: string; score: number | null; breakdown: any | null }>>({});
+  const [manuallyOverridden, setManuallyOverridden] = useState<Record<string, boolean>>({});
   const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
@@ -1647,8 +1651,54 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         entries.forEach(([id]) => { next[id] = false; });
         return next;
       });
+
+      // Fire AI best-resume scoring in parallel for every newly fetched
+      // candidate that has 2+ resumes and hasn't been AI-scored yet.
+      entries.forEach(([id, data]) => {
+        if (data.length >= 2 && !(id in aiPickResults)) {
+          aiPickBestResume(id);
+        }
+      });
     });
   }, [candidateIds]);
+
+  /**
+   * Calls POST /api/jobs/best-resume, gets the best-matching base resume for
+   * this candidate against the current job, and silently pre-selects it.
+   * Falls back gracefully — no error is surfaced to the user.
+   */
+  async function aiPickBestResume(candidateId: string) {
+    setAiPickLoading((prev) => ({ ...prev, [candidateId]: true }));
+    try {
+      const res = await fetch("/api/jobs/best-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: job.id, candidate_id: candidateId }),
+      });
+      if (!res.ok) return; // silent fail — default (first) resume stays selected
+      const data = await res.json();
+      if (!data.best_resume_id) return;
+      // Only update selection if the user hasn't already manually changed it
+      setManuallyOverridden((prev) => {
+        if (!prev[candidateId]) {
+          setSelectedBaseResumeIds((s) => ({ ...s, [candidateId]: data.best_resume_id }));
+          setAiPickResults((p) => ({
+            ...p,
+            [candidateId]: {
+              best_resume_id: data.best_resume_id,
+              score: data.score ?? null,
+              breakdown: data.breakdown ?? null,
+            },
+          }));
+        }
+        return prev;
+      });
+    } catch {
+      // Silently ignore network errors — the existing default selection stands
+    } finally {
+      setAiPickLoading((prev) => ({ ...prev, [candidateId]: false }));
+    }
+  }
 
   function toggleCandidate(id: string) {
     setCandidateIds((prev) => {
@@ -1903,17 +1953,62 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                     {loading ? (
                       <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
                     ) : bases.length > 0 ? (
-                      <select
-                        value={selectedBaseResumeIds[id] ?? ""}
-                        onChange={(e) => setSelectedBaseResumeIds((prev) => ({ ...prev, [id]: e.target.value }))}
-                        style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}
-                      >
-                        {bases.map((br) => (
-                          <option key={br.id} value={br.id}>
-                            {br.name} ({br.status})
-                          </option>
-                        ))}
-                      </select>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ position: "relative" }}>
+                          <select
+                            value={selectedBaseResumeIds[id] ?? ""}
+                            onChange={(e) => {
+                              setSelectedBaseResumeIds((prev) => ({ ...prev, [id]: e.target.value }));
+                              // Mark as manually overridden so future AI updates don't clobber it
+                              setManuallyOverridden((prev) => ({ ...prev, [id]: true }));
+                            }}
+                            style={{
+                              width: "100%",
+                              padding: "8px 12px",
+                              borderRadius: "var(--radius)",
+                              border: aiPickResults[id] && !manuallyOverridden[id]
+                                ? "1px solid var(--accent)"
+                                : "1px solid var(--border)",
+                              transition: "border-color 0.2s ease",
+                            }}
+                          >
+                            {bases.map((br) => (
+                              <option key={br.id} value={br.id}>
+                                {br.name} ({br.status})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {/* AI scoring status chip */}
+                        {aiPickLoading[id] && bases.length >= 2 && (
+                          <div style={{
+                            display: "flex", alignItems: "center", gap: "5px",
+                            fontSize: "11.5px", color: "var(--ink-soft)",
+                            animation: "pulse 1.4s ease-in-out infinite",
+                          }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                            AI scoring resumes…
+                          </div>
+                        )}
+                        {aiPickResults[id] && !aiPickLoading[id] && !manuallyOverridden[id] && (
+                          <div
+                            title={aiPickResults[id]?.breakdown?.reasoning ?? "AI selected the best-matching resume for this job"}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: "5px", alignSelf: "flex-start",
+                              fontSize: "11.5px", fontWeight: 600,
+                              color: "var(--accent)",
+                              backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
+                              border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+                              borderRadius: "100px",
+                              padding: "2px 9px 2px 6px",
+                              cursor: "default",
+                            }}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 20 20" fill="currentColor"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                            AI Selected{aiPickResults[id]?.score != null ? ` — ${aiPickResults[id].score}% match` : ""}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warning, #b45309)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
                         <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>

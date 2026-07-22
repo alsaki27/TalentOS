@@ -1,27 +1,28 @@
-// Full staging-row dump for a run — every job that made it through ingest,
-// regardless of whether it hit Matchmaker's ≥90% bar and got logged into
-// `jobs`. runs/[id] only returns aggregate counts by stage; this is the
-// endpoint an export (CSV/Excel) should actually pull from, since "all the
-// jobs we found" is a much bigger set than "jobs that got logged."
 import { NextRequest, NextResponse } from "next/server";
-import { requireCurrentUser } from "@/lib/auth";
-import { findRunById } from "@/server/repositories/jobCeoRunRepository";
-import { listStagedByRun } from "@/server/repositories/jobCeoStagingRepository";
+import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { listStagedByRun, countStagedByRunAndStage } from "@/server/repositories/jobCeoStagingRepository";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const { response } = await requireCurrentUser(["admin", "manager"]);
+  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
-  const run = await findRunById(params.id);
-  if (!run) {
-    return NextResponse.json({ error: "Run not found" }, { status: 404 });
-  }
+  const url = new URL(req.url);
+  const stage = url.searchParams.get("stage") || undefined;
+  const limit = Math.min(500, parseInt(url.searchParams.get("limit") || "200", 10));
+  const offset = parseInt(url.searchParams.get("offset") || "0", 10);
 
-  const rows = await listStagedByRun(params.id);
-  return NextResponse.json({ run, count: rows.length, jobs: rows });
+  try {
+    const [rows, counts] = await Promise.all([
+      listStagedByRun(params.id, stage, limit, offset),
+      countStagedByRunAndStage(params.id),
+    ]);
+    return NextResponse.json({ rows, counts, limit, offset });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? "Could not load staging data" }, { status: 500 });
+  }
 }

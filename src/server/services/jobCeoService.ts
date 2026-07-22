@@ -240,7 +240,7 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
       const matchResult = result.result as { matches: { candidateId: string; score: number; reasons: string[]; outreachDraft: string }[] };
       const highMatches = matchResult.matches.filter((m) => m.score >= 90);
 
-      if (highMatches.length > 0 && !isDuplicate) {
+      if (!isDuplicate) {
         let parsedRaw: Record<string, any> = {};
         if (row.raw && typeof row.raw === "object") parsedRaw = row.raw;
         if (typeof row.raw === "string") { try { parsedRaw = JSON.parse(row.raw); } catch (e) {} }
@@ -269,7 +269,6 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
         const created = await createJob(jobRow);
         await syncCompanyDirectoryFromJobs([created]);
 
-
         for (const m of highMatches) {
           await logActivity({
             type: "job_ceo_match",
@@ -288,21 +287,14 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
         await updateStaged(row.id, {
           stage: "logged",
           logged_job_id: created.id,
-          match_results: { matches: highMatches },
+          match_results: matchResult,
         });
-        matched += highMatches.length;
-        logged++;
-      } else if (highMatches.length > 0 && isDuplicate) {
-        await updateStaged(row.id, {
-          stage: "logged",
-          match_results: { matches: highMatches, duplicate: true },
-        });
-        matched += highMatches.length;
+        matched += matchResult.matches.length;
         logged++;
       } else {
         await updateStaged(row.id, {
-          stage: "matched",
-          match_results: matchResult,
+          stage: "logged",
+          match_results: { ...matchResult, duplicate: true },
         });
         matched += matchResult.matches.length;
         logged++;
@@ -410,6 +402,59 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   }
 
   if (currentStatus === "matchmaking") {
+    // --- CEO Orchestrator Phase ---
+    // If enough jobs were processed, let the Orchestrator analyze the drop rates and propose config changes.
+    if (run.ingested_count >= 10) {
+      const qaDropRate = run.ingested_count > 0 ? (run.ingested_count - run.kept_count) / run.ingested_count : 0;
+      const deepFetchFailureRate = run.kept_count > 0 ? (run.kept_count - run.researched_count) / run.kept_count : 0;
+
+      // Ensure we have a high enough failure rate to bother the AI (e.g., > 60% QA drop or > 30% deep fetch failure)
+      if (qaDropRate > 0.6 || deepFetchFailureRate > 0.3) {
+        try {
+          const qaConfig = await findAgentConfigByAutomationId("job_ceo_qa");
+          const fetchConfig = await findAgentConfigByAutomationId("job_ceo_deep_fetch");
+
+          const ctx: JobCeoAgentContext = {
+            runId: run.id,
+            previousOutputs: {
+              runContext: {
+                ingestedCount: run.ingested_count,
+                keptCount: run.kept_count,
+                researchedCount: run.researched_count,
+                qaDropRate,
+                deepFetchFailureRate,
+              },
+              agentConfigsSnapshot: {
+                job_ceo_qa: qaConfig?.system_prompt ?? "Default Bouncer prompt",
+                job_ceo_deep_fetch: "Default Deep Fetch config"
+              }
+            }
+          };
+
+          const config = await findAgentConfigByAutomationId("job_ceo_orchestrator");
+          const { result } = await callAgent("job_ceo_orchestrator", ctx, async (provider) => {
+            return runCeoOrchestrator(
+              { system_prompt: config?.system_prompt ?? undefined, max_output_tokens: config?.max_output_tokens ?? 500 },
+              provider,
+              ctx
+            );
+          });
+          
+          const plan = result as any;
+          if (plan.proposals && plan.proposals.length > 0) {
+            await persistCeoProposals(run.id, plan.proposals.map((p: any) => ({
+              targetAutomationId: p.target_automation_id,
+              proposedChanges: p.proposed_changes,
+              rationale: p.rationale,
+            })));
+          }
+        } catch (err) {
+          console.error("[Job CEO] Orchestrator failed:", err);
+        }
+      }
+    }
+    // -----------------------------
+
     await updateRunStatus(run.id, "completed", { last_error: undefined });
 
     await logActivity({

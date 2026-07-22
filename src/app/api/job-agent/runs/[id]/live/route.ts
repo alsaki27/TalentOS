@@ -10,6 +10,7 @@ import {
   processApifyRunData,
 } from "@/server/services/jobAgentService";
 import { requireCurrentUser } from "@/lib/auth";
+import { waitUntil } from "@vercel/functions";
 
 export const dynamic = "force-dynamic";
 
@@ -77,10 +78,11 @@ export async function GET(
 
       if (wonMutex) {
         // Fire-and-forget — intentionally NOT awaited so the HTTP response returns fast.
-        // The Next.js runtime keeps server-side promises alive after the response.
-        // In production, the Vercel cron will handle this instead.
-        processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true })
-          .catch((err) => console.error(`[live] processApifyRunData error for ${params.id}:`, err.message));
+        // We use waitUntil to prevent the Next.js runtime from killing the promise prematurely.
+        waitUntil(
+          processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true })
+            .catch((err) => console.error(`[live] processApifyRunData error for ${params.id}:`, err.message))
+        );
       }
 
       return NextResponse.json({ items: [], status: "processing", apify_status: apifyStatus });

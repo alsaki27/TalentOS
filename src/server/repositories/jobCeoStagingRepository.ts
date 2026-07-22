@@ -64,6 +64,52 @@ export async function insertStaged(
   return rows.length;
 }
 
+/**
+ * Cross-run deduplication using the permanent job_ceo_seen_signatures table.
+ * Returns the set of signatures that are NEW (not previously seen).
+ * Also inserts new signatures into the seen-signatures table so future runs skip them.
+ */
+export async function checkAndRecordDedup(
+  runId: string,
+  signatures: Array<{ signature: string; title: string; company: string }>
+): Promise<Set<string>> {
+  if (signatures.length === 0) return new Set();
+
+  const sigValues = signatures.map((s) => s.signature);
+
+  // Find which signatures already exist
+  const placeholders = sigValues.map((_, i) => `$${i + 1}`).join(", ");
+  const existing = await query<{ signature: string }>(
+    `SELECT signature FROM job_ceo_seen_signatures WHERE signature IN (${placeholders})`,
+    sigValues
+  );
+  const existingSet = new Set(existing.map((r) => r.signature));
+
+  // Filter to new-only
+  const newSigs = signatures.filter((s) => !existingSet.has(s.signature));
+
+  if (newSigs.length === 0) return new Set();
+
+  // Insert new signatures in bulk
+  const insertValues: unknown[] = [];
+  const insertPlaceholders: string[] = [];
+  let idx = 1;
+  for (const s of newSigs) {
+    insertPlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3})`);
+    insertValues.push(s.signature, runId, s.title, s.company);
+    idx += 4;
+  }
+
+  await execute(
+    `INSERT INTO job_ceo_seen_signatures (signature, run_id, title, company)
+     VALUES ${insertPlaceholders.join(", ")}
+     ON CONFLICT (signature) DO NOTHING`,
+    insertValues
+  );
+
+  return new Set(newSigs.map((s) => s.signature));
+}
+
 export async function claimNextStagedBatch(
   runId: string,
   stage: StagedJobStage,
@@ -124,9 +170,32 @@ export async function countByStage(runId: string): Promise<{ stage: string; coun
   );
 }
 
-export async function listStagedByRun(runId: string): Promise<StagedJobRow[]> {
+export async function listStagedByRun(
+  runId: string,
+  stage?: string,
+  limit = 200,
+  offset = 0
+): Promise<StagedJobRow[]> {
+  if (stage) {
+    return query<StagedJobRow>(
+      "SELECT * FROM job_ceo_staging WHERE run_id = $1 AND stage = $2 ORDER BY created_at ASC LIMIT $3 OFFSET $4",
+      [runId, stage, limit, offset]
+    );
+  }
   return query<StagedJobRow>(
-    "SELECT * FROM job_ceo_staging WHERE run_id = $1 ORDER BY created_at ASC",
+    "SELECT * FROM job_ceo_staging WHERE run_id = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
+    [runId, limit, offset]
+  );
+}
+
+export async function countStagedByRunAndStage(runId: string): Promise<Record<string, number>> {
+  const rows = await query<{ stage: string; count: string }>(
+    "SELECT stage, COUNT(*)::text AS count FROM job_ceo_staging WHERE run_id = $1 GROUP BY stage",
     [runId]
   );
+  const result: Record<string, number> = {};
+  for (const r of rows) {
+    result[r.stage] = parseInt(r.count, 10);
+  }
+  return result;
 }

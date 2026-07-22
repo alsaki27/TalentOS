@@ -1101,3 +1101,15 @@ label {
 .resume-paper .text-xl { font-size: 1.25em !important; line-height: 1.4 !important; }
 .resume-paper .text-2xl { font-size: 1.5em !important; line-height: 1.33 !important; }
 .resume-paper .text-3xl { font-size: 1.875em !important; line-height: 1.2 !important; }
+
+/* ── Global utility animations ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
