@@ -31,7 +31,7 @@ INSERT INTO ai_api_keys (
 VALUES (
   'google_vertex_proxy',
   'Google Vertex (Proxy)',
-  'placeholder-env-managed',          -- real secret is GOOGLE_VERTEX_PROXY_SECRET in Cloudflare env
+  'enc:placeholder-env-managed',      -- real secret is GOOGLE_VERTEX_PROXY_SECRET in Cloudflare env
   'env-managed',                      -- not a real fingerprint; key material is not stored here
   'gemini-2.5-flash',
   'gemini-2.5-flash',
