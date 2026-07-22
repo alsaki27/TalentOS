@@ -25,12 +25,17 @@ export async function GET(req: NextRequest) {
 
   if (encryptionConfigured) {
     try {
-      const keys = await query<{ encrypted_key: string; is_enabled: boolean }>(
-        `SELECT encrypted_key, is_enabled FROM ai_api_keys`
+      const keys = await query<{ encrypted_key: string; is_enabled: boolean; provider: string }>(
+        `SELECT encrypted_key, is_enabled, provider FROM ai_api_keys`
       );
       totalKeys = keys.length;
       for (const key of keys) {
         if (!key.is_enabled) disabledKeys++;
+        
+        // The Google Vertex Proxy key's secret lives in Cloudflare env vars.
+        // The DB row only stores a plaintext placeholder. Skip it for readiness checks.
+        if (key.provider === 'google_vertex_proxy') continue;
+
         if (key.encrypted_key.startsWith("enc:")) {
           encryptedKeys++;
         } else {

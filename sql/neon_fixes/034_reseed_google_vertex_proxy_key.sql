@@ -1,7 +1,7 @@
 -- 034: Re-seed the Google Vertex (Proxy) ai_api_keys row.
 --
 -- This row was wiped by a migration reset (same pattern as before, see commit
--- dfc70ec). The row is purely a routable handle for the AI Control Center â€”
+-- dfc70ec). The row is purely a routable handle for the AI Control Center —
 -- the actual secret material (GOOGLE_VERTEX_PROXY_SECRET / GOOGLE_VERTEX_PROXY_URL)
 -- lives in Cloudflare Worker env vars, not in this table. The encrypted_key
 -- value below is a known placeholder; buildProviderFromDbKey always reads the
@@ -28,7 +28,7 @@ INSERT INTO ai_api_keys (
   supports_streaming,
   available_models
 )
-VALUES (
+SELECT 
   'google_vertex_proxy',
   'Google Vertex (Proxy)',
   'enc:placeholder-env-managed',      -- real secret is GOOGLE_VERTEX_PROXY_SECRET in Cloudflare env
@@ -45,5 +45,6 @@ VALUES (
   true,
   false,
   '[]'::jsonb
-)
-ON CONFLICT DO NOTHING;
+WHERE NOT EXISTS (
+  SELECT 1 FROM ai_api_keys WHERE provider = 'google_vertex_proxy'
+);
