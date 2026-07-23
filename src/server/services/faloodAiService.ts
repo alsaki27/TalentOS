@@ -109,8 +109,8 @@ Be intent-aware based on the user's latest message:
 - If the user asks to REMOVE skills, use type "skill_remove" with the skills to remove.
 - If the user asks to change Personal Info (name, title, email, phone, links, location), use type "personal_info" and set targetId to the exact field name.
 - If the user asks to change Experience metadata (job title, company, location, start date, end date), use type "experience_info", set targetId to the experience item id, set "original" to the exact field name (jobTitle, company, location, startDate, endDate), and "suggested" to the new text.
-- If the user asks to MODIFY or REWRITE an existing experience bullet/line, use type "experience", set "original" to the old bullet point text, and "suggested" to the new bullet point text.
-- If the user asks to ADD a new experience bullet/line, use type "experience_add".
+- If the user asks to MODIFY or REWRITE an existing experience bullet/line, use type "experience", set "original" to the old bullet point text, and "suggested" to the new bullet point text. If modifying multiple bullets, output a SEPARATE suggestion object for EACH bullet. "suggested" MUST be a string, NEVER an array.
+- If the user asks to ADD a new experience bullet/line, use type "experience_add". If adding multiple bullets, output a SEPARATE suggestion object for EACH bullet. "suggested" MUST be a string, NEVER an array.
 - If the user asks to REMOVE an experience bullet/line, use type "experience_remove".
 - If the user asks to ADD a whole new experience/job block, use type "experience_block_add". Set "suggested" to a JSON object: {"jobTitle": "...", "company": "...", "location": "...", "startDate": "...", "endDate": "...", "description": "...", "bulletPoints": ["..."]}.
 - If the user asks to REMOVE an entire experience/job block, use type "experience_block_remove". Set targetId to the experience item id.

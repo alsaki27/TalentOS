@@ -359,7 +359,10 @@ export default function ApplicationQueuePage() {
     if (!confirm(`Remove ${item.candidates?.name ?? "this ticket"}?`)) return;
     const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
     if (res.ok) { setFeedback({ kind: "success", text: "Removed." }); load(page, false); }
-    else { setFeedback({ kind: "error", text: "Remove failed." }); }
+    else { 
+      const d = await res.json().catch(() => ({}));
+      setFeedback({ kind: "error", text: d.error || "Remove failed." }); 
+    }
   }
 
   function openFaloodDropdown(item: QueueItem) {

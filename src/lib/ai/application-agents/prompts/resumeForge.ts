@@ -79,14 +79,13 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
    return updated;
 }
 
-/** Transform the base resume by merging new skills and adjusting experience bullets. */
+/** Transform the base resume by merging new skills. Let the AI handle the experience bullets natively. */
 function transformResume(base: any, jobAnalysis: any, addedSkills: string[]): any {
    const mergedSkills = mergeSkills(base.skills ?? [], addedSkills);
-   const updatedExperience = augmentExperience(base.experience ?? [], addedSkills, jobAnalysis);
    return {
       ...base,
       skills: mergedSkills,
-      experience: updatedExperience,
+      experience: base.experience ?? [],
    };
 }
 

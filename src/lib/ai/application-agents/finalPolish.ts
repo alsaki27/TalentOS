@@ -57,6 +57,47 @@ export async function runFinalPolish(
   console.log("[Agent:FinalPolish] ───────────────────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
 
+  // -- Structural Protection: Forcefully restore dates and location from base resume --
+  const baseContent = (ctx.baseResume as any)?.content ?? {};
+  
+  if (baseContent.personalInfo && validated.personalInfo) {
+    validated.personalInfo = {
+      ...validated.personalInfo,
+      fullName: baseContent.personalInfo.fullName ?? validated.personalInfo.fullName,
+      email: baseContent.personalInfo.email ?? validated.personalInfo.email,
+      phone: baseContent.personalInfo.phone ?? validated.personalInfo.phone,
+      location: baseContent.personalInfo.location ?? validated.personalInfo.location,
+      linkedin: baseContent.personalInfo.linkedin ?? validated.personalInfo.linkedin,
+      github: baseContent.personalInfo.github ?? validated.personalInfo.github,
+      website: baseContent.personalInfo.website ?? validated.personalInfo.website,
+    };
+  }
+
+  const baseExperience = baseContent.experience ?? [];
+  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
+    validated.experience.forEach((exp: any) => {
+      const baseMatch = baseExperience.find((b: any) => 
+        b.company && exp.company && b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
+      );
+      if (baseMatch) {
+        exp.startDate = baseMatch.startDate ?? null;
+        exp.endDate = baseMatch.endDate ?? null;
+        if (baseMatch.location !== undefined) exp.location = baseMatch.location;
+      }
+    });
+  }
+  if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
+    validated.education.forEach((edu: any) => {
+      const baseMatch = baseContent.education.find((b: any) => 
+        b.institution && edu.institution && b.institution.toLowerCase().trim() === edu.institution.toLowerCase().trim()
+      );
+      if (baseMatch) {
+        edu.startDate = baseMatch.startDate ?? null;
+        edu.endDate = baseMatch.endDate ?? null;
+      }
+    });
+  }
+
   // Defense in depth against the exact failure the prompt now explicitly
   // forbids: confirmed live, the model can satisfy the single-page word
   // count by wiping every bullet from a kept role (empty bullets array),

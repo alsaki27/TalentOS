@@ -63,6 +63,51 @@ export async function runResumeForge(
   const validated = ResumeDraftSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Resume Forge output validation failed: ${validated.error}`);
 
+  // -- Structural Protection: Forcefully restore dates, location, and personal info from base resume --
+  const baseExperience = baseContent.experience ?? [];
+  const baseEducation = baseContent.education ?? [];
+  const basePersonalInfo = baseContent.personalInfo ?? {};
+  
+  if (basePersonalInfo && validated.personalInfo) {
+    validated.personalInfo = {
+      ...validated.personalInfo,
+      fullName: basePersonalInfo.fullName ?? validated.personalInfo.fullName,
+      email: basePersonalInfo.email ?? validated.personalInfo.email,
+      phone: basePersonalInfo.phone ?? validated.personalInfo.phone,
+      location: basePersonalInfo.location ?? validated.personalInfo.location,
+      linkedin: basePersonalInfo.linkedin ?? validated.personalInfo.linkedin,
+      github: basePersonalInfo.github ?? validated.personalInfo.github,
+      website: basePersonalInfo.website ?? validated.personalInfo.website,
+    };
+  }
+
+  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
+    validated.experience.forEach((exp: any) => {
+      // Find matching experience in base by company and title (case-insensitive)
+      const baseMatch = baseExperience.find((b: any) => 
+        b.company && exp.company && b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
+      );
+      if (baseMatch) {
+        exp.startDate = baseMatch.startDate ?? null;
+        exp.endDate = baseMatch.endDate ?? null;
+        if (baseMatch.location !== undefined) {
+          exp.location = baseMatch.location;
+        }
+      }
+    });
+  }
+  if (Array.isArray(validated.education) && Array.isArray(baseContent?.education)) {
+    validated.education.forEach((edu: any) => {
+      const baseMatch = baseContent.education.find((b: any) => 
+        b.institution && edu.institution && b.institution.toLowerCase().trim() === edu.institution.toLowerCase().trim()
+      );
+      if (baseMatch) {
+        edu.startDate = baseMatch.startDate ?? null;
+        edu.endDate = baseMatch.endDate ?? null;
+      }
+    });
+  }
+
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   console.log("[Agent:ResumeForge] ── OUTPUT ───────────────────────────────────");
   console.log("[Agent:ResumeForge] validated draft:", JSON.stringify(validated, null, 2));

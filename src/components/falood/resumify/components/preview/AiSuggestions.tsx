@@ -588,11 +588,16 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         setIsTyping(true);
 
         try {
-            // Prepare messages for API (remove generic ids or extra fields if needed, but backend handles it)
-            const apiMessages = newMessages.map(m => ({
-                role: m.role,
-                content: m.content
-            }));
+            // Prepare messages for API. Include suggestion context so the AI knows what it previously proposed and its status.
+            const apiMessages = newMessages.map(m => {
+                if (m.role === 'assistant' && m.suggestions && m.suggestions.length > 0) {
+                    const suggsText = m.suggestions.map(s => 
+                        `- [${s.status?.toUpperCase() || 'PENDING'}] Type: ${s.type}, Suggested: ${JSON.stringify(s.suggested)}`
+                    ).join('\n');
+                    return { role: m.role, content: `${m.content}\n\nMy Previous Suggestions:\n${suggsText}` };
+                }
+                return { role: m.role, content: m.content };
+            });
             const { suggestions: newSuggestions, reply } = await fetchAiSuggestions(
                 apiMessages,
                 state.jobDescription || currentInput
