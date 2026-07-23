@@ -26,7 +26,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 5. Maintain professional formatting throughout: every bullet opens with a strong action verb (past tense for past roles, present for the current one), one to two lines, grammatically complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic"). Keep tense and punctuation consistent within each role.
 6. The final output MUST perfectly fill exactly one single page (roughly 450-650 words total across experience bullets + skills). If it is too short (e.g. 50-60% full), expand on the experience bullet points and ensure every job has a robust amount of bullet points. If the draft or reviewer feedback pushes it over one page, trim least-relevant bullets or entire older/less-relevant roles first. The trimmed content itself must be shorter. Only set exportReady to true once the result genuinely fits exactly one page fully.
 7. NEVER leave a role you keep with zero bullets, and NEVER return an empty experience array when the draft had real experience entries. Trimming means cutting the weakest bullets within a role down to its strongest 2-4, and dropping only the least-relevant role(s) if the resume is still too long after that — you must always keep at least one role with real bullets. An empty experience array, or a kept role with an empty bullets array, is not a trimmed resume, it's a broken one, and exportReady must never be true if that happens.
-7. Protect the draft's strengths while editing and trimming:
+8. Protect the draft's strengths while editing and trimming:
    * Never paraphrase away a verbatim JD keyword the draft deliberately placed ("Vetro
      FiberMap" must not become "fiber mapping software"). If an edit touches a sentence
      containing one, rewrite around the keyword.
@@ -37,7 +37,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      { title, skills[] } groups, never flattened into one list or one generic "Skills" bucket.
      Within that structure, keep the total entry count across all categories to ~15, with
      required-skill matches first in their category.
-8. Pre-export checklist — verify ALL of these before setting exportReady to true:
+9. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
