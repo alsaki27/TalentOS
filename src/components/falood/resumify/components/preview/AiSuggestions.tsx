@@ -323,6 +323,38 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
             const updatedExperience = resumeData.experience.map(exp => {
                 if (exp.id !== target.id) return exp;
+
+                // FALLBACK: If the AI outputted 'experience_add' but provided an 'original' text,
+                // it actually meant to MODIFY an existing bullet (or date).
+                if (suggestion.original) {
+                    const normOrig = normalize(suggestion.original);
+                    if (normOrig) {
+                        let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+                        if (idx === -1) {
+                            idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normOrig) || normOrig.includes(normalize(bp)));
+                        }
+                        if (idx !== -1) {
+                            const updated = [...exp.bulletPoints];
+                            updated[idx] = newBullet;
+                            return { ...exp, bulletPoints: updated };
+                        }
+
+                        // Try dates as well, just in case they used experience_add for a date change
+                        if (normalize(exp.startDate) === normOrig) return { ...exp, startDate: newBullet };
+                        if (normalize(exp.endDate) === normOrig) return { ...exp, endDate: newBullet };
+                        
+                        const combinedDate = `${exp.startDate || ''} - ${exp.endDate || ''}`;
+                        if (normalize(combinedDate) === normOrig || normalize(combinedDate).includes(normOrig)) {
+                            const parts = newBullet.split(/\s*[-–—]\s*/);
+                            if (parts.length >= 2) {
+                                return { ...exp, startDate: parts[0].trim(), endDate: parts.slice(1).join(' - ').trim() };
+                            } else {
+                                return { ...exp, endDate: newBullet };
+                            }
+                        }
+                    }
+                }
+
                 if (exp.bulletPoints.includes(newBullet)) return exp;
                 return { ...exp, bulletPoints: [...exp.bulletPoints, newBullet] };
             });
@@ -574,7 +606,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                     : newSuggestions.length > 0
                         ? 'I have initialized some suggestions for you based on our conversation.'
                         : 'I acknowledged that. Is there anything specific on the resume you would like to work on?',
-                suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
+                suggestions: newSuggestions.map((s, index) => ({ 
+                    ...s, 
+                    id: `sugg-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`,
+                    status: 'pending' 
+                }))
             };
 
             setChatHistory([...newMessages, aiMsg]);
