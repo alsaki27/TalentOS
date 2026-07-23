@@ -26,7 +26,7 @@ interface EducationEntry {
 
 interface Suggestion {
     id: string;
-    type: 'experience' | 'experience_add' | 'experience_remove' | 'skill' | 'skill_remove' | 'summary' | 'skill_reorg' | 'personal_info' | 'education_add';
+    type: 'experience' | 'experience_info' | 'experience_block_add' | 'experience_block_remove' | 'experience_add' | 'experience_remove' | 'skill' | 'skill_remove' | 'summary' | 'skill_reorg' | 'personal_info' | 'education_add';
     title: string;
     description: string;
     original?: string;
