@@ -27,11 +27,12 @@ function mergeSkills(baseCategories: any[], newSkills: string[]): any[] {
   return categories.map(c => ({ title: c.title, skills: Array.from(c.skills) }));
 }
 
-/** Score how many JD keywords appear in a bullet. */
-function scoreBullet(bullet: string, keywords: Set<string>): number {
+function scoreBullet(bullet: any, keywords: Set<string>): number {
   let score = 0;
+  const bStr = typeof bullet === 'string' ? bullet : (bullet && bullet.text ? String(bullet.text) : "");
+  if (!bStr) return 0;
   keywords.forEach(kw => {
-    if (bullet.toLowerCase().includes(kw.toLowerCase())) score++;
+    if (bStr.toLowerCase().includes(kw.toLowerCase())) score++;
   });
   return score;
 }
@@ -42,7 +43,9 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
   const verbPool = ["Designed", "Implemented", "Managed", "Optimized", "Developed"];
   const updated = experiences.map(exp => {
     const originalBullets = exp.bullets || exp.bulletPoints || [];
-    return { ...exp, bullets: [...originalBullets], bulletPoints: undefined };
+    // Normalize to strings just in case they are { text: string } objects
+    const stringBullets = originalBullets.map((b: any) => typeof b === 'string' ? b : (b?.text ? String(b.text) : ""));
+    return { ...exp, bullets: stringBullets, bulletPoints: undefined };
   });
 
   newSkills.forEach(skill => {
