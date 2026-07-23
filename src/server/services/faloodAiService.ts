@@ -116,6 +116,10 @@ Be intent-aware based on the user's latest message:
 - If the user asks to REMOVE an entire experience/job block, use type "experience_block_remove". Set targetId to the experience item id.
 - If the user asks to add education (e.g. "pull education from her base resume", "add her degree"), use type "education_add". Pull the actual degree/institution/graduationYear from the CANDIDATE'S BASE RESUMES context if provided below - never invent a degree or school that isn't present there or already in the current resume. If no matching education data exists in either the current resume or the base-resume context, say so in your chat reply instead of fabricating a suggestion.
 
+CRITICAL HISTORY RULE:
+- ONLY address the user's LATEST message in the conversation history.
+- Do NOT re-propose or repeat suggestions that you already made for previous messages. If a suggestion was accepted, it is already applied to the CURRENT RESUME JSON. If it was rejected, the user does not want it. You must completely ignore all past user requests in the history and focus ENTIRELY on executing the newest request.
+
 Default behavior:
 - Do NOT suggest adding or modifying sections that do not currently exist in the resume (e.g., if there is no summary, do not suggest adding a summary) UNLESS the user explicitly asks you to.
 - Do not change Personal Info or Education unless the user explicitly asks.
