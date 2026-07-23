@@ -75,17 +75,34 @@ export async function runFinalPolish(
 
   const baseExperience = baseContent.experience ?? [];
   if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    validated.experience.forEach((exp: any) => {
-      const baseMatch = baseExperience.find((b: any) => 
+    validated.experience.forEach((exp: any, i: number) => {
+      // Try exact company match first
+      let baseMatch = baseExperience.find((b: any) => 
         b.company && exp.company && b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
       );
+      
+      // If exact match fails, try fuzzy match
+      if (!baseMatch) {
+         baseMatch = baseExperience.find((b: any) => 
+           b.company && exp.company && (b.company.toLowerCase().includes(exp.company.toLowerCase()) || exp.company.toLowerCase().includes(b.company.toLowerCase()))
+         );
+      }
+      
+      // If still no match, fallback to index matching if lengths are identical
+      if (!baseMatch && validated.experience.length === baseExperience.length) {
+         baseMatch = baseExperience[i];
+      }
+
       if (baseMatch) {
         exp.startDate = baseMatch.startDate ?? null;
         exp.endDate = baseMatch.endDate ?? null;
-        if (baseMatch.location !== undefined) exp.location = baseMatch.location;
+        if (baseMatch.location !== undefined) {
+          exp.location = baseMatch.location;
+        }
       }
     });
   }
+
   if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
     validated.education.forEach((edu: any) => {
       const baseMatch = baseContent.education.find((b: any) => 

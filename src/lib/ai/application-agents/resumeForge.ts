@@ -81,11 +81,24 @@ export async function runResumeForge(
   }
 
   if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    validated.experience.forEach((exp: any) => {
-      // Find matching experience in base by company and title (case-insensitive)
-      const baseMatch = baseExperience.find((b: any) => 
+    validated.experience.forEach((exp: any, i: number) => {
+      // Try exact company match first
+      let baseMatch = baseExperience.find((b: any) => 
         b.company && exp.company && b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
       );
+      
+      // If exact match fails, try fuzzy match (e.g. includes)
+      if (!baseMatch) {
+         baseMatch = baseExperience.find((b: any) => 
+           b.company && exp.company && (b.company.toLowerCase().includes(exp.company.toLowerCase()) || exp.company.toLowerCase().includes(b.company.toLowerCase()))
+         );
+      }
+      
+      // If still no match, fallback to index matching if lengths are identical
+      if (!baseMatch && validated.experience.length === baseExperience.length) {
+         baseMatch = baseExperience[i];
+      }
+
       if (baseMatch) {
         exp.startDate = baseMatch.startDate ?? null;
         exp.endDate = baseMatch.endDate ?? null;

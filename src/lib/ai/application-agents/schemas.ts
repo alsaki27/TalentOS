@@ -142,7 +142,7 @@ function parseExperienceEntry(v: unknown): ExperienceEntry | null {
     location: expectString(v.location, "location"),
     startDate: expectString(v.startDate, "startDate"),
     endDate: expectString(v.endDate, "endDate"),
-    bullets: Array.isArray(v.bullets) ? v.bullets.filter((b): b is string => typeof b === "string") : [],
+    bullets: Array.isArray(v.bullets) ? v.bullets.filter((b): b is string => typeof b === "string") : (Array.isArray(v.bulletPoints) ? v.bulletPoints.filter((b): b is string => typeof b === "string") : []),
     evidenceIds: Array.isArray(v.evidenceIds) ? v.evidenceIds.filter((e): e is string => typeof e === "string") : [],
   };
 }
