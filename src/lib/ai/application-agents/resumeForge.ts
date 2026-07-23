@@ -64,20 +64,19 @@ export async function runResumeForge(
   if ("error" in validated) throw new Error(`Resume Forge output validation failed: ${validated.error}`);
 
   // -- Structural Protection: Forcefully restore dates, location, and personal info from base resume --
-  const baseExperience = baseContent.experience ?? [];
   const baseEducation = baseContent.education ?? [];
   const basePersonalInfo = baseContent.personalInfo ?? {};
   
-  if (basePersonalInfo && validated.personalInfo) {
-    validated.personalInfo = {
-      ...validated.personalInfo,
-      fullName: basePersonalInfo.fullName ?? validated.personalInfo.fullName,
-      email: basePersonalInfo.email ?? validated.personalInfo.email,
-      phone: basePersonalInfo.phone ?? validated.personalInfo.phone,
-      location: basePersonalInfo.location ?? validated.personalInfo.location,
-      linkedin: basePersonalInfo.linkedin ?? validated.personalInfo.linkedin,
-      github: basePersonalInfo.github ?? validated.personalInfo.github,
-      website: basePersonalInfo.website ?? validated.personalInfo.website,
+  if (basePersonalInfo && (validated as any).personalInfo) {
+    (validated as any).personalInfo = {
+      ...(validated as any).personalInfo,
+      fullName: basePersonalInfo.fullName ?? (validated as any).personalInfo.fullName,
+      email: basePersonalInfo.email ?? (validated as any).personalInfo.email,
+      phone: basePersonalInfo.phone ?? (validated as any).personalInfo.phone,
+      location: basePersonalInfo.location ?? (validated as any).personalInfo.location,
+      linkedin: basePersonalInfo.linkedin ?? (validated as any).personalInfo.linkedin,
+      github: basePersonalInfo.github ?? (validated as any).personalInfo.github,
+      website: basePersonalInfo.website ?? (validated as any).personalInfo.website,
     };
   }
 

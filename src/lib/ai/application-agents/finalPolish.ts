@@ -60,16 +60,16 @@ export async function runFinalPolish(
   // -- Structural Protection: Forcefully restore dates and location from base resume --
   const baseContent = (ctx.baseResume as any)?.content ?? {};
   
-  if (baseContent.personalInfo && validated.personalInfo) {
-    validated.personalInfo = {
-      ...validated.personalInfo,
-      fullName: baseContent.personalInfo.fullName ?? validated.personalInfo.fullName,
-      email: baseContent.personalInfo.email ?? validated.personalInfo.email,
-      phone: baseContent.personalInfo.phone ?? validated.personalInfo.phone,
-      location: baseContent.personalInfo.location ?? validated.personalInfo.location,
-      linkedin: baseContent.personalInfo.linkedin ?? validated.personalInfo.linkedin,
-      github: baseContent.personalInfo.github ?? validated.personalInfo.github,
-      website: baseContent.personalInfo.website ?? validated.personalInfo.website,
+  if (baseContent.personalInfo && (validated as any).personalInfo) {
+    (validated as any).personalInfo = {
+      ...(validated as any).personalInfo,
+      fullName: baseContent.personalInfo.fullName ?? (validated as any).personalInfo.fullName,
+      email: baseContent.personalInfo.email ?? (validated as any).personalInfo.email,
+      phone: baseContent.personalInfo.phone ?? (validated as any).personalInfo.phone,
+      location: baseContent.personalInfo.location ?? (validated as any).personalInfo.location,
+      linkedin: baseContent.personalInfo.linkedin ?? (validated as any).personalInfo.linkedin,
+      github: baseContent.personalInfo.github ?? (validated as any).personalInfo.github,
+      website: baseContent.personalInfo.website ?? (validated as any).personalInfo.website,
     };
   }
 

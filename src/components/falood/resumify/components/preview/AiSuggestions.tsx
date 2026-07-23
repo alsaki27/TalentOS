@@ -591,7 +591,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             // Prepare messages for API. Include suggestion context so the AI knows what it previously proposed and its status.
             const apiMessages = newMessages.map(m => {
                 if (m.role === 'assistant' && m.suggestions && m.suggestions.length > 0) {
-                    const suggsText = m.suggestions.map(s => 
+                    const suggsText = m.suggestions.map((s: any) => 
                         `- [${s.status?.toUpperCase() || 'PENDING'}] Type: ${s.type}, Suggested: ${JSON.stringify(s.suggested)}`
                     ).join('\n');
                     return { role: m.role, content: `${m.content}\n\nMy Previous Suggestions:\n${suggsText}` };
