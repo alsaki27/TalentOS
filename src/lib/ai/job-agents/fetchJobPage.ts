@@ -57,7 +57,9 @@ export async function fetchJobPageText(url: string): Promise<string> {
 
   try {
     var controller = new AbortController();
-    var timeout = setTimeout(function () { controller.abort(); }, 10000);
+    // Reduced from 10s \u2192 5s: external pages that will succeed typically respond in < 5s;
+    // dead or slow links were adding a guaranteed 10s stall per job.
+    var timeout = setTimeout(function () { controller.abort(); }, 5000);
 
     var response = await fetch(url, {
       signal: controller.signal,

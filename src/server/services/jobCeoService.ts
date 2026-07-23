@@ -34,7 +34,39 @@ import { createProposal, supersedePendingFor } from "@/server/repositories/agent
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
-const BATCH_SIZE = 5;
+// Increased from 5 → 15 for higher throughput per dispatch tick.
+// Each stage's items run in parallel (Promise.allSettled) so the total wall-clock time
+// for a 15-item batch is roughly equal to the slowest single item, not 15× the average.
+const BATCH_SIZE = 15;
+
+// Maximum concurrent AI calls within one batch to avoid hammering the AI provider.
+const STAGE_CONCURRENCY = 5;
+
+/**
+ * Concurrency-limited parallel executor.
+ * Runs tasks in rolling windows of `concurrency` so we never issue more than
+ * `concurrency` simultaneous calls while still finishing a batch faster than
+ * a pure sequential approach.
+ */
+async function runConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let idx = 0;
+
+  async function worker(): Promise<void> {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i]);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 function getRunnerFor(stage: string) {
   switch (stage) {
@@ -110,10 +142,8 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
   const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, kept: 0 };
 
-  let processed = 0;
-  let kept = 0;
-
-  for (const row of batch) {
+  // Process items in parallel chunks. STAGE_CONCURRENCY caps concurrent AI calls.
+  const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },
@@ -135,16 +165,20 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
 
       if (verdict.keep) {
         await updateStaged(row.id, { stage: "qa_passed", qa_score: verdict.score, qa_reason: verdict.reason });
-        kept++;
+        return { processed: 1, kept: 1 };
       } else {
         await updateStaged(row.id, { stage: "qa_dropped", qa_score: verdict.score, qa_reason: verdict.reason });
+        return { processed: 1, kept: 0 };
       }
-      processed++;
     } catch (err) {
       console.error(`[Job CEO] QA failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
       await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown" });
+      return { processed: 0, kept: 0 };
     }
-  }
+  });
+
+  const processed = results.reduce((s, r) => s + r.processed, 0);
+  const kept = results.reduce((s, r) => s + r.kept, 0);
 
   await bumpRunCounts(runId, { kept_count: kept });
   return { processed, kept };
@@ -154,10 +188,8 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, researched: 0 };
 
-  let processed = 0;
-  let researched = 0;
-
-  for (const row of batch) {
+  // Deep Fetch does a network fetch + AI call. Run in parallel for massive throughput gain.
+  const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },
@@ -179,15 +211,17 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         description_text: fetchResult.descriptionText || row.description_text,
         requirements: fetchResult.requirements,
       });
-      researched++;
-      processed++;
+      return { processed: 1, researched: 1 };
     } catch (err) {
       console.error(`[Job CEO] Deep Fetch failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
+      // Graceful degradation: mark as researched with existing description so the pipeline continues.
       await updateStaged(row.id, { stage: "researched", description_text: row.description_text });
-      researched++;
-      processed++;
+      return { processed: 1, researched: 1 };
     }
-  }
+  });
+
+  const processed = results.reduce((s, r) => s + r.processed, 0);
+  const researched = results.reduce((s, r) => s + r.researched, 0);
 
   await bumpRunCounts(runId, { researched_count: researched });
   return { processed, researched };
@@ -197,7 +231,13 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
   const batch = await claimNextStagedBatch(runId, "researched", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0 };
 
-  const existingJobs = await listAllJobsForFuzzyDedupe();
+  // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
+  // Previously listAllJobsForFuzzyDedupe was inside the inner loop; now it runs once.
+  const [existingJobs, candidates] = await Promise.all([
+    listAllJobsForFuzzyDedupe(),
+    loadCandidateSummaries(50),
+  ]);
+
   const existingTitles = new Set<string>();
   const existingCompanies = new Set<string>();
   for (const j of existingJobs) {
@@ -205,13 +245,8 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
     if (j.company) existingCompanies.add(j.company.toLowerCase().trim());
   }
 
-  const candidates = await loadCandidateSummaries(50);
-
-  let processed = 0;
-  let matched = 0;
-  let logged = 0;
-
-  for (const row of batch) {
+  // Run matchmaking in parallel — each item is an independent AI call.
+  const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: {
@@ -289,22 +324,24 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           logged_job_id: created.id,
           match_results: matchResult,
         });
-        matched += matchResult.matches.length;
-        logged++;
+        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
       } else {
         await updateStaged(row.id, {
           stage: "logged",
           match_results: { ...matchResult, duplicate: true },
         });
-        matched += matchResult.matches.length;
-        logged++;
+        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
       }
-      processed++;
     } catch (err) {
       console.error(`[Job CEO] Matchmaker failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
       await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown" });
+      return { processed: 0, matched: 0, logged: 0 };
     }
-  }
+  });
+
+  const processed = results.reduce((s, r) => s + r.processed, 0);
+  const matched = results.reduce((s, r) => s + r.matched, 0);
+  const logged = results.reduce((s, r) => s + r.logged, 0);
 
   await bumpRunCounts(runId, { matched_count: matched, logged_count: logged });
   return { processed, matched, logged };

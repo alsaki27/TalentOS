@@ -1,4 +1,4 @@
-﻿export var JOB_CEO_CONFIG_DEFAULTS = {
+export var JOB_CEO_CONFIG_DEFAULTS = {
   job_ceo_orchestrator: {
     displayName: "Job CEO",
     temperature: 0.2,
@@ -21,9 +21,9 @@
   },
   job_ceo_qa: {
     displayName: "QA Bouncer",
-    temperature: 0.2,
-    maxOutputTokens: 32768,
-    timeoutMs: 30000,
+    temperature: 0.1,
+    maxOutputTokens: 512,   // QA verdict JSON is tiny; 32768 was wasting time on token reservation.
+    timeoutMs: 15000,       // Halved from 30s — fast regex fallback covers any AI timeout.
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
@@ -31,9 +31,9 @@
   },
   job_ceo_deep_fetch: {
     displayName: "Deep Fetch",
-    temperature: 0.3,
-    maxOutputTokens: 32768,
-    timeoutMs: 60000,
+    temperature: 0.2,
+    maxOutputTokens: 2048,  // Description text extraction; 32768 was excessive.
+    timeoutMs: 30000,       // Reduced from 60s; network fetch is capped at 10s internally.
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 0,

@@ -1,4 +1,4 @@
-﻿import type { AiProvider } from "@/lib/ai/provider";
+import type { AiProvider } from "@/lib/ai/provider";
 import type { JobCeoAgentContext, StagedJob } from "./types";
 import { DeepFetchResultSchema, type DeepFetchResultV1 } from "./schemas";
 import { buildDeepFetchPrompt } from "./prompts/deepFetch";
@@ -19,7 +19,9 @@ export async function runDeepFetch(
   var title = stagedJob.title ?? "Unknown";
   var company = stagedJob.company ?? "Unknown";
 
-  if (existingDesc.length > 500) {
+  // Skip the network roundtrip and AI extraction for jobs that already have
+  // a rich enough description. Raised from 500 → 800 to skip more jobs early.
+  if (existingDesc.length > 800) {
     return {
       descriptionText: existingDesc,
       requirements: stagedJob.requirements as DeepFetchResultV1["requirements"] ?? { yearsExperience: null, techStack: [], clearance: null, certifications: [] },
