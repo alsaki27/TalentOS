@@ -236,25 +236,25 @@ def build_job_payload(row: "pd.Series", companies: Dict[Any, Dict[str, Any]]) ->
 
 def main():
     parser = argparse.ArgumentParser(description="OpenJobData → TalentOS Job CEO ingest")
-    parser.add_argument("--role-group", default="all",
+    parser.add_argument("--role-group", default=None,
                         help="Role group id (A, B, C, D, or 'all'). Default: all")
-    parser.add_argument("--days", type=int, default=1,
+    parser.add_argument("--days", type=int, default=None,
                         help="Number of trailing days to scan. Default: 1")
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run", action="store_true", default=None,
                         help="Scan and print counts but do NOT POST to TalentOS")
-    parser.add_argument("--keywords", default="",
+    parser.add_argument("--keywords", default=None,
                         help="Comma-separated custom keywords (overrides role-group filter)")
-    parser.add_argument("--limit", type=int, default=0,
+    parser.add_argument("--limit", type=int, default=None,
                         help="Max jobs to send per run (0 = no limit)")
     args = parser.parse_args()
 
     # Environment overrides
-    dry_run = args.dry_run or os.environ.get("DRY_RUN", "").lower() == "true"
-    role_group = args.role_group or os.environ.get("ROLE_GROUP", "all")
-    days_back = args.days or int(os.environ.get("DAYS", "1"))
-    custom_keywords_raw = args.keywords or os.environ.get("KEYWORDS", "")
+    dry_run = args.dry_run if args.dry_run is not None else (os.environ.get("DRY_RUN", "").lower() == "true")
+    role_group = args.role_group if args.role_group is not None else os.environ.get("ROLE_GROUP", "all")
+    days_back = args.days if args.days is not None else int(os.environ.get("DAYS", "1"))
+    custom_keywords_raw = args.keywords if args.keywords is not None else os.environ.get("KEYWORDS", "")
     custom_keywords = [k.strip() for k in custom_keywords_raw.split(",") if k.strip()]
-    limit = args.limit or int(os.environ.get("LIMIT", "0"))
+    limit = args.limit if args.limit is not None else int(os.environ.get("LIMIT", "0"))
 
     base_url = os.environ.get("BASE_URL", "https://skarion-talent-os.skarion-talentos.workers.dev")
     ingest_secret = os.environ.get("INGEST_SECRET") or os.environ.get("JOB_CEO_INGEST_SECRET")
