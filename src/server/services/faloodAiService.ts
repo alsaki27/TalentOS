@@ -108,8 +108,11 @@ Be intent-aware based on the user's latest message:
 - Only use "skill_reorg" if the user explicitly asks to reorganize/rewrite the entire skills section.
 - If the user asks to REMOVE skills, use type "skill_remove" with the skills to remove.
 - If the user asks to change Personal Info (name, title, email, phone, links, location), use type "personal_info" and set targetId to the exact field name.
+- If the user asks to change Experience metadata (job title, company, location, start date, end date), use type "experience_info", set targetId to the experience item id, set "original" to the exact field name (jobTitle, company, location, startDate, endDate), and "suggested" to the new text.
 - If the user asks to ADD a new experience bullet/line, use type "experience_add".
 - If the user asks to REMOVE an experience bullet/line, use type "experience_remove".
+- If the user asks to ADD a whole new experience/job block, use type "experience_block_add". Set "suggested" to a JSON object: {"jobTitle": "...", "company": "...", "location": "...", "startDate": "...", "endDate": "...", "description": "...", "bulletPoints": ["..."]}.
+- If the user asks to REMOVE an entire experience/job block, use type "experience_block_remove". Set targetId to the experience item id.
 - If the user asks to add education (e.g. "pull education from her base resume", "add her degree"), use type "education_add". Pull the actual degree/institution/graduationYear from the CANDIDATE'S BASE RESUMES context if provided below - never invent a degree or school that isn't present there or already in the current resume. If no matching education data exists in either the current resume or the base-resume context, say so in your chat reply instead of fabricating a suggestion.
 
 Default behavior:
@@ -125,12 +128,12 @@ Output strictly valid JSON (no markdown fences, no explanation) in the following
     "suggestions": [
         {
             "id": "unique_id",
-            "type": "experience" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add",
+            "type": "experience" | "experience_info" | "experience_block_add" | "experience_block_remove" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add",
             "title": "Short title of suggestion",
             "description": "Reasoning for the suggestion",
-            "original": "Original text (if applicable)",
-            "suggested": "For summary/experience/personal_info/experience_add: a plain string. For skill/skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects: [{\\"id\\": \\"cat1\\", \\"name\\": \\"Category Name\\", \\"skills\\": [\\"Skill 1\\"]}]. For education_add: a JSON ARRAY of objects: [{\\"degree\\": \\"...\\", \\"institution\\": \\"...\\", \\"graduationYear\\": \\"...\\", \\"location\\": \\"...\\"}]",
-            "targetId": "For experience/experience_add/experience_remove: experience item id. For skill/skill_remove: skill category id. For personal_info: one of fullName|jobTitle|email|phone|location|website|linkedin|github|birthDate. Not used for education_add."
+            "original": "Original text (if applicable, or field name for experience_info)",
+            "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill/skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
+            "targetId": "For experience/experience_add/experience_remove/experience_info/experience_block_remove: experience item id. For skill/skill_remove: skill category id. For personal_info: field name."
         }
     ]
 }`;

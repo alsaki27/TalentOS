@@ -199,37 +199,16 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
             let matchedExpId: string | null = null;
             let matchedBulletIndex = -1;
-            let matchedField: keyof import('@/components/falood/resumify/types/resume').Experience | 'dateRange' | null = null;
-
             for (const exp of candidates) {
-                if (suggestion.original) {
-                    const normOriginal = normalize(suggestion.original);
-
-                    // 1. Try matching bullet points
-                    let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
-                    if (idx === -1) {
-                        idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normOriginal) || normOriginal.includes(normalize(bp)));
-                    }
-                    if (idx !== -1) {
-                        matchedExpId = exp.id;
-                        matchedBulletIndex = idx;
-                        break;
-                    }
-
-                    // 2. Try matching other fields (jobTitle, company, etc.)
-                    if (normOriginal && normalize(exp.jobTitle) === normOriginal) { matchedExpId = exp.id; matchedField = 'jobTitle'; break; }
-                    if (normOriginal && normalize(exp.company) === normOriginal) { matchedExpId = exp.id; matchedField = 'company'; break; }
-                    if (normOriginal && normalize(exp.location) === normOriginal) { matchedExpId = exp.id; matchedField = 'location'; break; }
-                    if (normOriginal && normalize(exp.startDate) === normOriginal) { matchedExpId = exp.id; matchedField = 'startDate'; break; }
-                    if (normOriginal && normalize(exp.endDate) === normOriginal) { matchedExpId = exp.id; matchedField = 'endDate'; break; }
-
-                    // 3. Try matching combined date string (e.g. "Jul 2025 - Present")
-                    const combinedDate = `${exp.startDate || ''} - ${exp.endDate || ''}`;
-                    if (normOriginal && (normalize(combinedDate) === normOriginal || normalize(combinedDate).includes(normOriginal))) {
-                        matchedExpId = exp.id;
-                        matchedField = 'dateRange';
-                        break;
-                    }
+                let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+                if (idx === -1 && suggestion.original) {
+                    const normalizedOriginal = normalize(suggestion.original);
+                    idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
+                }
+                if (idx !== -1) {
+                    matchedExpId = exp.id;
+                    matchedBulletIndex = idx;
+                    break;
                 }
             }
 
@@ -237,26 +216,58 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
             const updatedExperience = resumeData.experience.map(exp => {
                 if (exp.id !== matchedExpId) return exp;
-                
-                if (matchedBulletIndex !== -1) {
-                    const updatedBullets = [...exp.bulletPoints];
-                    updatedBullets[matchedBulletIndex] = newText;
-                    return { ...exp, bulletPoints: updatedBullets };
-                }
-                
-                if (matchedField === 'dateRange') {
-                    const parts = newText.split(/\s*[-–—]\s*/);
-                    if (parts.length >= 2) {
-                        return { ...exp, startDate: parts[0].trim(), endDate: parts.slice(1).join(' - ').trim() };
-                    } else {
-                        return { ...exp, endDate: newText };
-                    }
-                } else if (matchedField) {
-                    return { ...exp, [matchedField]: newText };
-                }
-
-                return exp;
+                const updatedBullets = [...exp.bulletPoints];
+                updatedBullets[matchedBulletIndex] = newText;
+                return { ...exp, bulletPoints: updatedBullets };
             });
+
+            return { ...resumeData, experience: updatedExperience };
+        }
+
+        if (suggestion.type === 'experience_info') {
+            const field = suggestion.original as keyof import('@/components/falood/resumify/types/resume').Experience | undefined;
+            const newText = (suggestion.suggested as string) ?? '';
+            if (!field || !newText) return resumeData;
+
+            const target = suggestion.targetId
+                ? resumeData.experience.find(exp => exp.id === suggestion.targetId)
+                : resumeData.experience[0]; // fallback to most recent if no targetId
+
+            if (!target) return resumeData;
+            const allowedFields = ['jobTitle', 'company', 'location', 'startDate', 'endDate'];
+            if (!allowedFields.includes(field)) return resumeData;
+
+            const updatedExperience = resumeData.experience.map(exp => {
+                if (exp.id !== target.id) return exp;
+                return { ...exp, [field]: newText };
+            });
+
+            return { ...resumeData, experience: updatedExperience };
+        }
+
+        if (suggestion.type === 'experience_block_add') {
+            const newBlock = suggestion.suggested as any;
+            if (!newBlock || typeof newBlock !== 'object') return resumeData;
+            
+            const newExperience: import('@/components/falood/resumify/types/resume').Experience = {
+                id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                jobTitle: newBlock.jobTitle || '',
+                company: newBlock.company || '',
+                location: newBlock.location || '',
+                startDate: newBlock.startDate || '',
+                endDate: newBlock.endDate || '',
+                current: newBlock.current || false,
+                description: newBlock.description || '',
+                bulletPoints: Array.isArray(newBlock.bulletPoints) ? newBlock.bulletPoints : [],
+            };
+
+            return { ...resumeData, experience: [newExperience, ...resumeData.experience] };
+        }
+
+        if (suggestion.type === 'experience_block_remove') {
+            if (!suggestion.targetId) return resumeData;
+            const updatedExperience = resumeData.experience.filter(exp => exp.id !== suggestion.targetId);
+            if (updatedExperience.length === resumeData.experience.length) return resumeData; // no match
 
             return { ...resumeData, experience: updatedExperience };
         }
