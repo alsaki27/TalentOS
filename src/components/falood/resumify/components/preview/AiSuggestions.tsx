@@ -199,16 +199,37 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
             let matchedExpId: string | null = null;
             let matchedBulletIndex = -1;
+            let matchedField: keyof import('@/components/falood/resumify/types/resume').Experience | 'dateRange' | null = null;
+
             for (const exp of candidates) {
-                let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
-                if (idx === -1 && suggestion.original) {
-                    const normalizedOriginal = normalize(suggestion.original);
-                    idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normalizedOriginal) || normalizedOriginal.includes(normalize(bp)));
-                }
-                if (idx !== -1) {
-                    matchedExpId = exp.id;
-                    matchedBulletIndex = idx;
-                    break;
+                if (suggestion.original) {
+                    const normOriginal = normalize(suggestion.original);
+
+                    // 1. Try matching bullet points
+                    let idx = exp.bulletPoints.findIndex(bp => bp === suggestion.original);
+                    if (idx === -1) {
+                        idx = exp.bulletPoints.findIndex(bp => normalize(bp).includes(normOriginal) || normOriginal.includes(normalize(bp)));
+                    }
+                    if (idx !== -1) {
+                        matchedExpId = exp.id;
+                        matchedBulletIndex = idx;
+                        break;
+                    }
+
+                    // 2. Try matching other fields (jobTitle, company, etc.)
+                    if (normOriginal && normalize(exp.jobTitle) === normOriginal) { matchedExpId = exp.id; matchedField = 'jobTitle'; break; }
+                    if (normOriginal && normalize(exp.company) === normOriginal) { matchedExpId = exp.id; matchedField = 'company'; break; }
+                    if (normOriginal && normalize(exp.location) === normOriginal) { matchedExpId = exp.id; matchedField = 'location'; break; }
+                    if (normOriginal && normalize(exp.startDate) === normOriginal) { matchedExpId = exp.id; matchedField = 'startDate'; break; }
+                    if (normOriginal && normalize(exp.endDate) === normOriginal) { matchedExpId = exp.id; matchedField = 'endDate'; break; }
+
+                    // 3. Try matching combined date string (e.g. "Jul 2025 - Present")
+                    const combinedDate = `${exp.startDate} - ${exp.endDate}`;
+                    if (normOriginal && (normalize(combinedDate) === normOriginal || normalize(combinedDate).includes(normOriginal))) {
+                        matchedExpId = exp.id;
+                        matchedField = 'dateRange';
+                        break;
+                    }
                 }
             }
 
@@ -216,9 +237,25 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
             const updatedExperience = resumeData.experience.map(exp => {
                 if (exp.id !== matchedExpId) return exp;
-                const updatedBullets = [...exp.bulletPoints];
-                updatedBullets[matchedBulletIndex] = newText;
-                return { ...exp, bulletPoints: updatedBullets };
+                
+                if (matchedBulletIndex !== -1) {
+                    const updatedBullets = [...exp.bulletPoints];
+                    updatedBullets[matchedBulletIndex] = newText;
+                    return { ...exp, bulletPoints: updatedBullets };
+                }
+                
+                if (matchedField === 'dateRange') {
+                    const parts = newText.split(/\s*[-–—]\s*/);
+                    if (parts.length >= 2) {
+                        return { ...exp, startDate: parts[0].trim(), endDate: parts.slice(1).join(' - ').trim() };
+                    } else {
+                        return { ...exp, endDate: newText };
+                    }
+                } else if (matchedField) {
+                    return { ...exp, [matchedField]: newText };
+                }
+
+                return exp;
             });
 
             return { ...resumeData, experience: updatedExperience };
