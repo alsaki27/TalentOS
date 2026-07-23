@@ -341,7 +341,9 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed >= BATCH_SIZE || transitioned;
+    // Keep chaining as long as ANY work was done — not just full batches.
+    // A partial final batch (e.g. 3 of 5) is still work that should continue.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -362,7 +364,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed >= BATCH_SIZE || transitioned;
+    // Keep chaining as long as ANY work was done — not just full batches.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -381,16 +384,12 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
     if (!hasMore || Number(hasMore.count) <= 0) {
       await updateRunStatus(run.id, "matchmaking", { last_error: undefined });
       transitioned = true;
-
-      await logActivity({
-        type: "job_ceo_run_completed",
-        description: `Job CEO run completed: ${run.ingested_count} ingested, ${run.kept_count} kept, ${run.researched_count} researched, ${run.matched_count} matched, ${run.logged_count} logged`,
-        entityType: "job_ceo_run",
-        entityId: run.id,
-      });
+      // NOTE: Do NOT log job_ceo_run_completed here — matchmaking stage has not run yet.
+      // The completion log is emitted once, in the matchmaking → completed transition below.
     }
 
-    const needsMore = result.processed >= BATCH_SIZE || transitioned;
+    // Keep chaining as long as ANY work was done — not just full batches.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -464,7 +463,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       entityId: run.id,
     });
 
-    return { dispatched: true, runId: run.id, stage: "completed", count: 1, needsDispatch: true };
+    // needsDispatch: false — no more work to do; run is fully complete.
+    return { dispatched: true, runId: run.id, stage: "completed", count: 1, needsDispatch: false };
   }
 
   return { dispatched: false, runId: null, stage: null, count: 0, needsDispatch: false };
