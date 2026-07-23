@@ -147,7 +147,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     }, [messages]);
 
     const applySuggestionToResumeData = useCallback((resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
-        const normalize = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+        const normalize = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
         if (suggestion.type === 'summary') {
             return { ...resumeData, summary: (suggestion.suggested as string) ?? '' };
@@ -224,7 +224,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                     if (normOriginal && normalize(exp.endDate) === normOriginal) { matchedExpId = exp.id; matchedField = 'endDate'; break; }
 
                     // 3. Try matching combined date string (e.g. "Jul 2025 - Present")
-                    const combinedDate = `${exp.startDate} - ${exp.endDate}`;
+                    const combinedDate = `${exp.startDate || ''} - ${exp.endDate || ''}`;
                     if (normOriginal && (normalize(combinedDate) === normOriginal || normalize(combinedDate).includes(normOriginal))) {
                         matchedExpId = exp.id;
                         matchedField = 'dateRange';
