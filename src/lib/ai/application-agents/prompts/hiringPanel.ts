@@ -9,14 +9,29 @@ Note: If the draft contains bullets with "(added)" or "(refined)" markers, these
 
 Review the tailored resume draft against the original job analysis and base resume.
 
-SCORING GUIDELINES (ensure ATS scores are high if matches are present, and strictly enforce formatting):
-- atsScore (0-10): Score this rigorously based on matching keywords and job description alignment. If the resume perfectly matches the job description and covers the requirements, it MUST receive a high score (e.g., 9-10). It should strive to score higher than the base resume. Only dock points if essential required skills are completely missing.
-- recruiterScore (0-10): does the resume read well and put relevant strengths near the top? Note genuinely weak phrasing as optional edits. Do not penalize the lack of a professional summary — a summary is intentionally forbidden in this pipeline.
-- roleFitScore (0-10): how well does the candidate's experience align with what the role is actually asking for? Give credit for adjacent/transferable experience, not just exact matches.
-- truthfulnessRisk (0-10): flag genuine fabrication risk only. Rephrasing, expanding, or lengthening the candidate's existing real experience to better fit the job is NOT a truthfulness risk and is completely allowed.
-- Formatting: ONE-PAGE RULE IS STRICT. The resume MUST fill exactly one page (around 450-650 words). Flag if it is too short (e.g., only 50-60% full) or if it is over one page. Flag a professional summary if present (it must be null).
+SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinely weak resumes):
+- atsScore (0-10): how well does the draft cover the job's key required skills and top ATS
+  keywords, using close-enough or verbatim phrasing? Score generously when most of the important
+  keywords are present in some reasonable form; only dock a couple points, not a full point each,
+  for a handful of missing nice-to-haves. A keyword the candidate genuinely can't support (already
+  in missingRequirements/excludedKeywords) should not lower the score at all.
+- recruiterScore (0-10): does the resume read well and put relevant strengths near the top? Note
+  genuinely weak phrasing (fragments, "responsible for", repeated opening verbs, buzzword filler)
+  as optional edits rather than automatic score-tankers. Do not penalize the lack of a professional
+  summary — a summary is intentionally forbidden in this pipeline.
+- roleFitScore (0-10): how well does the candidate's experience align with what the role is
+  actually asking for? Give credit for adjacent/transferable experience, not just exact matches.
+- truthfulnessRisk (0-10): flag genuine fabrication risk only — a required license/certification/
+  degree that appears in the draft with no support anywhere in the base resume or evidence bank is
+  the main thing to catch (call it out as a "critical" requiredEdit). Rephrasing or reordering the
+  candidate's existing real experience is NOT a truthfulness risk. An honest omission (listed under
+  missingRequirements) is not a risk either. Default this score low unless something concrete is
+  actually unsupported.
+- Formatting: only flag if the draft is clearly way over one page (roughly 650+ words) or a kept
+  role has zero bullets. Flag a professional summary if present (it must be null).
 
-Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming in the next stage. Do not penalize expanded bullet points that are meant to ensure the resume fills exactly one page.
+Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
+in the next stage, so don't pad it with nitpicks that could cause good content to get cut.
 
 Return a JSON object with:
 - atsScore: number 0-10
