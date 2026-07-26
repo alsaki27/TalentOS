@@ -43,13 +43,36 @@ ${contentStr}
     });
 
     const raw = textOf(response.content);
-    const match = raw.match(/\[[\s\S]*\]/);
-    const jsonString = match ? match[0] : raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const parsed = JSON.parse(jsonString);
     
+    // Find the first '[' and last ']'
+    const firstBracket = raw.indexOf('[');
+    const lastBracket = raw.lastIndexOf(']');
+    
+    let parsed: any = [];
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      const jsonString = raw.substring(firstBracket, lastBracket + 1);
+      try {
+        parsed = JSON.parse(jsonString);
+      } catch (e) {
+        require('fs').appendFileSync('.ai-debug.log', `[parse error] ${e}\nRaw JSON: ${jsonString}\n`);
+      }
+    } else {
+      try {
+        parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim());
+      } catch (e) {
+        require('fs').appendFileSync('.ai-debug.log', `[fallback parse error] ${e}\nRaw Output: ${raw}\n`);
+      }
+    }
+
+    if (!Array.isArray(parsed)) {
+      require('fs').appendFileSync('.ai-debug.log', `[not an array] Parsed result is not an array: ${JSON.stringify(parsed)}\n`);
+      return [];
+    }
+
     return ResponseSchema.parse(parsed);
-  } catch (err) {
+  } catch (err: any) {
     console.error("[extractProfessionalSkills] Failed to extract skills:", err);
+    require('fs').appendFileSync('.ai-debug.log', `[extract error] ${err?.message || err}\n`);
     return [];
   }
 }

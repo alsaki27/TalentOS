@@ -12,8 +12,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const baseResumes = await query<any>("SELECT * FROM base_resumes WHERE candidate_id = $1 ORDER BY updated_at DESC", [params.id]);
     if (!baseResumes.length) return NextResponse.json({ skills: [] });
     
-    const contents = baseResumes.map(br => br.content).filter(c => c && typeof c === "object");
-    if (!contents.length) return NextResponse.json({ skills: [] });
+    const contents = baseResumes.map(br => {
+      if (typeof br.content === "string") {
+        try { return JSON.parse(br.content); } catch (e) { return br.content; }
+      }
+      return br.content;
+    }).filter(c => !!c);
+    
+    if (!contents.length) return NextResponse.json({ skills: [], parsedFromResumeName: baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ") });
     
     const provider = getGoogleVertexProxyProvider("gemini-2.5-pro");
     if (!provider) {
