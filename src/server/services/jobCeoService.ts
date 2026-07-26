@@ -511,7 +511,7 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
   const result = await dispatchNextJobCeoWork();
 
   if (result.needsDispatch) {
-    const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+    const baseUrl = process.env.TALENTOS_BASE_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://skarion-talent-os.skarion-talentos.workers.dev");
     const cronSecret = process.env.CRON_SECRET;
     await backgroundDispatch(
       fetch(`${baseUrl}/api/job-ceo/dispatch`, {

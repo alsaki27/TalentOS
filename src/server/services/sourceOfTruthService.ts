@@ -2,11 +2,13 @@ import type { AiProvider } from "@/lib/ai/provider";
 import { findSoTByCandidateId, upsertSoT, updatePendingSkills, updateConfirmedSkills, type PendingSkill } from "@/server/repositories/sourceOfTruthRepository";
 import { queryOne } from "@/server/db/neon";
 import { inferAdjacentSkills } from "@/lib/ai/source-of-truth/inferAdjacentSkills";
+import { extractProfessionalSkills } from "@/lib/ai/source-of-truth/extractProfessionalSkills";
 
 export interface CandidateSoT {
   confirmedSkills: string[];
   pendingSkills: PendingSkill[];
   lastParsedAt: string | null;
+  parsedFromResumeName?: string | null;
 }
 
 export async function parseSourceOfTruth(
@@ -31,40 +33,9 @@ export async function parseSourceOfTruth(
     throw new Error("Base resume has no valid content.");
   }
 
-  // Extract skills from base resume
-  const extractedSkills = new Set<string>();
-
-  // Extract from skills section
-  if (Array.isArray(content.skills)) {
-    content.skills.forEach((skillItem: any) => {
-      if (typeof skillItem === "string") {
-        extractedSkills.add(skillItem);
-      } else if (skillItem && typeof skillItem === "object" && Array.isArray(skillItem.skills)) {
-        skillItem.skills.forEach((s: any) => {
-          if (typeof s === "string") {
-            extractedSkills.add(s);
-          }
-        });
-      }
-    });
-  }
-
-  // Bonus: Extract first word of experience bullets as a weak signal
-  if (Array.isArray(content.experience)) {
-    content.experience.forEach((exp: any) => {
-      if (Array.isArray(exp.bullets)) {
-        exp.bullets.forEach((b: any) => {
-          const text = typeof b === "string" ? b : b?.text;
-          if (typeof text === "string") {
-            const firstWord = text.split(" ")[0]?.replace(/[^a-zA-Z0-9]/g, "");
-            if (firstWord && firstWord.length > 2) {
-              extractedSkills.add(firstWord);
-            }
-          }
-        });
-      }
-    });
-  }
+  // Extract highly relevant professional skills using AI
+  const aiExtractedSkills = await extractProfessionalSkills(content, provider);
+  const extractedSkills = new Set<string>(aiExtractedSkills);
 
   // Fetch existing Source of Truth to preserve manually confirmed skills
   const existingSoT = await findSoTByCandidateId(candidateId);
@@ -98,7 +69,8 @@ export async function parseSourceOfTruth(
   return {
     confirmedSkills: result.confirmed_skills,
     pendingSkills: result.pending_skills,
-    lastParsedAt: result.last_parsed_at
+    lastParsedAt: result.last_parsed_at,
+    parsedFromResumeName: baseResume.name || baseResume.filename
   };
 }
 
@@ -235,9 +207,19 @@ export async function getSourceOfTruth(
 ): Promise<CandidateSoT | null> {
   const row = await findSoTByCandidateId(candidateId);
   if (!row) return null;
+
+  let parsedFromResumeName: string | null = null;
+  if (row.parsed_from_resume_id) {
+    const baseResume = await queryOne<any>("SELECT name, filename FROM base_resumes WHERE id = $1", [row.parsed_from_resume_id]);
+    if (baseResume) {
+      parsedFromResumeName = baseResume.name || baseResume.filename;
+    }
+  }
+
   return {
     confirmedSkills: row.confirmed_skills,
     pendingSkills: row.pending_skills,
     lastParsedAt: row.last_parsed_at,
+    parsedFromResumeName,
   };
 }

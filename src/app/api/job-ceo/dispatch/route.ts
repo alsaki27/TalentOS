@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { dispatchNextJobCeoWork, dispatchAndChain } from "@/server/services/jobCeoService";
+import { dispatchAndChain } from "@/server/services/jobCeoService";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await dispatchNextJobCeoWork();
+    const result = await dispatchAndChain();
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message ?? String(err) }, { status: 500 });
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await dispatchNextJobCeoWork();
+    const result = await dispatchAndChain();
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message ?? String(err) }, { status: 500 });

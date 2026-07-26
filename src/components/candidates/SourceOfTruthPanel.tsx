@@ -12,7 +12,7 @@ interface Suggestion {
 }
 
 export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateId: string; verifiedSkills: string[] }) {
-  const [sot, setSot] = useState<{ confirmedSkills: string[]; pendingSuggestions: Suggestion[]; lastParsedAt: string | null } | null>(null);
+  const [sot, setSot] = useState<{ confirmedSkills: string[]; pendingSuggestions: Suggestion[]; lastParsedAt: string | null; parsedFromResumeName?: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -159,10 +159,14 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
         </div>
       </div>
       
-      <p className="muted" style={{ fontSize: 13, marginTop: -8, marginBottom: 20 }}>
-        The Source of Truth represents the ledger of all skills the recruiter has confirmed this candidate is eligible to claim. 
-        When tailoring applications, the AI can safely pull from this list without requiring explicit base resume evidence.
-      </p>
+      <p className="muted" style={{ marginTop: 8 }}>
+          The Source of Truth represents the ledger of all skills the recruiter has confirmed this candidate is eligible to claim. When tailoring applications, the AI can safely pull from this list without requiring explicit base resume evidence.
+          {sot?.parsedFromResumeName && (
+            <span style={{ display: 'block', marginTop: '4px', fontStyle: 'italic', color: 'var(--color-primary)' }}>
+              Skills extracted from base resume: <strong>{sot.parsedFromResumeName}</strong>
+            </span>
+          )}
+        </p>
 
       {/* Confirmed Skills Section */}
       <div className="card" style={{ marginBottom: 20 }}>

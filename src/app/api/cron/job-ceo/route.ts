@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
     });
 
     // Also trigger dispatch so it starts moving through the pipeline
-    const baseUrl = process.env.TALENTOS_BASE_URL || "http://localhost:3000";
+    const baseUrl = process.env.TALENTOS_BASE_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://skarion-talent-os.skarion-talentos.workers.dev");
     fetch(`${baseUrl}/api/job-ceo/dispatch`, {
       method: "POST",
       headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
