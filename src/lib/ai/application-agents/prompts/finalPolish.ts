@@ -27,19 +27,10 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    (past tense for past roles, present for the current one), one to two lines, grammatically
    complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic").
    Keep tense and punctuation consistent within each role.
-5. The final output MUST fit on a single page (roughly 450-650 words total across experience
-   bullets + skills). If the draft or reviewer feedback pushes it over that, trim
-   least-relevant bullets or entire older/less-relevant roles first — do not shrink
-   font/spacing conceptually or pad whitespace to "cheat" the limit; the trimmed content
-   itself must be shorter. Only set exportReady to true once the result genuinely fits one
-   page.
-6. NEVER leave a role you keep with zero bullets, and NEVER return an empty experience array
-   when the draft had real experience entries. Trimming means cutting the weakest bullets
-   within a role down to its strongest 2-4, and dropping only the least-relevant role(s) if
-   the resume is still too long after that — you must always keep at least one role with
-   real bullets. An empty experience array, or a kept role with an empty bullets array, is
-   not a trimmed resume, it's a broken one, and exportReady must never be true if that
-   happens.
+5. The final output MUST fit on a single page strictly at any cost (roughly 450-650 words total across experience
+   bullets + skills). Do not shrink font/spacing conceptually or pad whitespace to "cheat" the limit;
+   the content itself must be concise. Only set exportReady to true once the result genuinely fits one page.
+6. NEVER drop or vanish an entire experience role from the base resume, and NEVER leave any role with fewer than 2-3 bullets! Every role from the draft must be preserved. To fit within one page strictly, use 5-6 bullets for the main role, 3-5 bullets for secondary roles, and 2-3 bullets for older roles (maximum 6 bullets per role, minimum 2-3 bullets per role). Never collapse a role down to zero or 1 bullet. An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. Protect the draft's strengths while editing and trimming:
    * Never paraphrase away a verbatim JD keyword the draft deliberately placed ("Vetro
      FiberMap" must not become "fiber mapping software"). If an edit touches a sentence
@@ -57,7 +48,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
    * the top third (skills + first role's first two bullets) hits the JD's top selection
      criteria and contains at least one quantified achievement;
-   * word budget respected, no kept role with zero bullets, no unsupported claims anywhere.
+   * one-page limit respected strictly at any cost, every experience role preserved with 2 to 6 bullets (no role vanished), no unsupported claims anywhere.
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 
