@@ -282,12 +282,11 @@ export async function triggerAiWorkflowForApplication(
 
   // Fetch SoT and notes LIVE so the pipeline always uses current recruiter decisions.
   const sot = await getSourceOfTruth(appRow.candidate_id);
-  const notesRow = await queryOne<{ notes: string | null }>(
-    "SELECT notes FROM candidates WHERE id = $1",
-    [appRow.candidate_id]
-  );
   const sourceOfTruth: SourceOfTruthData | null = sot
-    ? { confirmedSkills: sot.confirmedSkills, notesContext: notesRow?.notes ?? null }
+    ? {
+        confirmedSkills: sot.confirmedSkills,
+        notesContext: sot.notes ?? null,
+      }
     : null;
 
   const { workflowId } = await startWorkflow({

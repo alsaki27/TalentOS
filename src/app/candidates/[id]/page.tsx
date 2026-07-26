@@ -9,6 +9,8 @@ import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorR
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
+import { PipelineStatus } from "@/components/candidates/PipelineStatus";
+import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
 
 interface BaseResumeSummary {
   id: string;
@@ -330,7 +332,7 @@ export default function CandidateProfilePage() {
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Applications">("Overview");
+  const [activeTab, setActiveTab] = useState<"Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Applications">("Overview");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -951,7 +953,7 @@ export default function CandidateProfilePage() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-        {(["Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Applications"] as const).map((tab) => (
+        {(["Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Applications"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1177,7 +1179,11 @@ export default function CandidateProfilePage() {
       )}
 
       {activeTab === "Source of Truth" && (
-        <SourceOfTruthPanel candidateId={params.id as string} verifiedSkills={candidate.verified_skills ?? []} />
+        <SourceOfTruthPanel candidateId={candidate.id} verifiedSkills={candidate.verified_skills || []} />
+      )}
+
+      {activeTab === "Notes & Caveats" && (
+        <CandidateNotesPanel candidateId={candidate.id} />
       )}
 
       {activeTab === "Evidence Bank" && (

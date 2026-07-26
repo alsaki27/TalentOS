@@ -7,6 +7,7 @@ export interface SoTRow {
   pending_skills: PendingSkill[];
   parsed_from_resume_id: string | null;
   last_parsed_at: string | null;
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -36,8 +37,8 @@ export async function upsertSoT(candidateId: string, fields: Partial<SoTRow>): P
   const existing = await findSoTByCandidateId(candidateId);
   if (!existing) {
     const row = await queryOne<any>(
-      `INSERT INTO candidate_source_of_truth (candidate_id, confirmed_skills, pending_skills, parsed_from_resume_id, last_parsed_at)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO candidate_source_of_truth (candidate_id, confirmed_skills, pending_skills, parsed_from_resume_id, last_parsed_at, notes)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         candidateId,
@@ -45,6 +46,7 @@ export async function upsertSoT(candidateId: string, fields: Partial<SoTRow>): P
         JSON.stringify(fields.pending_skills ?? []),
         fields.parsed_from_resume_id ?? null,
         fields.last_parsed_at ?? null,
+        fields.notes ?? null,
       ]
     );
     return {
@@ -73,8 +75,14 @@ export async function upsertSoT(candidateId: string, fields: Partial<SoTRow>): P
       updates.push(`last_parsed_at = $${i++}`);
       values.push(fields.last_parsed_at);
     }
+    if (fields.notes !== undefined) {
+      updates.push(`notes = $${i++}`);
+      values.push(fields.notes);
+    }
 
-    updates.push(`updated_at = NOW()`);
+    if (updates.length > 0) {
+      updates.push(`updated_at = NOW()`);
+    }
     values.push(candidateId);
 
     const row = await queryOne<any>(

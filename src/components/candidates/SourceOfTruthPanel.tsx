@@ -1,36 +1,29 @@
-"use client";
-
 import { useEffect, useState } from "react";
-import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
 
 interface Suggestion {
   skill: string;
   category: string;
   confidence: number;
   reason: string;
-  status: "pending" | "accepted" | "rejected";
 }
 
 export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateId: string; verifiedSkills: string[] }) {
-  const [sot, setSot] = useState<{ confirmedSkills: string[]; pendingSuggestions: Suggestion[]; lastParsedAt: string | null; parsedFromResumeName?: string | null } | null>(null);
+  const [sot, setSot] = useState<{ confirmedSkills: string[]; pendingSuggestions: Suggestion[]; lastParsedAt: string | null; parsedFromResumeName?: string | null; notes?: string | null } | null>(null);
+  const [draftSkills, setDraftSkills] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   // Manual Add Form
-  const [showAdd, setShowAdd] = useState(false);
   const [manualSkill, setManualSkill] = useState("");
-  const [manualCategory, setManualCategory] = useState("Manual");
-
-  useEffect(() => {
-    loadSot();
-  }, []);
 
   async function loadSot() {
     setLoading(true);
     try {
       const res = await fetch(`/api/candidates/${candidateId}/source-of-truth`);
       if (res.ok) {
-        setSot(await res.json());
+        const data = await res.json();
+        setSot(data);
+        setDraftSkills(data.confirmedSkills || []);
       }
     } catch (e) {
       console.error(e);
@@ -39,12 +32,17 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
     }
   }
 
-  async function handleAutoTrigger() {
+  useEffect(() => {
+    loadSot();
+  }, [candidateId]);
+
+  async function handleScanResume() {
     setActionLoading("trigger");
     try {
-      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/auto-trigger`, { method: "POST" });
+      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/scan-only`, { method: "POST" });
       if (res.ok) {
-        setSot(await res.json());
+        const data = await res.json();
+        setDraftSkills(data.skills || []);
       } else {
         const errText = await res.text();
         alert(`Failed to scan resume: ${errText}`);
@@ -57,15 +55,22 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
     }
   }
 
-  async function handleAutoAccept() {
-    setActionLoading("auto-accept");
+  async function handleSaveToDatabase() {
+    setActionLoading("save");
     try {
-      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/auto-accept`, { method: "POST" });
+      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/skills/replace`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: draftSkills }),
+      });
       if (res.ok) {
-        await loadSot();
+        const data = await res.json();
+        setSot(data);
+        setDraftSkills(data.confirmedSkills || []);
+        alert("Skills successfully saved to Candidate Profile!");
       } else {
         const errText = await res.text();
-        alert(`Failed to auto-accept skills: ${errText}`);
+        alert(`Failed to save skills: ${errText}`);
       }
     } catch (e: any) {
       console.error(e);
@@ -75,110 +80,72 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
     }
   }
 
-  async function handleAddManual() {
-    if (!manualSkill.trim()) return;
-    setActionLoading("manual-add");
-    try {
-      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/manual`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skill: manualSkill.trim(), category: manualCategory }),
-      });
-      if (res.ok) {
-        setManualSkill("");
-        setShowAdd(false);
-        await loadSot();
-      } else {
-        const errText = await res.text();
-        alert(`Failed to add manual skill: ${errText}`);
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(`An error occurred: ${e.message}`);
-    } finally {
-      setActionLoading(null);
+  function handleAddManual() {
+    const trimmed = manualSkill.trim();
+    if (!trimmed) return;
+    if (!draftSkills.includes(trimmed)) {
+      setDraftSkills([...draftSkills, trimmed]);
     }
+    setManualSkill("");
   }
 
-  async function updateSuggestionStatus(skill: string, status: "accepted" | "rejected") {
-    setActionLoading(`update-${skill}`);
-    try {
-      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/skills`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skill, status }),
-      });
-      if (res.ok) {
-        await loadSot();
-      } else {
-        const errText = await res.text();
-        alert(`Failed to update skill status: ${errText}`);
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(`An error occurred: ${e.message}`);
-    } finally {
-      setActionLoading(null);
-    }
-  }
-
-  async function removeSkill(skill: string) {
-    if (!confirm(`Remove "${skill}" from confirmed skills?`)) return;
-    setActionLoading(`remove-${skill}`);
-    try {
-      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/skills`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skill }),
-      });
-      if (res.ok) {
-        await loadSot();
-      } else {
-        const errText = await res.text();
-        alert(`Failed to remove skill: ${errText}`);
-      }
-    } catch (e: any) {
-      console.error(e);
-      alert(`An error occurred: ${e.message}`);
-    } finally {
-      setActionLoading(null);
-    }
+  function removeSkill(skill: string) {
+    setDraftSkills(draftSkills.filter(s => s !== skill));
   }
 
   if (loading) return <p className="muted">Loading Source of Truth...</p>;
 
+  // Check if draft has unsaved changes compared to DB
+  const hasUnsavedChanges = JSON.stringify(draftSkills) !== JSON.stringify(sot?.confirmedSkills || []);
+
   return (
     <div>
-      <div className="page-header">
+      <div className="page-header" style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>Candidate Source of Truth</h2>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={() => setShowAdd(true)}>+ Add Manual Skill</button>
-          <button className="btn-primary" onClick={handleAutoTrigger} disabled={actionLoading === "trigger"}>
-            {actionLoading === "trigger" ? "Running AI Scan..." : "Scan Resume for Skills"}
+          <button className="btn-primary" onClick={handleSaveToDatabase} disabled={actionLoading === "save" || !hasUnsavedChanges}>
+            {actionLoading === "save" ? "Saving..." : "Save Source of Truth"}
           </button>
         </div>
       </div>
       
-      <p className="muted" style={{ marginTop: 8 }}>
-          The Source of Truth represents the ledger of all skills the recruiter has confirmed this candidate is eligible to claim. When tailoring applications, the AI can safely pull from this list without requiring explicit base resume evidence.
-          {sot?.parsedFromResumeName && (
-            <span style={{ display: 'block', marginTop: '4px', fontStyle: 'italic', color: 'var(--color-primary)' }}>
-              Skills extracted from base resume: <strong>{sot.parsedFromResumeName}</strong>
-            </span>
-          )}
-        </p>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>
+        The Source of Truth represents the ledger of all skills the recruiter has confirmed this candidate is eligible to claim. 
+        When tailoring applications, the AI can safely pull from this list without requiring explicit base resume evidence.
+      </p>
 
-      {/* Confirmed Skills Section */}
-      <div className="card" style={{ marginBottom: 20 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0, marginBottom: 12 }}>Confirmed Skills ({sot?.confirmedSkills.length || 0})</h3>
-        {sot?.confirmedSkills && sot.confirmedSkills.length > 0 ? (
+      {/* Unified Editable Box Section */}
+      <div className="card" style={{ marginBottom: 20, border: hasUnsavedChanges ? "1px solid var(--accent)" : "1px solid var(--border)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h3 style={{ fontSize: 14, margin: 0 }}>
+            Confirmed Skills ({draftSkills.length}) {hasUnsavedChanges && <span style={{ color: "var(--accent)", fontSize: 12, marginLeft: 8 }}>• Unsaved changes</span>}
+          </h3>
+          <button className="btn-compact btn-sm" onClick={handleScanResume} disabled={actionLoading === "trigger"}>
+            {actionLoading === "trigger" ? "Running AI Scan..." : "Scan Resume for Skills"}
+          </button>
+        </div>
+        
+        {/* Add manual skill input inside the box */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <input 
+            type="text" 
+            className="input" 
+            placeholder="Add a skill manually (e.g. React, Python)" 
+            value={manualSkill}
+            onChange={(e) => setManualSkill(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleAddManual(); }}
+            style={{ flex: 1 }}
+          />
+          <button className="btn-compact" onClick={handleAddManual}>Add Skill</button>
+        </div>
+
+        {draftSkills.length > 0 ? (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {sot.confirmedSkills.map(skill => (
+            {draftSkills.map(skill => (
               <span key={skill} className="badge badge-success" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, padding: "4px 8px" }}>
                 {skill}
                 <button 
                   onClick={() => removeSkill(skill)}
-                  disabled={actionLoading === `remove-${skill}`}
                   style={{ background: "none", border: "none", color: "inherit", padding: 0, cursor: "pointer", opacity: 0.7 }}
                 >
                   ✕
@@ -187,7 +154,7 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
             ))}
           </div>
         ) : (
-          <p className="muted" style={{ fontSize: 13 }}>No confirmed skills yet. Scan the resume or add manually.</p>
+          <p className="muted" style={{ fontSize: 13 }}>No skills in the draft yet. Scan the resume or add manually.</p>
         )}
       </div>
 
@@ -202,103 +169,6 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
                 {skill}
               </span>
             ))}
-          </div>
-        </div>
-      )}
-
-      {/* AI Suggestions Section */}
-      {sot?.pendingSuggestions && sot.pendingSuggestions.length > 0 && (
-        <div className="card" style={{ borderLeft: "4px solid var(--accent)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <h3 style={{ fontSize: 14, margin: 0 }}>AI Skill Suggestions ({sot.pendingSuggestions.length})</h3>
-            <button 
-              className="btn-sm" 
-              onClick={handleAutoAccept} 
-              disabled={actionLoading === "auto-accept"}
-            >
-              {actionLoading === "auto-accept" ? "Accepting..." : "Auto-Accept High Confidence (≥90%)"}
-            </button>
-          </div>
-          
-          <div className="table-shell">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Skill</th>
-                  <th>Category</th>
-                  <th>Confidence</th>
-                  <th>Reasoning</th>
-                  <th style={{ width: 140 }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sot.pendingSuggestions.map((sug, i) => (
-                  <tr key={i}>
-                    <td><strong>{sug.skill}</strong></td>
-                    <td className="muted" style={{ fontSize: 13 }}>{sug.category}</td>
-                    <td>
-                      <span className={`badge ${sug.confidence >= 0.9 ? "badge-success" : sug.confidence >= 0.7 ? "badge-warning" : "badge-danger"}`}>
-                        {Math.round(sug.confidence * 100)}%
-                      </span>
-                    </td>
-                    <td className="muted" style={{ fontSize: 12, maxWidth: 300, whiteSpace: "normal" }}>
-                      {sug.reason}
-                    </td>
-                    <td style={{ display: "flex", gap: 6 }}>
-                      <button 
-                        className="btn-success btn-sm btn-compact"
-                        onClick={() => updateSuggestionStatus(sug.skill, "accepted")}
-                        disabled={actionLoading === `update-${sug.skill}`}
-                      >
-                        ✓ Accept
-                      </button>
-                      <button 
-                        className="btn-danger btn-sm btn-compact"
-                        onClick={() => updateSuggestionStatus(sug.skill, "rejected")}
-                        disabled={actionLoading === `update-${sug.skill}`}
-                      >
-                        ✕ Reject
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Manual Add Modal */}
-      {showAdd && (
-        <div className="modal-overlay" onClick={() => setShowAdd(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Add Confirmed Skill</h2>
-            <div className="field-group">
-              <label>Skill Name</label>
-              <input 
-                autoFocus
-                value={manualSkill} 
-                onChange={(e) => setManualSkill(e.target.value)} 
-                placeholder="e.g. React.js"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleAddManual();
-                }}
-              />
-            </div>
-            <div className="field-group">
-              <label>Category</label>
-              <input 
-                value={manualCategory} 
-                onChange={(e) => setManualCategory(e.target.value)} 
-                placeholder="e.g. Framework"
-              />
-            </div>
-            <div className="modal-actions">
-              <button onClick={() => setShowAdd(false)}>Cancel</button>
-              <button className="btn-primary" onClick={handleAddManual} disabled={actionLoading === "manual-add" || !manualSkill.trim()}>
-                {actionLoading === "manual-add" ? "Adding..." : "Add Skill"}
-              </button>
-            </div>
           </div>
         </div>
       )}

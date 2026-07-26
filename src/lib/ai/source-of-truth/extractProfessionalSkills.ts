@@ -41,8 +41,9 @@ ${contentStr}
     });
 
     const raw = textOf(response.content);
-    const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const parsed = JSON.parse(stripped);
+    const match = raw.match(/\[[\s\S]*\]/);
+    const jsonString = match ? match[0] : raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const parsed = JSON.parse(jsonString);
     
     return ResponseSchema.parse(parsed);
   } catch (err) {

@@ -9,6 +9,7 @@ export interface CandidateSoT {
   pendingSkills: PendingSkill[];
   lastParsedAt: string | null;
   parsedFromResumeName?: string | null;
+  notes?: string | null;
 }
 
 export async function parseSourceOfTruth(
@@ -204,19 +205,22 @@ export async function getSourceOfTruth(
 ): Promise<CandidateSoT | null> {
   const row = await findSoTByCandidateId(candidateId);
   if (!row) return null;
-
+  const sotRow = await findSoTByCandidateId(candidateId);
+  if (!sotRow) return null;
+  
   let parsedFromResumeName: string | null = null;
-  if (row.parsed_from_resume_id) {
-    const baseResume = await queryOne<any>("SELECT name, filename FROM base_resumes WHERE id = $1", [row.parsed_from_resume_id]);
+  if (sotRow.parsed_from_resume_id) {
+    const baseResume = await queryOne<any>("SELECT name, filename FROM base_resumes WHERE id = $1", [sotRow.parsed_from_resume_id]);
     if (baseResume) {
       parsedFromResumeName = baseResume.name || baseResume.filename;
     }
   }
 
   return {
-    confirmedSkills: row.confirmed_skills,
-    pendingSkills: row.pending_skills,
-    lastParsedAt: row.last_parsed_at,
+    confirmedSkills: sotRow.confirmed_skills,
+    pendingSkills: sotRow.pending_skills,
+    lastParsedAt: sotRow.last_parsed_at,
     parsedFromResumeName,
+    notes: sotRow.notes
   };
 }
