@@ -84,17 +84,54 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
     }
   }
 
-  function handleAddManual() {
+  async function handleAddManual() {
     const trimmed = manualSkill.trim();
     if (!trimmed) return;
+    
+    let newDraft = draftSkills;
     if (!draftSkills.includes(trimmed)) {
-      setDraftSkills([...draftSkills, trimmed]);
+      newDraft = [...draftSkills, trimmed];
+      setDraftSkills(newDraft);
     }
     setManualSkill("");
+    
+    // Auto-save if there were no other unsaved changes
+    const hadUnsavedChanges = JSON.stringify(draftSkills) !== JSON.stringify(sot?.confirmedSkills || []);
+    if (!hadUnsavedChanges) {
+      await saveDirectly(newDraft);
+    }
   }
 
-  function removeSkill(skill: string) {
-    setDraftSkills(draftSkills.filter(s => s !== skill));
+  async function removeSkill(skill: string) {
+    const newDraft = draftSkills.filter(s => s !== skill);
+    setDraftSkills(newDraft);
+    
+    // Auto-save if there were no other unsaved changes
+    const hadUnsavedChanges = JSON.stringify(draftSkills) !== JSON.stringify(sot?.confirmedSkills || []);
+    if (!hadUnsavedChanges) {
+      await saveDirectly(newDraft);
+    }
+  }
+
+  async function saveDirectly(skillsToSave: string[]) {
+    setActionLoading("save");
+    try {
+      const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/skills/replace`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skills: skillsToSave }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSot(data);
+        setDraftSkills(data.confirmedSkills || []);
+        setDraftResumeName(data.parsedFromResumeName || null);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setActionLoading(null);
+    }
   }
 
   if (loading) return <p className="muted">Loading Source of Truth...</p>;
