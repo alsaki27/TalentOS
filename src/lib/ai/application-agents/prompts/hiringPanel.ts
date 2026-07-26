@@ -33,8 +33,7 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   candidate's existing real experience is NOT a truthfulness risk. An honest omission (listed under
   missingRequirements) is not a risk either. Default this score low unless something concrete is
   actually unsupported.
-- Formatting: only flag if the draft is clearly way over one page (roughly 650+ words) or a kept
-  role has zero bullets. Flag a professional summary if present (it must be null).
+- Formatting: check that the draft fits on one page strictly at any cost (roughly 450-650 words). Verify that every experience role has between 2-3 and 6 bullets (max 6 bullets per role, min 2-3 bullets per role so no experience role vanishes or is left empty). Flag a professional summary if present (it must be null).
 
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
 in the next stage, so don't pad it with nitpicks that could cause good content to get cut.
