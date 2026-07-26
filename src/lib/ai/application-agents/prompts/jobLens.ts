@@ -38,9 +38,7 @@ Analyze this job posting and return a JSON object with the following fields:
     "5+ years").
 - responsibilities: array of key responsibilities, most central to the role first
 - evidenceRequirements: array of concrete proof a strong candidate would show for the top
-  requirements, phrased as checkable items ("designed OSP routes in Vetro FiberMap on a real
-  deployment", not "knows Vetro"). Downstream agents use these to judge whether the
-  candidate's evidence bank truly supports a claim.
+  requirements, MUST be formatted precisely as: [WHAT action/design/management was performed] + [USING what tool/software/methodology] + [AT what scale/scope/environment] (e.g., "Designed OSP fiber routes using Vetro FiberMap for multi-mile municipal deployments"). Downstream agents use these exact structural patterns to judge whether the candidate's bullets truly support a claim.
 - prohibitedUnsupportedClaims: claims that should never be made without proof. ALWAYS
   include an explicit entry for every required license, certification, or degree named in
   the posting (e.g., "Do not claim a PE license unless evidenced") — this is the single
@@ -48,8 +46,9 @@ Analyze this job posting and return a JSON object with the following fields:
   security clearance, work-authorization status, or named-client/named-program experience
   the JD demands.
 - ambiguities: unclear or missing information in the JD
-- rawSummary: a brief plain-language summary of the role, ending with one sentence naming the
-  2-3 things this employer most wants to see on page one of a resume
+- roleContext: structured key-value map extracting domain-specific signals and parameters that define the physical, technical, or business scope of this role (e.g., for trade/telecom/engineering: permit types like DNR/DOT/City, easement/ROW management, joint trenching, cable count sizing, BDT cost estimating; for software: infrastructure scale, cloud providers, deployment models). Downstream agents use these as concrete "proof anchors" when searching the candidate's base resume.
+- topThreePageOneWins: array of exactly 3 concrete things this employer most wants to see on page one of the resume, in order of priority (e.g., ["3+ years OSP telecommunications engineering in exchange environments", "Permitting experience with State, DOT, and local municipalities", "Proficiency in AutoCAD and outside plant cable sizing/records"]). Downstream agents use this to order and emphasize bullets in the top third of the resume.
+- rawSummary: a brief plain-language summary of the role.
 
 JOB POSTING:
 Title: ${job?.title ?? "Unknown"}

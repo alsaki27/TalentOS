@@ -7,12 +7,13 @@ const SKILL_CATEGORY_MAP: Record<string, string> = {
   // Example: "AutoCAD": "Design / CAD",
 };
 
-/** Map a skill to its category using SKILL_CATEGORY_MAP. */
+/*
+ * Legacy pre-transform helpers (retained for reference / non-AI fallback mode):
+ *
 function mapSkillToCategory(skill: string): string {
   return SKILL_CATEGORY_MAP[skill] ?? "Additional Skills";
 }
 
-/** Merge new skills into the base skill categories while preserving existing ones. */
 function mergeSkills(baseCategories: any[], newSkills: string[]): any[] {
   const categories = baseCategories.map(c => ({ title: c.title, skills: new Set(c.skills) }));
   newSkills.forEach(skill => {
@@ -37,19 +38,16 @@ function scoreBullet(bullet: any, keywords: Set<string>): number {
   return score;
 }
 
-/** Augment experience bullets with new skills, respecting a maximum of 6 bullets per role. */
 function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis: any): any[] {
   const jdKeywords = new Set([...(jobAnalysis.requiredSkills ?? []), ...(jobAnalysis.preferredSkills ?? [])]);
   const verbPool = ["Designed", "Implemented", "Managed", "Optimized", "Developed"];
   const updated = experiences.map(exp => {
     const originalBullets = exp.bullets || exp.bulletPoints || [];
-    // Normalize to strings just in case they are { text: string } objects
     const stringBullets = originalBullets.map((b: any) => typeof b === 'string' ? b : (b?.text ? String(b.text) : ""));
     return { ...exp, bullets: stringBullets, bulletPoints: undefined };
   });
 
   newSkills.forEach(skill => {
-    // Choose the experience that already scores highest against JD keywords.
     let bestIdx = 0;
     let bestScore = -1;
     updated.forEach((exp, idx) => {
@@ -64,7 +62,6 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
     if (target.bullets.length < 6) {
       target.bullets.push(newBullet);
     } else {
-      // Replace the bullet with the lowest JD‑keyword match count.
       let lowestIdx = 0;
       let lowestScore = Infinity;
       target.bullets.forEach((b: string, i: number) => {
@@ -81,7 +78,6 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
   return updated;
 }
 
-/** Transform the base resume by merging new skills and adjusting experience bullets. */
 function transformResume(base: any, jobAnalysis: any, addedSkills: string[]): any {
   const mergedSkills = mergeSkills(base.skills ?? [], addedSkills);
   const updatedExperience = augmentExperience(base.experience ?? [], addedSkills, jobAnalysis);
@@ -91,6 +87,7 @@ function transformResume(base: any, jobAnalysis: any, addedSkills: string[]): an
     experience: updatedExperience,
   };
 }
+*/
 
 /** Build the prompt for the Resume Forge agent. */
 export function buildResumeForgePrompt(
@@ -101,76 +98,41 @@ export function buildResumeForgePrompt(
   verifiedSkills: string[] = [],
   sourceOfTruth: { confirmedSkills: string[]; notesContext: string | null } | null = null
 ): string {
-  // Collect all skills the JD emphasizes (required + preferred).
-  const addedSkills = [
-    ...(jobAnalysis.requiredSkills ?? []),
-    ...(jobAnalysis.preferredSkills ?? []),
-  ];
+  // We pass the raw base resume directly to the AI without mechanical pre-processing.
+  const rawBaseResume = baseResume?.content ?? {};
 
-  // Produce a version of the base resume that already includes the new skills.
-  const transformed = transformResume(baseResume?.content ?? {}, jobAnalysis, addedSkills);
+  return `You are Resume Forge, a top 1% professional resume architect. Your job is to take the candidate's clean BASE RESUME below and precision-tailor it so it reads as an elite, ATS-optimized match for THIS job — without inventing facts or fabricating experience. This is a strategic tailoring pass: reword, restructure, and emphasize real qualifications. If you are ever unsure whether to include something, keep it and reword it professionally rather than dropping it.
 
-  return `You are Resume Forge. Your job is simple: take the candidate's BASE RESUME below and
-rephrase/reorder it so it reads as a strong, ATS-friendly match for THIS job — without inventing
-anything. This is a light tailoring pass, not a rewrite from scratch. If you are ever unsure
-whether to include something, keep it and reword it rather than dropping it or leaving a section
-empty. Returning a near-empty resume is always the wrong answer — the base resume already has
-real content; your job is to reuse and reword almost all of it, not replace it with less.
-
-GROUND RULES:
-1. Do not invent employers, job titles, dates, locations, degrees, certifications, licenses, or
-   metrics/numbers that aren't already in the base resume or evidence bank. Everything else about
-   the candidate's real history (skills, responsibilities, tools, wording) can be freely
-   rephrased, reordered, condensed, or expanded to better match the job description — this is
-   expected and encouraged, not something that needs a separate evidence citation.
-2. If a JD keyword or skill matches something the candidate already has in their base resume,
-   evidence bank, or VERIFIED SKILLS, weave the JD's exact phrasing into the relevant bullet or
-   the skills list. If it doesn't match anything about the candidate, just leave it out — don't
-   stress about it, don't list it as a big miss, just skip it.
-3. Keep every experience role from the base resume. Keep roughly the same number of bullets per
-   role as the base resume (rewrite them, don't delete them). Do not collapse a role down to one
-   or two bullets and do not return an empty experience array.
-4. Never generate, add, or keep a professional summary. Always return summary as null.
-5. The skills output MUST use the same categorized‑group structure as the base resume's skills
-   section (an array of { title, skills[] } groups, e.g. "GIS Platforms & Mapping" with its own
-   skills list, "Field Data & QA/QC" with its own, etc.) — never collapse everything into one
-   flat list or one generic "Skills" bucket. Reuse the base resume's existing category titles
-   whenever the skills still fit them; only rename/add/split a category if the job genuinely
-   calls for regrouping. Within each category, reorder/refresh which skills are listed/emphasized
-   for this job, but keep the category structure intact.
-6. Skill‑to‑Category Mapping: Use the SKILL_CATEGORY_MAP defined above to assign any new required or
-   preferred skill to its proper category. If a skill is not present in the map, create a new
-   category titled "Additional Skills" and place the skill there.
-7. Bullet Replacement Threshold: If an experience already has 6 bullets, drop the bullet that
-   matches the fewest JD keywords before inserting a new bullet that incorporates the new skill.
-
-JOB ANALYSIS:
-${JSON.stringify(jobAnalysis)}
+GROUND RULES & ARCHITECTURE:
+1. Do not invent employers, job titles, dates, locations, degrees, certifications, licenses, or metrics/numbers that aren't already in the base resume, evidence bank, or Source of Truth. Everything else about the candidate's real history (skills, responsibilities, tools, technical wording) can be freely rephrased, reordered, condensed, or expanded to align with the job description.
+2. Bullet-Writing Framework (Action + Tool/Skill + Scale/Outcome): Every single bullet in every experience role MUST follow this elite structural format:
+   \`[Strong Action Verb] + [Specific Task, Tool, System, or Methodology] + [Scale, Scope, Environment, or Quantifiable Outcome]\`.
+   Generic verbs ("Managed", "Assisted", "Responsible for") or robotic placeholder suffixes ("to meet job requirements", "per company standards", "in accordance with requirements") are STRICTLY FORBIDDEN. Write authentic, professional engineering and technical bullets.
+3. Top 3 Page-One Wins: Check \`topThreePageOneWins\` and \`roleContext\` from the JOB ANALYSIS. You MUST ensure that the first role's top 2–3 bullets and the primary skills category directly address these employer priorities with concrete proof from the candidate's real background.
+4. Keep every experience role from the base resume. Keep roughly the same number of bullets per role as the base resume (rewrite and enhance them, do not delete them). Do not collapse a role down to 1–2 bullets and do not return an empty experience array.
+5. Never generate, add, or keep a professional summary. Always return summary as null.
+6. Categorized Skills Structure: The skills output MUST use a categorized-group structure (an array of \`{ title, skills[] }\` groups, e.g. "Outside Plant Engineering & CAD", "Permitting & ROW Management", "Telecom Systems & QA/QC") — never collapse everything into one flat list or a generic "Skills" bucket. Tailor category titles so they immediately signal domain expertise for this specific job.
+7. Natural Language Check: Before finalizing each bullet, verify that it reads as something a human subject-matter expert would write. If any bullet sounds like machine-generated filler or ends in "to meet job requirements", rewrite it immediately around real technical substance.
 
 BASE RESUME:
-${JSON.stringify(transformed).slice(0, 12000)}
+${JSON.stringify(rawBaseResume).slice(0, 12000)}
 
 EVIDENCE BANK:
 ${JSON.stringify(evidence).slice(0, 8000)}
 
-VERIFIED SKILLS (recruiter‑confirmed, safe to use without an evidenceId):
+VERIFIED SKILLS (recruiter-confirmed, safe to use without an evidenceId):
 ${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none recorded)"}
 
 JOB ANALYSIS:
 ${JSON.stringify(jobAnalysis)}
 
-SOURCE OF TRUTH SKILLS (skills the recruiter has personally confirmed this candidate
-is eligible to claim — treat these as equal to skills already in the base resume):
+SOURCE OF TRUTH SKILLS (skills the recruiter has personally confirmed this candidate is eligible to claim — treat these as equal to skills already in the base resume):
 ${JSON.stringify(sourceOfTruth?.confirmedSkills ?? [])}
 
-CANDIDATE NOTES (internal context only — use to better understand the candidate's
-background and preferences; NEVER copy this text verbatim into the resume output):
+CANDIDATE NOTES (internal context only — use to better understand the candidate's background and preferences; NEVER copy this text verbatim into the resume output):
 ${sourceOfTruth?.notesContext ?? "(none)"}
 
-RULE FOR SOURCE OF TRUTH: You MAY weave SoT skills into experience bullets and the
-skills section ONLY if they are genuinely relevant to THIS job's JD. Do NOT include
-all of them — pick only what the JD calls for. Do NOT invent employers, titles, or
-dates to support them. Dates, locations, and employers come from the base resume only.
+RULE FOR SOURCE OF TRUTH: For each SoT skill that maps to a JD requirement or keyword, integrate it naturally into the most relevant existing experience bullet (reword the bullet to include the tool/skill in context), or place it into the appropriate skills category. Never append standalone robotic sentences just to inject a skill. Pick only what the JD calls for. Do NOT invent employers, titles, or dates to support them.
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

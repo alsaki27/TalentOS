@@ -44,6 +44,8 @@ export interface JobAnalysisV1 {
   prohibitedUnsupportedClaims: string[];
   ambiguities: string[];
   rawSummary: string;
+  roleContext?: Record<string, unknown>;
+  topThreePageOneWins?: string[];
 }
 
 export const JobAnalysisSchema: Schema<JobAnalysisV1> = {
@@ -72,6 +74,8 @@ export const JobAnalysisSchema: Schema<JobAnalysisV1> = {
       prohibitedUnsupportedClaims: expectStringArray(input.prohibitedUnsupportedClaims, "prohibitedUnsupportedClaims") ?? [],
       ambiguities: expectStringArray(input.ambiguities, "ambiguities") ?? [],
       rawSummary: expectString(input.rawSummary, "rawSummary") ?? "",
+      roleContext: isRecord(input.roleContext) ? input.roleContext : undefined,
+      topThreePageOneWins: expectStringArray(input.topThreePageOneWins, "topThreePageOneWins") ?? undefined,
     };
   },
 };
@@ -205,6 +209,7 @@ export interface ReviewScoreV1 {
   recruiterScore: number;
   roleFitScore: number;
   truthfulnessRisk: number;
+  naturalLanguageCheck?: number;
   formattingIssues: string[];
   requiredEdits: { issueId: string; description: string; severity: "minor" | "major" | "critical" }[];
   optionalEdits: { issueId: string; description: string }[];
@@ -241,6 +246,7 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
       recruiterScore,
       roleFitScore,
       truthfulnessRisk: truthfulnessRisk ?? 0,
+      naturalLanguageCheck: expectNumber(input.naturalLanguageCheck, "naturalLanguageCheck") ?? undefined,
       formattingIssues: expectStringArray(input.formattingIssues, "formattingIssues") ?? [],
       requiredEdits,
       optionalEdits: Array.isArray(input.optionalEdits) ? input.optionalEdits.filter((e: unknown): e is { issueId: string; description: string } => {

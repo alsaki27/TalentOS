@@ -27,12 +27,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    (past tense for past roles, present for the current one), one to two lines, grammatically
    complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic").
    Keep tense and punctuation consistent within each role.
-5. The final output MUST fit on a single page (roughly 450-650 words total across experience
-   bullets + skills). If the draft or reviewer feedback pushes it over that, trim
-   least-relevant bullets or entire older/less-relevant roles first — do not shrink
-   font/spacing conceptually or pad whitespace to "cheat" the limit; the trimmed content
-   itself must be shorter. Only set exportReady to true once the result genuinely fits one
-   page.
+5. Content-First One-Page Target: Aim for a resume that fits a standard single page at 11pt font. Trim only if the total experience + skills content is clearly over one page (rough guide: 5+ roles with 5+ bullets each, or 700+ words). Never trim a quantified achievement or a bullet containing a verbatim JD keyword just to hit an arbitrary word count. If trimming is genuinely required for length, cut least-relevant or redundant bullets from older roles first.
 6. NEVER leave a role you keep with zero bullets, and NEVER return an empty experience array
    when the draft had real experience entries. Trimming means cutting the weakest bullets
    within a role down to its strongest 2-4, and dropping only the least-relevant role(s) if
@@ -54,10 +49,10 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 8. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
+   * natural language check: no bullet ends with robotic filler like "to meet job requirements" or reads like machine-generated template text;
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
-   * the top third (skills + first role's first two bullets) hits the JD's top selection
-     criteria and contains at least one quantified achievement;
-   * word budget respected, no kept role with zero bullets, no unsupported claims anywhere.
+   * the top third (skills + first role's top 2 bullets) hits the JD's top selection criteria (\`topThreePageOneWins\`) and contains at least one quantified achievement;
+   * one-page target respected without destroying high-value content, no kept role with zero bullets, no unsupported claims anywhere.
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 

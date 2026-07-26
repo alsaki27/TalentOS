@@ -33,6 +33,8 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   candidate's existing real experience is NOT a truthfulness risk. An honest omission (listed under
   missingRequirements) is not a risk either. Default this score low unless something concrete is
   actually unsupported.
+- naturalLanguageCheck (0-10): evaluate whether the bullets read like an authentic human subject-matter expert wrote them vs. robotic AI filler. Dock points severely for any bullet ending in "to meet job requirements", "per job requirements", or using generic verb+noun filler without technical context. Score 9-10 if every bullet is crisp, action-oriented, and substantive.
+- Top 3 Page-One Wins Check: Check whether the top third of the draft (first role's top 2–3 bullets + primary skills category) directly addresses the employer's top selection criteria from the JOB ANALYSIS (\`topThreePageOneWins\` and \`roleContext\`). Flag as a major requiredEdit if the top priorities are buried or missing from page one.
 - Formatting: only flag if the draft is clearly way over one page (roughly 650+ words) or a kept
   role has zero bullets. Flag a professional summary if present (it must be null).
 
@@ -44,6 +46,7 @@ Return a JSON object with:
 - recruiterScore: number 0-10
 - roleFitScore: number 0-10
 - truthfulnessRisk: number 0-10
+- naturalLanguageCheck: number 0-10
 - formattingIssues: array of formatting issue descriptions
 - requiredEdits: array of { issueId, description, severity: "minor"|"major"|"critical" }
 - optionalEdits: array of { issueId, description }
