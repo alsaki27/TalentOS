@@ -208,12 +208,10 @@ export async function getSourceOfTruth(
   const sotRow = await findSoTByCandidateId(candidateId);
   if (!sotRow) return null;
   
+  const baseResumes = await query<any>("SELECT name, filename FROM base_resumes WHERE candidate_id = $1", [candidateId]);
   let parsedFromResumeName: string | null = null;
-  if (sotRow.parsed_from_resume_id) {
-    const baseResume = await queryOne<any>("SELECT name, filename FROM base_resumes WHERE id = $1", [sotRow.parsed_from_resume_id]);
-    if (baseResume) {
-      parsedFromResumeName = baseResume.name || baseResume.filename;
-    }
+  if (baseResumes.length > 0) {
+    parsedFromResumeName = baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ");
   }
 
   return {

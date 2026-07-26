@@ -20,8 +20,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return new NextResponse("AI Provider not configured", { status: 500 });
     }
     const extractedSkills = await extractProfessionalSkills(contents, provider);
+    const resumeNames = baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ");
     
-    return NextResponse.json({ skills: extractedSkills });
+    return NextResponse.json({ 
+      skills: extractedSkills,
+      parsedFromResumeName: resumeNames 
+    });
   } catch (err: any) {
     console.error("Scan only error:", err);
     return new NextResponse(err.message, { status: 500 });

@@ -10,6 +10,7 @@ interface Suggestion {
 export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateId: string; verifiedSkills: string[] }) {
   const [sot, setSot] = useState<{ confirmedSkills: string[]; pendingSuggestions: Suggestion[]; lastParsedAt: string | null; parsedFromResumeName?: string | null; notes?: string | null } | null>(null);
   const [draftSkills, setDraftSkills] = useState<string[]>([]);
+  const [draftResumeName, setDraftResumeName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -24,6 +25,7 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
         const data = await res.json();
         setSot(data);
         setDraftSkills(data.confirmedSkills || []);
+        setDraftResumeName(data.parsedFromResumeName || null);
       }
     } catch (e) {
       console.error(e);
@@ -43,6 +45,7 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       if (res.ok) {
         const data = await res.json();
         setDraftSkills(data.skills || []);
+        setDraftResumeName(data.parsedFromResumeName || null);
       } else {
         const errText = await res.text();
         alert(`Failed to scan resume: ${errText}`);
@@ -67,6 +70,7 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
         const data = await res.json();
         setSot(data);
         setDraftSkills(data.confirmedSkills || []);
+        setDraftResumeName(data.parsedFromResumeName || null);
         alert("Skills successfully saved to Candidate Profile!");
       } else {
         const errText = await res.text();
@@ -112,6 +116,11 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>
         The Source of Truth represents the ledger of all skills the recruiter has confirmed this candidate is eligible to claim. 
         When tailoring applications, the AI can safely pull from this list without requiring explicit base resume evidence.
+        {draftResumeName && (
+          <span style={{ display: 'block', marginTop: '4px', fontStyle: 'italic', color: 'var(--color-primary)' }}>
+            Skills extracted from base resume(s): <strong>{draftResumeName}</strong>
+          </span>
+        )}
       </p>
 
       {/* Unified Editable Box Section */}
