@@ -160,7 +160,7 @@ export async function callVertexProxy(opts: {
   };
 }
 
-export function getGoogleVertexProxyProvider(): AiProvider | null {
+export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider | null {
   const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
   const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET;
 
@@ -168,7 +168,7 @@ export function getGoogleVertexProxyProvider(): AiProvider | null {
 
   return {
     send({ system, messages, tools, temperature, maxTokens }) {
-      const model = process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
+      const model = modelOverride || process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
       return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens });
     },
   };

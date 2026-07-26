@@ -44,13 +44,13 @@ function fromGeminiResponse(data: any): AiResponse {
   return { content: [{ type: "text", text }], stopReason };
 }
 
-export function getGoogleProvider(): AiProvider | null {
+export function getGoogleProvider(modelOverride?: string): AiProvider | null {
   const apiKey = process.env.GOOGLE_API_KEY;
   if (!apiKey) return null;
 
   return {
     async send({ system, messages, temperature, maxTokens }) {
-      const model = process.env.GOOGLE_MODEL || DEFAULT_MODEL;
+      const model = modelOverride || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
       const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
 
       const geminiMessages = toGeminiMessages(messages);

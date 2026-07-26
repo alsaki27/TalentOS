@@ -96,6 +96,7 @@ export interface AgentContext {
   // text or documented as a full evidence entry.
   verifiedSkills: string[];
   previousOutputs: Record<string, ArtifactRecord>;
+  sourceOfTruth: SourceOfTruthData | null;
 }
 
 export interface AgentJobData {
@@ -138,6 +139,16 @@ export interface AgentEvidenceItem {
   relatedSkills: string[];
   confidenceScore: number;
   source: string;
+}
+
+// ── Source of Truth ── (fetched live at pipeline trigger, not from cache)
+export interface SourceOfTruthData {
+  // All confirmed skills: base resume skills + all accepted SoT suggestions.
+  // Fetched live from candidate_source_of_truth + candidates.notes at trigger time.
+  confirmedSkills: string[];
+  // Snapshot of candidates.notes at the moment the pipeline was triggered.
+  // Internal AI context only — never appears in resume output.
+  notesContext: string | null;
 }
 
 // ── Artifact record (immutable, versioned output) ──

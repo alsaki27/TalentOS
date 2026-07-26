@@ -533,7 +533,15 @@ export default function JobsPage() {
 
   async function removeAssignment(applicant: Applicant) {
     if (!confirm(`Remove ${applicant.name}'s assignment for this job?`)) return;
-    await fetch(`/api/applications/${applicant.application_id}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`/api/applications/${applicant.application_id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        alert(`Failed to remove assignment: ${err.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Error removing assignment: ${err.message}`);
+    }
     load(page);
   }
 

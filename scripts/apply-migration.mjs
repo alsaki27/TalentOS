@@ -25,7 +25,7 @@ const dbUrl = env.DATABASE_URL || process.env.DATABASE_URL;
 const sql = neon(dbUrl);
 
 async function run() {
-  const query = readFileSync('sql/neon_fixes/039_drop_old_application_fk.sql', 'utf8');
+  const query = readFileSync('sql/neon_fixes/040_drop_old_workflow_fk.sql', 'utf8');
   await sql.query(query);
   console.log("Migration applied.");
 }

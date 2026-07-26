@@ -6,6 +6,8 @@ import type { AiProvider } from "@/lib/ai/provider";
 import { callWithUsageTracking, AiRouteCallError, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
+import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
+import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
 import { runJobLens } from "@/lib/ai/application-agents/jobLens";
 import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
@@ -72,17 +74,20 @@ export async function startWorkflow(input: {
   baseResume: any;
   evidence: any[];
   verifiedSkills?: string[];
+  sourceOfTruth?: SourceOfTruthData | null;
   idempotencyKey?: string;
   startedBy?: string;
   matchScore?: number;
   matchReason?: string;
 }): Promise<{ workflowId: string }> {
+  // Config snapshot bundles all inputs needed by agents
   const configSnapshot = {
     candidateId: input.candidateId,
     job: input.job,
     baseResume: input.baseResume,
     evidence: input.evidence,
     verifiedSkills: input.verifiedSkills ?? [],
+    sourceOfTruth: input.sourceOfTruth ?? null,
   };
 
   const wf = await createWorkflow({
@@ -275,6 +280,16 @@ export async function triggerAiWorkflowForApplication(
     [appRow.candidate_id]
   );
 
+  // Fetch SoT and notes LIVE so the pipeline always uses current recruiter decisions.
+  const sot = await getSourceOfTruth(appRow.candidate_id);
+  const notesRow = await queryOne<{ notes: string | null }>(
+    "SELECT notes FROM candidates WHERE id = $1",
+    [appRow.candidate_id]
+  );
+  const sourceOfTruth: SourceOfTruthData | null = sot
+    ? { confirmedSkills: sot.confirmedSkills, notesContext: notesRow?.notes ?? null }
+    : null;
+
   const { workflowId } = await startWorkflow({
     applicationId,
     candidateId: appRow.candidate_id,
@@ -282,6 +297,7 @@ export async function triggerAiWorkflowForApplication(
     baseResume: resumeRow,
     evidence: evidence ?? [],
     verifiedSkills: candidateRow?.verified_skills ?? [],
+    sourceOfTruth,
     startedBy,
     matchScore: matchScore ?? undefined,
     matchReason: matchReason ?? undefined,
@@ -320,6 +336,7 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
     baseResume: snapshot.baseResume ?? {},
     evidence: snapshot.evidence ?? [],
     verifiedSkills: snapshot.verifiedSkills ?? [],
+    sourceOfTruth: snapshot.sourceOfTruth ?? null,
     previousOutputs: outputsMap,
   };
 }

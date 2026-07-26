@@ -181,12 +181,25 @@ export default function JobCeoRunStagingPage() {
           <h1 className="text-xl font-bold text-ink">Staging Pipeline Viewer</h1>
           <p className="text-sm text-ink-soft mt-0.5">Live view of jobs moving through the multi-agent pipeline</p>
         </div>
-        <button
-          onClick={() => fetchData(activeStage)}
-          className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink transition-colors"
-        >
-          Refresh
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={async () => {
+              if (!confirm("Stop this run?")) return;
+              await fetch(`/api/job-ceo/runs/${runId}/cancel`, { method: "POST" });
+              // Refresh or navigate away
+              window.location.href = "/job-ceo";
+            }}
+            className="px-3 py-1.5 text-xs font-medium rounded-md border border-red-500 bg-surface text-red-500 hover:text-red-600 transition-colors"
+          >
+            Stop Run
+          </button>
+          <button
+            onClick={() => fetchData(activeStage)}
+            className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Stage Count Cards */}

@@ -98,7 +98,8 @@ export function buildResumeForgePrompt(
   baseResume: any,
   evidence: any[],
   jobAnalysis: any,
-  verifiedSkills: string[] = []
+  verifiedSkills: string[] = [],
+  sourceOfTruth: { confirmedSkills: string[]; notesContext: string | null } | null = null
 ): string {
   // Collect all skills the JD emphasizes (required + preferred).
   const addedSkills = [
@@ -154,6 +155,22 @@ ${JSON.stringify(evidence).slice(0, 8000)}
 
 VERIFIED SKILLS (recruiter‑confirmed, safe to use without an evidenceId):
 ${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none recorded)"}
+
+JOB ANALYSIS:
+${JSON.stringify(jobAnalysis)}
+
+SOURCE OF TRUTH SKILLS (skills the recruiter has personally confirmed this candidate
+is eligible to claim — treat these as equal to skills already in the base resume):
+${JSON.stringify(sourceOfTruth?.confirmedSkills ?? [])}
+
+CANDIDATE NOTES (internal context only — use to better understand the candidate's
+background and preferences; NEVER copy this text verbatim into the resume output):
+${sourceOfTruth?.notesContext ?? "(none)"}
+
+RULE FOR SOURCE OF TRUTH: You MAY weave SoT skills into experience bullets and the
+skills section ONLY if they are genuinely relevant to THIS job's JD. Do NOT include
+all of them — pick only what the JD calls for. Do NOT invent employers, titles, or
+dates to support them. Dates, locations, and employers come from the base resume only.
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

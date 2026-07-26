@@ -31,7 +31,7 @@ export async function runFinalPolish(
         content: [
           {
             type: "text",
-            text: buildFinalPolishPrompt(ctx.job, ctx.baseResume, draft, review, jobAnalysis),
+            text: buildFinalPolishPrompt(ctx.job, ctx.baseResume, draft, review, jobAnalysis, ctx.sourceOfTruth),
           },
         ],
       },

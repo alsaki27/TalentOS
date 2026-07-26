@@ -3,7 +3,8 @@ export function buildFinalPolishPrompt(
   baseResume: any,
   draft: any,
   review: any,
-  jobAnalysis: any
+  jobAnalysis: any,
+  sourceOfTruth: { confirmedSkills: string[] } | null = null
 ): string {
   return `You are Final Polish, an AI that applies reviewer feedback to produce a final, QA-passed resume.
 
@@ -79,6 +80,10 @@ ${JSON.stringify(jobAnalysis).slice(0, 4000)}
 
 BASE RESUME:
 ${JSON.stringify(baseResume?.content ?? {}).slice(0, 4000)}
+
+SOURCE OF TRUTH CONTEXT (recruiter-confirmed eligible skills — treat as legitimate,
+do NOT suggest removing or flagging them as unsupported):
+${JSON.stringify((sourceOfTruth?.confirmedSkills ?? []).slice(0, 30))}
 
 TAILORED DRAFT:
 ${JSON.stringify(draft).slice(0, 8000)}

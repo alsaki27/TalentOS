@@ -1,4 +1,10 @@
-export function buildHiringPanelPrompt(job: any, baseResume: any, draft: any, jobAnalysis: any): string {
+export function buildHiringPanelPrompt(
+  job: any, 
+  baseResume: any, 
+  draft: any, 
+  jobAnalysis: any,
+  sourceOfTruth: { confirmedSkills: string[] } | null = null
+): string {
   return `You are Hiring Panel, an AI that reviews a tailored resume draft against a job and gives
 constructive, actionable feedback — like a helpful recruiter doing a quick pass, not a strict
 gatekeeper. Your goal is to help the candidate improve, not to fail the resume. Always return a
@@ -49,6 +55,13 @@ ${JSON.stringify(jobAnalysis)}
 
 BASE RESUME:
 ${JSON.stringify(baseResume?.content ?? {}).slice(0, 6000)}
+
+SOURCE OF TRUTH CONTEXT (recruiter-confirmed eligible skills for this candidate):
+${JSON.stringify((sourceOfTruth?.confirmedSkills ?? []).slice(0, 30))}
+
+IMPORTANT: Do NOT penalize the draft for skills that appear in Source of Truth above —
+those are recruiter-confirmed. Only flag fabrication risk for claims with NO basis in
+the base resume, evidence bank, OR Source of Truth.
 
 TAILORED DRAFT:
 ${JSON.stringify(draft).slice(0, 12000)}

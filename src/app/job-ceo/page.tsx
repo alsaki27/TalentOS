@@ -648,8 +648,18 @@ export default function JobCeoPage() {
                   href={`/job-ceo/runs/${run.id}`}
                   className="text-xs text-ink-soft hover:text-ink transition-colors"
                 >
-                  View pipeline →
+                  View full details →
                 </Link>
+                <button
+                  onClick={async () => {
+                    if (!confirm("Stop this run?")) return;
+                    await fetch(`/api/job-ceo/runs/${run.id}/cancel`, { method: "POST" });
+                    setRuns((prev) => prev.map((r) => r.id === run.id ? { ...r, status: "cancelled" } : r));
+                  }}
+                  className="text-xs text-red-500 hover:text-red-600 transition-colors ml-4 font-medium px-2 py-1 border border-red-500 rounded"
+                >
+                  Stop
+                </button>
               </div>
 
               <div className="grid grid-cols-6 gap-2">

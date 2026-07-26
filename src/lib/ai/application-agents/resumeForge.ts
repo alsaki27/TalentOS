@@ -16,7 +16,14 @@ export async function runResumeForge(
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   const baseContent = (ctx.baseResume as any)?.content ?? {};
   const baseExperience = baseContent?.experience ?? [];
-  const promptText = buildResumeForgePrompt(ctx.job, ctx.baseResume, ctx.evidence, jobAnalysis, ctx.verifiedSkills);
+  const promptText = buildResumeForgePrompt(
+    ctx.job, 
+    ctx.baseResume, 
+    ctx.evidence, 
+    jobAnalysis, 
+    ctx.verifiedSkills,
+    ctx.sourceOfTruth
+  );
 
   console.log("[Agent:ResumeForge] ── INPUT ────────────────────────────────────");
   console.log("[Agent:ResumeForge] baseResume raw DB fields:", Object.keys(ctx.baseResume as any));
