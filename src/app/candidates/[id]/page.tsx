@@ -9,7 +9,6 @@ import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorR
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
-import { PipelineStatus } from "@/components/candidates/PipelineStatus";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
 
 interface BaseResumeSummary {

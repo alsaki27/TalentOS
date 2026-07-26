@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { extractProfessionalSkills } from "@/lib/ai/source-of-truth/extractProfessionalSkills";
-import { getGoogleVertexProxyProvider } from "@/lib/ai/provider";
+import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
 import { query } from "@/server/db/neon";
 import { requireCurrentUser } from "@/lib/auth";
 
@@ -16,6 +16,9 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!contents.length) return NextResponse.json({ skills: [] });
     
     const provider = getGoogleVertexProxyProvider("gemini-2.5-pro");
+    if (!provider) {
+      return new NextResponse("AI Provider not configured", { status: 500 });
+    }
     const extractedSkills = await extractProfessionalSkills(contents, provider);
     
     return NextResponse.json({ skills: extractedSkills });
