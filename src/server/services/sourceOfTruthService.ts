@@ -24,9 +24,16 @@ export async function parseSourceOfTruth(
     throw new Error("No base resumes found for candidate.");
   }
 
-  const contents = baseResumes.map(br => br.content).filter(c => c && typeof c === "object");
+  // Parse content — DB may store content as JSON string or object
+  const contents = baseResumes.map(br => {
+    if (typeof br.content === "string") {
+      try { return JSON.parse(br.content); } catch (e) { return br.content; }
+    }
+    return br.content;
+  }).filter(c => !!c);
+  
   if (contents.length === 0) {
-    throw new Error("Base resumes have no valid content.");
+    throw new Error("Base resumes have no parseable content.");
   }
 
   // Extract highly relevant professional skills using AI from ALL base resumes
@@ -203,8 +210,6 @@ export async function removeConfirmedSkill(
 export async function getSourceOfTruth(
   candidateId: string
 ): Promise<CandidateSoT | null> {
-  const row = await findSoTByCandidateId(candidateId);
-  if (!row) return null;
   const sotRow = await findSoTByCandidateId(candidateId);
   if (!sotRow) return null;
   

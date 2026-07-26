@@ -16,6 +16,9 @@ import {
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { getSourceOfTruth, parseSourceOfTruth } from "@/server/services/sourceOfTruthService";
+import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
+import { getGoogleProvider } from "@/lib/ai/googleProvider";
 
 export async function GET(req: NextRequest) {
   const currentUser = await getCurrentUserContext();
@@ -164,10 +167,37 @@ export async function POST(req: NextRequest) {
     if (body.job_id) {
       for (const application of data ?? []) {
         const preferredBaseResumeId = candidateResumes[application.candidate_id]?.base_resume_id ?? body.base_resume_id ?? undefined;
+        
+        // 1. Auto-trigger AI resume tailoring workflow
         await backgroundDispatch(
           triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, preferredBaseResumeId ?? undefined).catch((err) => {
             console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
           })
+        );
+        
+        // 2. Auto-parse Source of Truth if not parsed yet (per plan: auto-trigger on ticket creation)
+        await backgroundDispatch(
+          (async () => {
+            try {
+              const existingSoT = await getSourceOfTruth(application.candidate_id);
+              if (!existingSoT || !existingSoT.lastParsedAt) {
+                // SoT has never been parsed — auto-parse now
+                const provider = getGoogleVertexProxyProvider("gemini-2.5-pro")
+                               || getGoogleProvider("gemini-2.5-pro");
+                if (provider) {
+                  console.log(`[SoT Auto-Parse] Starting for candidate ${application.candidate_id}`);
+                  await parseSourceOfTruth(application.candidate_id, undefined, provider);
+                  console.log(`[SoT Auto-Parse] Completed for candidate ${application.candidate_id}`);
+                } else {
+                  console.warn(`[SoT Auto-Parse] No AI provider available for candidate ${application.candidate_id}`);
+                }
+              } else {
+                console.log(`[SoT Auto-Parse] Skipped for candidate ${application.candidate_id} — already parsed at ${existingSoT.lastParsedAt}`);
+              }
+            } catch (err) {
+              console.error(`[SoT Auto-Parse] Failed for candidate ${application.candidate_id}:`, err);
+            }
+          })()
         );
       }
     }
