@@ -69,7 +69,7 @@ export async function parseSourceOfTruth(
     last_parsed_at
   });
 
-  const parsedFromResumeName = baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ");
+  const parsedFromResumeName = baseResumes.map(br => br.name).filter(Boolean).join(" & ");
 
   return {
     confirmedSkills: result.confirmed_skills,
@@ -213,17 +213,23 @@ export async function getSourceOfTruth(
   const sotRow = await findSoTByCandidateId(candidateId);
   if (!sotRow) return null;
   
-  const baseResumes = await query<any>("SELECT name, filename FROM base_resumes WHERE candidate_id = $1", [candidateId]);
+  const baseResumes = await query<any>("SELECT name FROM base_resumes WHERE candidate_id = $1", [candidateId]);
   let parsedFromResumeName: string | null = null;
   if (baseResumes.length > 0) {
-    parsedFromResumeName = baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ");
+    parsedFromResumeName = baseResumes.map(br => br.name).filter(Boolean).join(" & ");
   }
+
+  // Fetch notes LIVE from candidates table (never stale — plan requires live read)
+  const candidateRow = await queryOne<{ notes: string | null }>(
+    "SELECT notes FROM candidates WHERE id = $1",
+    [candidateId]
+  );
 
   return {
     confirmedSkills: sotRow.confirmed_skills,
     pendingSkills: sotRow.pending_skills,
     lastParsedAt: sotRow.last_parsed_at,
     parsedFromResumeName,
-    notes: sotRow.notes
+    notes: candidateRow?.notes ?? null
   };
 }
