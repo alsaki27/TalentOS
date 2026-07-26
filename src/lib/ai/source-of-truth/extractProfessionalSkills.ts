@@ -21,8 +21,11 @@ CRITICAL RULES:
 3. NEVER extract broad generic domains like "Software Engineering", "Business", or "Data" unless they represent a specific methodology (e.g., "Agile Software Development").
 4. If a term is a common noun (like "Dashboards", "Map Layouts", "Scripts"), it is NOT a valid skill. Only proper nouns and recognized technical terms (like "Tableau", "ArcGIS", "Bash Scripting") are permitted.
 5. DO NOT hallucinate. The skill MUST be clearly evidenced in the provided resume experience, education, or skills sections.
-6. Your output MUST be exactly between 30 to 40 skills.
-7. Keep the output strictly as a JSON array of strings. No markdown formatting, no explanations.
+6. Your output MUST contain between 30 to 40 skills.
+7. Keep the output strictly as a JSON array of strings. No markdown formatting, no explanations, no preamble text.
+
+EXAMPLE OUTPUT FORMAT:
+["Python", "React", "PostgreSQL", "Docker", "TypeScript", "AWS S3", "Node.js"]
 
 RESUME CONTENT:
 ${contentStr}
@@ -30,7 +33,7 @@ ${contentStr}
 
   try {
     const response = await provider.send({
-      system: "You are a professional skills extraction engine. Return only a valid JSON array of strings.",
+      system: "You are a professional skills extraction engine. Return ONLY a valid JSON array of strings with no other text, no markdown, no explanation.",
       messages: [
         {
           role: "user",
@@ -38,13 +41,19 @@ ${contentStr}
         },
       ],
       tools: [],
-      temperature: 0.1, // Very low temperature for highly deterministic, accurate extraction
-      maxTokens: 1500,
+      temperature: 0.1,
+      maxTokens: 2000,
     });
 
     const raw = textOf(response.content);
+    console.log("[extractProfessionalSkills] Raw AI response length:", raw?.length ?? 0);
     
-    // Find the first '[' and last ']'
+    if (!raw || raw.trim().length === 0) {
+      console.error("[extractProfessionalSkills] Empty response from AI");
+      return [];
+    }
+
+    // Find the first '[' and last ']' to extract JSON array robustly
     const firstBracket = raw.indexOf('[');
     const lastBracket = raw.lastIndexOf(']');
     
@@ -54,25 +63,30 @@ ${contentStr}
       try {
         parsed = JSON.parse(jsonString);
       } catch (e) {
-        require('fs').appendFileSync('.ai-debug.log', `[parse error] ${e}\nRaw JSON: ${jsonString}\n`);
+        console.error("[extractProfessionalSkills] JSON parse error:", e, "Raw JSON:", jsonString.substring(0, 200));
+        return [];
       }
     } else {
+      // Fallback: strip markdown code fences and parse
+      const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
       try {
-        parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim());
+        parsed = JSON.parse(stripped);
       } catch (e) {
-        require('fs').appendFileSync('.ai-debug.log', `[fallback parse error] ${e}\nRaw Output: ${raw}\n`);
+        console.error("[extractProfessionalSkills] Fallback parse error:", e, "Raw:", raw.substring(0, 200));
+        return [];
       }
     }
 
     if (!Array.isArray(parsed)) {
-      require('fs').appendFileSync('.ai-debug.log', `[not an array] Parsed result is not an array: ${JSON.stringify(parsed)}\n`);
+      console.error("[extractProfessionalSkills] Result is not an array:", typeof parsed);
       return [];
     }
 
-    return ResponseSchema.parse(parsed);
+    const result = ResponseSchema.parse(parsed);
+    console.log("[extractProfessionalSkills] Successfully extracted", result.length, "skills");
+    return result;
   } catch (err: any) {
-    console.error("[extractProfessionalSkills] Failed to extract skills:", err);
-    require('fs').appendFileSync('.ai-debug.log', `[extract error] ${err?.message || err}\n`);
+    console.error("[extractProfessionalSkills] Failed to extract skills:", err?.message || err);
     return [];
   }
 }
