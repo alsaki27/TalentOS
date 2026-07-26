@@ -5,21 +5,22 @@ import { z } from "zod";
 const ResponseSchema = z.array(z.string());
 
 export async function extractProfessionalSkills(
-  resumeContent: any,
+  resumeContents: any[],
   provider: AiProvider
 ): Promise<string[]> {
-  const contentStr = JSON.stringify(resumeContent, null, 2);
+  const contentStr = JSON.stringify(resumeContents, null, 2);
 
-  const prompt = `You are a professional skills extraction engine for a top-tier ATS (Applicant Tracking System).
+  const prompt = `You are an elite, top 1% technical recruiter and professional skills extraction engine for a top-tier ATS.
   
-Your task is to analyze the provided resume JSON and extract exactly 30 to 40 HIGHLY RELEVANT, PROFESSIONAL hard skills.
-You must ensure a minimum 80% relevance/match to the candidate's actual core competencies.
+Your task is to analyze the provided resume(s) JSON and extract exactly 30 to 40 HIGHLY RELEVANT, PROFESSIONAL hard skills.
+You must ensure a minimum 80% relevance/match to the candidate's actual core competencies based on their experience and education.
 
 CRITICAL RULES:
-1. Do NOT extract generalized action verbs or vague words (e.g., "Developed", "Managed", "Produced", "Dashboards", "Map Layouts", "Assisted", "Conducted", "Integrated", "Created").
-2. Only extract specific tools, methodologies, frameworks, languages, platforms, and industry-standard hard skills.
-3. Keep the output strictly as a JSON array of strings. No markdown formatting, no explanations.
-4. Extract exactly 30 to 40 skills.
+1. STRICTLY extract only concrete hard skills (e.g., specific programming languages, tools, frameworks, hardware, specialized methodologies, industry standards, certifications).
+2. DO NOT extract generalized action verbs, vague words, or soft skills (e.g., "Developed", "Managed", "Produced", "Dashboards", "Map Layouts", "Assisted", "Conducted", "Integrated", "Created", "Leadership", "Communication", "Problem Solving").
+3. DO NOT hallucinate. The skill MUST be clearly evidenced in the provided resume experience, education, or skills sections.
+4. Keep the output strictly as a JSON array of strings. No markdown formatting, no explanations.
+5. Extract exactly 30 to 40 of the absolute strongest skills.
 
 RESUME CONTENT:
 ${contentStr}

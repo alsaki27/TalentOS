@@ -1,6 +1,6 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import { findSoTByCandidateId, upsertSoT, updatePendingSkills, updateConfirmedSkills, type PendingSkill } from "@/server/repositories/sourceOfTruthRepository";
-import { queryOne } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 import { inferAdjacentSkills } from "@/lib/ai/source-of-truth/inferAdjacentSkills";
 import { extractProfessionalSkills } from "@/lib/ai/source-of-truth/extractProfessionalSkills";
 
@@ -16,33 +16,28 @@ export async function parseSourceOfTruth(
   baseResumeId: string | undefined,
   provider: AiProvider
 ): Promise<CandidateSoT> {
-  // Load base resume
-  let baseResume;
-  if (baseResumeId) {
-    baseResume = await queryOne<any>("SELECT * FROM base_resumes WHERE id = $1 AND candidate_id = $2", [baseResumeId, candidateId]);
-  } else {
-    baseResume = await queryOne<any>("SELECT * FROM base_resumes WHERE candidate_id = $1 ORDER BY updated_at DESC LIMIT 1", [candidateId]);
+  // Load ALL base resumes for the candidate
+  const baseResumes = await query<any>("SELECT * FROM base_resumes WHERE candidate_id = $1 ORDER BY updated_at DESC", [candidateId]);
+  
+  if (!baseResumes || baseResumes.length === 0) {
+    throw new Error("No base resumes found for candidate.");
   }
 
-  if (!baseResume) {
-    throw new Error("No base resume found for candidate.");
+  const contents = baseResumes.map(br => br.content).filter(c => c && typeof c === "object");
+  if (contents.length === 0) {
+    throw new Error("Base resumes have no valid content.");
   }
 
-  const content = baseResume.content;
-  if (!content || typeof content !== "object") {
-    throw new Error("Base resume has no valid content.");
-  }
-
-  // Extract highly relevant professional skills using AI
-  const aiExtractedSkills = await extractProfessionalSkills(content, provider);
+  // Extract highly relevant professional skills using AI from ALL base resumes
+  const aiExtractedSkills = await extractProfessionalSkills(contents, provider);
   const extractedSkills = new Set<string>(aiExtractedSkills);
 
-  // Fetch existing Source of Truth to preserve manually confirmed skills
+  // Fetch existing Source of Truth to see if it exists
   const existingSoT = await findSoTByCandidateId(candidateId);
-  const existingConfirmed = existingSoT?.confirmed_skills ?? [];
-
-  // Merge existing confirmed skills with newly extracted skills
-  const confirmed_skills = Array.from(new Set([...existingConfirmed, ...Array.from(extractedSkills)]));
+  
+  // To prevent the accumulation of bad/generic skills from previous buggy parses, 
+  // we completely replace the confirmed_skills array with the new highly-targeted list.
+  const confirmed_skills = Array.from(extractedSkills);
 
   // Infer adjacent skills
   const inferred = await inferAdjacentSkills(confirmed_skills, provider, { maxSuggestions: 50 });
@@ -57,7 +52,7 @@ export async function parseSourceOfTruth(
   }));
 
   const last_parsed_at = new Date().toISOString();
-  const parsed_from_resume_id = baseResume.id;
+  const parsed_from_resume_id = baseResumes[0].id; // We'll just link the primary/latest one as a foreign key if needed
 
   const result = await upsertSoT(candidateId, {
     confirmed_skills,
@@ -66,11 +61,13 @@ export async function parseSourceOfTruth(
     last_parsed_at
   });
 
+  const parsedFromResumeName = baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ");
+
   return {
     confirmedSkills: result.confirmed_skills,
     pendingSkills: result.pending_skills,
     lastParsedAt: result.last_parsed_at,
-    parsedFromResumeName: baseResume.name || baseResume.filename
+    parsedFromResumeName
   };
 }
 

@@ -1571,10 +1571,6 @@ export default function CandidateProfilePage() {
         </div>
       )}
 
-      {activeTab === "Source of Truth" && (
-        <SourceOfTruthPanel candidateId={candidate.id} verifiedSkills={candidate.verified_skills ?? []} />
-      )}
-
       {showEdit && (
         <EditProfileModal
           candidate={candidate}
