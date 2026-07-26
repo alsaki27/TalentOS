@@ -73,10 +73,15 @@ ${JSON.stringify(confirmedSkills)}
     maxTokens: 2000,
   });
 
-  const raw = textOf(response.content);
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  const parsed = JSON.parse(stripped);
-  
-  const validated = ResponseSchema.parse(parsed);
-  return validated;
+  try {
+    const raw = textOf(response.content);
+    const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    const parsed = JSON.parse(stripped);
+    
+    const validated = ResponseSchema.parse(parsed);
+    return validated;
+  } catch (err) {
+    console.error("[inferAdjacentSkills] Failed to parse AI response:", err);
+    return [];
+  }
 }

@@ -66,7 +66,12 @@ export async function parseSourceOfTruth(
     });
   }
 
-  const confirmed_skills = Array.from(extractedSkills);
+  // Fetch existing Source of Truth to preserve manually confirmed skills
+  const existingSoT = await findSoTByCandidateId(candidateId);
+  const existingConfirmed = existingSoT?.confirmed_skills ?? [];
+
+  // Merge existing confirmed skills with newly extracted skills
+  const confirmed_skills = Array.from(new Set([...existingConfirmed, ...Array.from(extractedSkills)]));
 
   // Infer adjacent skills
   const inferred = await inferAdjacentSkills(confirmed_skills, provider, { maxSuggestions: 50 });

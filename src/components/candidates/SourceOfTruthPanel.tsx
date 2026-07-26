@@ -45,9 +45,13 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/auto-trigger`, { method: "POST" });
       if (res.ok) {
         setSot(await res.json());
+      } else {
+        const errText = await res.text();
+        alert(`Failed to scan resume: ${errText}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(`An error occurred: ${e.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -59,9 +63,13 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       const res = await fetch(`/api/candidates/${candidateId}/source-of-truth/auto-accept`, { method: "POST" });
       if (res.ok) {
         await loadSot();
+      } else {
+        const errText = await res.text();
+        alert(`Failed to auto-accept skills: ${errText}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(`An error occurred: ${e.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -77,12 +85,16 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
         body: JSON.stringify({ skill: manualSkill.trim(), category: manualCategory }),
       });
       if (res.ok) {
-        setShowAdd(false);
         setManualSkill("");
+        setShowAdd(false);
         await loadSot();
+      } else {
+        const errText = await res.text();
+        alert(`Failed to add manual skill: ${errText}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(`An error occurred: ${e.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -98,9 +110,13 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       });
       if (res.ok) {
         await loadSot();
+      } else {
+        const errText = await res.text();
+        alert(`Failed to update skill status: ${errText}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(`An error occurred: ${e.message}`);
     } finally {
       setActionLoading(null);
     }
@@ -117,9 +133,13 @@ export function SourceOfTruthPanel({ candidateId, verifiedSkills }: { candidateI
       });
       if (res.ok) {
         await loadSot();
+      } else {
+        const errText = await res.text();
+        alert(`Failed to remove skill: ${errText}`);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      alert(`An error occurred: ${e.message}`);
     } finally {
       setActionLoading(null);
     }

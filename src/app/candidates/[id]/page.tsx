@@ -330,7 +330,7 @@ export default function CandidateProfilePage() {
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
   const [appStatusFilter, setAppStatusFilter] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"Overview" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Applications" | "Source of Truth">("Overview");
+  const [activeTab, setActiveTab] = useState<"Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Applications">("Overview");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -1174,6 +1174,10 @@ export default function CandidateProfilePage() {
             </div>
           )}
         </>
+      )}
+
+      {activeTab === "Source of Truth" && (
+        <SourceOfTruthPanel candidateId={params.id as string} verifiedSkills={candidate.verified_skills ?? []} />
       )}
 
       {activeTab === "Evidence Bank" && (
