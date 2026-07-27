@@ -13,6 +13,7 @@ import { requireCurrentUser, MASTER_DATA_MANAGER_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { findSoTByCandidateId } from "@/server/repositories/sourceOfTruthRepository";
 
 const AUTOMATION_ID = "job_match_score";
 
@@ -39,7 +40,9 @@ interface ResumeScore {
  */
 async function scoreResume(
   resume: BaseResume,
-  jobDescText: string
+  jobDescText: string,
+  verifiedSkills: string[] = [],
+  sotSkills: string[] = []
 ): Promise<ResumeScore> {
   const systemPrompt =
     "You are an unbiased, expert technical recruiter evaluating a candidate's fit for a job. Reply with valid JSON only, no markdown, no explanation.";
@@ -50,17 +53,21 @@ async function scoreResume(
 - "experience_match": Integer from 0-100 representing experience relevance.
 - "reasoning": A brief, 1-2 sentence explanation of the score.
 
-Strictness Rules:
-1. Base your evaluation 100% strictly on the explicit evidence in the base resume versus the job description. Do not assume any skills or experience that are not explicitly mentioned.
-2. Be completely unbiased and objective. Do NOT apply any leniency for transferable skills. If a required skill is missing, heavily penalize the score.
-3. Calculate the match score rigorously based on the exact overlap of required skills, exact years of experience, and responsibilities.
-4. Be realistic and extremely strict. A perfect 100 should only happen if the candidate meets every single requirement perfectly.
+Evaluation Rules:
+1. Base your evaluation on ALL available candidate information: the base resume content, recruiter-verified skills, and Source of Truth confirmed skills.
+2. Evaluate how well the candidate's technical skills, methodologies, domain knowledge, and professional experience align with the job description requirements.
+3. Be objective, accurate, and realistic. Give credit for direct experience as well as strongly transferable domain skills and recruiter-verified competencies.
+4. Calculate a realistic, fair, and comprehensive match score (0-100) reflecting the candidate's true qualifications for this role.
 
 Job Description:
 ${jobDescText}
 
 Candidate Base Resume (JSON):
-${JSON.stringify(resume.content)}`;
+${JSON.stringify(resume.content)}
+
+Recruiter-Verified & Source of Truth Confirmed Skills (Treat these as 100% verified candidate competencies):
+${JSON.stringify([...(verifiedSkills || []), ...(sotSkills || [])])}
+`;
 
   const { result } = await callWithUsageTracking(
     AUTOMATION_ID,
@@ -124,18 +131,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Single resume — nothing to compare; return it directly without an AI call
-    if (baseResumes.length === 1) {
-      return NextResponse.json({
-        best_resume_id: baseResumes[0].id,
-        best_resume_name: baseResumes[0].name,
-        score: null,
-        breakdown: null,
-        all_scores: [],
-        single_resume: true,
-      });
-    }
-
     // ── 2. Load job description ──
     const job = await queryOne<{
       title: string;
@@ -167,13 +162,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const [candidateRow, sotRow] = await Promise.all([
+      queryOne<{ verified_skills: string[] | null }>("SELECT verified_skills FROM candidates WHERE id = $1", [candidate_id]),
+      findSoTByCandidateId(candidate_id)
+    ]);
+    const verifiedSkills = candidateRow?.verified_skills || [];
+    const sotSkills = sotRow?.confirmed_skills || [];
+
     // ── 3. Score all resumes in parallel ──
     console.log(
       `[best-resume] Scoring ${baseResumes.length} base resumes for candidate ${candidate_id} against job ${job_id}`
     );
 
     const scoringResults = await Promise.allSettled(
-      baseResumes.map((resume) => scoreResume(resume, jobDescText))
+      baseResumes.map((resume) => scoreResume(resume, jobDescText, verifiedSkills, sotSkills))
     );
 
     const all_scores: ResumeScore[] = [];

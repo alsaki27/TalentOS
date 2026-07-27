@@ -30,13 +30,14 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 5. The final output MUST fit on a single page strictly at any cost (roughly 450-650 words total across experience
    bullets + skills). Do not shrink font/spacing conceptually or pad whitespace to "cheat" the limit;
    the content itself must be concise. Only set exportReady to true once the result genuinely fits one page.
-6. PAGE FULLNESS & BULLET COUNT RULES:
-   * Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling the single page without leaving large empty whitespace at the bottom (as happens when roles are condensed too much).
+6. PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL - DO NOT LEAVE EMPTY WHITESPACE BELOW):
+   * Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling out the single page from top to bottom without leaving large empty whitespace at the bottom (which happens when roles are condensed too much).
    * NEVER drop or vanish an entire experience role from the base resume, and NEVER remove all bullet points from any role! Every role from the draft must be preserved.
-   * For the primary / most recent role: Use 5 to 6 detailed, high-impact bullets.
-   * For secondary / earlier roles: Use 4 to 5 detailed bullets.
-   * For older roles: Use 3 to 4 detailed bullets.
-   * Maximum 6 bullets per role, minimum 3 bullets per role. Never collapse a role down to zero, 1, or 2 bullets. An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
+   * To prevent empty whitespace below, generate rich, substantive, multi-line bullet points (2 to 3 lines per bullet where appropriate) for every role:
+     - For the primary / most recent role: Use 6 to 7 detailed, high-impact bullets.
+     - For secondary / earlier roles: Use 4 to 6 detailed bullets.
+     - For older roles: Use 3 to 4 detailed bullets.
+   * Minimum 3 bullets per role. Never collapse a role down to zero, 1, or 2 bullets. An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
    * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
    * DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', never change it to 'Jan 2022 - Jan 2022').
@@ -49,14 +50,14 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    * NEVER generate a professional summary. The summary field must always be null. The skills
      output MUST stay in the same categorized-group structure the draft used — an array of
      { title, skills[] } groups, never flattened into one list or one generic "Skills" bucket.
-   * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms if the skill is already listed in any category! Keep each category clean and concise (approx. 4 to 8 distinct skills per category).
+   * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills.
 9. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
    * the top third (skills + first role's first two bullets) hits the JD's top selection
      criteria and contains at least one quantified achievement;
-   * one-page limit respected strictly at any cost, every experience role preserved with 3 to 6 bullets (no role vanished, no over-shrinking), no duplicate titles/dates, no unsupported claims anywhere.
+   * one-page limit respected strictly at any cost, every experience role preserved with 3 to 7 bullets (no role vanished, no over-shrinking, no empty bottom whitespace), no duplicate titles/dates, no unsupported claims anywhere.
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 

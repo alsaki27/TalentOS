@@ -44,7 +44,7 @@ function mergeSkills(baseCategories: any[], newSkills: string[]): any[] {
       cat = { title: catTitle, skills: new Set() };
       categories.push(cat);
     }
-    if (cat.skills.size < 10) {
+    if (cat.skills.size < 15) {
       cat.skills.add(skill.trim());
       allExisting.add(skill.trim());
     }
@@ -94,7 +94,7 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
     });
     const target = updated[bestIdx];
     const newBullet = `${verbPool[Math.floor(Math.random() * verbPool.length)]} ${skill} in alignment with project scope and technical deliverables.`;
-    if (target.bullets.length < 6) {
+    if (target.bullets.length < 7) {
       target.bullets.push(newBullet);
     } else {
       // Replace the bullet with the lowest JD‑keyword match count.
@@ -134,10 +134,12 @@ export function buildResumeForgePrompt(
   verifiedSkills: string[] = [],
   sourceOfTruth: { confirmedSkills: string[]; notesContext: string | null } | null = null
 ): string {
-  // Collect all skills the JD emphasizes (required + preferred).
+  // Collect all skills the JD emphasizes (required + preferred) plus recruiter verified & SoT skills.
   const addedSkills = [
     ...(jobAnalysis.requiredSkills ?? []),
     ...(jobAnalysis.preferredSkills ?? []),
+    ...(verifiedSkills ?? []),
+    ...(sourceOfTruth?.confirmedSkills ?? []),
   ];
 
   // Produce a version of the base resume that already includes the new skills.
@@ -162,21 +164,23 @@ Rules:
 
 SKILLS SECTION RULES (CRITICAL):
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies (e.g., 'AutoCAD', 'Route Optimization', 'ROW Coordination').
-* DO NOT add duplicate skills or synonyms if the skill is already listed in any category!
-* Keep each category clean and concise (approx. 4 to 8 distinct skills per category). Never create bloated categories or excessively large lists.
+* DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
+* Expand each relevant skill category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct, high-priority skills per category). Do not artificially truncate skills.
+* Prioritize the most important technical skills required by the JD without adding bloat or generic buzzwords.
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
 * DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', never change it to 'Jan 2022 - Jan 2022').
 * Every experience entry from the base resume must be preserved exactly once in the same chronological order.
 
-PAGE FULLNESS & BULLET COUNT RULES:
-* Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling the single page without leaving large empty whitespace at the bottom (as happens when roles are condensed too much).
-* For the primary / most recent role: Use 5 to 6 detailed, high-impact bullets.
-* For secondary / earlier roles: Use 4 to 5 detailed bullets.
-* For older roles: Use 3 to 4 detailed bullets.
-* NEVER remove all bullet points from any experience role! NEVER leave any role with fewer than 3 bullets! Every role from the base resume must be preserved with substantive, detailed bullet points so the page remains full and comprehensive.
-* Maximum 6 bullets per role, minimum 3 bullets per role. Keep the content rich and detailed to maintain a professional, full one-page presentation.
+PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL - DO NOT LEAVE EMPTY WHITESPACE BELOW):
+* The tailored resume MUST look visually full, comprehensive, and balanced, completely filling out the single page from top to bottom without leaving large empty whitespace at the bottom (which happens when roles are condensed too much).
+* To prevent empty whitespace below, generate rich, substantive, multi-line bullet points (2 to 3 lines per bullet where appropriate) for every role:
+  - For the primary / most recent role: Use 6 to 7 detailed, high-impact bullets.
+  - For secondary / earlier roles: Use 4 to 6 detailed bullets.
+  - For older roles: Use 3 to 4 detailed bullets.
+* NEVER remove all bullet points from any experience role! NEVER leave any role with fewer than 3 bullets! Every role from the base resume must be preserved with rich technical detail so the page remains full and comprehensive.
+* Keep the content substantive, project-focused, and detailed to maintain a professional, full one-page presentation.
 
 Humanity may worship keywords, but credibility still gets the interview.
 

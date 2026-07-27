@@ -1723,7 +1723,11 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       const res = await fetch("/api/jobs/match-score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ job_id: job.id, candidate_id: candidateId }),
+        body: JSON.stringify({
+          job_id: job.id,
+          candidate_id: candidateId,
+          base_resume_id: selectedBaseResumeIds[candidateId] || aiPickResults[candidateId]?.best_resume_id,
+        }),
       });
       if (res.ok) {
         const newScore = await res.json();
