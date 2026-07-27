@@ -17,6 +17,10 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 1. Apply ALL required edits from the reviewer — critical-severity edits (especially any
    flagging a fabricated or unsupported license/certification/degree) are non-negotiable;
    never leave one unresolved or add it to rejectedIssueIds.
+   IMPORTANT: Employment dates copied from the base resume (even future-looking start dates,
+   unconventional date ranges, or "Present" end dates) are NEVER unsupported claims. Do NOT
+   remove or alter them. They are the candidate's real data. Date anomalies flagged by the
+   reviewer should be moved to unresolvedWarnings, not treated as fabrication.
 2. Apply optional edits where they clearly improve quality.
 3. Never invent evidence or experience that isn't supported — this includes never
    reinstating a credential, degree, or claim the reviewer flagged as unsupported, even if
@@ -37,7 +41,9 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      - For the primary / most recent role: Use 6 to 7 detailed, high-impact bullets.
      - For secondary / earlier roles: Use 4 to 6 detailed bullets.
      - For older roles: Use 3 to 4 detailed bullets.
-   * Minimum 3 bullets per role. Never collapse a role down to zero, 1, or 2 bullets. An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
+   * ABSOLUTE MINIMUM: 3 bullets per role, no exceptions. Never collapse a role down to zero, 1, or 2 bullets.
+   * IF YOU ARE TRIMMING FOR ONE-PAGE FIT: trim bullets from WITHIN roles (shorten text), NOT by removing entire bullets. A page with fewer but longer bullets is better than a page with many roles having only 1-2 bullets and huge blank space at the bottom.
+   * An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
    * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
    * DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', never change it to 'Jan 2022 - Jan 2022').
