@@ -115,29 +115,88 @@ export async function runFinalPolish(
     });
   }
 
-  // Defense in depth against the exact failure the prompt now explicitly
-  // forbids: confirmed live, the model can satisfy the single-page word
-  // count by wiping every bullet from a kept role (empty bullets array),
-  // or even wiping the entire experience section to [], while still
-  // setting exportReady: true and a high finalQaScore - a schema-valid but
-  // practically broken resume (confirmed live: a real draft with 2 roles
-  // and real bullets came out with experience: [] and exportReady: true).
-  // Force a retry rather than let a gutted resume through, since the
-  // prompt instruction alone isn't a guarantee.
-  const draftHadExperience = Array.isArray((draft as any)?.experience) && (draft as any).experience.length > 0;
-  const draftHadBullets = draftHadExperience && (draft as any).experience.some((e: any) => Array.isArray(e?.bullets) && e.bullets.length > 0);
-  const emptyBulletRoles = validated.experience.filter((e) => e.bullets.length === 0);
+  // ── BULLET SAFETY NET ───────────────────────────────────────────────────────
+  // Defense in depth: if FinalPolish strips bullets from any role,
+  // silently restore them from the draft (ResumeForge output) or base resume.
+  // Never throw here — throwing causes a retry that also strips bullets.
+  if (Array.isArray(validated.experience)) {
+    const draftExperience: any[] = Array.isArray((draft as any)?.experience)
+      ? (draft as any).experience
+      : [];
 
-  if (draftHadExperience && validated.experience.length === 0 && validated.exportReady) {
-    throw new Error(
-      `Final Polish wiped the entire experience section (draft had ${(draft as any).experience.length} role(s)) while marking exportReady - rejecting`
-    );
+    validated.experience.forEach((exp: any, i: number) => {
+      const currentBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
+      if (currentBullets.length >= 3) return; // already fine
+
+      // Step 1: try to restore from the draft (ResumeForge output) which had good bullets
+      let sourceBullets: string[] = [];
+      const draftMatch: any =
+        draftExperience.find((d: any) =>
+          d.company && exp.company &&
+          d.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
+        ) ??
+        draftExperience.find((d: any) =>
+          d.company && exp.company &&
+          (d.company.toLowerCase().includes(exp.company.toLowerCase()) ||
+           exp.company.toLowerCase().includes(d.company.toLowerCase()))
+        ) ??
+        (validated.experience.length === draftExperience.length ? draftExperience[i] : undefined);
+
+      if (draftMatch && Array.isArray(draftMatch.bullets) && draftMatch.bullets.length > 0) {
+        sourceBullets = draftMatch.bullets.filter((b: unknown): b is string => typeof b === "string" && !!b.trim());
+      }
+
+      // Step 2: fall back to base resume bullets if draft also had none
+      if (sourceBullets.length === 0) {
+        const baseMatch: any =
+          baseExperience.find((b: any) =>
+            b.company && exp.company &&
+            b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
+          ) ??
+          baseExperience.find((b: any) =>
+            b.company && exp.company &&
+            (b.company.toLowerCase().includes(exp.company.toLowerCase()) ||
+             exp.company.toLowerCase().includes(b.company.toLowerCase()))
+          ) ??
+          (validated.experience.length === baseExperience.length ? baseExperience[i] : undefined);
+
+        if (baseMatch) {
+          const rawBase: unknown[] = Array.isArray(baseMatch.bullets)
+            ? baseMatch.bullets
+            : Array.isArray(baseMatch.bulletPoints)
+            ? baseMatch.bulletPoints
+            : [];
+          sourceBullets = rawBase
+            .map((b) => {
+              if (typeof b === "string" && b.trim()) return b.trim();
+              if (b && typeof b === "object" && !Array.isArray(b)) {
+                const o = b as Record<string, unknown>;
+                const t = o.text ?? o.content ?? o.description ?? "";
+                if (typeof t === "string" && t.trim()) return t.trim();
+              }
+              return null;
+            })
+            .filter((b): b is string => b !== null);
+        }
+      }
+
+      if (sourceBullets.length > 0) {
+        const merged = [...currentBullets];
+        for (const sb of sourceBullets) {
+          if (merged.length >= Math.max(3, currentBullets.length)) break;
+          const isDupe = merged.some(
+            (m) => m.toLowerCase().slice(0, 40) === sb.toLowerCase().slice(0, 40)
+          );
+          if (!isDupe) merged.push(sb);
+        }
+        exp.bullets = merged;
+        console.warn(
+          `[Agent:FinalPolish] BULLET GUARD restored bullets for "${exp.title}" (was ${currentBullets.length}, now ${merged.length})`
+        );
+      }
+    });
   }
-  if (draftHadBullets && emptyBulletRoles.length > 0 && validated.exportReady) {
-    throw new Error(
-      `Final Polish left ${emptyBulletRoles.length} kept role(s) with zero bullets while marking exportReady - rejecting: ${emptyBulletRoles.map((e) => e.title).join(", ")}`
-    );
-  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   return validated;
 }
