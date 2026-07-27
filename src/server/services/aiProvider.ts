@@ -386,7 +386,9 @@ export async function getActiveProviderWithFallback(): Promise<ActiveProvider | 
 
   // Fallback to DB-managed keys
   const dbKeys = await listEnabledAiKeys();
+  const blockedStatuses = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
   for (const key of dbKeys) {
+    if (blockedStatuses.includes(key.status as any)) continue;
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
     const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
