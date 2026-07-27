@@ -2,6 +2,40 @@
 // Skills come exclusively from the candidate's Source of Truth (confirmed_skills from DB)
 // and the job analysis. No hardcoded category maps. The AI decides where skills belong.
 
+/**
+ * Normalise a single bullet that may be stored as a plain string or as a { text: string }
+ * object (both formats appear in older base resumes). Returns a plain string or null.
+ */
+function normaliseBullet(b: unknown): string | null {
+  if (typeof b === "string" && b.trim()) return b.trim();
+  if (b && typeof b === "object" && !Array.isArray(b)) {
+    const obj = b as Record<string, unknown>;
+    if (typeof obj.text === "string" && obj.text.trim()) return obj.text.trim();
+    if (typeof obj.content === "string" && obj.content.trim()) return obj.content.trim();
+    if (typeof obj.description === "string" && obj.description.trim()) return obj.description.trim();
+  }
+  return null;
+}
+
+/**
+ * Return a normalised copy of the base resume content where every experience entry's
+ * bullets are guaranteed to be a plain string[]. Handles both `bullets` and `bulletPoints`
+ * fields, and objects like `{ text: string }`. The original object is NOT mutated.
+ */
+function normaliseBaseContent(baseContent: any): any {
+  if (!baseContent || typeof baseContent !== "object") return baseContent ?? {};
+  const experiences: any[] = Array.isArray(baseContent.experience)
+    ? baseContent.experience.map((exp: any) => {
+        const rawBullets: unknown[] =
+          Array.isArray(exp.bullets) ? exp.bullets :
+          Array.isArray(exp.bulletPoints) ? exp.bulletPoints : [];
+        const normalisedBullets = rawBullets.map(normaliseBullet).filter((b): b is string => b !== null);
+        return { ...exp, bullets: normalisedBullets, bulletPoints: undefined };
+      })
+    : (baseContent.experience ?? []);
+  return { ...baseContent, experience: experiences };
+}
+
 /** Build per-role minimum bullet requirements as a prompt string, using actual base resume experience data. */
 function buildBulletRequirements(experiences: any[]): string {
   if (!experiences || experiences.length === 0) return "";
@@ -16,6 +50,23 @@ function buildBulletRequirements(experiences: any[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Build a human-readable snapshot of the experience section — role headings and their
+ * existing bullets as a numbered list. Sent to the AI separately from the raw JSON so
+ * the AI cannot miss or misinterpret the existing bullet content.
+ */
+function buildExperienceSnapshot(experiences: any[]): string {
+  if (!experiences || experiences.length === 0) return "(no experience entries)";
+  return experiences.map((exp, idx) => {
+    const header = `${idx + 1}. ${exp.title ?? "Role"} at ${exp.company ?? ""} (${exp.startDate ?? ""} – ${exp.endDate ?? "Present"})`;
+    const bullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
+    const bulletLines = bullets.length > 0
+      ? bullets.map((b: string, i: number) => `   ${i + 1}. ${b}`).join("\n")
+      : "   (no bullets stored — you MUST write them from scratch using the evidence bank and job analysis)";
+    return `${header}\n${bulletLines}`;
+  }).join("\n\n");
+}
+
 /** Build the prompt for the Resume Forge agent. */
 export function buildResumeForgePrompt(
   job: any,
@@ -25,12 +76,15 @@ export function buildResumeForgePrompt(
   verifiedSkills: string[] = [],
   sourceOfTruth: { confirmedSkills: string[]; notesContext: string | null } | null = null
 ): string {
-  const baseContent = baseResume?.content ?? {};
-  const bulletRequirements = buildBulletRequirements(baseContent.experience ?? []);
+  // Normalise the base resume so bullets are always plain strings — handles { text } objects
+  const rawBaseContent = baseResume?.content ?? {};
+  const baseContent = normaliseBaseContent(rawBaseContent);
+  const baseExperience: any[] = baseContent.experience ?? [];
+  const bulletRequirements = buildBulletRequirements(baseExperience);
+  const experienceSnapshot = buildExperienceSnapshot(baseExperience);
 
   // Collect all SoT confirmed skills + recruiter verified skills into one deduplicated list
   const sotSkills = sourceOfTruth?.confirmedSkills ?? [];
-  const allVerified = Array.from(new Set([...verifiedSkills, ...sotSkills]));
 
   return `Compare the base resume with the job description and create a truthful, ATS-friendly, one-page tailored resume.
 
@@ -65,19 +119,24 @@ JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 
 PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY WHITESPACE):
 * The tailored resume MUST look visually full, balanced, and complete — filling the single page top to bottom without leaving large empty whitespace at the bottom.
-* REQUIRED bullet counts per role (based on this candidate's actual experience):
+* YOU MUST WRITE BULLETS FOR EVERY EXPERIENCE ROLE. An experience entry without bullets is a broken resume. Never output a role with an empty bullets array.
+* REQUIRED bullet counts per role:
 ${bulletRequirements || "  - Most recent role: 6-7 bullets\n  - Earlier roles: 4-6 bullets\n  - Oldest roles: 3-4 bullets"}
-* NEVER remove all bullet points from any experience role! NEVER leave any role with fewer than 3 bullets!
-* Each bullet should be a rich, multi-clause statement demonstrating quantified impact, tools used, and project context. Do NOT write one-line stubs.
-* If trimming for page length, SHORTEN bullets (condense wording), do NOT delete entire bullets.
+* For each role: start from the EXISTING BULLETS shown in the EXPERIENCE SNAPSHOT below, keep the strongest ones, rewrite them to be more relevant and impactful for this job, and add additional bullets if needed to hit the minimum count. Do NOT start from scratch — build on what is already there.
+* NEVER return a role with zero bullets or fewer than 3 bullets. This is the most important rule.
+* Each bullet: strong action verb, quantified result or scope where possible, relevant tool or methodology, one to two complete sentences. No one-line stubs.
+* If trimming for page length: shorten individual bullet text. Do NOT delete entire bullets.
 
 Humanity may worship keywords, but credibility still gets the interview.
 
 JOB ANALYSIS:
 ${JSON.stringify(jobAnalysis)}
 
-BASE RESUME (use this as-is — do NOT change dates, job titles, companies, or locations):
+BASE RESUME — RAW JSON (authoritative source for dates, titles, companies, education, skills structure):
 ${JSON.stringify(baseContent).slice(0, 12000)}
+
+EXPERIENCE SNAPSHOT — EXISTING BULLETS (use these as the starting point for each role's bullet points; rewrite and expand them to match the job, do NOT ignore or discard them):
+${experienceSnapshot}
 
 EVIDENCE BANK:
 ${JSON.stringify(evidence).slice(0, 8000)}
