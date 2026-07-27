@@ -104,13 +104,13 @@ Rules:
 * Output only the final resume in valid JSON format, not explanations.
 
 SKILLS SECTION RULES (CRITICAL):
-* DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) Source of Truth confirmed skills listed below, or (c) skills the candidate clearly demonstrates through their experience bullets.
+* DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) Source of Truth confirmed skills listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies.
 * DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
-* Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills that are relevant to this job. Do NOT create arbitrary new categories.
-* From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. If a confirmed skill clearly belongs in "GIS Software" (for example), put it there — use the base resume's own category titles as the guide.
-* Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate.
-* Do NOT add a skill from SoT if it has no relevance to this specific job description.
+* Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories.
+* From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category titles as the guide.
+* Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
+* Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array.
@@ -118,14 +118,14 @@ JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * Every experience entry from the base resume must be preserved exactly once in the same chronological order.
 
 PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY WHITESPACE):
-* The tailored resume MUST look visually full, balanced, and complete — filling the single page top to bottom without leaving large empty whitespace at the bottom.
+* The tailored resume MUST fill the entire single page top to bottom — no large empty whitespace at the bottom.
 * YOU MUST WRITE BULLETS FOR EVERY EXPERIENCE ROLE. An experience entry without bullets is a broken resume. Never output a role with an empty bullets array.
-* REQUIRED bullet counts per role:
-${bulletRequirements || "  - Most recent role: 6-7 bullets\n  - Earlier roles: 4-6 bullets\n  - Oldest roles: 3-4 bullets"}
-* For each role: start from the EXISTING BULLETS shown in the EXPERIENCE SNAPSHOT below, keep the strongest ones, rewrite them to be more relevant and impactful for this job, and add additional bullets if needed to hit the minimum count. Do NOT start from scratch — build on what is already there.
-* NEVER return a role with zero bullets or fewer than 3 bullets. This is the most important rule.
-* Each bullet: strong action verb, quantified result or scope where possible, relevant tool or methodology, one to two complete sentences. No one-line stubs.
-* If trimming for page length: shorten individual bullet text. Do NOT delete entire bullets.
+* EXACT REQUIRED BULLET COUNTS PER ROLE (non-negotiable):
+${bulletRequirements || "  - Most recent role: minimum 6 bullets, maximum 7 bullets\n  - Second role: minimum 4 bullets, maximum 6 bullets\n  - Older roles: minimum 3 bullets, maximum 4 bullets"}
+* Strategy: Take each EXISTING BULLET from the EXPERIENCE SNAPSHOT below, keep its facts intact, then EXPAND the sentence to be longer (2-3 lines) by adding more detail about tools used, project scale, impact metrics, or methodology. Do NOT invent new facts — expand the existing sentences using information that is already in the base resume, evidence bank, and job analysis.
+* If a role has fewer existing bullets than the required minimum: write additional bullets from the evidence bank and job analysis.
+* NEVER return a role with fewer bullets than its required minimum above.
+* When trimming for page length: shorten individual bullet sentences. NEVER delete entire bullets.
 
 Humanity may worship keywords, but credibility still gets the interview.
 

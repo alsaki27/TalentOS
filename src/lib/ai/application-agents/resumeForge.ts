@@ -116,30 +116,33 @@ export async function runResumeForge(
     });
   }
 
-  // ── BULLET SAFETY NET ───────────────────────────────────────────────────────
-  // Defense in depth: if the AI returned fewer than 3 bullets for any role,
-  // force-restore bullets from the corresponding base resume entry.
-  // This fires silently — no throw, no retry — so the resume always has content.
+  // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
+  // Defense in depth: if the AI returned fewer than the required minimum bullets
+  // for any role, force-restore from the base resume. Fires silently — no throw,
+  // no retry — so the resume always has content.
+  //
+  // Per-role minimum (must match buildBulletRequirements in prompts/resumeForge.ts):
+  //   idx 0 (most recent) → 6   idx 1 → 4   idx ≥2 → 3
+  const getMinBullets = (idx: number) => idx === 0 ? 6 : idx === 1 ? 4 : 3;
+
   if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
     validated.experience.forEach((exp: any, i: number) => {
+      const requiredMin = getMinBullets(i);
       const currentBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
-      if (currentBullets.length >= 3) return; // already fine
+      if (currentBullets.length >= requiredMin) return; // already meets requirement
 
-      // Find the matching base entry using the same company-match cascade as above
-      let baseMatch: any = baseExperience.find((b: any) =>
-        b.company && exp.company &&
-        b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
-      );
-      if (!baseMatch) {
-        baseMatch = baseExperience.find((b: any) =>
+      // Find the matching base entry (exact → fuzzy → index fallback)
+      let baseMatch: any =
+        baseExperience.find((b: any) =>
+          b.company && exp.company &&
+          b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
+        ) ??
+        baseExperience.find((b: any) =>
           b.company && exp.company &&
           (b.company.toLowerCase().includes(exp.company.toLowerCase()) ||
            exp.company.toLowerCase().includes(b.company.toLowerCase()))
-        );
-      }
-      if (!baseMatch && validated.experience.length === baseExperience.length) {
-        baseMatch = baseExperience[i];
-      }
+        ) ??
+        (validated.experience.length === baseExperience.length ? baseExperience[i] : undefined);
 
       if (baseMatch) {
         // Normalise base bullets from { text } objects or plain strings
@@ -161,11 +164,10 @@ export async function runResumeForge(
           .filter((b): b is string => b !== null);
 
         if (baseBullets.length > 0) {
-          // Keep any AI-generated bullets, then append base bullets until we have ≥3
+          // Keep AI-generated bullets, then append base bullets until requiredMin is met
           const merged = [...currentBullets];
           for (const bb of baseBullets) {
-            if (merged.length >= Math.max(3, currentBullets.length)) break;
-            // Skip if a very similar bullet already exists (first 40 chars match)
+            if (merged.length >= requiredMin) break;
             const isDupe = merged.some(
               (m) => m.toLowerCase().slice(0, 40) === bb.toLowerCase().slice(0, 40)
             );
@@ -173,13 +175,13 @@ export async function runResumeForge(
           }
           exp.bullets = merged;
           console.warn(
-            `[Agent:ResumeForge] BULLET GUARD restored bullets for "${exp.title}" (was ${currentBullets.length}, now ${merged.length})`
+            `[Agent:ResumeForge] BULLET GUARD "${exp.title}": ${currentBullets.length} → ${merged.length} bullets (required min ${requiredMin})`
           );
         }
       }
     });
   }
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   if (Array.isArray(validated.education) && Array.isArray(baseContent?.education)) {
     validated.education.forEach((edu: any) => {
       const baseMatch = baseContent.education.find((b: any) => 
