@@ -84,7 +84,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     : typeof (finalData as any).finalQaScore === "number" ? (finalData as any).finalQaScore
     : null;
   const truthScore =
-    typeof reviewData?.truthfulnessRisk === "number" ? reviewData.truthfulnessRisk : null;
+    typeof reviewData?.truthfulnessRisk === "number" ? Math.max(0, 10 - reviewData.truthfulnessRisk) : null;
 
   // The agent schema (FinalResumeV1) carries no contact/identity data; the
   // studio's ResumeDocument shape needs the candidate's header, which lives on

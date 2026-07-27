@@ -439,7 +439,7 @@ function FindingsPanel({ details }: { details: any }) {
             </div>
             <div style={{ textAlign: "center" }}>
               <div style={{ fontSize: 9, color: "var(--muted)" }}>Truth</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.truthfulnessRisk}/10</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : 0}/10</div>
             </div>
           </div>
           {hiringPanel.overallComment && (
