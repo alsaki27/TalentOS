@@ -12,18 +12,44 @@ function mapSkillToCategory(skill: string): string {
   return SKILL_CATEGORY_MAP[skill] ?? "Additional Skills";
 }
 
-/** Merge new skills into the base skill categories while preserving existing ones. */
+function isCleanSkill(skill: string, existingSkills: Set<string>): boolean {
+  if (!skill || typeof skill !== 'string') return false;
+  const trimmed = skill.trim();
+  // Ignore full sentences or requirements (> 40 chars or > 5 words)
+  if (trimmed.length > 40 || trimmed.split(/\s+/).length > 5) return false;
+  // Ignore duplicates (case-insensitive check against existing skills)
+  const lower = trimmed.toLowerCase();
+  for (const existing of existingSkills) {
+    if (existing.toLowerCase() === lower || existing.toLowerCase().includes(lower) || lower.includes(existing.toLowerCase())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Merge new skills into the base skill categories while preserving existing ones without bloat or duplicates. */
 function mergeSkills(baseCategories: any[], newSkills: string[]): any[] {
-  const categories = baseCategories.map(c => ({ title: c.title, skills: new Set(c.skills) }));
+  const allExisting = new Set<string>();
+  const categories = baseCategories.map(c => {
+    const skillsSet = new Set<string>(c.skills || []);
+    skillsSet.forEach(s => allExisting.add(s));
+    return { title: c.title, skills: skillsSet };
+  });
+
   newSkills.forEach(skill => {
+    if (!isCleanSkill(skill, allExisting)) return;
     const catTitle = mapSkillToCategory(skill);
     let cat = categories.find(c => c.title === catTitle);
     if (!cat) {
       cat = { title: catTitle, skills: new Set() };
       categories.push(cat);
     }
-    cat.skills.add(skill);
+    if (cat.skills.size < 10) {
+      cat.skills.add(skill.trim());
+      allExisting.add(skill.trim());
+    }
   });
+
   return categories.map(c => ({ title: c.title, skills: Array.from(c.skills) }));
 }
 
@@ -48,7 +74,14 @@ function augmentExperience(experiences: any[], newSkills: string[], jobAnalysis:
     return { ...exp, bullets: stringBullets, bulletPoints: undefined };
   });
 
-  newSkills.forEach(skill => {
+  const cleanSkills = newSkills.filter(skill => {
+    if (!skill || typeof skill !== 'string') return false;
+    const trimmed = skill.trim();
+    if (trimmed.length > 40 || trimmed.split(/\s+/).length > 5) return false;
+    return true;
+  });
+
+  cleanSkills.forEach(skill => {
     // Choose the experience that already scores highest against JD keywords.
     let bestIdx = 0;
     let bestScore = -1;
@@ -122,11 +155,28 @@ Rules:
 * Remove weak, repetitive, irrelevant, and generic content.
 * Mention missing requirements only when supported by the base resume.
 * Keep technical skills concise and grouped by relevance (an array of { title, skills[] } groups, never a flat list).
-* Use 5–7 bullets for the main role, 3–5 for secondary roles, and 1–2 for older roles (maximum 6 bullets per role, minimum 2–3 bullets per role so no experience role ever vanishes or is left empty).
 * Keep everything readable and within one page strictly at any cost.
 * Verify date consistency, degree accuracy, experience duration, location, and formatting before finalizing.
 * Never generate a professional summary (always return summary as null).
 * Output only the final resume in valid JSON format, not explanations.
+
+SKILLS SECTION RULES (CRITICAL):
+* DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies (e.g., 'AutoCAD', 'Route Optimization', 'ROW Coordination').
+* DO NOT add duplicate skills or synonyms if the skill is already listed in any category!
+* Keep each category clean and concise (approx. 4 to 8 distinct skills per category). Never create bloated categories or excessively large lists.
+
+JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
+* NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
+* DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', never change it to 'Jan 2022 - Jan 2022').
+* Every experience entry from the base resume must be preserved exactly once in the same chronological order.
+
+PAGE FULLNESS & BULLET COUNT RULES:
+* Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling the single page without leaving large empty whitespace at the bottom (as happens when roles are condensed too much).
+* For the primary / most recent role: Use 5 to 6 detailed, high-impact bullets.
+* For secondary / earlier roles: Use 4 to 5 detailed bullets.
+* For older roles: Use 3 to 4 detailed bullets.
+* NEVER remove all bullet points from any experience role! NEVER leave any role with fewer than 3 bullets! Every role from the base resume must be preserved with substantive, detailed bullet points so the page remains full and comprehensive.
+* Maximum 6 bullets per role, minimum 3 bullets per role. Keep the content rich and detailed to maintain a professional, full one-page presentation.
 
 Humanity may worship keywords, but credibility still gets the interview.
 
