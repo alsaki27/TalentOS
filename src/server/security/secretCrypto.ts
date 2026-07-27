@@ -65,6 +65,9 @@ export async function decryptSecret(ciphertext: string): Promise<string> {
     console.warn("[SECURITY] Plaintext AI key detected — re-encrypt this key via the admin UI when possible.");
     return ciphertext;
   }
+  if (ciphertext === "enc:placeholder-env-managed" || ciphertext === "enc:env-managed-placeholder") {
+    return ciphertext.slice(4);
+  }
 
   const key = await getKey();
   const base64 = ciphertext.slice(4); // Remove "enc:" prefix
