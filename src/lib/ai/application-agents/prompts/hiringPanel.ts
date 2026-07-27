@@ -27,12 +27,18 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   summary — a summary is intentionally forbidden in this pipeline.
 - roleFitScore (0-10): how well does the candidate's experience align with what the role is
   actually asking for? Give credit for adjacent/transferable experience, not just exact matches.
-- truthfulnessRisk (0-10): flag genuine fabrication risk only — a required license/certification/
-  degree that appears in the draft with no support anywhere in the base resume or evidence bank is
-  the main thing to catch (call it out as a "critical" requiredEdit). Rephrasing or reordering the
-  candidate's existing real experience is NOT a truthfulness risk. An honest omission (listed under
-  missingRequirements) is not a risk either. Default this score low unless something concrete is
-  actually unsupported.
+- truthfulnessRisk (0-10): flag ONLY genuine credential fabrication — a specific license, certification,
+  degree, or permit that appears in the draft with ZERO support in the base resume, evidence bank, or Source
+  of Truth is the ONLY thing to catch (call it out as a "critical" requiredEdit).
+  CRITICAL EXCLUSIONS — these are NEVER truthfulnessRisk:
+    • Employment dates, start dates, or end dates copied from the base resume (even if they appear to be
+      future dates or unconventional) — these come directly from the candidate's real data.
+    • Reordering or rephrasing existing experience bullets.
+    • Skills from Source of Truth (they are recruiter-confirmed).
+    • Omitting a requirement the candidate doesn't have (that is a missingRequirements item, not a risk).
+    • Any formatting, date presentation, or style issue — those are formattingIssues, not truthfulnessRisk.
+  Default truthfulnessRisk to 0 unless you have concrete evidence of an invented credential. A score of 5+
+  requires a "critical" requiredEdit with a specific, named unsupported claim.
 - Formatting & Structure: check that the draft fits on one page strictly at any cost (roughly 450-650 words) without over-shrinking or leaving large bottom whitespace. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Flag a professional summary if present (it must be null).
 
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
