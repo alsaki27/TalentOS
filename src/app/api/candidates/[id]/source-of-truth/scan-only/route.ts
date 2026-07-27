@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { extractProfessionalSkills } from "@/lib/ai/source-of-truth/extractProfessionalSkills";
-import { getActiveProviderAsync } from "@/lib/ai/index";
 import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
-import { getGoogleProvider } from "@/lib/ai/googleProvider";
 import { query } from "@/server/db/neon";
 import { requireCurrentUser } from "@/lib/auth";
 
@@ -23,9 +21,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     
     if (!contents.length) return NextResponse.json({ skills: [], parsedFromResumeName: baseResumes.map(br => br.name || br.filename).filter(Boolean).join(" & ") });
     
-    const provider = getGoogleVertexProxyProvider("gemini-2.5-pro")
-                  || getGoogleProvider("gemini-2.5-pro")
-                  || (await getActiveProviderAsync())?.provider;
+    const provider = getGoogleVertexProxyProvider("gemini-2.5-pro");
                   
     if (!provider) {
       return new NextResponse("AI Provider not configured", { status: 500 });
