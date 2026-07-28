@@ -57,15 +57,14 @@ export async function fetchJobPageText(url: string): Promise<string> {
 
   try {
     var controller = new AbortController();
-    // Reduced from 10s \u2192 5s: external pages that will succeed typically respond in < 5s;
-    // dead or slow links were adding a guaranteed 10s stall per job.
-    var timeout = setTimeout(function () { controller.abort(); }, 5000);
+    // 8s timeout: jina.ai needs a few seconds to render JS, but keeps it under 60s total workflow limit.
+    var timeout = setTimeout(function () { controller.abort(); }, 8000);
 
-    var response = await fetch(url, {
+    var jinaUrl = `https://r.jina.ai/${url}`;
+    var response = await fetch(jinaUrl, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "TalentOS-JobCEO/1.0 (job-ingestion-bot; +https://skarion-talent-os.skarion-talentos.workers.dev)",
-        "Accept": "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8",
+        "Accept": "text/plain",
       },
     });
 
@@ -73,25 +72,8 @@ export async function fetchJobPageText(url: string): Promise<string> {
 
     if (!response.ok) return "";
 
-    var html = await response.text();
-
-    var text = html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, "")
-      .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, "")
-      .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#x27;/g, "'")
-      .replace(/&[a-z]+;/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
+    var text = await response.text();
+    // Jina returns markdown. We just truncate it if it's too massive.
     return text.length > 15000 ? text.slice(0, 15000) : text;
   } catch (_err) {
     return "";

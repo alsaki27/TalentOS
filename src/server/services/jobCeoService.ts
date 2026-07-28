@@ -139,7 +139,7 @@ export async function startRun(input: StartRunInput): Promise<JobCeoRunRow> {
 }
 
 export async function processQaBatch(runId: string): Promise<{ processed: number; kept: number }> {
-  const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "researched", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, kept: 0 };
 
   // Process items in parallel chunks. STAGE_CONCURRENCY caps concurrent AI calls.
@@ -185,7 +185,7 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
 }
 
 export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number }> {
-  const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, researched: 0 };
 
   // Deep Fetch does a network fetch + AI call. Run in parallel for massive throughput gain.
@@ -228,7 +228,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
 }
 
 export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number }> {
-  const batch = await claimNextStagedBatch(runId, "researched", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0 };
 
   // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
@@ -369,7 +369,7 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
                      currentStatus === "deep_fetch" ? "matchmaking" : "completed";
 
   if (currentStatus === "ingesting") {
-    const result = await processQaBatch(run.id);
+    const result = await processDeepFetchBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "ingested");
 
     let transitioned = false;
@@ -392,8 +392,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   }
 
   if (currentStatus === "qa") {
-    const result = await processDeepFetchBatch(run.id);
-    const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "qa_passed");
+    const result = await processQaBatch(run.id);
+    const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "researched");
 
     let transitioned = false;
     if (!hasMore || Number(hasMore.count) <= 0) {
@@ -415,7 +415,7 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
 
   if (currentStatus === "deep_fetch") {
     const result = await processMatchmakerBatch(run.id);
-    const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "researched");
+    const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "qa_passed");
 
     let transitioned = false;
     if (!hasMore || Number(hasMore.count) <= 0) {
@@ -511,16 +511,27 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
   const result = await dispatchNextJobCeoWork();
 
   if (result.needsDispatch) {
-    const baseUrl = process.env.TALENTOS_BASE_URL || (process.env.NODE_ENV === "development" ? "http://localhost:3000" : "https://skarion-talent-os.skarion-talentos.workers.dev");
-    const cronSecret = process.env.CRON_SECRET;
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/job-ceo/dispatch`, {
-        method: "POST",
-        headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
-      }).catch((err) =>
-        console.error("[Job CEO] Dispatch chain self-fetch failed:", err)
-      )
-    );
+    if (process.env.NODE_ENV === "development") {
+      backgroundDispatch(
+        (async () => {
+          let r = result;
+          while (r.needsDispatch) {
+            r = await dispatchNextJobCeoWork();
+          }
+        })().catch(err => console.error("[Job CEO] Local background dispatch loop failed:", err))
+      );
+    } else {
+      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+      const cronSecret = process.env.CRON_SECRET;
+      await backgroundDispatch(
+        fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+          method: "POST",
+          headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
+        }).catch((err) =>
+          console.error("[Job CEO] Dispatch chain self-fetch failed:", err)
+        )
+      );
+    }
   }
 
   return result;

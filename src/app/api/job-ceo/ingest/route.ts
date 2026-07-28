@@ -71,9 +71,20 @@ export async function POST(req: NextRequest) {
 
     // Trigger dispatch if we actually staged new jobs
     if (staged > 0) {
-      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+      // Use the same URL-resolution logic as jobCeoService.ts dispatchAndChain:
+      // prefer TALENTOS_BASE_URL env var, fall back to localhost in dev, production in prod.
+      const baseUrl =
+        process.env.TALENTOS_BASE_URL ||
+        (process.env.NODE_ENV === "development"
+          ? "http://localhost:3000"
+          : "https://skarion-talent-os.skarion-talentos.workers.dev");
+      const cronSecret = process.env.CRON_SECRET;
       await backgroundDispatch(
-        fetch(`${baseUrl}/api/job-ceo/dispatch`, { method: "POST" }).catch((err) => {
+        fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+          method: "POST",
+          // Bug 2 fix: include auth header so dispatch route does not reject with 401.
+          headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined,
+        }).catch((err) => {
           console.error("[Job CEO] Ingest dispatch self-fetch failed:", err);
         })
       );
