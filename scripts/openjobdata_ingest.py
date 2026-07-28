@@ -293,6 +293,18 @@ def main():
         df = df[df["status"] == "active"]
         print(f"After status=active filter: {len(df):,}")
 
+    # ── US-ONLY FILTER (strict) ───────────────────────────────────────────────
+    # The OpenJobData minimal schema has a 'country' column with ISO-2 codes
+    # (e.g. "US", "GB", "CA"). Reject every row that is not explicitly in the
+    # United States. Remote-only rows that have country=US are kept.
+    if "country" in df.columns:
+        before_us = len(df)
+        df = df[df["country"].str.upper().isin(["US", "USA", "UNITED STATES"])]
+        print(f"After US-only filter: {len(df):,} (dropped {before_us - len(df):,} non-US rows)")
+    else:
+        print("  WARNING: 'country' column not found in dataset — US filter skipped")
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Apply role-title keyword filter
     df = df[df["title"].apply(lambda t: matches_role(t, role_group, custom_keywords or None))]
     print(f"After keyword filter (role_group={role_group}): {len(df):,} matched")

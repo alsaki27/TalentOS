@@ -16,8 +16,17 @@ export interface ScheduleRow {
 }
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
-  if (response) return response;
+  // Allow GitHub Actions / cron callers to read the schedule using CRON_SECRET bearer
+  // without needing a session cookie (which they can never have).
+  const authHeader = req.headers.get("authorization") || "";
+  const cronSecret = process.env.CRON_SECRET;
+  const hasCronAuth = cronSecret && authHeader === `Bearer ${cronSecret}`;
+
+  if (!hasCronAuth) {
+    // Fall back to normal session-based auth for dashboard users
+    const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
+    if (response) return response;
+  }
 
   try {
     const rows = await query<ScheduleRow>("SELECT * FROM job_ceo_schedule ORDER BY updated_at DESC LIMIT 1");

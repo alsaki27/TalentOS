@@ -51,10 +51,12 @@ jobs:
 
       - name: Run ingest
         env:
-          # Same production Worker URL deploy.yml already uses directly (not
-          # treated as a secret elsewhere in this repo) — override via the
-          # TALENTOS_INGEST_URL repo secret if that ever changes.
-          TALENTOS_INGEST_URL: ${{ secrets.TALENTOS_INGEST_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          # BASE_URL is what openjobdata_ingest.py reads (os.environ.get("BASE_URL")).
+          # TALENTOS_INGEST_URL kept as an alias in case other scripts use it.
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          TALENTOS_INGEST_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          # INGEST_SECRET is what openjobdata_ingest.py reads for the bearer token.
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           ARGS=(--role-group "${{ github.event.inputs.role_group || 'all' }}")
