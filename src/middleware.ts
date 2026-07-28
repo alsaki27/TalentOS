@@ -118,6 +118,16 @@ function isJobCeoAuthorized(req: NextRequest, pathname: string) {
   return false;
 }
 
+// The AI key readiness endpoint is hit by GitHub Actions deployment CI — it has no
+// session cookie but authenticates via CRON_SECRET Bearer in the route handler.
+// Middleware must let it through so the route can apply its own auth logic.
+function isAiKeyReadinessAuthorized(req: NextRequest, pathname: string) {
+  if (pathname !== "/api/admin/ai-key-readiness") return false;
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  return req.headers.get("authorization") === `Bearer ${secret}`;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
@@ -129,6 +139,7 @@ export async function middleware(req: NextRequest) {
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
   if (isOpenJobDataIngestAuthorized(req, pathname)) return NextResponse.next();
   if (isJobCeoAuthorized(req, pathname)) return NextResponse.next();
+  if (isAiKeyReadinessAuthorized(req, pathname)) return NextResponse.next();
 
   const token = req.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
   const session = token ? await getVerifiedSession(token) : null;
