@@ -2,8 +2,21 @@ import type { AiProvider } from "@/lib/ai/provider";
 import type { JobCeoAgentContext, StagedJob } from "./types";
 import { DeepFetchResultSchema, type DeepFetchResultV1 } from "./schemas";
 import { buildDeepFetchPrompt } from "./prompts/deepFetch";
-import { fetchJobPageText } from "./fetchJobPage";
+import { fetchJobPageText, isSafeExternalUrl } from "./fetchJobPage";
 import { textOf } from "@/lib/ai/provider";
+
+function resolveFetchUrl(stagedJob: StagedJob): string | null {
+  if (stagedJob.source_url && isSafeExternalUrl(stagedJob.source_url)) {
+    return stagedJob.source_url;
+  }
+  if (stagedJob.raw && typeof stagedJob.raw === "object") {
+    var raw = stagedJob.raw as Record<string, unknown>;
+    if (raw.apply_url && typeof raw.apply_url === "string" && isSafeExternalUrl(raw.apply_url)) {
+      return raw.apply_url;
+    }
+  }
+  return null;
+}
 
 export async function runDeepFetch(
   options: { system_prompt?: string; temperature?: number; max_output_tokens?: number; timeout_ms?: number },
@@ -19,46 +32,54 @@ export async function runDeepFetch(
   var title = stagedJob.title ?? "Unknown";
   var company = stagedJob.company ?? "Unknown";
 
-  // Skip the network roundtrip and AI extraction for jobs that already have
-  // a rich enough description. Raised from 500 → 800 to skip more jobs early.
-  if (existingDesc.length > 800) {
+  if (existingDesc.length > 200) {
     return {
       descriptionText: existingDesc,
       requirements: stagedJob.requirements as DeepFetchResultV1["requirements"] ?? { yearsExperience: null, techStack: [], clearance: null, certifications: [] },
     };
   }
 
-  var rawText = "";
-  if (stagedJob.source_url) {
-    rawText = await fetchJobPageText(stagedJob.source_url);
-  }
+  var fetchUrl = resolveFetchUrl(stagedJob);
 
-  if (!rawText && existingDesc.length < 50) {
+  if (!fetchUrl) {
+    console.warn(`[Deep Fetch] No fetchable URL for: "${title}" @ "${company}"`);
     return { descriptionText: existingDesc, requirements: { yearsExperience: null, techStack: [], clearance: null, certifications: [] } };
   }
 
-  var enrichedText = rawText ? rawText : existingDesc;
+  var rawText = await fetchJobPageText(fetchUrl);
+
+  if (!rawText) {
+    console.warn(`[Deep Fetch] No description obtained for: "${title}" @ "${company}"`);
+    return { descriptionText: existingDesc, requirements: { yearsExperience: null, techStack: [], clearance: null, certifications: [] } };
+  }
 
   try {
     var response = await provider.send({
-      system: options.system_prompt ?? "You are Deep Fetch, a job-description enhancement agent. Return only valid JSON.",
+      system: options.system_prompt ?? "You are Deep Fetch, a job-description extraction agent. Return only valid JSON.",
       messages: [
-        { role: "user", content: [{ type: "text", text: buildDeepFetchPrompt(title, company, enrichedText) }] },
+        { role: "user", content: [{ type: "text", text: buildDeepFetchPrompt(title, company, rawText) }] },
       ],
       tools: [],
-      temperature: options.temperature,
-      maxTokens: options.max_output_tokens,
-      timeoutMs: options.timeout_ms,
+      temperature: options.temperature ?? 0.1,
+      maxTokens: options.max_output_tokens ?? 2048,
+      timeoutMs: options.timeout_ms ?? 8000,
     });
 
-    var raw = textOf(response.content);
-    var stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    var parsed = JSON.parse(stripped);
+    var parsed = parseAiJson(textOf(response.content));
     var validated = DeepFetchResultSchema.parse(parsed);
-    if ("error" in validated) throw new Error("Deep Fetch output validation failed: " + validated.error);
-
+    if ("error" in validated) throw new Error("Deep Fetch validation: " + validated.error);
+    console.log(`[Deep Fetch] AI extracted description (${validated.descriptionText.length} chars) for: "${title}"`);
     return validated;
   } catch (err) {
-    return { descriptionText: existingDesc, requirements: { yearsExperience: null, techStack: [], clearance: null, certifications: [] } };
+    console.warn(`[Deep Fetch] AI extraction failed (${(err as Error).message ?? String(err)}) — using raw fetched text`);
+    return {
+      descriptionText: rawText,
+      requirements: { yearsExperience: null, techStack: [], clearance: null, certifications: [] },
+    };
   }
+}
+
+function parseAiJson(raw: string): unknown {
+  var stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  return JSON.parse(stripped);
 }

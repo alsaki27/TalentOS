@@ -34,13 +34,9 @@ import { createProposal, supersedePendingFor } from "@/server/repositories/agent
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
-// Increased from 5 → 15 for higher throughput per dispatch tick.
-// Each stage's items run in parallel (Promise.allSettled) so the total wall-clock time
-// for a 15-item batch is roughly equal to the slowest single item, not 15× the average.
-const BATCH_SIZE = 15;
+const BATCH_SIZE = 5;
 
-// Maximum concurrent AI calls within one batch to avoid hammering the AI provider.
-const STAGE_CONCURRENCY = 5;
+const STAGE_CONCURRENCY = 6;
 
 /**
  * Concurrency-limited parallel executor.
@@ -103,7 +99,7 @@ export async function callAgent(
 ): Promise<{ result: unknown; providerName: string; aiKeyId: string | null; model: string | null }> {
   const agentConfig = await findAgentConfigByAutomationId(automationId);
   const defaults = JOB_CEO_CONFIG_DEFAULTS[automationId as keyof typeof JOB_CEO_CONFIG_DEFAULTS];
-  const timeoutMs = agentConfig?.timeout_ms ?? defaults?.timeoutMs ?? 60000;
+  const timeoutMs = agentConfig?.timeout_ms ?? defaults?.timeoutMs ?? 10000;
 
   return Promise.race([
     callWithUsageTracking(automationId, { workflowId: ctx.runId } as CallContext, fn),
@@ -150,18 +146,15 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
     };
 
     try {
-      const result = await callAgent("job_ceo_qa", ctx, (provider) => {
-        const runner = getRunnerFor("qa");
-        if (!runner) throw new Error("No runner for stage: qa");
-        const options: AgentOptions = {
+      const result = await callAgent("job_ceo_qa", ctx, async (provider) => {
+        var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.maxOutputTokens,
-          timeout_ms: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.timeoutMs,
+          timeout_ms: 5000,
         };
-        return runner(options, provider, ctx);
+        return runQaBouncer(opts, provider, ctx);
       });
-
-      const verdict = result.result as { keep: boolean; score: number; tier: string; reason: string };
+      var verdict = result.result as { keep: boolean; score: number; tier: string; reason: string };
 
       if (verdict.keep) {
         await updateStaged(row.id, { stage: "qa_passed", qa_score: verdict.score, qa_reason: verdict.reason });
@@ -196,16 +189,15 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
     };
 
     try {
-      const result = await callAgent("job_ceo_deep_fetch", ctx, (provider) => {
-        const options: AgentOptions = {
+      const result = await callAgent("job_ceo_deep_fetch", ctx, async (provider) => {
+        var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.maxOutputTokens,
-          timeout_ms: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.timeoutMs,
+          timeout_ms: 8000,
         };
-        return runDeepFetch(options, provider, ctx);
+        return runDeepFetch(opts, provider, ctx);
       });
-
-      const fetchResult = result.result as { descriptionText: string; requirements: Record<string, unknown> };
+      var fetchResult = result.result as { descriptionText: string; requirements: Record<string, unknown> };
       await updateStaged(row.id, {
         stage: "researched",
         description_text: fetchResult.descriptionText || row.description_text,
@@ -213,8 +205,9 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
       });
       return { processed: 1, researched: 1 };
     } catch (err) {
-      console.error(`[Job CEO] Deep Fetch failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
-      // Graceful degradation: mark as researched with existing description so the pipeline continues.
+      var errMsg = (err as Error).message ?? String(err);
+      console.error(`[Job CEO] Deep Fetch FAILED for "${row.title ?? "?"}" @ "${row.company ?? "?"}" (row=${row.id}): ${errMsg}`);
+      console.error(`[Job CEO] Deep Fetch diagnostics — source_url=${row.source_url ?? "null"}, existing_desc_len=${String(row.description_text ?? "").length}, has_raw=${String(row.raw != null)}`);
       await updateStaged(row.id, { stage: "researched", description_text: row.description_text });
       return { processed: 1, researched: 1 };
     }
@@ -263,15 +256,14 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
       const companyKey = company.toLowerCase().trim();
       const isDuplicate = existingTitles.has(titleKey) && existingCompanies.has(companyKey);
 
-      const result = await callAgent("job_ceo_matchmaker", ctx, (provider) => {
-        const options: AgentOptions = {
+      var result = await callAgent("job_ceo_matchmaker", ctx, async (provider) => {
+        var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_matchmaker.temperature,
-          max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_matchmaker.maxOutputTokens,
-          timeout_ms: JOB_CEO_CONFIG_DEFAULTS.job_ceo_matchmaker.timeoutMs,
+          max_output_tokens: 4096,
+          timeout_ms: 8000,
         };
-        return runMatchmaker(options, provider, ctx);
+        return runMatchmaker(opts, provider, ctx);
       });
-
       const matchResult = result.result as { matches: { candidateId: string; score: number; reasons: string[]; outreachDraft: string }[] };
       const highMatches = matchResult.matches.filter((m) => m.score >= 90);
 
@@ -512,14 +504,11 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
 
   if (result.needsDispatch) {
     if (process.env.NODE_ENV === "development") {
-      backgroundDispatch(
-        (async () => {
-          let r = result;
-          while (r.needsDispatch) {
-            r = await dispatchNextJobCeoWork();
-          }
-        })().catch(err => console.error("[Job CEO] Local background dispatch loop failed:", err))
-      );
+      var r = result;
+      while (r.needsDispatch) {
+        r = await dispatchNextJobCeoWork();
+      }
+      console.log("[Job CEO] Local dispatch chain completed.");
     } else {
       const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
       const cronSecret = process.env.CRON_SECRET;

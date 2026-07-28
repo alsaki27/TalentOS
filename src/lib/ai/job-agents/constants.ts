@@ -32,9 +32,9 @@ export var JOB_CEO_CONFIG_DEFAULTS = {
   job_ceo_deep_fetch: {
     displayName: "Deep Fetch",
     temperature: 0.2,
-    maxOutputTokens: 2048,  // Description text extraction; 32768 was excessive.
-    timeoutMs: 30000,       // Reduced from 60s; network fetch is capped at 10s internally.
-    maxAttempts: 2,
+    maxOutputTokens: 2048,
+    timeoutMs: 8000,
+    maxAttempts: 1,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
     outputSchemaVersion: "DeepFetchResultV1",
@@ -42,9 +42,9 @@ export var JOB_CEO_CONFIG_DEFAULTS = {
   job_ceo_matchmaker: {
     displayName: "Matchmaker",
     temperature: 0.2,
-    maxOutputTokens: 32768,
-    timeoutMs: 60000,
-    maxAttempts: 2,
+    maxOutputTokens: 4096,
+    timeoutMs: 8000,
+    maxAttempts: 1,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
     outputSchemaVersion: "MatchmakerResultV1",

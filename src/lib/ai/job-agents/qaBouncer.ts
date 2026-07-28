@@ -12,9 +12,7 @@ export async function runQaBouncer(
   var stagedJob: StagedJob | undefined;
   try {
     stagedJob = ctx.previousOutputs.stagedJob as StagedJob | undefined;
-  } catch (_) {
-    // fall through to regex
-  }
+  } catch (_) {}
 
   if (stagedJob) {
     try {
@@ -24,14 +22,12 @@ export async function runQaBouncer(
           { role: "user", content: [{ type: "text", text: buildQaBouncerPrompt(stagedJob) }] },
         ],
         tools: [],
-        temperature: options.temperature,
-        maxTokens: options.max_output_tokens,
-        timeoutMs: options.timeout_ms,
+        temperature: options.temperature ?? 0.1,
+        maxTokens: options.max_output_tokens ?? 256,
+        timeoutMs: options.timeout_ms ?? 5000,
       });
 
-      var raw = textOf(response.content);
-      var stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-      var parsed = JSON.parse(stripped);
+      var parsed = parseAiJson(textOf(response.content));
       var validated = QaVerdictSchema.parse(parsed);
       if ("error" in validated) {
         console.warn("[QA Bouncer] AI output invalid, falling back to regex: " + validated.error);
@@ -39,11 +35,16 @@ export async function runQaBouncer(
         return validated;
       }
     } catch (err) {
-      console.warn("[QA Bouncer] AI call failed, falling back to regex:", (err as Error).message ?? String(err));
+      console.warn("[QA Bouncer] AI failed (" + ((err as Error).message ?? String(err)) + ") — using regex");
     }
   }
 
   return classifyWithRegex(stagedJob);
+}
+
+function parseAiJson(raw: string): unknown {
+  var stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  return JSON.parse(stripped);
 }
 
 function classifyWithRegex(stagedJob?: StagedJob): QaVerdictV1 {
@@ -85,7 +86,7 @@ function classifyWithRegex(stagedJob?: StagedJob): QaVerdictV1 {
   }
 
   if (matchCount >= 3) {
-    return { keep: true, score: 85, tier: "best", reason: "Strong target-industry signals: " + matchCount + " keyword matches" };
+    return { keep: true, score: 85, tier: "best", reason: "Strong target-industry signals: " + matchCount + " keyword matches in title/description" };
   }
   if (matchCount >= 1) {
     if (!text || text.length < 50) {
