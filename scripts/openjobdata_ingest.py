@@ -21,6 +21,7 @@ CLI arguments (for GitHub Actions workflow_dispatch):
 
 import argparse
 import hashlib
+import math
 import os
 import re
 import sys
@@ -175,6 +176,17 @@ def load_deltas(fs, bucket_prefix: str, days_back: int) -> "pd.DataFrame":
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def sanitize_payload(obj: Any) -> Any:
+    """Recursively replace NaN/Inf float values with None so JSON serialisation works."""
+    if isinstance(obj, dict):
+        return {k: sanitize_payload(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_payload(v) for v in obj]
+    if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+        return None
+    return obj
 
 
 def build_job_payload(row: "pd.Series", companies: Dict[Any, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -362,7 +374,7 @@ def main():
     total_skipped = 0
 
     for i in range(0, len(jobs), BATCH_SIZE):
-        batch = jobs[i : i + BATCH_SIZE]
+        batch = [sanitize_payload(j) for j in jobs[i : i + BATCH_SIZE]]
         url = f"{base_url}/api/job-ceo/ingest"
         try:
             resp = requests.post(
