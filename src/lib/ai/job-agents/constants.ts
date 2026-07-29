@@ -33,7 +33,7 @@ export var JOB_CEO_CONFIG_DEFAULTS = {
     displayName: "Deep Fetch",
     temperature: 0.2,
     maxOutputTokens: 2048,
-    timeoutMs: 8000,
+    timeoutMs: 60000,       // Must exceed Jina fetch (30s) + direct HTTP (8s) + AI extraction (8s) = ~46s
     maxAttempts: 1,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
@@ -43,7 +43,7 @@ export var JOB_CEO_CONFIG_DEFAULTS = {
     displayName: "Matchmaker",
     temperature: 0.2,
     maxOutputTokens: 4096,
-    timeoutMs: 8000,
+    timeoutMs: 30000,       // AI matchmaker + job creation + company sync + activity logs
     maxAttempts: 1,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
