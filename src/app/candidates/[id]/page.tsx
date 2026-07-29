@@ -1,7 +1,7 @@
 // src/app/candidates/[id]/page.tsx
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
@@ -10,6 +10,7 @@ import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsed
 import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
+import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
 interface BaseResumeSummary {
   id: string;
@@ -329,9 +330,8 @@ export default function CandidateProfilePage() {
   const [events, setEvents] = useState<ApplicationEvent[]>([]);
   const [comments, setComments] = useState<ApplicationComment[]>([]);
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
-  const [appStatusFilter, setAppStatusFilter] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Applications">("Overview");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -952,7 +952,7 @@ export default function CandidateProfilePage() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-        {(["Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Applications"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -970,7 +970,7 @@ export default function CandidateProfilePage() {
         ))}
       </div>
 
-      {activeTab === "Overview" && (
+      {activeTab === "Profile Overview" && (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
@@ -1253,7 +1253,7 @@ export default function CandidateProfilePage() {
                 <button className="btn-primary" onClick={() => setShowCreateBaseResume(true)}>
                   + Create blank base resume
                 </button>
-                <Link href={`/candidates/${candidate.id}`} onClick={() => setActiveTab("Overview")}>
+                <Link href={`/candidates/${candidate.id}`} onClick={() => setActiveTab("Profile Overview")}>
                   <button>Upload resume first</button>
                 </Link>
               </div>
@@ -1452,128 +1452,9 @@ export default function CandidateProfilePage() {
       )}
 
       {activeTab === "Applications" && (
-        <div>
-          <h2 style={{ fontSize: 16, marginBottom: 12 }}>Applications ({candidate.applications.length})</h2>
-
-          {candidate.applications.length > 0 && (
-            <div className="filter-bar">
-              <select value={appStatusFilter} onChange={(e) => setAppStatusFilter(e.target.value)}>
-                <option value="">All statuses</option>
-                <option value="assigned">Assigned</option>
-                <option value="stacked">Stacked</option>
-                <option value="in_progress">In progress</option>
-                <option value="applied">Applied</option>
-                <option value="replied">Replied</option>
-                <option value="interview">Interview</option>
-                <option value="rejected">Rejected</option>
-                <option value="offer">Offer</option>
-              </select>
-            </div>
-          )}
-
-          {selectedApps.size > 0 && (
-            <div className="bulk-bar">
-              <span>{selectedApps.size} selected</span>
-              <button className="btn-danger" onClick={deleteSelectedApplications}>Delete selected</button>
-            </div>
-          )}
-
-          {candidate.applications.length === 0 ? (
-            <div className="empty">No applications logged yet for this candidate.</div>
-          ) : (() => {
-            const filteredApps = candidate.applications.filter((a) => !appStatusFilter || a.status === appStatusFilter);
-            return filteredApps.length === 0 ? (
-              <div className="empty">No applications match this filter.</div>
-            ) : (
-            <div className="table-shell">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ width: 28 }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: "auto" }}
-                      checked={selectedApps.size === filteredApps.length}
-                      onChange={() =>
-                        setSelectedApps((prev) =>
-                          prev.size === filteredApps.length ? new Set() : new Set(filteredApps.map((a) => a.id))
-                        )
-                      }
-                    />
-                  </th>
-                  <th>Job</th>
-                  <th>Company</th>
-                  <th>Status</th>
-                  <th>Source</th>
-                  <th>Applied</th>
-                  <th>Resume used</th>
-                  <th>Tailored variant</th>
-                  <th>Follow-up</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredApps.map((a) => (
-                  <Fragment key={a.id}>
-                    <tr>
-                      <td><input type="checkbox" style={{ width: "auto" }} checked={selectedApps.has(a.id)} onChange={() => toggleAppSelected(a.id)} /></td>
-                      <td>{a.jobs?.title || <span className="muted">Ad-hoc job</span>}</td>
-                      <td className="muted">{a.jobs?.company || <span className="muted">—</span>}</td>
-                      <td><StatusBadge status={a.status} /></td>
-                      <td><SourceTypeBadge sourceType={a.source_type} /></td>
-                      <td className="muted">{new Date(a.applied_at).toLocaleDateString()}</td>
-                      <td className="muted">{a.resume_filename || "—"}</td>
-                      <td>
-                        <ApplicationResumeAttach
-                          candidateId={candidate.id}
-                          applicationId={a.id}
-                          jobId={a.jobs?.id ?? ""}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="date"
-                          defaultValue={a.follow_up_at ?? ""}
-                          onBlur={(e) => updateFollowUp(a.id, e.target.value)}
-                        />
-                      </td>
-                      <td style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => setTailorContext({ jobId: a.jobs?.id ?? "", applicationId: a.id })}>Tailor</button>
-                        <button onClick={() => toggleHistory(a.id)}>History</button>
-                        <button onClick={() => deleteApplication(a.id)}>Delete</button>
-                      </td>
-                    </tr>
-                    {expandedAppId === a.id && (
-                      <tr>
-                        <td colSpan={10} style={{ background: "var(--bg)" }}>
-                          <label style={{ display: "block", marginBottom: 6 }}>Status history</label>
-                          {events.length === 0 ? (
-                            <span className="muted">No status changes recorded yet.</span>
-                          ) : (
-                            <ul style={{ margin: "0 0 16px", paddingLeft: 18 }}>
-                              {events.map((ev) => (
-                                <li key={ev.id} className="muted" style={{ fontSize: 12 }}>
-                                  {new Date(ev.created_at).toLocaleString()} — {ev.from_status ?? "(created)"} → <strong>{ev.to_status}</strong>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                          <ApplicationComments
-                            applicationId={a.id}
-                            comments={comments}
-                            onCommented={() => loadComments(a.id)}
-                          />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-            </div>
-            );
-          })()}
-        </div>
+        <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
+          <CandidateApplicationsDashboard candidateId={candidate.id} />
+        </Suspense>
       )}
 
       {showEdit && (

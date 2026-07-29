@@ -115,6 +115,7 @@ export default function NavBar() {
           px-6 py-4 lg:p-0 z-40 shadow-lg lg:shadow-none`}
       >
         <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
+        <Link href="/candidate-dashboard" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Dashboard</Link>
         {canViewJobs && <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>}
         <Link href="/ats-score" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">ATS Score Analysis</Link>
         <Link href="/falood" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Falood AI</Link>
