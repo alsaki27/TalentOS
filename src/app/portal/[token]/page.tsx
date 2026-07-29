@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import CandidatePortalDashboard from "@/components/portal/CandidatePortalDashboard";
 
 interface Update {
   id: string;
@@ -48,6 +49,7 @@ export default function CandidatePortalPage() {
   const [gmailLoading, setGmailLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [activeView, setActiveView] = useState<"overview" | "dashboard">("overview");
 
   useEffect(() => {
     if (!token) return;
@@ -80,6 +82,37 @@ export default function CandidatePortalPage() {
         Here's a live look at the jobs we've applied to on your behalf and any updates.
       </p>
 
+      <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
+        <button
+          onClick={function () { setActiveView("overview"); }}
+          style={{
+            padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+            border: activeView === "overview" ? "1px solid var(--accent)" : "1px solid var(--border)",
+            background: activeView === "overview" ? "var(--accent)" : "var(--surface)",
+            color: activeView === "overview" ? "#fff" : "var(--ink-soft)",
+            cursor: "pointer",
+          }}
+        >
+          Applications
+        </button>
+        <button
+          onClick={function () { setActiveView("dashboard"); }}
+          style={{
+            padding: "8px 20px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+            border: activeView === "dashboard" ? "1px solid var(--accent)" : "1px solid var(--border)",
+            background: activeView === "dashboard" ? "var(--accent)" : "var(--surface)",
+            color: activeView === "dashboard" ? "#fff" : "var(--ink-soft)",
+            cursor: "pointer",
+          }}
+        >
+          Dashboard
+        </button>
+      </div>
+
+      {activeView === "dashboard" ? (
+        <CandidatePortalDashboard token={token || ""} />
+      ) : (
+      <>
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <div>
@@ -156,7 +189,9 @@ export default function CandidatePortalPage() {
           ))}
         </div>
       )}
-    </>
+      </>
+      )}
+      </>
   );
 }
 
