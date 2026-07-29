@@ -268,7 +268,7 @@ def main():
     custom_keywords = [k.strip() for k in custom_keywords_raw.split(",") if k.strip()]
     limit = args.limit if args.limit is not None else int(os.environ.get("LIMIT", "0"))
 
-    base_url = os.environ.get("BASE_URL", "https://skarion-talent-os.skarion-talentos.workers.dev")
+    base_url = (os.environ.get("BASE_URL") or "https://skarion-talent-os.skarion-talentos.workers.dev").strip()
     ingest_secret = os.environ.get("INGEST_SECRET") or os.environ.get("JOB_CEO_INGEST_SECRET")
 
     if not dry_run and not ingest_secret:
