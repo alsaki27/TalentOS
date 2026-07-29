@@ -28,6 +28,7 @@ import {
   insertStaged,
   claimNextStagedBatch,
   updateStaged,
+  removeDedupSignature,
   countByStage as countStagedByStage,
 } from "@/server/repositories/jobCeoStagingRepository";
 import { createProposal, supersedePendingFor } from "@/server/repositories/agentConfigProposalRepository";
@@ -37,6 +38,8 @@ import { backgroundDispatch } from "@/server/lib/waitUntil";
 const BATCH_SIZE = 5;
 
 const STAGE_CONCURRENCY = 6;
+
+const MIN_DESCRIPTION_LENGTH = 100;
 
 /**
  * Concurrency-limited parallel executor.
@@ -177,11 +180,10 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
   return { processed, kept };
 }
 
-export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number }> {
+export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number; skipped: number }> {
   const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
-  if (batch.length === 0) return { processed: 0, researched: 0 };
+  if (batch.length === 0) return { processed: 0, researched: 0, skipped: 0 };
 
-  // Deep Fetch does a network fetch + AI call. Run in parallel for massive throughput gain.
   const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
@@ -198,26 +200,40 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         return runDeepFetch(opts, provider, ctx);
       });
       var fetchResult = result.result as { descriptionText: string; requirements: Record<string, unknown> };
+      var finalDesc = fetchResult.descriptionText || row.description_text || "";
+      if (String(finalDesc).length < MIN_DESCRIPTION_LENGTH) {
+        console.warn(`[Job CEO] Deep Fetch — description too short (${String(finalDesc).length} chars) for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — skipping`);
+        await updateStaged(row.id, { stage: "no_description", description_text: finalDesc, last_error: "Description too short (" + String(finalDesc).length + " chars)" });
+        if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
+        return { processed: 1, researched: 0, skipped: 1 };
+      }
       await updateStaged(row.id, {
         stage: "researched",
-        description_text: fetchResult.descriptionText || row.description_text,
+        description_text: finalDesc,
         requirements: fetchResult.requirements,
       });
-      return { processed: 1, researched: 1 };
+      return { processed: 1, researched: 1, skipped: 0 };
     } catch (err) {
       var errMsg = (err as Error).message ?? String(err);
       console.error(`[Job CEO] Deep Fetch FAILED for "${row.title ?? "?"}" @ "${row.company ?? "?"}" (row=${row.id}): ${errMsg}`);
       console.error(`[Job CEO] Deep Fetch diagnostics — source_url=${row.source_url ?? "null"}, existing_desc_len=${String(row.description_text ?? "").length}, has_raw=${String(row.raw != null)}`);
+      if (String(row.description_text ?? "").length < MIN_DESCRIPTION_LENGTH) {
+        console.warn(`[Job CEO] Deep Fetch — no usable description for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — marking as no_description`);
+        await updateStaged(row.id, { stage: "no_description", description_text: row.description_text, last_error: errMsg });
+        if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
+        return { processed: 1, researched: 0, skipped: 1 };
+      }
       await updateStaged(row.id, { stage: "researched", description_text: row.description_text });
-      return { processed: 1, researched: 1 };
+      return { processed: 1, researched: 1, skipped: 0 };
     }
   });
 
   const processed = results.reduce((s, r) => s + r.processed, 0);
   const researched = results.reduce((s, r) => s + r.researched, 0);
+  const skipped = results.reduce((s, r) => s + (r.skipped ?? 0), 0);
 
-  await bumpRunCounts(runId, { researched_count: researched });
-  return { processed, researched };
+  await bumpRunCounts(runId, { researched_count: researched, skipped_count: skipped });
+  return { processed, researched, skipped };
 }
 
 export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number }> {

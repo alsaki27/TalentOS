@@ -225,7 +225,7 @@ export async function fetchJobPageText(url: string): Promise<string> {
   var rawText: string | null = null;
 
   try {
-    rawText = await tryJinaFetch(url, 10000);
+    rawText = await tryJinaFetch(url, 30000);
   } catch (err) {
     console.warn(`[Deep Fetch] Jina failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
   }

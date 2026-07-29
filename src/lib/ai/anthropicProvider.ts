@@ -31,9 +31,16 @@ export function getAnthropicProvider(): AiProvider | null {
   if (!apiKey) return null;
 
   return {
-    async send({ system, messages, tools, maxTokens }) {
+    async send({ system, messages, tools, maxTokens, timeoutMs }) {
+      var controller = new AbortController();
+      var timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+      }
+      try {
       const res = await fetch(ANTHROPIC_API_URL, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "x-api-key": apiKey,
           "anthropic-version": ANTHROPIC_VERSION,
@@ -60,6 +67,9 @@ export function getAnthropicProvider(): AiProvider | null {
         usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
       };
       return response;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
   };
 }
