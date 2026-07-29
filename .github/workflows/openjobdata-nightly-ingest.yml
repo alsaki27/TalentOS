@@ -18,9 +18,8 @@ name: OpenJobData Nightly Ingest (Job Agent)
 
 on:
   schedule:
-    # 09:30 UTC daily — 30 min after openjobdata-osp-export.yml's own daily
-    # refresh check, so both jobs aren't racing the dataset's daily publish window.
-    - cron: "30 9 * * *"
+    # 18:30 UTC = 00:30 (12:30 AM) BDT
+    - cron: "30 18 * * *"
   workflow_dispatch:
     inputs:
       role_group:
@@ -41,6 +40,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: neon-cloudflare-migration
 
       - uses: actions/setup-python@v5
         with:

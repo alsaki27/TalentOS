@@ -383,7 +383,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
                      currentStatus === "deep_fetch" ? "matchmaking" : "completed";
 
   if (currentStatus === "ingesting") {
+    var tsStart = Date.now();
     const result = await processDeepFetchBatch(run.id);
+    var tsMs = Date.now() - tsStart;
+    if (result.processed > 0) console.log(`[Job CEO] Deep Fetch batch: ${result.processed} processed, ${result.researched} researched, ${(result as any).skipped ?? 0} skipped in ${tsMs}ms`);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "ingested");
     const rowsExist = hasMore && Number(hasMore.count) > 0;
 
@@ -405,7 +408,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   }
 
   if (currentStatus === "qa") {
+    var tsStart = Date.now();
     const result = await processQaBatch(run.id);
+    var tsMs = Date.now() - tsStart;
+    if (result.processed > 0) console.log(`[Job CEO] QA batch: ${result.processed} processed, ${result.kept} kept in ${tsMs}ms`);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "researched");
     const rowsExist = hasMore && Number(hasMore.count) > 0;
 
@@ -427,7 +433,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   }
 
   if (currentStatus === "deep_fetch") {
+    var tsStart = Date.now();
     const result = await processMatchmakerBatch(run.id);
+    var tsMs = Date.now() - tsStart;
+    if (result.processed > 0) console.log(`[Job CEO] Matchmaker batch: ${result.processed} processed, ${result.matched} matched, ${result.logged} logged in ${tsMs}ms`);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "qa_passed");
     const rowsExist = hasMore && Number(hasMore.count) > 0;
 
@@ -520,14 +529,40 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
 
 export async function dispatchAndChain(): Promise<DispatchResult> {
   const result = await dispatchNextJobCeoWork();
+  var totalProcessed = result.count;
 
   if (result.needsDispatch) {
     if (process.env.NODE_ENV === "development") {
       var r = result;
-      while (r.needsDispatch) {
+      var iteration = 0;
+      var chainStart = Date.now();
+      var lastStage = r.stage;
+      var lastLog = Date.now();
+      const MAX_ITERATIONS = 10000;
+
+      console.log(`[Job CEO] Dev chain started — stage=${r.stage}, runId=${r.runId}`);
+      while (r.needsDispatch && iteration < MAX_ITERATIONS) {
+        iteration++;
+        var stageStart = Date.now();
         r = await dispatchNextJobCeoWork();
+        totalProcessed += r.count;
+        var stageMs = Date.now() - stageStart;
+
+        if (r.stage !== lastStage) {
+          console.log(`[Job CEO] Stage ${lastStage} → ${r.stage} completed in ${((Date.now() - lastLog) / 1000).toFixed(1)}s (${totalProcessed} items processed, ${iteration} iterations)`);
+          lastStage = r.stage;
+          lastLog = Date.now();
+        } else if (r.count > 0 && stageMs > 5000) {
+          console.log(`[Job CEO] Slow batch at ${r.stage}: ${stageMs}ms, ${r.count} items (iteration ${iteration})`);
+        }
       }
-      console.log("[Job CEO] Local dispatch chain completed.");
+
+      if (iteration >= MAX_ITERATIONS) {
+        console.error(`[Job CEO] CRITICAL: Dev chain reached ${MAX_ITERATIONS} iterations — forcing exit. This indicates a dispatch loop bug.`);
+      }
+
+      var totalSec = ((Date.now() - chainStart) / 1000).toFixed(1);
+      console.log(`[Job CEO] Dev chain DONE — ${totalSec}s, ${totalProcessed} items, ${iteration} iterations, final stage=${r.stage}`);
     } else {
       const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
       const cronSecret = process.env.CRON_SECRET;
