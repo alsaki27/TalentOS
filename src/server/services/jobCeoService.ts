@@ -160,15 +160,15 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
       var verdict = result.result as { keep: boolean; score: number; tier: string; reason: string };
 
       if (verdict.keep) {
-        await updateStaged(row.id, { stage: "qa_passed", qa_score: verdict.score, qa_reason: verdict.reason });
+        await updateStaged(row.id, { stage: "qa_passed", qa_score: verdict.score, qa_reason: verdict.reason, claimed_at: null as any, claim_expires_at: null as any });
         return { processed: 1, kept: 1 };
       } else {
-        await updateStaged(row.id, { stage: "qa_dropped", qa_score: verdict.score, qa_reason: verdict.reason });
+        await updateStaged(row.id, { stage: "qa_dropped", qa_score: verdict.score, qa_reason: verdict.reason, claimed_at: null as any, claim_expires_at: null as any });
         return { processed: 1, kept: 0 };
       }
     } catch (err) {
       console.error(`[Job CEO] QA failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
-      await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown" });
+      await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown", claimed_at: null as any, claim_expires_at: null as any });
       return { processed: 0, kept: 0 };
     }
   });
@@ -203,7 +203,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
       var finalDesc = fetchResult.descriptionText || row.description_text || "";
       if (String(finalDesc).length < MIN_DESCRIPTION_LENGTH) {
         console.warn(`[Job CEO] Deep Fetch — description too short (${String(finalDesc).length} chars) for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — skipping`);
-        await updateStaged(row.id, { stage: "no_description", description_text: finalDesc, last_error: "Description too short (" + String(finalDesc).length + " chars)" });
+        await updateStaged(row.id, { stage: "no_description", description_text: finalDesc, last_error: "Description too short (" + String(finalDesc).length + " chars)", claimed_at: null as any, claim_expires_at: null as any });
         if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
         return { processed: 1, researched: 0, skipped: 1 };
       }
@@ -211,6 +211,8 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         stage: "researched",
         description_text: finalDesc,
         requirements: fetchResult.requirements,
+        claimed_at: null as any,
+        claim_expires_at: null as any,
       });
       return { processed: 1, researched: 1, skipped: 0 };
     } catch (err) {
@@ -219,11 +221,11 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
       console.error(`[Job CEO] Deep Fetch diagnostics — source_url=${row.source_url ?? "null"}, existing_desc_len=${String(row.description_text ?? "").length}, has_raw=${String(row.raw != null)}`);
       if (String(row.description_text ?? "").length < MIN_DESCRIPTION_LENGTH) {
         console.warn(`[Job CEO] Deep Fetch — no usable description for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — marking as no_description`);
-        await updateStaged(row.id, { stage: "no_description", description_text: row.description_text, last_error: errMsg });
+        await updateStaged(row.id, { stage: "no_description", description_text: row.description_text, last_error: errMsg, claimed_at: null as any, claim_expires_at: null as any });
         if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
         return { processed: 1, researched: 0, skipped: 1 };
       }
-      await updateStaged(row.id, { stage: "researched", description_text: row.description_text });
+      await updateStaged(row.id, { stage: "researched", description_text: row.description_text, claimed_at: null as any, claim_expires_at: null as any });
       return { processed: 1, researched: 1, skipped: 0 };
     }
   });
@@ -331,18 +333,22 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           stage: "logged",
           logged_job_id: created.id,
           match_results: matchResult,
+          claimed_at: null as any,
+          claim_expires_at: null as any,
         });
         return { processed: 1, matched: matchResult.matches.length, logged: 1 };
       } else {
         await updateStaged(row.id, {
           stage: "logged",
           match_results: { ...matchResult, duplicate: true },
+          claimed_at: null as any,
+          claim_expires_at: null as any,
         });
         return { processed: 1, matched: matchResult.matches.length, logged: 1 };
       }
     } catch (err) {
       console.error(`[Job CEO] Matchmaker failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
-      await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown" });
+      await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown", claimed_at: null as any, claim_expires_at: null as any });
       return { processed: 0, matched: 0, logged: 0 };
     }
   });
@@ -379,16 +385,15 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   if (currentStatus === "ingesting") {
     const result = await processDeepFetchBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "ingested");
+    const rowsExist = hasMore && Number(hasMore.count) > 0;
 
     let transitioned = false;
-    if (!hasMore || Number(hasMore.count) <= 0) {
+    if (!rowsExist) {
       await updateRunStatus(run.id, "qa", { last_error: undefined });
       transitioned = true;
     }
 
-    // Keep chaining as long as ANY work was done — not just full batches.
-    // A partial final batch (e.g. 3 of 5) is still work that should continue.
-    const needsMore = result.processed > 0 || transitioned;
+    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -402,15 +407,15 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   if (currentStatus === "qa") {
     const result = await processQaBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "researched");
+    const rowsExist = hasMore && Number(hasMore.count) > 0;
 
     let transitioned = false;
-    if (!hasMore || Number(hasMore.count) <= 0) {
+    if (!rowsExist) {
       await updateRunStatus(run.id, "deep_fetch", { last_error: undefined });
       transitioned = true;
     }
 
-    // Keep chaining as long as ANY work was done — not just full batches.
-    const needsMore = result.processed > 0 || transitioned;
+    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -424,17 +429,15 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   if (currentStatus === "deep_fetch") {
     const result = await processMatchmakerBatch(run.id);
     const hasMore = (await countStagedByStage(run.id)).find((c) => c.stage === "qa_passed");
+    const rowsExist = hasMore && Number(hasMore.count) > 0;
 
     let transitioned = false;
-    if (!hasMore || Number(hasMore.count) <= 0) {
+    if (!rowsExist) {
       await updateRunStatus(run.id, "matchmaking", { last_error: undefined });
       transitioned = true;
-      // NOTE: Do NOT log job_ceo_run_completed here — matchmaking stage has not run yet.
-      // The completion log is emitted once, in the matchmaking → completed transition below.
     }
 
-    // Keep chaining as long as ANY work was done — not just full batches.
-    const needsMore = result.processed > 0 || transitioned;
+    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
 
     return {
       dispatched: result.processed > 0 || transitioned,
