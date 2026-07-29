@@ -176,6 +176,9 @@ export default function ApplicationsDataTable({
                         }}
                       >
                         <option value="applied">Applied</option>
+                        <option value="assigned">Applied</option>
+                        <option value="stacked">Applied</option>
+                        <option value="in_progress">Applied</option>
                         <option value="replied">📞 Screening</option>
                         <option value="interview">🎯 Interview</option>
                         <option value="offer">🏆 Offer</option>
