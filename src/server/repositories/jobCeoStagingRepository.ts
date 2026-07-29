@@ -110,6 +110,16 @@ export async function checkAndRecordDedup(
   return new Set(newSigs.map((s) => s.signature));
 }
 
+export async function removeDedupSignature(signature: string): Promise<void> {
+  await execute("DELETE FROM job_ceo_seen_signatures WHERE signature = $1", [signature]);
+}
+
+export async function removeDedupSignatures(signatures: string[]): Promise<void> {
+  if (signatures.length === 0) return;
+  const placeholders = signatures.map((_, i) => `$${i + 1}`).join(", ");
+  await execute(`DELETE FROM job_ceo_seen_signatures WHERE signature IN (${placeholders})`, signatures);
+}
+
 export async function claimNextStagedBatch(
   runId: string,
   stage: StagedJobStage,

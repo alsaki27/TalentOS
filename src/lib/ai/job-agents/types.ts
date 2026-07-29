@@ -80,7 +80,8 @@ export type StagedJobStage =
   | "researched"
   | "matched"
   | "logged"
-  | "error";
+  | "error"
+  | "no_description";
 
 export interface StagedJob {
   id: string;

@@ -49,7 +49,7 @@ export function getGoogleProvider(modelOverride?: string): AiProvider | null {
   if (!apiKey) return null;
 
   return {
-    async send({ system, messages, temperature, maxTokens }) {
+    async send({ system, messages, temperature, maxTokens, timeoutMs }) {
       const model = modelOverride || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
       const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
 
@@ -69,8 +69,15 @@ export function getGoogleProvider(modelOverride?: string): AiProvider | null {
         };
       }
 
+      var controller = new AbortController();
+      var timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+      }
+      try {
       const res = await fetch(url, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
@@ -85,6 +92,9 @@ export function getGoogleProvider(modelOverride?: string): AiProvider | null {
 
       const data = await res.json();
       return fromGeminiResponse(data);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
   };
 }
@@ -95,7 +105,7 @@ export function getGoogleFallbackProvider(): AiProvider | null {
   if (!apiKey || !fallbackModel) return null;
 
   return {
-    async send({ system, messages, temperature, maxTokens }) {
+    async send({ system, messages, temperature, maxTokens, timeoutMs }) {
       const url = `${GOOGLE_API_BASE}/${fallbackModel}:generateContent`;
 
       const geminiMessages = toGeminiMessages(messages);
@@ -114,8 +124,15 @@ export function getGoogleFallbackProvider(): AiProvider | null {
         };
       }
 
+      var controller = new AbortController();
+      var timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+      }
+      try {
       const res = await fetch(url, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": apiKey,
@@ -130,6 +147,9 @@ export function getGoogleFallbackProvider(): AiProvider | null {
 
       const data = await res.json();
       return fromGeminiResponse(data);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
   };
 }

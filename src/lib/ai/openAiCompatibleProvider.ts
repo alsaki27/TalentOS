@@ -87,7 +87,14 @@ export interface OpenAiCompatibleConfig {
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): AiProvider {
   return {
     async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+      var controller = new AbortController();
+      var timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+      }
+      try {
       const res = await fetch(config.apiUrl, {
+        signal: controller.signal,
         method: "POST",
         headers: {
           Authorization: `Bearer ${config.apiKey}`,
@@ -122,6 +129,9 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
       const choice = data.choices?.[0];
       if (!choice) throw new Error(`${config.errorLabel} returned no choices.`);
       return fromOpenAiChoice(choice, data.usage);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
     },
   };
 }

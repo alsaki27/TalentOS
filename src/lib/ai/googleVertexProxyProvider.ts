@@ -109,11 +109,19 @@ export async function callVertexProxy(opts: {
   tools: AiTool[];
   temperature?: number;
   maxTokens?: number;
+  timeoutMs?: number;
 }): Promise<AiResponse> {
   const geminiTools = toGeminiTools(opts.tools);
 
+  var controller = new AbortController();
+  var timer: ReturnType<typeof setTimeout> | undefined;
+  if (opts.timeoutMs && opts.timeoutMs > 0) {
+    timer = setTimeout(function () { controller.abort(); }, opts.timeoutMs);
+  }
+  try {
   const res = await fetch(`${opts.proxyUrl}/generate`, {
     method: "POST",
+    signal: controller.signal,
     headers: {
       "Content-Type": "application/json",
       "x-proxy-secret": opts.proxySecret,
@@ -158,6 +166,9 @@ export async function callVertexProxy(opts: {
     stopReason: hasToolUse ? "tool_use" : data.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
     usage,
   };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider | null {
@@ -167,9 +178,9 @@ export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider
   if (!proxyUrl || !proxySecret) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens }) {
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
       const model = modelOverride || process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
-      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens });
+      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs });
     },
   };
 }
@@ -182,8 +193,8 @@ export function getGoogleVertexFallbackProvider(): AiProvider | null {
   if (!proxyUrl || !proxySecret || !fallbackModel) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens }) {
-      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens });
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs });
     },
   };
 }
