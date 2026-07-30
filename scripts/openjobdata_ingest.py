@@ -372,31 +372,65 @@ def main():
     BATCH_SIZE = 100
     total_staged = 0
     total_skipped = 0
+    failed_batches: List[int] = []  # batch indices that permanently failed after retries
 
     for i in range(0, len(jobs), BATCH_SIZE):
         batch = [sanitize_payload(j) for j in jobs[i : i + BATCH_SIZE]]
+        batch_num = i // BATCH_SIZE + 1
         url = f"{base_url}/api/job-ceo/ingest"
-        try:
-            resp = requests.post(
-                url,
-                json={"jobs": batch},
-                headers={"Authorization": f"Bearer {ingest_secret}", "Content-Type": "application/json"},
-                timeout=60,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            staged = data.get("staged", len(batch))
-            skipped = data.get("skipped", 0)
-            total_staged += staged
-            total_skipped += skipped
-            print(f"  Batch {i // BATCH_SIZE + 1}: sent {len(batch)}, staged={staged}, skipped_dup={skipped}")
-        except requests.RequestException as e:
-            print(f"  Batch {i // BATCH_SIZE + 1}: FAILED — {e}")
-            if hasattr(e, "response") and e.response is not None:
-                print(f"    Response: {e.response.text[:500]}")
-            sys.exit(1)
+
+        # ── Per-batch retry with exponential backoff ──────────────────────────
+        # A single transient HTTP error (502, timeout, etc.) must never kill the
+        # entire ingest run. We retry up to MAX_RETRIES times before giving up on
+        # this specific batch and continuing to the next one. Only after ALL
+        # batches have been attempted do we exit(1) if any permanently failed.
+        MAX_RETRIES = 3
+        BACKOFF_SECS = [2, 4, 8]  # wait 2s, then 4s, then 8s before each retry
+
+        batch_ok = False
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                resp = requests.post(
+                    url,
+                    json={"jobs": batch},
+                    headers={"Authorization": f"Bearer {ingest_secret}", "Content-Type": "application/json"},
+                    timeout=90,  # raised from 60 — large batches can be slow on cold starts
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                staged = data.get("staged", len(batch))
+                skipped = data.get("skipped", 0)
+                total_staged += staged
+                total_skipped += skipped
+                print(f"  Batch {batch_num}: sent {len(batch)}, staged={staged}, skipped_dup={skipped}")
+                batch_ok = True
+                break  # success — move on to next batch
+
+            except requests.RequestException as e:
+                err_body = ""
+                if hasattr(e, "response") and e.response is not None:
+                    err_body = e.response.text[:500]
+                if attempt < MAX_RETRIES:
+                    wait = BACKOFF_SECS[attempt - 1]
+                    print(f"  Batch {batch_num}: attempt {attempt}/{MAX_RETRIES} FAILED — {e} (retrying in {wait}s)")
+                    if err_body:
+                        print(f"    Response: {err_body}")
+                    import time
+                    time.sleep(wait)
+                else:
+                    print(f"  Batch {batch_num}: ALL {MAX_RETRIES} attempts FAILED — {e} (skipping batch)")
+                    if err_body:
+                        print(f"    Response: {err_body}")
+                    failed_batches.append(batch_num)
+
+        if not batch_ok:
+            continue  # already logged above; move to next batch
 
     print(f"\n[DONE] Sent {len(jobs)} jobs → staged={total_staged}, skipped_dup={total_skipped}")
+
+    if failed_batches:
+        print(f"[WARN] {len(failed_batches)} batch(es) permanently failed after retries: {failed_batches}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
