@@ -244,38 +244,84 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: JOB CEO dispatch
+    # Hard wall: GitHub Actions job timeout prevents a runaway loop from
+    # consuming runner minutes indefinitely. The inner loop already has its own
+    # 55-minute safety limit, but this provides a second layer of protection.
+    timeout-minutes: 60
     steps:
-      - name: Call JOB CEO dispatch (looped)
+      - name: Call JOB CEO dispatch (smart loop)
         run: |
-          # Loop for ~9.5 minutes (570 seconds) calling every 15 seconds.
-          # This mirrors the dispatch-workflows loop pattern: each 10-minute GitHub
-          # tick acts as a near-continuous poller so a stuck workflow is rescued
-          # within seconds rather than waiting 10 minutes for the next tick.
-          # The self-chaining backgroundDispatch inside dispatchAndChain is meant to
-          # keep the pipeline moving without this cron, but confirmed in production
-          # that ctx.waitUntil doesn't always fire reliably (Cloudflare edge cache
-          # can evict the Worker before the promise runs). This loop is the safety net.
-          END=$((SECONDS + 570))
+          # Strategy: call /api/job-ceo/dispatch in a tight loop.
+          # - Read the JSON body on every call.
+          # - If needsDispatch=false the run is fully complete — break immediately.
+          # - Sleep 5 seconds between calls (enough time for Cloudflare to process
+          #   a batch before the next request lands).
+          # - Hard wall: 55 minutes total (leaves 5 minutes of safety margin before
+          #   the 60-minute job timeout).
+          # This turns what was a 10-hour "one call per tick" problem into a
+          # self-draining loop: a 300-job run finishes in 30-45 minutes instead.
+          WALL_END=$((SECONDS + 3300))   # 55 * 60
           CALLS=0
           FAILURES=0
-          while [ $SECONDS -lt $END ]; do
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+
+          echo "JOB CEO dispatch smart loop started. Will run until needsDispatch=false or wall time."
+
+          while [ $SECONDS -lt $WALL_END ]; do
             CALLS=$((CALLS + 1))
-            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
               -X POST \
               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
-              "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/dispatch")
+              -H "Content-Type: application/json" \
+              "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/dispatch" 2>&1)
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
-              echo "::warning::JOB CEO dispatch call failed with HTTP $HTTP_CODE"
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Call $CALLS: JOB CEO dispatch HTTP $HTTP_CODE — body: $(echo $BODY | head -c 200)"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
+                exit 1
+              fi
+              sleep 5
+              continue
             fi
-            sleep 15
+
+            CONSECUTIVE_FAILURES=0
+
+            # Check if the run is complete
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' || echo "true")
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "unknown")
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' || echo "0")
+
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH"
+
+            if [ "$NEEDS_DISPATCH" = "false" ]; then
+              echo "✓ JOB CEO dispatch complete — run is fully done. Exiting loop after $CALLS calls."
+              break
+            fi
+
+            sleep 5
           done
-          # Only fail the run if the majority of calls failed.
+
+          if [ "$CALLS" -eq 0 ]; then
+            echo "::error::No dispatch calls were made."
+            exit 1
+          fi
+
+          # Fail only if a majority of all calls failed (transient blips are acceptable)
           if [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
             echo "::error::$FAILURES of $CALLS JOB CEO dispatch calls failed this run"
             exit 1
           fi
-          echo "JOB CEO dispatch loop done: $CALLS calls, $FAILURES failures"
+
+          echo "JOB CEO dispatch loop done: $CALLS calls, $FAILURES failures."
+
+
 
   job-description-enrichment:
     if: >

@@ -35,7 +35,12 @@ import { createProposal, supersedePendingFor } from "@/server/repositories/agent
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
-const BATCH_SIZE = 5;
+// 20 items per dispatch call — STAGE_CONCURRENCY=6 still governs actual AI
+// parallelism inside runConcurrent, so this doesn't flood the AI provider.
+// It does reduce the total number of dispatch round-trips by 4× vs. the old
+// value of 5, which is critical for large runs (300 jobs = 45 dispatch calls
+// instead of 180) and prevents the chain from stalling before completing.
+const BATCH_SIZE = 20;
 
 const STAGE_CONCURRENCY = 6;
 
