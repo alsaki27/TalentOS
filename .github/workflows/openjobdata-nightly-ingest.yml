@@ -18,8 +18,8 @@ name: OpenJobData Nightly Ingest (Job Agent)
 
 on:
   schedule:
-    # Testing: trigger at 11:25 UTC (17:25 BDT)
-    - cron: "25 11 * * *"
+    # Trigger at 20:00 UTC (02:00 AM BDT)
+    - cron: "00 20 * * *"
   workflow_dispatch:
     inputs:
       role_group:
@@ -27,9 +27,9 @@ on:
         required: false
         default: "all"
       days:
-        description: "Number of trailing days to scan (default: 1)."
+        description: "Number of trailing days to scan (default: 2)."
         required: false
-        default: "1"
+        default: "2"
       dry_run:
         description: "If true, scan and print counts but don't POST to TalentOS."
         required: false
@@ -61,7 +61,7 @@ jobs:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           ARGS=(--role-group "${{ github.event.inputs.role_group || 'all' }}")
-          DAYS="${{ github.event.inputs.days || '1' }}"
+          DAYS="${{ github.event.inputs.days || '2' }}"
           ARGS+=(--days "$DAYS")
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             ARGS+=(--dry-run)
