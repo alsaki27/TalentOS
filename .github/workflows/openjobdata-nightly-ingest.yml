@@ -18,8 +18,8 @@ name: OpenJobData Nightly Ingest (Job Agent)
 
 on:
   schedule:
-    # Testing: trigger at 11:00 UTC (17:00 BDT)
-    - cron: "00 11 * * *"
+    # Testing: trigger at 11:25 UTC (17:25 BDT)
+    - cron: "25 11 * * *"
   workflow_dispatch:
     inputs:
       role_group:
