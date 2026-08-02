@@ -93,18 +93,17 @@ jobs:
           while [ $SECONDS -lt $WALL_END ]; do
             CALLS=$((CALLS + 1))
 
-            # Write body to a temp file; capture HTTP status code separately.
-            BODY_FILE=$(mktemp)
-            ERR_FILE=$(mktemp)
-            HTTP_CODE=$(curl -s -o "$BODY_FILE" -w "%{http_code}" \
+            # Use the exact curl invocation format from scheduled-jobs.yml which is known to work
+            RESPONSE=$(curl -sS -w "\n%{http_code}" \
               -X POST \
-              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
               -H "Content-Type: application/json" \
               --max-time 30 \
-              "$BASE_URL/api/job-ceo/dispatch" 2>"$ERR_FILE" || echo "000")
-            BODY=$(cat "$BODY_FILE" 2>/dev/null || echo "")
-            CURL_ERR=$(cat "$ERR_FILE" 2>/dev/null || echo "")
-            rm -f "$BODY_FILE" "$ERR_FILE"
+              "${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1 | tr -d '[:space:]')
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
 
             # Sanitise: strip whitespace, default to "000" if empty/non-numeric
             HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '[:space:]')
@@ -115,7 +114,7 @@ jobs:
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
               CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — body: $(echo "$BODY" | head -c 100) — err: $CURL_ERR"
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo "$BODY" | head -c 300)"
               if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
                 echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
                 exit 1
