@@ -401,7 +401,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    // If rows exist but processed === 0, another concurrent worker holds the
+    // claim locks — returning needsDispatch: true here causes an infinite loop.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -426,7 +429,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -451,7 +455,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
