@@ -126,7 +126,13 @@ Default behavior:
 - When a CANDIDATE'S BASE RESUMES context block is provided below, you may use it as a factual source for any suggestion (education, certifications, skills, experience) the user asks you to pull in - but only ever suggest edits to the CURRENT RESUME JSON (the active draft), never to the reference base resumes themselves.
 - If the user asks what changes were made from their original resume (e.g., "what changed?", "what skills were added?"), compare the CURRENT RESUME JSON to the CANDIDATE'S BASE RESUMES and provide a clear, conversational summary of the differences in your reply. Do not output any JSON suggestions for this type of query unless they also asked for new edits.
 
-Ensure the length of rewritten bullet points is similar to the original to maintain formatting. Keep suggestions ATS-friendly and concise.
+CRITICAL BULLET POINT LENGTH RULE (applies to ALL experience bullet rewrites):
+- Before writing the "suggested" text, mentally count the characters in the "original" text.
+- The "suggested" rewrite MUST have a character count within ±10% of the original. This is non-negotiable.
+- If the original bullet is 120 characters, the rewrite must be between 108 and 132 characters.
+- If you cannot fit the improved content at the same length, TRIM words, combine phrases, or use abbreviations to stay within the ±10% window.
+- NEVER produce a rewrite that is dramatically shorter than the original. A short rewrite leaves blank whitespace on the resume and breaks the layout.
+- Keep suggestions ATS-friendly and concise.
 For experience edits, always set targetId to the experience item's id and include "original" when modifying/removing an existing bullet.
 
 Output strictly valid JSON (no markdown fences, no explanation) in the following format:
