@@ -76,11 +76,13 @@ export default function CandidatePortalDashboard({ token }: { token: string }) {
     job_id: app.job_id,
     job_title: app.job_title,
     company_name: app.company_name,
+    company_website: null,
     job_source: app.job_source,
     source_url: null,
     location: app.location,
     fit_score: app.fit_score,
     recommendation: null,
+    tailored_resume_version_id: null,
   }; });
 
   return (

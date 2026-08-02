@@ -22,6 +22,7 @@ interface DashboardRow {
   job_id: string;
   job_title: string;
   company_name: string;
+  company_website: string | null;
   job_source: string;
   source_url: string | null;
   location: string | null;
@@ -30,6 +31,7 @@ interface DashboardRow {
   salary_currency: string | null;
   fit_score: number | null;
   recommendation: string | null;
+  tailored_resume_version_id: string | null;
 }
 
 interface CandidateOption {
@@ -82,10 +84,13 @@ export async function GET(req: NextRequest) {
     var allRows = await query<DashboardRow>(
       `SELECT
         a.id AS application_id, a.status, a.priority, a.applied_at,
-        a.follow_up_at, a.next_action,
+        a.follow_up_at, a.next_action, a.tailored_resume_version_id,
         a.candidate_id, c.name AS candidate_name,
         j.id AS job_id, j.title AS job_title, j.company AS company_name,
-        j.source AS job_source, j.source_url, j.location,
+        j.company_website,
+        j.source AS job_source,
+        COALESCE(j.apply_url, j.source_url) AS source_url,
+        j.location,
         j.salary_min, j.salary_max, j.salary_currency,
         tj.fit_score, tj.recommendation
       FROM applications a
