@@ -267,6 +267,7 @@ export default function JobCeoPage() {
   const [savingSchedule, setSavingSchedule] = useState(false);
   const [savingGroup, setSavingGroup] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [deletingRunIds, setDeletingRunIds] = useState<Set<string>>(new Set());
 
   // ── Data fetchers ─────────────────────────────────────────────────────────
 
@@ -671,17 +672,16 @@ export default function JobCeoPage() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-6 gap-2">
+              <div className="grid grid-cols-5 gap-2">
                 {[
                   { label: "Ingested", val: run.ingested_count },
                   { label: "Kept", val: run.kept_count },
                   { label: "Researched", val: run.researched_count },
                   { label: "Matched", val: run.matched_count },
                   { label: "Logged", val: run.logged_count },
-                  { label: "Skipped (Dup)", val: run.skipped_count ?? 0 },
                 ].map(({ label, val }) => (
                   <div key={label} className="text-center p-2 rounded bg-surface border border-border">
-                    <div className={`text-lg font-bold ${label === "Skipped (Dup)" ? "text-amber-400" : "text-ink"}`}>{val}</div>
+                    <div className="text-lg font-bold text-ink">{val}</div>
                     <div className="text-xs text-ink-soft">{label}</div>
                   </div>
                 ))}
@@ -712,8 +712,8 @@ export default function JobCeoPage() {
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Researched</th>
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Matched</th>
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Logged</th>
-                <th className="text-right text-xs font-medium text-amber-500 p-2">Skipped (Dup)</th>
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Created</th>
+                <th className="text-center text-xs font-medium text-ink-soft p-2">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -738,10 +738,35 @@ export default function JobCeoPage() {
                   <td className="text-right text-xs text-ink p-2">{run.researched_count}</td>
                   <td className="text-right text-xs text-ink p-2">{run.matched_count}</td>
                   <td className="text-right text-xs text-ink p-2">{run.logged_count}</td>
-                  <td className="text-right text-xs text-amber-400 font-medium p-2">{run.skipped_count ?? 0}</td>
                   <td className="text-xs text-ink-soft p-2">
                     {new Date(run.created_at).toLocaleDateString()}{" "}
                     {new Date(run.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </td>
+                  <td className="text-center p-2">
+                    {["completed", "failed", "cancelled"].includes(run.status) && (
+                      <button
+                        disabled={deletingRunIds.has(run.id)}
+                        onClick={async () => {
+                          if (!confirm(`Delete run ${run.id.slice(0, 8)} and all its data? This cannot be undone.`)) return;
+                          setDeletingRunIds((prev) => new Set(prev).add(run.id));
+                          try {
+                            const res = await fetch(`/api/job-ceo/runs/${run.id}`, { method: "DELETE" });
+                            if (res.ok) {
+                              setRuns((prev) => prev.filter((r) => r.id !== run.id));
+                            } else {
+                              const d = await res.json().catch(() => ({}));
+                              alert(d.error ?? "Failed to delete run");
+                            }
+                          } finally {
+                            setDeletingRunIds((prev) => { const s = new Set(prev); s.delete(run.id); return s; });
+                          }
+                        }}
+                        title="Delete this run and all staging data"
+                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 transition-colors px-2 py-0.5 border border-red-700 hover:border-red-500 rounded"
+                      >
+                        {deletingRunIds.has(run.id) ? "…" : "Delete"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

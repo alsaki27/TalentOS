@@ -112,3 +112,10 @@ export async function listRuns(limit: number): Promise<JobCeoRunRow[]> {
     [limit]
   );
 }
+
+export async function deleteRun(id: string): Promise<void> {
+  // Cascade: staging rows reference the run via run_id foreign key.
+  // Delete staging rows first, then the run itself (in case FK is not ON DELETE CASCADE).
+  await execute("DELETE FROM job_ceo_staging WHERE run_id = $1", [id]);
+  await execute("DELETE FROM job_ceo_runs WHERE id = $1", [id]);
+}

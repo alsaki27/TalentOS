@@ -120,7 +120,7 @@ function extractJsonLd(html: string): string | null {
 
 async function tryDirectFetch(url: string): Promise<string | null> {
   var controller = new AbortController();
-  var timeout = setTimeout(function () { controller.abort(); }, 20000);
+  var timeout = setTimeout(function () { controller.abort(); }, 45000); // 45s — gives time before 60s AI timeout
 
   try {
     var response = await fetch(url, {
