@@ -347,6 +347,9 @@ export default function JobCeoPage() {
       if (!res.ok) {
         setTriggerError(data.error ?? "Trigger failed");
       } else {
+        setSelectedRoleGroupIds(new Set());
+        setSelectedGroupIds(new Set());
+        setCustomKeywords("");
         await fetchRuns();
       }
     } catch (err: any) {
@@ -466,6 +469,20 @@ export default function JobCeoPage() {
       <div className="p-4 rounded-lg border border-border bg-bg space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-ink">Role Groups (Default)</h2>
+          {roleGroups.length > 0 && (
+            <button
+              onClick={() => {
+                if (selectedRoleGroupIds.size === roleGroups.length) {
+                  setSelectedRoleGroupIds(new Set());
+                } else {
+                  setSelectedRoleGroupIds(new Set(roleGroups.map(g => g.id)));
+                }
+              }}
+              className="text-xs text-accent hover:opacity-80"
+            >
+              {selectedRoleGroupIds.size === roleGroups.length ? "Deselect All" : "Select All"}
+            </button>
+          )}
         </div>
 
         {roleGroups.length === 0 ? (
