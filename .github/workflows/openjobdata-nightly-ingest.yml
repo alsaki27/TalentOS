@@ -38,6 +38,9 @@ on:
 jobs:
   ingest:
     runs-on: ubuntu-latest
+    # Python ingest (~10 min) + 50-min dispatch loop + 5-min buffer = 65 min needed.
+    # Set to 75 to give headroom without risking GitHub's 6-hour hard cap.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,3 +70,68 @@ jobs:
             ARGS+=(--dry-run)
           fi
           python scripts/openjobdata_ingest.py "${ARGS[@]}"
+
+      - name: Drive Job CEO pipeline to completion
+        # Immediately after ingest, poll /api/job-ceo/dispatch in a tight loop
+        # until needsDispatch=false (run fully complete) or 50-minute wall time.
+        # This prevents the "stuck after ingesting" problem caused by Cloudflare's
+        # ctx.waitUntil backgroundDispatch being unreliable between stages, and
+        # eliminates the up-to-10-minute gap before the separate job-ceo-dispatch
+        # cron would otherwise pick up the run.
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          echo "Starting Job CEO dispatch loop — driving pipeline to completion..."
+          WALL_END=$((SECONDS + 3000))   # 50 minutes (leaves 10-minute buffer before GHA 60-min job timeout)
+          CALLS=0
+          FAILURES=0
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+
+          while [ $SECONDS -lt $WALL_END ]; do
+            CALLS=$((CALLS + 1))
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              "$BASE_URL/api/job-ceo/dispatch" 2>&1)
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              FAILURES=$((FAILURES + 1))
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo $BODY | head -c 300)"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
+                exit 1
+              fi
+              sleep 10
+              continue
+            fi
+
+            CONSECUTIVE_FAILURES=0
+
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' || echo "true")
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "unknown")
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' || echo "0")
+
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH"
+
+            if [ "$NEEDS_DISPATCH" = "false" ]; then
+              echo "✓ Job CEO pipeline complete after $CALLS dispatch calls."
+              break
+            fi
+
+            sleep 5
+          done
+
+          echo "Dispatch loop finished: $CALLS calls, $FAILURES failures."
+          # Only fail if a majority of calls failed
+          if [ "$CALLS" -gt 0 ] && [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS dispatch calls failed"
+            exit 1
+          fi
