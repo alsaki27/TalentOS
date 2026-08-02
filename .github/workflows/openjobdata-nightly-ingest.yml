@@ -93,13 +93,15 @@ jobs:
           while [ $SECONDS -lt $WALL_END ]; do
             CALLS=$((CALLS + 1))
 
+            CLEAN_BASE_URL=$(echo "${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}" | tr -d '[:space:]')
+            
             # Use the exact curl invocation format from scheduled-jobs.yml which is known to work
             RESPONSE=$(curl -sS -w "\n%{http_code}" \
               -X POST \
               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
               -H "Content-Type: application/json" \
               --max-time 30 \
-              "${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
+              "$CLEAN_BASE_URL/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
             
             HTTP_CODE=$(echo "$RESPONSE" | tail -n1 | tr -d '[:space:]')
             BODY=$(echo "$RESPONSE" | sed '$d')
