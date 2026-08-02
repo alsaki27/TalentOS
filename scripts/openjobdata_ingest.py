@@ -370,13 +370,14 @@ def main():
 
     # POST to TalentOS in batches of 100
     BATCH_SIZE = 100
+    print(f"\n[PHASE 3] Uploading {len(jobs)} jobs in batches of {BATCH_SIZE}...")
     total_staged = 0
     total_skipped = 0
     failed_batches: List[int] = []  # batch indices that permanently failed after retries
+    current_run_id = None
 
-    for i in range(0, len(jobs), BATCH_SIZE):
+    for batch_num, i in enumerate(range(0, len(jobs), BATCH_SIZE), 1):
         batch = [sanitize_payload(j) for j in jobs[i : i + BATCH_SIZE]]
-        batch_num = i // BATCH_SIZE + 1
         url = f"{base_url}/api/job-ceo/ingest"
 
         # ── Per-batch retry with exponential backoff ──────────────────────────
@@ -390,9 +391,13 @@ def main():
         batch_ok = False
         for attempt in range(1, MAX_RETRIES + 1):
             try:
+                payload = {"jobs": batch}
+                if current_run_id:
+                    payload["runId"] = current_run_id
+
                 resp = requests.post(
                     url,
-                    json={"jobs": batch},
+                    json=payload,
                     headers={"Authorization": f"Bearer {ingest_secret}", "Content-Type": "application/json"},
                     timeout=90,  # raised from 60 — large batches can be slow on cold starts
                 )
@@ -400,6 +405,10 @@ def main():
                 data = resp.json()
                 staged = data.get("staged", len(batch))
                 skipped = data.get("skipped", 0)
+
+                if not current_run_id and data.get("runId"):
+                    current_run_id = data.get("runId")
+
                 total_staged += staged
                 total_skipped += skipped
                 print(f"  Batch {batch_num}: sent {len(batch)}, staged={staged}, skipped_dup={skipped}")
