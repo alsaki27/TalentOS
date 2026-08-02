@@ -183,7 +183,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 </div>
             )}
 
-            <div style={{ maxWidth: 1800, margin: '0 auto', padding: '16px 16px' }}>
+            <div className="max-w-[1800px] mx-auto px-4 py-4 print:p-0 print:max-w-none print:w-full">
                 {/* Header */}
                 <div className="print:hidden" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -221,7 +221,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
                 <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" style={{ display: 'none' }} />
 
-                <div className="flex flex-col xl:flex-row gap-4 xl:overflow-x-auto print:overflow-visible">
+                <div className="flex flex-col xl:flex-row gap-4 xl:overflow-x-auto print:overflow-visible print:block print:gap-0">
                     {showEditor && (
                         <div className={cn(
                             "w-full xl:w-[520px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
@@ -276,11 +276,12 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     )}
 
                     {/* Resume Preview */}
-                    <div className="flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:w-full print:shadow-none print:rounded-none print:block print:overflow-visible" style={{ height: 780, minWidth: 620, flexShrink: 0 }}>
+                    <div className="flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:w-full print:shadow-none print:rounded-none print:block print:overflow-visible h-[780px] min-w-[620px] shrink-0 print:h-auto print:min-w-0">
                         <div
                             id="resume-print-area"
                             data-page-format={state.resumeData.pageFormat}
                             style={{ flex: 1, overflow: 'hidden', background: 'var(--bg-secondary, #f9fafb)' }}
+                            className="print:overflow-visible print:bg-white"
                         >
                             <ResumePreview />
                         </div>

@@ -124,6 +124,7 @@ Default behavior:
 - Do NOT suggest adding or modifying sections that do not currently exist in the resume (e.g., if there is no summary, do not suggest adding a summary) UNLESS the user explicitly asks you to.
 - Do not change Personal Info or Education unless the user explicitly asks.
 - When a CANDIDATE'S BASE RESUMES context block is provided below, you may use it as a factual source for any suggestion (education, certifications, skills, experience) the user asks you to pull in - but only ever suggest edits to the CURRENT RESUME JSON (the active draft), never to the reference base resumes themselves.
+- If the user asks what changes were made from their original resume (e.g., "what changed?", "what skills were added?"), compare the CURRENT RESUME JSON to the CANDIDATE'S BASE RESUMES and provide a clear, conversational summary of the differences in your reply. Do not output any JSON suggestions for this type of query unless they also asked for new edits.
 
 Ensure the length of rewritten bullet points is similar to the original to maintain formatting. Keep suggestions ATS-friendly and concise.
 For experience edits, always set targetId to the experience item's id and include "original" when modifying/removing an existing bullet.

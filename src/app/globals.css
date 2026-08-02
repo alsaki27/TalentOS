@@ -1000,13 +1000,14 @@ label {
     display: none !important;
   }
 
-  html, body {
+  html, body, #__next, main, [style*="minHeight: 100vh"], [style*="min-height: 100vh"] {
     margin: 0 !important;
     padding: 0 !important;
     background: white !important;
     overflow: visible !important;
     width: auto !important;
     height: auto !important;
+    min-height: 0 !important;
   }
 
   /* Hide all elements, then selectively show resume */
@@ -1031,13 +1032,15 @@ label {
 
   #resume-print-area[data-page-format="a4"] {
     width: 210mm !important;
-    height: max-content !important;
+    height: auto !important;
+    min-height: 0 !important;
     page: resume-a4;
   }
 
   #resume-print-area[data-page-format="letter"] {
     width: 8.5in !important;
-    height: max-content !important;
+    height: auto !important;
+    min-height: 0 !important;
     page: resume-letter;
   }
 
@@ -1056,14 +1059,16 @@ label {
   #resume-print-area[data-page-format="a4"] #resume-content,
   #resume-print-area[data-page-format="a4"] .resume-preview-container {
     width: 210mm !important;
-    height: max-content !important;
+    height: auto !important;
+    min-height: 0 !important;
   }
 
   #resume-print-area[data-page-format="letter"] .resume-paper,
   #resume-print-area[data-page-format="letter"] #resume-content,
   #resume-print-area[data-page-format="letter"] .resume-preview-container {
     width: 8.5in !important;
-    height: max-content !important;
+    height: auto !important;
+    min-height: 0 !important;
   }
 
   /* Keep the resume at its normal layout size; the outer print area applies the scale. */
