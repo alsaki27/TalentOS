@@ -94,16 +94,17 @@ jobs:
             CALLS=$((CALLS + 1))
 
             # Write body to a temp file; capture HTTP status code separately.
-            # This avoids the tail-n1 parsing that breaks when curl produces no output.
             BODY_FILE=$(mktemp)
+            ERR_FILE=$(mktemp)
             HTTP_CODE=$(curl -s -o "$BODY_FILE" -w "%{http_code}" \
               -X POST \
               -H "Authorization: Bearer $CRON_SECRET" \
               -H "Content-Type: application/json" \
               --max-time 30 \
-              "$BASE_URL/api/job-ceo/dispatch" 2>/dev/null || echo "000")
+              "$BASE_URL/api/job-ceo/dispatch" 2>"$ERR_FILE" || echo "000")
             BODY=$(cat "$BODY_FILE" 2>/dev/null || echo "")
-            rm -f "$BODY_FILE"
+            CURL_ERR=$(cat "$ERR_FILE" 2>/dev/null || echo "")
+            rm -f "$BODY_FILE" "$ERR_FILE"
 
             # Sanitise: strip whitespace, default to "000" if empty/non-numeric
             HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '[:space:]')
@@ -114,7 +115,7 @@ jobs:
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
               CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo "$BODY" | head -c 300)"
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — body: $(echo "$BODY" | head -c 100) — err: $CURL_ERR"
               if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
                 echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
                 exit 1
