@@ -35,14 +35,16 @@ import { createProposal, supersedePendingFor } from "@/server/repositories/agent
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
-// 20 items per dispatch call — STAGE_CONCURRENCY=6 still governs actual AI
-// parallelism inside runConcurrent, so this doesn't flood the AI provider.
-// It does reduce the total number of dispatch round-trips by 4× vs. the old
-// value of 5, which is critical for large runs (300 jobs = 45 dispatch calls
-// instead of 180) and prevents the chain from stalling before completing.
+// Items per dispatch call for fast stages (QA, matchmaking).
 const BATCH_SIZE = 20;
 
+// Deep fetch processes fewer per batch — each can take up to 60s.
+// With STAGE_CONCURRENCY=3 and 10 items: ceil(10/3)=4 rounds × 60s = 240s < 5min claim.
+const DEEP_FETCH_BATCH_SIZE = 10;
+
 const STAGE_CONCURRENCY = 6;
+// Deep fetch uses lower concurrency — Jina has a global 429 risk above this
+const DEEP_FETCH_CONCURRENCY = 3;
 
 const MIN_DESCRIPTION_LENGTH = 100;
 
@@ -158,7 +160,7 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.maxOutputTokens,
-          timeout_ms: 5000,
+          timeout_ms: 15000, // 15s — was 5s which caused too many AI timeout errors
         };
         return runQaBouncer(opts, provider, ctx);
       });
@@ -186,10 +188,10 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
 }
 
 export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number; skipped: number }> {
-  const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "ingested", DEEP_FETCH_BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, researched: 0, skipped: 0 };
 
-  const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
+  const results = await runConcurrent(batch, DEEP_FETCH_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },

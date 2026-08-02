@@ -114,8 +114,33 @@ export async function listRuns(limit: number): Promise<JobCeoRunRow[]> {
 }
 
 export async function deleteRun(id: string): Promise<void> {
-  // Cascade: staging rows reference the run via run_id foreign key.
-  // Delete staging rows first, then the run itself (in case FK is not ON DELETE CASCADE).
+  // 1. Collect all logged job IDs and dedup signatures BEFORE we delete staging rows
+  const loggedJobIds = await query<{ logged_job_id: string }>(
+    "SELECT logged_job_id FROM job_ceo_staging WHERE run_id = $1 AND logged_job_id IS NOT NULL",
+    [id]
+  );
+  const dedupSigs = await query<{ dedup_signature: string }>(
+    "SELECT dedup_signature FROM job_ceo_staging WHERE run_id = $1 AND dedup_signature IS NOT NULL",
+    [id]
+  );
+
+  // 2. Delete logged jobs from the jobs table so next run treats them as fresh
+  if (loggedJobIds.length > 0) {
+    const ids = loggedJobIds.map((r) => r.logged_job_id);
+    const placeholders = ids.map((_, i) => `$${i + 1}`).join(", ");
+    await execute(`DELETE FROM jobs WHERE id IN (${placeholders})`, ids);
+  }
+
+  // 3. Remove dedup signatures so next run doesn't skip these jobs
+  if (dedupSigs.length > 0) {
+    const sigs = dedupSigs.map((r) => r.dedup_signature);
+    const placeholders = sigs.map((_, i) => `$${i + 1}`).join(", ");
+    await execute(`DELETE FROM job_ceo_seen_signatures WHERE signature IN (${placeholders})`, sigs);
+  }
+
+  // 4. Delete all staging rows for this run
   await execute("DELETE FROM job_ceo_staging WHERE run_id = $1", [id]);
+
+  // 5. Delete the run itself
   await execute("DELETE FROM job_ceo_runs WHERE id = $1", [id]);
 }

@@ -136,7 +136,7 @@ export async function claimNextStagedBatch(
     )
     UPDATE job_ceo_staging s
     SET claimed_at = NOW(),
-        claim_expires_at = NOW() + INTERVAL '2 minutes',
+        claim_expires_at = NOW() + INTERVAL '5 minutes',
         updated_at = NOW()
     FROM next_batch n
     WHERE s.id = n.id
