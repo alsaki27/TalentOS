@@ -812,6 +812,11 @@ function PipelineActions({
             View error
           </button>
         )}
+        <button className="btn-primary btn-sm"
+          onClick={() => onStartWorkflow(item)}
+          disabled={actionLoading === item.id}>
+          {actionLoading === item.id ? "Retrying..." : "🔄 Retry"}
+        </button>
         <FindingsButton item={item} />
       </div>
     );
