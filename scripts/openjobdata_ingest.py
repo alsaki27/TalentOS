@@ -35,11 +35,26 @@ import requests
 # Short acronyms MUST use \b boundaries to avoid:
 #   "osp" hitting "hOSPital", "cad" hitting "aCADemic",
 #   "gis" hitting "loGIStics" / "reGIStered"
-_BOUNDED_ROOTS = ["osp", "gis", "cad", "bim", "ftth", "fttx"]
+_BOUNDED_ROOTS = ["osp", "gis", "cad", "bim", "ftth", "fttx", "pv"]
 
 # Longer, unambiguous words are safe as plain substrings.
 # "fiberglass" is explicitly excluded (composites, not telecom).
 _SAFE_ROOTS = [
+    # OSP / Fiber new keywords
+    "fiber planning", "network planning", "row permit", "joint-use", 
+    "pole attachment", "utility coordination", "fiber cad",
+    # GIS new keywords
+    "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy",
+    # CAD new keywords
+    "as-built",
+    # Solar / Renewables keywords
+    "solar pv", "solar design", "pv design", "pv designer", "solar system designer", 
+    "commercial solar", "c&i solar", "solar project", "solar electrical", 
+    "solar cad", "solar permit", "distributed generation", "solar interconnection", 
+    "interconnection specialist", "utility interconnection", "renewable energy", 
+    "solar applications", "solar proposal", "solar estimator", "pv estimator", 
+    "solar performance", "energy-yield", "solar preconstruction", "solar commissioning",
+    # Existing keywords
     "fiber optic", "fiber network", "fiber design", "fiber splic", "fiber route",
     "fiber technician", "fiber construction", "fiber engineer", "fiber permit",
     "outside plant", "telecom", "broadband", "splice", "splicing",
@@ -61,19 +76,36 @@ ROLE_GROUPS: Dict[str, Dict[str, Any]] = {
             "fiber optic", "fiber network", "fiber design", "fiber splic", "fiber route",
             "fiber technician", "fiber construction", "fiber engineer", "fiber permit",
             "outside plant", "broadband", "splice", "splicing",
+            "fiber planning", "network planning", "row permit", "joint-use", 
+            "pole attachment", "utility coordination", "fiber cad"
         ],
     },
     "B": {
         "label": "CAD / Drafting",
         "bounded": ["cad", "bim"],
-        "safe": ["autocad", "drafter", "drafting", "piping designer", "structural drafter", "utility drafter"],
+        "safe": ["autocad", "drafter", "drafting", "piping designer", "structural drafter", "utility drafter", "as-built"],
     },
     "C": {
         "label": "GIS / Geospatial",
         "bounded": ["gis"],
-        "safe": ["geospatial", "cartograph", "remote sensing"],
+        "safe": [
+            "geospatial", "cartograph", "remote sensing",
+            "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy"
+        ],
     },
     "D": {"label": "Telecom General", "bounded": [], "safe": ["telecom"]},
+    "K": {
+        "label": "Solar / Renewable Energy",
+        "bounded": ["pv"],
+        "safe": [
+            "solar pv", "solar design", "pv design", "pv designer", "solar system designer", 
+            "commercial solar", "c&i solar", "solar project", "solar electrical", 
+            "solar cad", "solar permit", "distributed generation", "solar interconnection", 
+            "interconnection specialist", "utility interconnection", "renewable energy", 
+            "solar applications", "solar proposal", "solar estimator", "pv estimator", 
+            "solar performance", "energy-yield", "solar preconstruction", "solar commissioning"
+        ],
+    },
 }
 
 

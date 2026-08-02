@@ -618,14 +618,6 @@ export default function JobCeoPage() {
         )}
       </div>
 
-      {/* Schedule Control */}
-      {schedule && (
-        <ScheduleCard
-          schedule={schedule}
-          onSave={handleSaveSchedule}
-          saving={savingSchedule}
-        />
-      )}
 
       {/* Active Runs */}
       {hasActive && (
