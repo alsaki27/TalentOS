@@ -200,7 +200,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.maxOutputTokens,
-          timeout_ms: 8000,
+          timeout_ms: 20000,
         };
         return runDeepFetch(opts, provider, ctx);
       });

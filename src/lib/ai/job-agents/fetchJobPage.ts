@@ -120,7 +120,7 @@ function extractJsonLd(html: string): string | null {
 
 async function tryDirectFetch(url: string): Promise<string | null> {
   var controller = new AbortController();
-  var timeout = setTimeout(function () { controller.abort(); }, 8000);
+  var timeout = setTimeout(function () { controller.abort(); }, 20000);
 
   try {
     var response = await fetch(url, {
@@ -225,7 +225,7 @@ export async function fetchJobPageText(url: string): Promise<string> {
   var rawText: string | null = null;
 
   try {
-    rawText = await tryJinaFetch(url, 30000);
+    rawText = await tryJinaFetch(url, 50000);
   } catch (err) {
     console.warn(`[Deep Fetch] Jina failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
   }
