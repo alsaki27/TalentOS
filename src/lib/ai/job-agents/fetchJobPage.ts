@@ -159,7 +159,7 @@ async function tryDirectFetch(url: string): Promise<string | null> {
   }
 }
 
-async function tryJinaFetch(url: string, requestTimeoutMs: number): Promise<string | null> {
+async function tryJinaFetch(url: string, requestTimeoutMs: number, noCache = false): Promise<string | null> {
   var controller = new AbortController();
   var timeout = setTimeout(function () { controller.abort(); }, requestTimeoutMs);
 
@@ -167,13 +167,20 @@ async function tryJinaFetch(url: string, requestTimeoutMs: number): Promise<stri
     var encodedUrl = encodeURIComponent(url);
     var jinaUrl = `https://r.jina.ai/${encodedUrl}`;
 
+    var headers: Record<string, string> = {
+      "Accept": "text/plain",
+      "X-Return-Format": "markdown",
+      "X-Timeout": "25",           // Tell Jina to wait up to 25s for JS-rendered pages (ATS platforms)
+      "X-Remove-Selector": "nav, footer, header, .nav, .footer, .header, #nav, #footer, [role='navigation']",
+      "User-Agent": "TalentOS-JobCEO/1.0",
+    };
+    if (noCache) {
+      headers["X-No-Cache"] = "true"; // Force Jina to re-fetch instead of serving cached stale response
+    }
+
     var response = await fetch(jinaUrl, {
       signal: controller.signal,
-      headers: {
-        "Accept": "text/plain",
-        "X-Return-Format": "markdown",
-        "User-Agent": "TalentOS-JobCEO/1.0",
-      },
+      headers,
     });
 
     if (response.status === 429) {
@@ -204,7 +211,7 @@ async function tryJinaFetch(url: string, requestTimeoutMs: number): Promise<stri
     }
 
     if (isContentUseless(text)) {
-      console.warn(`[Deep Fetch] Jina returned useless content (${text.length} chars) — falling back to direct fetch for: ${url.substring(0, 100)}`);
+      console.warn(`[Deep Fetch] Jina returned useless content (${text.length} chars) — will retry or fall back for: ${url.substring(0, 100)}`);
       return null;
     }
 
@@ -224,16 +231,27 @@ export async function fetchJobPageText(url: string): Promise<string> {
 
   var rawText: string | null = null;
 
+  // ── Layer 1: Jina with JS-wait headers (handles React/SPA ATS platforms) ──
   try {
-    rawText = await tryJinaFetch(url, 50000);
+    rawText = await tryJinaFetch(url, 50000, false);
   } catch (err) {
-    console.warn(`[Deep Fetch] Jina failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
+    console.warn(`[Deep Fetch] Jina attempt 1 failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
   }
 
   if (rawText !== null) return rawText;
 
-  console.log(`[Deep Fetch] Jina exhausted — falling back to direct HTTP fetch for: ${url.substring(0, 100)}`);
+  // ── Layer 2: Jina retry with no-cache (avoids stale/empty cached responses) ──
+  console.log(`[Deep Fetch] Jina layer 1 returned nothing — retrying with X-No-Cache for: ${url.substring(0, 100)}`);
+  try {
+    rawText = await tryJinaFetch(url, 50000, true);
+  } catch (err) {
+    console.warn(`[Deep Fetch] Jina attempt 2 (no-cache) failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
+  }
 
+  if (rawText !== null) return rawText;
+
+  // ── Layer 3: Direct HTTP fetch (JSON-LD extraction + HTML strip) ──
+  console.log(`[Deep Fetch] Jina exhausted both attempts — falling back to direct HTTP fetch for: ${url.substring(0, 100)}`);
   try {
     rawText = await tryDirectFetch(url);
   } catch (err) {
@@ -242,6 +260,6 @@ export async function fetchJobPageText(url: string): Promise<string> {
 
   if (rawText !== null) return rawText;
 
-  console.warn(`[Deep Fetch] All layers exhausted for: ${url.substring(0, 100)}`);
+  console.warn(`[Deep Fetch] All 3 fetch layers exhausted for: ${url.substring(0, 100)}`);
   return "";
 }

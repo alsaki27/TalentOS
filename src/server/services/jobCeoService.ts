@@ -38,9 +38,9 @@ import { backgroundDispatch } from "@/server/lib/waitUntil";
 // Items per dispatch call for fast stages (QA, matchmaking).
 const BATCH_SIZE = 20;
 
-// Deep fetch processes fewer per batch — each can take up to 60s.
-// With STAGE_CONCURRENCY=3 and 10 items: ceil(10/3)=4 rounds × 60s = 240s < 5min claim.
-const DEEP_FETCH_BATCH_SIZE = 10;
+// Deep fetch processes fewer per batch — each can take up to ~145s with 3-layer retry.
+// With DEEP_FETCH_CONCURRENCY=3 and 5 items: ceil(5/3)=2 rounds × 145s = 290s < 5min claim.
+const DEEP_FETCH_BATCH_SIZE = 5;
 
 const STAGE_CONCURRENCY = 6;
 // Deep fetch uses lower concurrency — Jina has a global 429 risk above this
@@ -202,7 +202,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.maxOutputTokens,
-          timeout_ms: 60000, // 60s — ATS pages can be slow; was 20s which caused too many skips
+          timeout_ms: 150000, // 150s — accommodates 3-layer fetch: Jina(50s) + Jina-no-cache(50s) + direct(45s) + AI parsing
         };
         return runDeepFetch(opts, provider, ctx);
       });
