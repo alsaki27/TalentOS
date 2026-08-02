@@ -92,19 +92,29 @@ jobs:
 
           while [ $SECONDS -lt $WALL_END ]; do
             CALLS=$((CALLS + 1))
-            RESPONSE=$(curl -s -w "\n%{http_code}" \
+
+            # Write body to a temp file; capture HTTP status code separately.
+            # This avoids the tail-n1 parsing that breaks when curl produces no output.
+            BODY_FILE=$(mktemp)
+            HTTP_CODE=$(curl -s -o "$BODY_FILE" -w "%{http_code}" \
               -X POST \
               -H "Authorization: Bearer $CRON_SECRET" \
               -H "Content-Type: application/json" \
-              "$BASE_URL/api/job-ceo/dispatch" 2>&1)
+              --max-time 30 \
+              "$BASE_URL/api/job-ceo/dispatch" 2>/dev/null || echo "000")
+            BODY=$(cat "$BODY_FILE" 2>/dev/null || echo "")
+            rm -f "$BODY_FILE"
 
-            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-            BODY=$(echo "$RESPONSE" | head -n-1)
+            # Sanitise: strip whitespace, default to "000" if empty/non-numeric
+            HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '[:space:]')
+            if ! echo "$HTTP_CODE" | grep -qE '^[0-9]+$'; then
+              HTTP_CODE="000"
+            fi
 
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
               CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
-              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo $BODY | head -c 300)"
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo "$BODY" | head -c 300)"
               if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
                 echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
                 exit 1
@@ -115,11 +125,14 @@ jobs:
 
             CONSECUTIVE_FAILURES=0
 
-            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' || echo "true")
-            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "unknown")
-            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' || echo "0")
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' | head -1)
+            NEEDS_DISPATCH="${NEEDS_DISPATCH:-true}"
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' | head -1)
+            STAGE="${STAGE:-unknown}"
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' | head -1)
+            COUNT="${COUNT:-0}"
 
-            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH"
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH (HTTP $HTTP_CODE)"
 
             if [ "$NEEDS_DISPATCH" = "false" ]; then
               echo "✓ Job CEO pipeline complete after $CALLS dispatch calls."
@@ -130,7 +143,7 @@ jobs:
           done
 
           echo "Dispatch loop finished: $CALLS calls, $FAILURES failures."
-          # Only fail if a majority of calls failed
+          # Only fail if a majority of calls failed (transient blips are acceptable)
           if [ "$CALLS" -gt 0 ] && [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
             echo "::error::$FAILURES of $CALLS dispatch calls failed"
             exit 1
