@@ -100,7 +100,7 @@ jobs:
               -X POST \
               -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
               -H "Content-Type: application/json" \
-              --max-time 30 \
+              --max-time 300 \
               "$CLEAN_BASE_URL/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
             
             HTTP_CODE=$(echo "$RESPONSE" | tail -n1 | tr -d '[:space:]')
