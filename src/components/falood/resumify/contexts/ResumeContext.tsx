@@ -7,6 +7,7 @@ interface ResumeState {
   selectedSection: string | null;
   chatHistory: any[];
   jobDescription: string;
+  previewSuggestion: any | null;
 }
 
 type ResumeAction =
@@ -29,7 +30,8 @@ type ResumeAction =
   | { type: 'RESET_RESUME' }
   | { type: 'IMPORT_RESUME_DATA'; payload: ResumeData }
   | { type: 'SET_CHAT_HISTORY'; payload: any[] }
-  | { type: 'SET_JOB_DESCRIPTION'; payload: string };
+  | { type: 'SET_JOB_DESCRIPTION'; payload: string }
+  | { type: 'SET_PREVIEW_SUGGESTION'; payload: any | null };
 
 const initialResumeData: ResumeData = {
   personalInfo: {
@@ -75,6 +77,7 @@ const initialState: ResumeState = {
     }
   ],
   jobDescription: '',
+  previewSuggestion: null,
 };
 
 function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
@@ -164,6 +167,8 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...state, chatHistory: action.payload };
     case 'SET_JOB_DESCRIPTION':
       return { ...state, jobDescription: action.payload };
+    case 'SET_PREVIEW_SUGGESTION':
+      return { ...state, previewSuggestion: action.payload };
     default:
       return state;
   }
@@ -193,6 +198,7 @@ interface ResumeContextType {
   exportResumeData: () => ResumeData;
   setChatHistory: (history: any[]) => void;
   setJobDescription: (jd: string) => void;
+  setPreviewSuggestion: (suggestion: any | null) => void;
 }
 
 const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
@@ -284,6 +290,10 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: jd });
   }, []);
 
+  const setPreviewSuggestion = useCallback((suggestion: any | null) => {
+    dispatch({ type: 'SET_PREVIEW_SUGGESTION', payload: suggestion });
+  }, []);
+
   const value: ResumeContextType = useMemo(() => ({
     state,
     dispatch,
@@ -307,7 +317,8 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     importResumeData,
     exportResumeData,
     setChatHistory,
-    setJobDescription
+    setJobDescription,
+    setPreviewSuggestion
   }), [
     state,
     updatePersonalInfo,
@@ -331,6 +342,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     exportResumeData,
     setChatHistory,
     setJobDescription,
+    setPreviewSuggestion,
   ]);
 
   return (

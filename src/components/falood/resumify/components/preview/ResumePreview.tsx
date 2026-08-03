@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
 import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
@@ -7,36 +7,98 @@ import { ModernMinimalTemplate } from './templates/ModernMinimalTemplate';
 import { ElegantTimelineTemplate } from './templates/ElegantTimelineTemplate';
 import { CreativeModernTemplate } from './templates/CreativeModernTemplate';
 import { BJetProfessionalTemplate } from './templates/BJetProfessionalTemplate';
-
+import { applySuggestionToResumeData } from './AiSuggestions';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export const ResumePreview: React.FC = () => {
   const { state } = useResume();
-  const { resumeData } = state;
-  const pagePadding = resumeData.pagePadding ?? DEFAULT_PAGE_PADDING;
+  const { resumeData, previewSuggestion } = state;
+  const previewData = useMemo(() => {
+    if (previewSuggestion) {
+      return applySuggestionToResumeData(resumeData, previewSuggestion);
+    }
+    return resumeData;
+  }, [resumeData, previewSuggestion]);
+
+  const pagePadding = previewData.pagePadding ?? DEFAULT_PAGE_PADDING;
 
   const renderTemplate = () => {
-    switch (resumeData.template) {
+    switch (previewData.template) {
       case 'tech-sidebar':
-        return <TechSidebarTemplate data={resumeData} />;
+        return <TechSidebarTemplate data={previewData} />;
       case 'business-professional':
-        return <BusinessProfessionalTemplate data={resumeData} />;
+        return <BusinessProfessionalTemplate data={previewData} />;
       case 'modern-minimal':
-        return <ModernMinimalTemplate data={resumeData} />;
+        return <ModernMinimalTemplate data={previewData} />;
       case 'elegant-timeline':
-        return <ElegantTimelineTemplate data={resumeData} />;
+        return <ElegantTimelineTemplate data={previewData} />;
       case 'creative-modern':
-        return <CreativeModernTemplate data={resumeData} />;
+        return <CreativeModernTemplate data={previewData} />;
       case 'bjet-professional':
-        return <BJetProfessionalTemplate data={resumeData} />;
+        return <BJetProfessionalTemplate data={previewData} />;
       default:
-        return <TechSidebarTemplate data={resumeData} />;
+        return <TechSidebarTemplate data={previewData} />;
     }
   };
 
   const [containerRef, setContainerRef] = React.useState<HTMLDivElement | null>(null);
   const [scale, setScale] = React.useState(0.8);
   const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    if (!previewSuggestion || !containerRef) return;
+    
+    // Find text nodes that match the suggested changes and highlight them
+    const toHighlight: HTMLElement[] = [];
+    const searchStrings: string[] = [];
+    
+    if (previewSuggestion.type === 'experience' && typeof previewSuggestion.suggested === 'string') {
+        searchStrings.push(previewSuggestion.suggested);
+    } else if (previewSuggestion.type === 'summary' && typeof previewSuggestion.suggested === 'string') {
+        searchStrings.push(previewSuggestion.suggested);
+    } else if (previewSuggestion.type === 'personal_info' && typeof previewSuggestion.suggested === 'string') {
+        searchStrings.push(previewSuggestion.suggested);
+    } else if ((previewSuggestion.type === 'skill' || previewSuggestion.type === 'skill_remove') && Array.isArray(previewSuggestion.suggested)) {
+        searchStrings.push(...previewSuggestion.suggested);
+    } else if (previewSuggestion.type === 'skill_reorg' && Array.isArray(previewSuggestion.suggested)) {
+        previewSuggestion.suggested.forEach((cat: any) => {
+            if (cat && Array.isArray(cat.skills)) {
+                searchStrings.push(...cat.skills);
+            }
+        });
+    }
+
+    const cleanSearchStrings = searchStrings
+        .filter(s => typeof s === 'string' && s.trim().length > 2)
+        .map(s => s.replace(/\s+/g, ' ').trim().toLowerCase());
+
+    if (cleanSearchStrings.length === 0) return;
+
+    const walk = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walk.nextNode())) {
+        const text = (node.nodeValue || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (text && cleanSearchStrings.some(s => text.includes(s) || s.includes(text))) {
+            if (node.parentElement) {
+                // Ignore script or style tags
+                if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
+                // Only highlight reasonable sized elements, not the whole page
+                toHighlight.push(node.parentElement);
+            }
+        }
+    }
+
+    // Add highlight classes
+    toHighlight.forEach(el => {
+        el.classList.add('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm');
+    });
+
+    return () => {
+        toHighlight.forEach(el => {
+            el.classList.remove('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm');
+        });
+    };
+  }, [previewSuggestion, previewData, containerRef]);
 
   React.useEffect(() => {
     if (!containerRef) return;

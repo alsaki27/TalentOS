@@ -24,10 +24,11 @@ interface EducationEntry {
     graduationYear?: string;
 }
 
-interface Suggestion {
+export interface Suggestion {
     id: string;
     type: 'experience' | 'experience_info' | 'experience_block_add' | 'experience_block_remove' | 'experience_add' | 'experience_remove' | 'skill' | 'skill_remove' | 'summary' | 'skill_reorg' | 'personal_info' | 'education_add';
     title: string;
+    contextTitle?: string;
     description: string;
     original?: string;
     suggested: string | string[] | SkillCategory[] | EducationEntry[];
@@ -43,117 +44,14 @@ interface ChatMessage {
     suggestions?: Suggestion[];
 }
 
-export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candidateId }) => {
-    const { state, importResumeData, setChatHistory, setJobDescription } = useResume();
-    const { chatHistory: messages, jobDescription } = state;
-    const [input, setInput] = useState('');
-    const [isTyping, setIsTyping] = useState(false);
-    const autoSuggestRanRef = useRef(false);
+export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
+    const normalize = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
 
-    // Initial suggestions (empty now, waiting for user input)
-    // We no longer need a separate 'suggestions' state for the bottom view if we render them in chat.
-    // However, for the "summary badge" at top, we might want to count pending ones.
-    // Let's derive pending count from messages.
+    if (suggestion.type === 'summary') {
+        return { ...resumeData, summary: (suggestion.suggested as string) ?? '' };
+    }
 
-    const scrollAreaRef = useRef<HTMLDivElement>(null);
-    const prevMessageCountRef = useRef<number>(messages.length);
-    const prevLastMessageIdRef = useRef<string | undefined>(messages[messages.length - 1]?.id);
-    const prevIsTypingRef = useRef<boolean>(isTyping);
-    const localStorageKeyRef = useRef<string | null>(null);
-    const hasInitializedStorageRef = useRef(false);
-    const skipNextPersistRef = useRef(false);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-
-        const path = window.location.pathname;
-        const url = new URL(window.location.href);
-        const key = `falood-ai-chat:${path}`;
-        localStorageKeyRef.current = key;
-
-        const shouldRestore =
-            !path.includes('/falood/studio/tailor/') &&
-            !url.searchParams.get('id') &&
-            messages.length === 1 &&
-            messages[0]?.id === 'welcome';
-
-        if (!shouldRestore) {
-            hasInitializedStorageRef.current = true;
-            return;
-        }
-
-        const raw = window.localStorage.getItem(key);
-        if (!raw) {
-            hasInitializedStorageRef.current = true;
-            return;
-        }
-
-        try {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 1) {
-                skipNextPersistRef.current = true;
-                setChatHistory(parsed);
-            }
-        } catch { }
-        hasInitializedStorageRef.current = true;
-    }, [setChatHistory]);
-
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        if (!hasInitializedStorageRef.current) return;
-        if (skipNextPersistRef.current) {
-            skipNextPersistRef.current = false;
-            return;
-        }
-        const key = localStorageKeyRef.current ?? `falood-ai-chat:${window.location.pathname}`;
-        localStorageKeyRef.current = key;
-
-        try {
-            window.localStorage.setItem(key, JSON.stringify(messages));
-        } catch { }
-    }, [messages]);
-
-    // Auto-scroll to bottom of chat
-    useEffect(() => {
-        const currentLastMessageId = messages[messages.length - 1]?.id;
-        const shouldAutoScroll =
-            messages.length > prevMessageCountRef.current ||
-            currentLastMessageId !== prevLastMessageIdRef.current ||
-            (isTyping && !prevIsTypingRef.current);
-
-        prevMessageCountRef.current = messages.length;
-        prevLastMessageIdRef.current = currentLastMessageId;
-        prevIsTypingRef.current = isTyping;
-
-        if (!shouldAutoScroll) return;
-
-        const scrollRoot = scrollAreaRef.current;
-        if (!scrollRoot) return;
-
-        const scrollContainer = scrollRoot.querySelector('[data-radix-scroll-area-viewport]');
-        if (!scrollContainer) return;
-
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    }, [messages, isTyping]);
-
-    const pendingSuggestionsCount = useMemo(() => {
-        let count = 0;
-        for (const msg of messages) {
-            for (const s of msg.suggestions ?? []) {
-                if ((s.status ?? 'pending') === 'pending') count += 1;
-            }
-        }
-        return count;
-    }, [messages]);
-
-    const applySuggestionToResumeData = useCallback((resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
-        const normalize = (s?: string | null) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-
-        if (suggestion.type === 'summary') {
-            return { ...resumeData, summary: (suggestion.suggested as string) ?? '' };
-        }
-
-        if (suggestion.type === 'personal_info' && suggestion.targetId) {
+    if (suggestion.type === 'personal_info' && suggestion.targetId) {
             const allowed: Record<string, boolean> = {
                 fullName: true,
                 jobTitle: true,
@@ -462,7 +360,112 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         }
 
         return resumeData;
-    }, []);
+};
+
+export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candidateId }) => {
+    const { state, importResumeData, setChatHistory, setJobDescription, setPreviewSuggestion } = useResume();
+    const { chatHistory: messages, jobDescription } = state;
+    const [input, setInput] = useState('');
+    const [isTyping, setIsTyping] = useState(false);
+    const autoSuggestRanRef = useRef(false);
+
+    // Initial suggestions (empty now, waiting for user input)
+    // We no longer need a separate 'suggestions' state for the bottom view if we render them in chat.
+    // However, for the "summary badge" at top, we might want to count pending ones.
+    // Let's derive pending count from messages.
+
+    const scrollAreaRef = useRef<HTMLDivElement>(null);
+    const prevMessageCountRef = useRef<number>(messages.length);
+    const prevLastMessageIdRef = useRef<string | undefined>(messages[messages.length - 1]?.id);
+    const prevIsTypingRef = useRef<boolean>(isTyping);
+    const localStorageKeyRef = useRef<string | null>(null);
+    const hasInitializedStorageRef = useRef(false);
+    const skipNextPersistRef = useRef(false);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+
+        const path = window.location.pathname;
+        const url = new URL(window.location.href);
+        const key = `falood-ai-chat:${path}`;
+        localStorageKeyRef.current = key;
+
+        const shouldRestore =
+            !path.includes('/falood/studio/tailor/') &&
+            !url.searchParams.get('id') &&
+            messages.length === 1 &&
+            messages[0]?.id === 'welcome';
+
+        if (!shouldRestore) {
+            hasInitializedStorageRef.current = true;
+            return;
+        }
+
+        const raw = window.localStorage.getItem(key);
+        if (!raw) {
+            hasInitializedStorageRef.current = true;
+            return;
+        }
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 1) {
+                skipNextPersistRef.current = true;
+                setChatHistory(parsed);
+            }
+        } catch { }
+        hasInitializedStorageRef.current = true;
+    }, [setChatHistory]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (!hasInitializedStorageRef.current) return;
+        if (skipNextPersistRef.current) {
+            skipNextPersistRef.current = false;
+            return;
+        }
+        const key = localStorageKeyRef.current ?? `falood-ai-chat:${window.location.pathname}`;
+        localStorageKeyRef.current = key;
+
+        try {
+            window.localStorage.setItem(key, JSON.stringify(messages));
+        } catch { }
+    }, [messages]);
+
+    // Auto-scroll to bottom of chat
+    useEffect(() => {
+        const currentLastMessageId = messages[messages.length - 1]?.id;
+        const shouldAutoScroll =
+            messages.length > prevMessageCountRef.current ||
+            currentLastMessageId !== prevLastMessageIdRef.current ||
+            (isTyping && !prevIsTypingRef.current);
+
+        prevMessageCountRef.current = messages.length;
+        prevLastMessageIdRef.current = currentLastMessageId;
+        prevIsTypingRef.current = isTyping;
+
+        if (!shouldAutoScroll) return;
+
+        const scrollRoot = scrollAreaRef.current;
+        if (!scrollRoot) return;
+
+        const scrollContainer = scrollRoot.querySelector('[data-radix-scroll-area-viewport]');
+        if (!scrollContainer) return;
+
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    }, [messages, isTyping]);
+
+    const pendingSuggestionsCount = useMemo(() => {
+        let count = 0;
+        for (const msg of messages) {
+            for (const s of msg.suggestions ?? []) {
+                if ((s.status ?? 'pending') === 'pending') count += 1;
+            }
+        }
+        return count;
+    }, [messages]);
+
+
 
     const handleAccept = (suggestion: Suggestion, messageId: string) => {
         const nextResumeData = applySuggestionToResumeData(state.resumeData, suggestion);
@@ -735,7 +738,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                     {msg.suggestions && msg.suggestions.length > 0 && (
                                         <div className="flex flex-col gap-2 mt-1">
                                             {msg.suggestions.map((suggestion: Suggestion) => (
-                                                <Card key={suggestion.id} className={cn(
+                                                <Card 
+                                                    key={suggestion.id} 
+                                                    onMouseEnter={() => setPreviewSuggestion(suggestion)}
+                                                    onMouseLeave={() => setPreviewSuggestion(null)}
+                                                    className={cn(
                                                     "border shadow-sm overflow-hidden transition-all",
                                                     suggestion.status === 'accepted' ? "opacity-50 bg-green-50/30 border-green-200" :
                                                         suggestion.status === 'rejected' ? "opacity-40 bg-red-50/30 border-red-100 grayscale" :
@@ -757,6 +764,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                                 {suggestion.type === 'skill_reorg' ? 'SKILLS REORG' : suggestion.type.toUpperCase()}
                                                             </Badge>
                                                         </div>
+                                                        {suggestion.contextTitle && (
+                                                            <div className="mb-2 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
+                                                                {suggestion.contextTitle}
+                                                            </div>
+                                                        )}
                                                         {suggestion.original && (
                                                             <div className="space-y-1.5">
                                                                 <span className="text-[10px] uppercase font-semibold text-muted-foreground">Original</span>

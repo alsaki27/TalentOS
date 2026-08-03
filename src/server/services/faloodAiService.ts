@@ -142,6 +142,7 @@ Output strictly valid JSON (no markdown fences, no explanation) in the following
             "id": "unique_id",
             "type": "experience" | "experience_info" | "experience_block_add" | "experience_block_remove" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add",
             "title": "Short title of suggestion",
+            "contextTitle": "The exact name of the section or job role this change applies to (e.g., 'Experience: GIS Analyst', 'Technical Skills', 'Education: Bachelor of Science')",
             "description": "Reasoning for the suggestion",
             "original": "Original text (if applicable, or field name for experience_info)",
             "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill/skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
@@ -154,6 +155,7 @@ export interface FaloodSuggestion {
   id: string;
   type: string;
   title: string;
+  contextTitle?: string;
   description: string;
   original?: string;
   suggested: unknown;

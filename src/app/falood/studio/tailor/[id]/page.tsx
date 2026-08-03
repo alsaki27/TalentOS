@@ -288,7 +288,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     </div>
 
                     {/* AI Suggestions Panel */}
-                    <div className="w-full lg:w-[440px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780, flexShrink: 0 }}>
+                    <div className="w-full lg:w-[500px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780, flexShrink: 0 }}>
                         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <Sparkles size={16} style={{ color: 'var(--accent)' }} />
