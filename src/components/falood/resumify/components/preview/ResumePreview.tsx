@@ -46,59 +46,98 @@ export const ResumePreview: React.FC = () => {
   const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
 
   useLayoutEffect(() => {
-    if (!previewSuggestion || !containerRef) return;
+    if (!containerRef) return;
     
-    // Find text nodes that match the suggested changes and highlight them
-    const toHighlight: HTMLElement[] = [];
-    const searchStrings: string[] = [];
-    
-    if (previewSuggestion.type === 'experience' && typeof previewSuggestion.suggested === 'string') {
-        searchStrings.push(previewSuggestion.suggested);
-    } else if (previewSuggestion.type === 'summary' && typeof previewSuggestion.suggested === 'string') {
-        searchStrings.push(previewSuggestion.suggested);
-    } else if (previewSuggestion.type === 'personal_info' && typeof previewSuggestion.suggested === 'string') {
-        searchStrings.push(previewSuggestion.suggested);
-    } else if ((previewSuggestion.type === 'skill' || previewSuggestion.type === 'skill_remove') && Array.isArray(previewSuggestion.suggested)) {
-        searchStrings.push(...previewSuggestion.suggested);
-    } else if (previewSuggestion.type === 'skill_reorg' && Array.isArray(previewSuggestion.suggested)) {
-        previewSuggestion.suggested.forEach((cat: any) => {
-            if (cat && Array.isArray(cat.skills)) {
-                searchStrings.push(...cat.skills);
-            }
-        });
+    const suggestionsToHighlight: any[] = [];
+
+    // Add persistent highlights from chat history
+    state.chatHistory.forEach(msg => {
+        if (msg.suggestions && Array.isArray(msg.suggestions)) {
+            msg.suggestions.forEach(s => {
+                if (s.status === 'accepted' || s.status === 'rejected' || !s.status || s.status === 'pending') {
+                    suggestionsToHighlight.push(s);
+                }
+            });
+        }
+    });
+
+    // Also include currently hovered preview suggestion if any
+    if (previewSuggestion) {
+        suggestionsToHighlight.push({...previewSuggestion, status: 'preview'});
     }
 
-    const cleanSearchStrings = searchStrings
-        .filter(s => typeof s === 'string' && s.trim().length > 2)
-        .map(s => s.replace(/\s+/g, ' ').trim().toLowerCase());
+    const appliedElements = new Map<HTMLElement, string[]>();
 
-    if (cleanSearchStrings.length === 0) return;
+    suggestionsToHighlight.forEach(suggestion => {
+        const searchStrings: string[] = [];
+        
+        // For accepted suggestions, search for the SUGGESTED (new) text
+        // For rejected/pending, search for the ORIGINAL text
+        const isAccepted = suggestion.status === 'accepted';
+        const targetTextSource = isAccepted ? suggestion.suggested : (suggestion.original || suggestion.suggested);
+        
+        if (!targetTextSource) return;
 
-    const walk = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT, null);
-    let node;
-    while ((node = walk.nextNode())) {
-        const text = (node.nodeValue || '').replace(/\s+/g, ' ').trim().toLowerCase();
-        if (text && cleanSearchStrings.some(s => text.includes(s) || s.includes(text))) {
-            if (node.parentElement) {
-                // Ignore script or style tags
-                if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
-                // Only highlight reasonable sized elements, not the whole page
-                toHighlight.push(node.parentElement);
+        if (suggestion.type === 'experience' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if (suggestion.type === 'summary' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if (suggestion.type === 'personal_info' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if ((suggestion.type === 'skill' || suggestion.type === 'skill_remove') && Array.isArray(targetTextSource)) {
+            searchStrings.push(...targetTextSource);
+        } else if (suggestion.type === 'skill_reorg' && Array.isArray(targetTextSource)) {
+            targetTextSource.forEach((cat: any) => {
+                if (cat && Array.isArray(cat.skills)) {
+                    searchStrings.push(...cat.skills);
+                }
+            });
+        }
+
+        const cleanSearchStrings = searchStrings
+            .filter(s => typeof s === 'string' && s.trim().length > 2)
+            .map(s => s.replace(/\s+/g, ' ').trim().toLowerCase());
+
+        if (cleanSearchStrings.length === 0) return;
+
+        const walk = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walk.nextNode())) {
+            const text = (node.nodeValue || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            if (text && cleanSearchStrings.some(s => text.includes(s) || s.includes(text))) {
+                if (node.parentElement) {
+                    if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
+                    
+                    const el = node.parentElement;
+                    const existingClasses = appliedElements.get(el) || [];
+                    
+                    if (suggestion.status === 'accepted') {
+                        existingClasses.push('bg-green-200/50', 'outline', 'outline-2', 'outline-green-400');
+                    } else if (suggestion.status === 'rejected') {
+                        existingClasses.push('bg-red-200/50', 'outline', 'outline-2', 'outline-red-400', 'line-through');
+                    } else if (suggestion.status === 'preview') {
+                        existingClasses.push('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm', 'shadow-md');
+                    } else {
+                        existingClasses.push('bg-yellow-100/40', 'outline', 'outline-1', 'outline-yellow-300');
+                    }
+                    
+                    appliedElements.set(el, existingClasses);
+                }
             }
         }
-    }
+    });
 
-    // Add highlight classes
-    toHighlight.forEach(el => {
-        el.classList.add('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm');
+    // Apply classes
+    appliedElements.forEach((classes, el) => {
+        el.classList.add(...classes);
     });
 
     return () => {
-        toHighlight.forEach(el => {
-            el.classList.remove('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm');
+        appliedElements.forEach((classes, el) => {
+            el.classList.remove(...classes);
         });
     };
-  }, [previewSuggestion, previewData, containerRef]);
+  }, [previewSuggestion, previewData, containerRef, state.chatHistory]);
 
   React.useEffect(() => {
     if (!containerRef) return;

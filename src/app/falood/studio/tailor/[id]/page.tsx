@@ -7,6 +7,7 @@ import { ResumePreview } from '@/components/falood/resumify/components/preview/R
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft, Download, FileDown, Palette, Save, Settings, Sparkles, Upload } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -60,11 +61,13 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     const existingHistory = Array.isArray(json.data.chatHistory) ? json.data.chatHistory : [];
                     const hasContextAlready = existingHistory.some((m: any) => m?.id === 'tailor-context');
                     dispatch({ type: 'SET_CHAT_HISTORY', payload: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory] });
+                    dispatch({ type: 'SET_VERSIONS', payload: json.data.versions || [] });
 
                     lastSavedSnapshotRef.current = JSON.stringify({
                         resumeData: json.data.resumeData,
                         chatHistory: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory],
                         jobDescription: json.data.jobDescription || '',
+                        versions: json.data.versions || [],
                     });
                     setHasLoadedInitialData(true);
                 }
@@ -82,6 +85,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             resumeData: state.resumeData,
             chatHistory: state.chatHistory,
             jobDescription: state.jobDescription,
+            versions: state.versions,
         });
 
         if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
@@ -99,6 +103,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     companyName: company || null,
                     resumeData: state.resumeData,
                     chatHistory: state.chatHistory,
+                    versions: state.versions,
                 }),
             });
 
@@ -124,6 +129,33 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         await persistTailoredApplication(true);
     };
 
+    const handleSaveVersion = async () => {
+        const versionName = `v${(state.versions?.length || 0) + 1} - ${new Date().toLocaleString()}`;
+        const newVersion = {
+            id: crypto.randomUUID(),
+            name: versionName,
+            timestamp: new Date().toISOString(),
+            resumeData: state.resumeData,
+            chatHistory: state.chatHistory,
+        };
+        const updatedVersions = [newVersion, ...(state.versions || [])];
+        dispatch({ type: 'SET_VERSIONS', payload: updatedVersions });
+        
+        setIsSaving(true);
+        try {
+            await fetch(`/api/falood/applications?id=${applicationId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ versions: updatedVersions }),
+            });
+            showToast(`Saved version: ${versionName}`);
+        } catch {
+            showToast('Failed to save version');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
     useEffect(() => {
         if (isLoading || !hasLoadedInitialData) return;
 
@@ -131,6 +163,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             resumeData: state.resumeData,
             chatHistory: state.chatHistory,
             jobDescription: state.jobDescription,
+            versions: state.versions,
         });
         if (snapshot === lastSavedSnapshotRef.current) return;
 
@@ -210,6 +243,29 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                             <Sparkles className="w-4 h-4" />
                             {showEditor ? 'Hide Tools' : 'Show Tools'}
                         </Button>
+                        {state.versions && state.versions.length > 0 && (
+                            <Select onValueChange={(id) => {
+                                const v = state.versions.find(v => v.id === id);
+                                if (v) {
+                                    dispatch({ type: 'RESTORE_VERSION', payload: v });
+                                    showToast(`Restored ${v.name}`);
+                                }
+                            }}>
+                                <SelectTrigger className="w-[180px] h-8 text-xs">
+                                    <SelectValue placeholder="Restore Version" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {state.versions.map(v => (
+                                        <SelectItem key={v.id} value={v.id} className="text-xs">
+                                            {v.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        )}
+                        <Button size="sm" variant="outline" onClick={handleSaveVersion} disabled={isSaving} className="flex items-center gap-2">
+                            Save as Version
+                        </Button>
                         <Button size="sm" variant="outline" onClick={handleSave} disabled={isSaving} className="flex items-center gap-2">
                             <Save className="w-4 h-4" />{isSaving ? 'Saving…' : 'Save'}
                         </Button>
@@ -288,7 +344,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     </div>
 
                     {/* AI Suggestions Panel */}
-                    <div className="w-full lg:w-[500px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780, flexShrink: 0 }}>
+                    <div className="w-full lg:w-[580px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden" style={{ height: 780, flexShrink: 0 }}>
                         <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <Sparkles size={16} style={{ color: 'var(--accent)' }} />
