@@ -350,11 +350,18 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
         if (suggestion.type === 'skill_reorg') {
             const newCategories = suggestion.suggested as SkillCategory[];
             if (!Array.isArray(newCategories)) return resumeData;
+            
+            // Ensure all categories have a unique ID, otherwise React state bleeds across categories
+            const categoriesWithIds = newCategories.map((cat, idx) => ({
+                ...cat,
+                id: cat.id || `ai-cat-${Date.now()}-${idx}`
+            }));
+            
             return {
                 ...resumeData,
                 skills: {
                     ...resumeData.skills,
-                    categorized: newCategories,
+                    categorized: categoriesWithIds,
                 },
             };
         }

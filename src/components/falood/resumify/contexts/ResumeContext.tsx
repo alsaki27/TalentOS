@@ -173,8 +173,16 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...state, selectedSection: action.payload };
     case 'RESET_RESUME':
       return { ...initialState, resumeData: initialResumeData };
-    case 'IMPORT_RESUME_DATA':
-      return { ...state, resumeData: { ...initialResumeData, ...action.payload } };
+    case 'IMPORT_RESUME_DATA': {
+      const newData = { ...initialResumeData, ...action.payload };
+      if (newData.skills?.categorized) {
+        newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `import-cat-${Date.now()}-${idx}`
+        }));
+      }
+      return { ...state, resumeData: newData };
+    }
     case 'SET_CHAT_HISTORY':
       return { ...state, chatHistory: action.payload };
     case 'SET_JOB_DESCRIPTION':
@@ -183,12 +191,20 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...state, previewSuggestion: action.payload };
     case 'SET_VERSIONS':
       return { ...state, versions: action.payload };
-    case 'RESTORE_VERSION':
+    case 'RESTORE_VERSION': {
+      const restoredData = action.payload.resumeData;
+      if (restoredData.skills?.categorized) {
+        restoredData.skills.categorized = restoredData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `restore-cat-${Date.now()}-${idx}`
+        }));
+      }
       return {
         ...state,
-        resumeData: action.payload.resumeData,
+        resumeData: restoredData,
         chatHistory: action.payload.chatHistory
       };
+    }
     default:
       return state;
   }
