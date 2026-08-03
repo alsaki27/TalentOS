@@ -50,20 +50,9 @@ export const ResumePreview: React.FC = () => {
     
     const suggestionsToHighlight: any[] = [];
 
-    // Add persistent highlights from chat history
-    state.chatHistory.forEach(msg => {
-        if (msg.suggestions && Array.isArray(msg.suggestions)) {
-            msg.suggestions.forEach((s: any) => {
-                if (s.status === 'accepted' || s.status === 'rejected' || !s.status || s.status === 'pending') {
-                    suggestionsToHighlight.push(s);
-                }
-            });
-        }
-    });
-
-    // Also include currently hovered preview suggestion if any
+    // Only include currently hovered preview suggestion
     if (previewSuggestion) {
-        suggestionsToHighlight.push({...previewSuggestion, status: 'preview'});
+        suggestionsToHighlight.push(previewSuggestion);
     }
 
     const appliedElements = new Map<HTMLElement, string[]>();
@@ -115,10 +104,8 @@ export const ResumePreview: React.FC = () => {
                         existingClasses.push('bg-green-200/50', 'outline', 'outline-2', 'outline-green-400');
                     } else if (suggestion.status === 'rejected') {
                         existingClasses.push('bg-red-200/50', 'outline', 'outline-2', 'outline-red-400', 'line-through');
-                    } else if (suggestion.status === 'preview') {
-                        existingClasses.push('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm', 'shadow-md');
                     } else {
-                        existingClasses.push('bg-yellow-100/40', 'outline', 'outline-1', 'outline-yellow-300');
+                        existingClasses.push('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm', 'shadow-md');
                     }
                     
                     appliedElements.set(el, existingClasses);

@@ -130,6 +130,14 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     };
 
     const handleSaveVersion = async () => {
+        if (state.versions && state.versions.length > 0) {
+            const lastVersion = state.versions[0];
+            if (JSON.stringify(lastVersion.resumeData) === JSON.stringify(state.resumeData)) {
+                showToast('No changes to save as a new version.');
+                return;
+            }
+        }
+
         const versionName = `v${(state.versions?.length || 0) + 1} - ${new Date().toLocaleString()}`;
         const newVersion = {
             id: crypto.randomUUID(),
