@@ -53,7 +53,7 @@ export const ResumePreview: React.FC = () => {
     // Add persistent highlights from chat history
     state.chatHistory.forEach(msg => {
         if (msg.suggestions && Array.isArray(msg.suggestions)) {
-            msg.suggestions.forEach(s => {
+            msg.suggestions.forEach((s: any) => {
                 if (s.status === 'accepted' || s.status === 'rejected' || !s.status || s.status === 'pending') {
                     suggestionsToHighlight.push(s);
                 }
