@@ -93,7 +93,9 @@ export const ResumePreview: React.FC = () => {
         let node;
         while ((node = walk.nextNode())) {
             const text = (node.nodeValue || '').replace(/\s+/g, ' ').trim().toLowerCase();
-            if (text && cleanSearchStrings.some(s => text.includes(s) || s.includes(text))) {
+            // Match if the text node contains the search string, OR if the text node is a significant chunk (>20 chars) of the search string.
+            // This prevents highlighting small irrelevant words (like "and", "the", dates) that happen to be substrings of the suggestion.
+            if (text && cleanSearchStrings.some(s => text.includes(s) || (s.includes(text) && text.length > 20))) {
                 if (node.parentElement) {
                     if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
                     
