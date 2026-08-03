@@ -231,7 +231,7 @@ export const SkillsForm: React.FC = () => {
                     <Input
                       placeholder="Add skill and press Enter"
                       onKeyPress={(e) => handleSkillKeyPress(e, category.id)}
-                      disabled={category.skills.length >= 5}
+                      disabled={category.skills.length >= 20}
                     />
                   </div>
                   
@@ -255,7 +255,7 @@ export const SkillsForm: React.FC = () => {
                   )}
                   
                   <p className="text-xs text-muted-foreground">
-                    {category.skills.length}/5 skills in this category
+                    {category.skills.length}/20 skills in this category
                   </p>
                 </CardContent>
               </Card>
