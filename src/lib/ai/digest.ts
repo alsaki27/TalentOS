@@ -23,16 +23,28 @@ async function gatherSnapshot() {
     countApplicationsByStatus(["assigned", "stacked", "in_progress"]),
   ]);
 
+  const now = new Date();
+
   return {
     newJobsToday,
-    overdueTickets: (overdueTickets ?? []).map((t: any) => ({
-      candidate: t.candidates?.name,
-      job: t.jobs?.title,
-      owner: t.assigned_to,
-      dueAt: t.assignment_due_at,
-    })),
+    // daysOverdue is computed here, not left for the model to infer from dueAt —
+    // asking an LLM to do date arithmetic without a "today" reference point is how
+    // it ends up hallucinating elapsed-time numbers (confirmed live: reported 7-8
+    // days overdue on tickets that were actually 2-3 days overdue).
+    overdueTickets: (overdueTickets ?? []).map((t: any) => {
+      const dueAt = t.assignment_due_at ? new Date(t.assignment_due_at) : null;
+      const daysOverdue = dueAt ? Math.max(0, Math.floor((now.getTime() - dueAt.getTime()) / 86400000)) : null;
+      return {
+        candidate: t.candidates?.name,
+        job: t.jobs?.title,
+        owner: t.assigned_to,
+        dueAt: t.assignment_due_at,
+        daysOverdue,
+      };
+    }),
     applicationsToday: (recentAppsRes ?? []).length,
     pipelineTicketCount: pipelineCount,
+    today: now.toISOString().slice(0, 10),
   };
 }
 
@@ -90,9 +102,10 @@ export async function generateDailyDigest(): Promise<DigestResult | { error: str
   };
 
   const prompt = [
-    "Write a short, plain-language daily digest (4-6 sentences, no headers/bullets) for an internal recruiting team based on this data snapshot:",
+    `Today's date is ${snapshot.today}. Write a short, plain-language daily digest (4-6 sentences, no headers/bullets) for an internal recruiting team based on this data snapshot:`,
     JSON.stringify(snapshot),
     "Mention new jobs ingested today, how many overdue application tickets need attention (name them if there are 5 or fewer), applications submitted today, and how many tickets are still in the pipeline. If a number is zero, say so plainly rather than skipping it.",
+    "Each overdue ticket already has a daysOverdue field precomputed for you — use that number as-is in your summary. Do NOT calculate or guess how many days overdue a ticket is yourself.",
   ].join("\n\n");
 
   try {

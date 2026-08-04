@@ -35,6 +35,7 @@ VALUES
   ('application_final_polish',  'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
   ('base_resume_studio',        'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
   ('chat_assistant',            'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
+  ('application_tailoring',     'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
 
   -- Cheap tier (gemini-3.5-flash-lite)
   ('job_ceo_scout',             'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
@@ -44,7 +45,6 @@ VALUES
   ('application_job_lens',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
   ('copilot_fill_planner',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
   ('copilot_question_answerer', 'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('application_tailoring',     'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
   ('falood_ai',                 'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
   ('resume_suggestions',        'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
   ('jd_analysis',               'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),

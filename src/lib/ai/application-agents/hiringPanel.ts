@@ -29,7 +29,7 @@ export async function runHiringPanel(
         content: [
           {
             type: "text",
-            text: buildHiringPanelPrompt(ctx.job, ctx.baseResume, draft, jobAnalysis, ctx.sourceOfTruth),
+            text: buildHiringPanelPrompt(ctx.job, ctx.baseResume, draft, jobAnalysis, ctx.sourceOfTruth, ctx.evidence),
           },
         ],
       },
