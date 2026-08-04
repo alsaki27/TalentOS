@@ -831,7 +831,14 @@ export async function cancelWorkflow(workflowId: string): Promise<void> {
 export async function retryWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
-  await updateWorkflowStatus(workflowId, "queued");
+  // last_error must be cleared here, not just status - otherwise the Kanban
+  // (and Application Queue) keep showing the PREVIOUS failure's message
+  // indefinitely after a successful retry, since nothing else ever
+  // overwrites it until the workflow fails again. Confirmed live: a
+  // freshly re-queued, not-yet-processed workflow displayed a stale
+  // "All configured routes failed" error from before the retry, reading
+  // as a brand-new failure when it wasn't one.
+  await updateWorkflowStatus(workflowId, "queued", { last_error: null });
   await syncWorkflowToApplication(workflowId, "queued");
 }
 
@@ -847,7 +854,7 @@ export async function restartWorkflow(workflowId: string): Promise<void> {
     "DELETE FROM application_ai_artifacts WHERE workflow_id = $1",
     [workflowId]
   );
-  await updateWorkflowStatus(workflowId, "queued", { current_stage: 0 });
+  await updateWorkflowStatus(workflowId, "queued", { current_stage: 0, last_error: null });
   await syncWorkflowToApplication(workflowId, "queued");
 }
 
