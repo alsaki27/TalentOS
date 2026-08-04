@@ -10,6 +10,7 @@ export interface JobAgentRunRow {
   apify_run_id: string | null;
   apify_dataset_id: string | null;
   status: string;
+  actor_source: string;       // "indeed" | "google" | "linkedin"
   raw_count: number;
   deduped_count: number;
   imported_count: number;
@@ -29,6 +30,10 @@ export interface JobAgentRunSummary extends JobAgentRunRow {
   worthy_count: number;
   skip_count: number;
   staged_count: number;
+  pending_best_count: number;
+  pending_medium_count: number;
+  pending_worthy_count: number;
+  pending_skip_count: number;
 }
 
 export interface JobAgentStagedJobRow {
@@ -56,6 +61,7 @@ export interface JobAgentStagedJobRow {
   relevance_score: number | null;
   is_false_positive: boolean;
   dedup_hash: string | null;
+  source_url_hash: string | null;  // URL fingerprint for cross-actor dedup
   is_duplicate: boolean;
   import_status: string;
   imported_job_id: string | null;
@@ -69,7 +75,7 @@ export interface JobAgentStagedJobRow {
 }
 
 const RUN_COLUMNS = `
-  id, config_id, token_id, apify_run_id, apify_dataset_id, status, raw_count,
+  id, config_id, token_id, apify_run_id, apify_dataset_id, status, actor_source, raw_count,
   deduped_count, imported_count, skipped_count, classified_count,
   estimated_cost_usd, error, role_groups_ran, started_at, completed_at, created_at
 `;
@@ -80,12 +86,13 @@ const RUN_COLUMNS = `
 export async function createRun(
   configId: string,
   roleGroups: string[],
-  tokenId: string | null
+  tokenId: string | null,
+  actorSource: string = "indeed"
 ): Promise<JobAgentRunRow> {
   const row = await queryOne<JobAgentRunRow>(
-    `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
-     VALUES ($1, $2, 'pending', $3) RETURNING ${RUN_COLUMNS}`,
-    [configId, tokenId, roleGroups]
+    `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran, actor_source)
+     VALUES ($1, $2, 'pending', $3, $4) RETURNING ${RUN_COLUMNS}`,
+    [configId, tokenId, roleGroups, actorSource]
   );
   if (!row) throw new Error("Failed to create job agent run");
   return row;
@@ -203,26 +210,35 @@ async function getTierCounts(runId: string): Promise<{
   medium_count: number;
   worthy_count: number;
   skip_count: number;
+  pending_best_count: number;
+  pending_medium_count: number;
+  pending_worthy_count: number;
+  pending_skip_count: number;
 }> {
   const sql = `
     SELECT
       COUNT(*) FILTER (WHERE tier = 'best') AS best_count,
       COUNT(*) FILTER (WHERE tier = 'medium') AS medium_count,
       COUNT(*) FILTER (WHERE tier = 'worthy') AS worthy_count,
-      COUNT(*) FILTER (WHERE tier = 'skip') AS skip_count
+      COUNT(*) FILTER (WHERE tier = 'skip') AS skip_count,
+      COUNT(*) FILTER (WHERE tier = 'best' AND import_status IN ('staged', 'approved')) AS pending_best_count,
+      COUNT(*) FILTER (WHERE tier = 'medium' AND import_status IN ('staged', 'approved')) AS pending_medium_count,
+      COUNT(*) FILTER (WHERE tier = 'worthy' AND import_status IN ('staged', 'approved')) AS pending_worthy_count,
+      COUNT(*) FILTER (WHERE tier = 'skip' AND import_status IN ('staged', 'approved')) AS pending_skip_count
     FROM job_agent_staged_jobs
     WHERE run_id = $1
   `;
 
-  const row = await queryOne<{ best_count: number; medium_count: number; worthy_count: number; skip_count: number }>(
-    sql,
-    [runId]
-  );
+  const row = await queryOne<any>(sql, [runId]);
   return {
-    best_count: row?.best_count ?? 0,
-    medium_count: row?.medium_count ?? 0,
-    worthy_count: row?.worthy_count ?? 0,
-    skip_count: row?.skip_count ?? 0,
+    best_count: parseInt(row?.best_count ?? '0', 10),
+    medium_count: parseInt(row?.medium_count ?? '0', 10),
+    worthy_count: parseInt(row?.worthy_count ?? '0', 10),
+    skip_count: parseInt(row?.skip_count ?? '0', 10),
+    pending_best_count: parseInt(row?.pending_best_count ?? '0', 10),
+    pending_medium_count: parseInt(row?.pending_medium_count ?? '0', 10),
+    pending_worthy_count: parseInt(row?.pending_worthy_count ?? '0', 10),
+    pending_skip_count: parseInt(row?.pending_skip_count ?? '0', 10),
   };
 }
 
@@ -248,8 +264,8 @@ export async function insertStagedJobs(
     "salary_max", "date_posted", "via_platform", "source_url", "apply_link", "is_remote",
     "employment_type", "search_query_used", "role_group", "role_group_label",
     "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
-    "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
-    "description_text", "company_website", "external_job_id", "country", "industry",
+    "is_false_positive", "dedup_hash", "source_url_hash", "is_duplicate", "import_status",
+    "imported_job_id", "description_text", "company_website", "external_job_id", "country", "industry",
   ];
   const values: (string | number | boolean | string[] | null)[] = [];
   const placeholders: string[] = [];
@@ -270,6 +286,7 @@ export async function insertStagedJobs(
 
 export interface ListStagedJobsFilters {
   tier?: string;
+  tiers?: string[];
   group?: string;
   importStatus?: string;
   search?: string;
@@ -285,15 +302,21 @@ export async function listStagedJobs(
   filters: ListStagedJobsFilters = {}
 ): Promise<{ items: JobAgentStagedJobRow[]; total: number }> {
   const page = Math.max(1, filters.page ?? 1);
-  const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 100));
+  // Allow up to 10 000 for internal server-side bulk operations (e.g. importApprovedJobs).
+  // The API route handler independently enforces a 100-item cap for external requests.
+  const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 10000));
 
   const conditions: string[] = ["run_id = $1"];
-  const values: (string | number)[] = [runId];
+  const values: any[] = [runId];
   let idx = 2;
 
   if (filters.tier) {
     conditions.push(`tier = $${idx++}`);
     values.push(filters.tier);
+  }
+  if (filters.tiers && filters.tiers.length > 0) {
+    conditions.push(`tier = ANY($${idx++})`);
+    values.push(filters.tiers);
   }
   if (filters.group) {
     conditions.push(`role_group = $${idx++}`);
@@ -348,7 +371,7 @@ export async function updateStagedJobStatus(
 export async function bulkUpdateStagedJobStatus(
   runId: string,
   status: string,
-  opts: { tier?: string; excludeImportStatus?: string; jobIds?: string[] } = {}
+  opts: { tier?: string; tiers?: string[]; excludeImportStatus?: string; jobIds?: string[] } = {}
 ): Promise<number> {
   const conditions: string[] = ["run_id = $1"];
   const values: (string | string[])[] = [runId];
@@ -357,6 +380,10 @@ export async function bulkUpdateStagedJobStatus(
   if (opts.tier) {
     conditions.push(`tier = $${idx++}`);
     values.push(opts.tier);
+  }
+  if (opts.tiers && opts.tiers.length > 0) {
+    conditions.push(`tier = ANY($${idx++})`);
+    values.push(opts.tiers);
   }
   if (opts.excludeImportStatus) {
     conditions.push(`import_status <> $${idx++}`);
@@ -404,4 +431,23 @@ export async function getDedupHashes(hashes: string[]): Promise<Set<string>> {
     [hashes, sinceIso]
   );
   return new Set(rows.map((r) => r.dedup_hash));
+}
+
+/**
+ * Return a set of source_url_hash values that already exist in staged jobs from the past 30 days.
+ * Used for cross-actor URL-fingerprint deduplication.
+ */
+export async function getSourceUrlHashes(hashes: string[]): Promise<Set<string>> {
+  if (hashes.length === 0) return new Set();
+
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+  const sinceIso = since.toISOString();
+
+  const rows = await query<{ source_url_hash: string }>(
+    `SELECT DISTINCT source_url_hash FROM job_agent_staged_jobs
+     WHERE source_url_hash = ANY($1) AND source_url_hash IS NOT NULL AND created_at >= $2`,
+    [hashes, sinceIso]
+  );
+  return new Set(rows.map((r) => r.source_url_hash));
 }

@@ -15,6 +15,7 @@ export const SkillsForm: React.FC = () => {
   
   const [newSkill, setNewSkill] = useState('');
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [categoryInputs, setCategoryInputs] = useState<Record<string, string>>({});
 
   const addSimpleSkill = () => {
     if (!newSkill.trim()) return;
@@ -98,18 +99,18 @@ export const SkillsForm: React.FC = () => {
     updateSkills(updatedSkills);
   };
 
-  const handleSkillKeyPress = (e: React.KeyboardEvent<HTMLInputElement>, categoryId?: string) => {
+  const handleSkillKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, categoryId?: string) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const input = e.target as HTMLInputElement;
-      
       if (categoryId) {
-        addSkillToCategory(categoryId, input.value);
+        const val = categoryInputs[categoryId] || '';
+        if (val.trim()) {
+          addSkillToCategory(categoryId, val);
+          setCategoryInputs(prev => ({ ...prev, [categoryId]: '' }));
+        }
       } else {
-        setNewSkill(input.value);
         addSimpleSkill();
       }
-      input.value = '';
     }
   };
 
@@ -150,7 +151,7 @@ export const SkillsForm: React.FC = () => {
                 placeholder="Enter a skill and press Enter"
                 value={newSkill}
                 onChange={(e) => setNewSkill(e.target.value)}
-                onKeyPress={(e) => handleSkillKeyPress(e)}
+                onKeyDown={(e) => handleSkillKeyDown(e)}
               />
               <Button type="button" onClick={addSimpleSkill} disabled={!newSkill.trim()}>
                 <Plus className="w-4 h-4" />
@@ -230,9 +231,24 @@ export const SkillsForm: React.FC = () => {
                   <div className="flex gap-2">
                     <Input
                       placeholder="Add skill and press Enter"
-                      onKeyPress={(e) => handleSkillKeyPress(e, category.id)}
-                      disabled={category.skills.length >= 5}
+                      value={categoryInputs[category.id] || ''}
+                      onChange={(e) => setCategoryInputs(prev => ({ ...prev, [category.id]: e.target.value }))}
+                      onKeyDown={(e) => handleSkillKeyDown(e, category.id)}
+                      disabled={category.skills.length >= 20}
                     />
+                    <Button 
+                      type="button" 
+                      onClick={() => {
+                        const val = categoryInputs[category.id] || '';
+                        if (val.trim()) {
+                          addSkillToCategory(category.id, val);
+                          setCategoryInputs(prev => ({ ...prev, [category.id]: '' }));
+                        }
+                      }} 
+                      disabled={!(categoryInputs[category.id] || '').trim() || category.skills.length >= 20}
+                    >
+                      <Plus className="w-4 h-4" />
+                    </Button>
                   </div>
                   
                   {category.skills.length > 0 && (
@@ -255,7 +271,7 @@ export const SkillsForm: React.FC = () => {
                   )}
                   
                   <p className="text-xs text-muted-foreground">
-                    {category.skills.length}/5 skills in this category
+                    {category.skills.length}/20 skills in this category
                   </p>
                 </CardContent>
               </Card>

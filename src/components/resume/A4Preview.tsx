@@ -216,7 +216,7 @@ export default function A4Preview({
               <h2 className="a4-section-title">Skills</h2>
               {content.skills.map((group) => (
                 <div key={group.id} className="a4-skill-group">
-                  <span className="a4-skill-title">{group.title}:</span>{" "}
+                  <span className="a4-skill-title">{(group as any).name || group.title}:</span>{" "}
                   <span className="a4-skill-list">
                     {group.skills.map((s, i) => (
                       <span key={i}>

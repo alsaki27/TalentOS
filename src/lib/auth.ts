@@ -71,7 +71,7 @@ export function canAccessPath(role: string | null | undefined, pathname: string)
   if (isTeamArea) {
     return normalizedRole === "admin";
   }
-  if (normalizedRole === "application_engineer" && (isJobsArea || isCompaniesArea)) {
+  if (normalizedRole === "application_engineer" && isCompaniesArea) {
     return false;
   }
   return true;

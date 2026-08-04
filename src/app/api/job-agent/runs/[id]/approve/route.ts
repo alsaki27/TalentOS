@@ -13,18 +13,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const body = await req.json();
   const tier = body.tier ? String(body.tier) : undefined;
+  const tiers = Array.isArray(body.tiers) ? body.tiers.map(String) : undefined;
   const jobIds = Array.isArray(body.jobIds) ? body.jobIds.map(String) : undefined;
   const approveAll = body.approveAll === true;
 
-  if (!tier && !jobIds && !approveAll) {
+  if (!tier && !tiers && !jobIds && !approveAll) {
     return NextResponse.json(
-      { error: "tier, jobIds, or approveAll is required" },
+      { error: "tier, tiers, jobIds, or approveAll is required" },
       { status: 400 }
     );
   }
 
   try {
-    const result = await importApprovedJobs(params.id, { tier: tier as any, jobIds, approveAll });
+    const result = await importApprovedJobs(params.id, { tier: tier as any, tiers, jobIds, approveAll });
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message ?? "Import failed" }, { status: 500 });

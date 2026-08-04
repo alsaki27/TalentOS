@@ -35,14 +35,16 @@ import { createProposal, supersedePendingFor } from "@/server/repositories/agent
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
-// 20 items per dispatch call — STAGE_CONCURRENCY=6 still governs actual AI
-// parallelism inside runConcurrent, so this doesn't flood the AI provider.
-// It does reduce the total number of dispatch round-trips by 4× vs. the old
-// value of 5, which is critical for large runs (300 jobs = 45 dispatch calls
-// instead of 180) and prevents the chain from stalling before completing.
+// Items per dispatch call for fast stages (QA, matchmaking).
 const BATCH_SIZE = 20;
 
+// Deep fetch processes fewer per batch — each can take up to ~145s with 3-layer retry.
+// With DEEP_FETCH_CONCURRENCY=3 and 5 items: ceil(5/3)=2 rounds × 145s = 290s < 5min claim.
+const DEEP_FETCH_BATCH_SIZE = 5;
+
 const STAGE_CONCURRENCY = 6;
+// Deep fetch uses lower concurrency — Jina has a global 429 risk above this
+const DEEP_FETCH_CONCURRENCY = 3;
 
 const MIN_DESCRIPTION_LENGTH = 100;
 
@@ -158,7 +160,7 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_qa.maxOutputTokens,
-          timeout_ms: 5000,
+          timeout_ms: 15000, // 15s — was 5s which caused too many AI timeout errors
         };
         return runQaBouncer(opts, provider, ctx);
       });
@@ -186,10 +188,10 @@ export async function processQaBatch(runId: string): Promise<{ processed: number
 }
 
 export async function processDeepFetchBatch(runId: string): Promise<{ processed: number; researched: number; skipped: number }> {
-  const batch = await claimNextStagedBatch(runId, "ingested", BATCH_SIZE);
+  const batch = await claimNextStagedBatch(runId, "ingested", DEEP_FETCH_BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, researched: 0, skipped: 0 };
 
-  const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
+  const results = await runConcurrent(batch, DEEP_FETCH_CONCURRENCY, async (row) => {
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },
@@ -200,7 +202,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.maxOutputTokens,
-          timeout_ms: 8000,
+          timeout_ms: 150000, // 150s — accommodates 3-layer fetch: Jina(50s) + Jina-no-cache(50s) + direct(45s) + AI parsing
         };
         return runDeepFetch(opts, provider, ctx);
       });
@@ -243,9 +245,9 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
   return { processed, researched, skipped };
 }
 
-export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number }> {
+export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number; skipped: number }> {
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
-  if (batch.length === 0) return { processed: 0, matched: 0, logged: 0 };
+  if (batch.length === 0) return { processed: 0, matched: 0, logged: 0, skipped: 0 };
 
   // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
   // Previously listAllJobsForFuzzyDedupe was inside the inner loop; now it runs once.
@@ -341,7 +343,7 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           claimed_at: null as any,
           claim_expires_at: null as any,
         });
-        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
+        return { processed: 1, matched: matchResult.matches.length, logged: 1, skipped: 0 };
       } else {
         await updateStaged(row.id, {
           stage: "logged",
@@ -349,21 +351,22 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           claimed_at: null as any,
           claim_expires_at: null as any,
         });
-        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
+        return { processed: 1, matched: matchResult.matches.length, logged: 0, skipped: 1 };
       }
     } catch (err) {
       console.error(`[Job CEO] Matchmaker failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
       await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown", claimed_at: null as any, claim_expires_at: null as any });
-      return { processed: 0, matched: 0, logged: 0 };
+      return { processed: 0, matched: 0, logged: 0, skipped: 0 };
     }
   });
 
   const processed = results.reduce((s, r) => s + r.processed, 0);
   const matched = results.reduce((s, r) => s + r.matched, 0);
   const logged = results.reduce((s, r) => s + r.logged, 0);
+  const skipped = results.reduce((s, r) => s + (r.skipped || 0), 0);
 
-  await bumpRunCounts(runId, { matched_count: matched, logged_count: logged });
-  return { processed, matched, logged };
+  await bumpRunCounts(runId, { matched_count: matched, logged_count: logged, skipped_count: skipped });
+  return { processed, matched, logged, skipped };
 }
 
 export interface DispatchResult {
@@ -401,7 +404,10 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    // If rows exist but processed === 0, another concurrent worker holds the
+    // claim locks — returning needsDispatch: true here causes an infinite loop.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -426,7 +432,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,
@@ -451,7 +458,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
       transitioned = true;
     }
 
-    const needsMore = result.processed > 0 || transitioned || (!!rowsExist && result.processed === 0);
+    // Only signal more work if we actually did something or transitioned.
+    const needsMore = result.processed > 0 || transitioned;
 
     return {
       dispatched: result.processed > 0 || transitioned,

@@ -62,7 +62,7 @@ export async function runDeepFetch(
       tools: [],
       temperature: options.temperature ?? 0.1,
       maxTokens: options.max_output_tokens ?? 2048,
-      timeoutMs: options.timeout_ms ?? 8000,
+      timeoutMs: options.timeout_ms ?? 20000,
     });
 
     var parsed = parseAiJson(textOf(response.content));

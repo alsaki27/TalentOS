@@ -1,12 +1,22 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
 import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
 
+export interface ResumeVersion {
+  id: string;
+  name: string;
+  timestamp: string;
+  resumeData: ResumeData;
+  chatHistory: any[];
+}
+
 interface ResumeState {
   resumeData: ResumeData;
   isEditing: boolean;
   selectedSection: string | null;
   chatHistory: any[];
   jobDescription: string;
+  previewSuggestion: any | null;
+  versions: ResumeVersion[];
 }
 
 type ResumeAction =
@@ -29,7 +39,10 @@ type ResumeAction =
   | { type: 'RESET_RESUME' }
   | { type: 'IMPORT_RESUME_DATA'; payload: ResumeData }
   | { type: 'SET_CHAT_HISTORY'; payload: any[] }
-  | { type: 'SET_JOB_DESCRIPTION'; payload: string };
+  | { type: 'SET_JOB_DESCRIPTION'; payload: string }
+  | { type: 'SET_PREVIEW_SUGGESTION'; payload: any | null }
+  | { type: 'SET_VERSIONS'; payload: ResumeVersion[] }
+  | { type: 'RESTORE_VERSION'; payload: ResumeVersion };
 
 const initialResumeData: ResumeData = {
   personalInfo: {
@@ -75,6 +88,8 @@ const initialState: ResumeState = {
     }
   ],
   jobDescription: '',
+  previewSuggestion: null,
+  versions: [],
 };
 
 function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
@@ -158,12 +173,38 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...state, selectedSection: action.payload };
     case 'RESET_RESUME':
       return { ...initialState, resumeData: initialResumeData };
-    case 'IMPORT_RESUME_DATA':
-      return { ...state, resumeData: { ...initialResumeData, ...action.payload } };
+    case 'IMPORT_RESUME_DATA': {
+      const newData = { ...initialResumeData, ...action.payload };
+      if (newData.skills?.categorized) {
+        newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `import-cat-${Date.now()}-${idx}`
+        }));
+      }
+      return { ...state, resumeData: newData };
+    }
     case 'SET_CHAT_HISTORY':
       return { ...state, chatHistory: action.payload };
     case 'SET_JOB_DESCRIPTION':
       return { ...state, jobDescription: action.payload };
+    case 'SET_PREVIEW_SUGGESTION':
+      return { ...state, previewSuggestion: action.payload };
+    case 'SET_VERSIONS':
+      return { ...state, versions: action.payload };
+    case 'RESTORE_VERSION': {
+      const restoredData = action.payload.resumeData;
+      if (restoredData.skills?.categorized) {
+        restoredData.skills.categorized = restoredData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `restore-cat-${Date.now()}-${idx}`
+        }));
+      }
+      return {
+        ...state,
+        resumeData: restoredData,
+        chatHistory: action.payload.chatHistory
+      };
+    }
     default:
       return state;
   }
@@ -193,6 +234,9 @@ interface ResumeContextType {
   exportResumeData: () => ResumeData;
   setChatHistory: (history: any[]) => void;
   setJobDescription: (jd: string) => void;
+  setPreviewSuggestion: (suggestion: any | null) => void;
+  setVersions: (versions: ResumeVersion[]) => void;
+  restoreVersion: (version: ResumeVersion) => void;
 }
 
 const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
@@ -284,6 +328,18 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: jd });
   }, []);
 
+  const setPreviewSuggestion = useCallback((suggestion: any | null) => {
+    dispatch({ type: 'SET_PREVIEW_SUGGESTION', payload: suggestion });
+  }, []);
+
+  const setVersions = useCallback((versions: ResumeVersion[]) => {
+    dispatch({ type: 'SET_VERSIONS', payload: versions });
+  }, []);
+
+  const restoreVersion = useCallback((version: ResumeVersion) => {
+    dispatch({ type: 'RESTORE_VERSION', payload: version });
+  }, []);
+
   const value: ResumeContextType = useMemo(() => ({
     state,
     dispatch,
@@ -307,7 +363,10 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     importResumeData,
     exportResumeData,
     setChatHistory,
-    setJobDescription
+    setJobDescription,
+    setPreviewSuggestion,
+    setVersions,
+    restoreVersion
   }), [
     state,
     updatePersonalInfo,
@@ -331,6 +390,9 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     exportResumeData,
     setChatHistory,
     setJobDescription,
+    setPreviewSuggestion,
+    setVersions,
+    restoreVersion,
   ]);
 
   return (

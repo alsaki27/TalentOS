@@ -18,6 +18,7 @@ interface DashboardRow {
   job_id: string;
   job_title: string;
   company_name: string;
+  company_website: string | null;
   job_source: string;
   source_url: string | null;
   location: string | null;
@@ -26,6 +27,7 @@ interface DashboardRow {
   salary_currency: string | null;
   fit_score: number | null;
   recommendation: string | null;
+  tailored_resume_version_id: string | null;
 }
 
 interface DashboardData {

@@ -15,11 +15,13 @@ import {
   type JobAgentStagedJobRow,
 } from "@/server/repositories/jobAgentRunRepository";
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
-import { startRun, dispatchAndChain } from "@/server/services/jobCeoService";
-import { insertStaged } from "@/server/repositories/jobCeoStagingRepository";
+import { startRun } from "@/server/services/jobCeoService";
+import { insertStaged, checkAndRecordDedup } from "@/server/repositories/jobCeoStagingRepository";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export interface ImportApprovedJobsOptions {
   tier?: "best" | "medium" | "worthy";
+  tiers?: string[];
   jobIds?: string[];
   approveAll?: boolean;
 }
@@ -107,6 +109,12 @@ export async function importApprovedJobs(
       excludeImportStatus: "imported",
     });
   }
+  if (options.tiers && options.tiers.length > 0) {
+    await bulkUpdateStagedJobStatus(runId, "approved", {
+      tiers: options.tiers,
+      excludeImportStatus: "imported",
+    });
+  }
   if (options.jobIds && options.jobIds.length > 0) {
     await bulkUpdateStagedJobStatus(runId, "approved", {
       jobIds: options.jobIds,
@@ -114,10 +122,11 @@ export async function importApprovedJobs(
     });
   }
 
-  const filters: { importStatus: string; tier?: string; jobIds?: string[] } = {
+  const filters: { importStatus: string; tier?: string; tiers?: string[]; jobIds?: string[] } = {
     importStatus: "approved",
   };
   if (options.tier) filters.tier = options.tier;
+  if (options.tiers && options.tiers.length > 0) filters.tiers = options.tiers;
   if (options.jobIds && options.jobIds.length > 0) filters.jobIds = options.jobIds;
 
   const approved = await listStagedJobs(runId, { ...filters, pageSize: 10000 });
@@ -141,7 +150,7 @@ async function importRows(
     _job_row: stagedJobToJobRow(staged),
   }));
 
-  const { newRows, duplicates } = await filterNewJobs(candidates);
+  let { newRows, duplicates } = await filterNewJobs(candidates);
 
   let inserted: any[] = [];
   let runRecord: any = null;
@@ -167,8 +176,30 @@ async function importRows(
       };
     });
 
-    await insertStaged(runRecord.id, stagedInserts);
-    inserted = stagedInserts; // For the insertedByUrl map below
+    // Run Job CEO deduplication to ensure we don't insert jobs that were already staged
+    // (e.g. if the user approved the same job from two different runs before it was ingested)
+    const sigPayload = stagedInserts
+      .map((i) => ({
+        signature: i.title && i.company ? `${i.title.toLowerCase()}|${i.company.toLowerCase()}` : null,
+        title: i.title,
+        company: i.company,
+      }))
+      .filter((s) => s.signature !== null) as Array<{ signature: string; title: string; company: string }>;
+
+    const uniqueSignatures = await checkAndRecordDedup(runRecord.id, sigPayload);
+    const dedupCount = sigPayload.length - uniqueSignatures.size;
+    duplicates += dedupCount;
+
+    // Filter staged inserts to only those whose signature was unique
+    const finalInserts = stagedInserts.filter(i => {
+      const sig = i.title && i.company ? `${i.title.toLowerCase()}|${i.company.toLowerCase()}` : null;
+      return sig ? uniqueSignatures.has(sig) : true;
+    });
+
+    if (finalInserts.length > 0) {
+      await insertStaged(runRecord.id, finalInserts);
+    }
+    inserted = finalInserts; // For the insertedByUrl map below
   }
 
   // Mark all inserted staged jobs as imported.
@@ -194,10 +225,25 @@ async function importRows(
   // or a background cron will handle it when they finally arrive in the jobs table.
 
   if (runRecord) {
-    // Start the Deep Fetch -> Matchmaker chain immediately for the bridged jobs
-    dispatchAndChain().catch((err) => {
-      console.error("[jobAgentImporter] Bridge dispatch chain failed:", (err as Error).message);
-    });
+    // Kick off the Job CEO dispatch chain for the bridged jobs.
+    // waitUntil from @vercel/functions is a no-op on Cloudflare Workers, so we instead
+    // fire a self-fetch to /api/job-ceo/dispatch — the same pattern used by ingest/route.ts.
+    // backgroundDispatch registers the fetch with ctx.waitUntil() so it survives past the
+    // HTTP response on Cloudflare and doesn't get garbage-collected early.
+    const baseUrl =
+      process.env.TALENTOS_BASE_URL ||
+      (process.env.NODE_ENV === "development"
+        ? "http://localhost:3000"
+        : "https://skarion-talent-os.skarion-talentos.workers.dev");
+    const cronSecret = process.env.CRON_SECRET;
+    await backgroundDispatch(
+      fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+        method: "POST",
+        headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined,
+      }).catch((err) => {
+        console.error("[jobAgentImporter] Bridge dispatch self-fetch failed:", (err as Error).message);
+      })
+    );
   }
 
   return { imported: run.imported_count, skipped: run.skipped_count };

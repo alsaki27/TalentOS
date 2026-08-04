@@ -66,12 +66,24 @@ export async function POST(req: NextRequest) {
     const resumeData = studioDocumentToResumeData(parsedContent);
     skills = resumeData.skills.mode === "simple" ? resumeData.skills.simple : resumeData.skills.categorized.flatMap((c) => c.skills);
 
+    const sourceKey = `${source}:${id}`;
+    
+    // Check if a studio session already exists for this source resume
+    const existing = await queryOne<{ id: string }>(
+      `SELECT id FROM falood_saved_applications WHERE name = $1 LIMIT 1`,
+      [sourceKey]
+    );
+
+    if (existing) {
+      return NextResponse.json({ id: existing.id, jobTitle, companyName }, { status: 200 });
+    }
+
     const created = await queryOne<{ id: string }>(
       `INSERT INTO falood_saved_applications
-         (job_description, company_name, skills, resume_data, chat_history, candidate_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (name, job_description, company_name, skills, resume_data, chat_history, candidate_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([]), candidateId]
+      [sourceKey, jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([]), candidateId]
     );
     if (!created) throw new Error("Failed to create falood_saved_applications row");
 

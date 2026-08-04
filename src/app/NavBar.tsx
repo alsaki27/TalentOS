@@ -32,7 +32,7 @@ export default function NavBar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const currentRole = me?.profile.role ?? "";
-  const canViewJobs = ["admin", "manager"].includes(currentRole);
+  const canViewJobs = ["admin", "manager", "application_engineer"].includes(currentRole);
   const canViewCompanies = ["admin", "manager"].includes(currentRole);
   const canViewTeam = currentRole === "admin";
   const isAdmin = currentRole === "admin";

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 interface DashboardApplication {
   application_id: string;
@@ -11,11 +12,13 @@ interface DashboardApplication {
   job_id: string;
   job_title: string;
   company_name: string;
+  company_website: string | null;
   job_source: string;
   source_url: string | null;
   location: string | null;
   fit_score: number | null;
   recommendation: string | null;
+  tailored_resume_version_id: string | null;
 }
 
 interface ApplicationsDataTableProps {
@@ -110,6 +113,7 @@ export default function ApplicationsDataTable({
               <th style={{ ...TH_STYLE, cursor: "default" }}>Job ID</th>
               <th style={{ ...TH_STYLE, cursor: "default" }}>Source</th>
               <th style={{ ...TH_STYLE, cursor: "default" }}>Location</th>
+              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center" }}>Resume</th>
               <th onClick={function () { onSort("status"); }} style={TH_STYLE}>Status {renderSortIndicator("status")}</th>
               <th onClick={function () { onSort("applied_at"); }} style={TH_STYLE}>Applied {renderSortIndicator("applied_at")}</th>
               {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center" }}>Actions</th>}
@@ -124,7 +128,16 @@ export default function ApplicationsDataTable({
               return (
                 <tr key={app.application_id} style={{ borderBottom: "1px solid var(--border)", transition: "background 0.15s" }}>
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    <a href={"/jobs/" + app.job_id} style={{ color: "var(--accent)", textDecoration: "none" }}>{app.company_name}</a>
+                    {app.company_website ? (
+                      <a href={app.company_website} target="_blank" rel="noopener noreferrer"
+                        style={{ color: "var(--accent)", textDecoration: "none" }}
+                        title={"Visit " + app.company_name + " website"}
+                      >{app.company_name}</a>
+                    ) : (
+                      <a href={"/jobs/" + app.job_id}
+                        style={{ color: "var(--accent)", textDecoration: "none" }}
+                      >{app.company_name}</a>
+                    )}
                   </td>
                   <td style={{ padding: "10px 12px" }}>
                     {app.source_url ? (
@@ -160,6 +173,37 @@ export default function ApplicationsDataTable({
                     <span style={{ color: "var(--ink-soft)", fontSize: 12, fontWeight: 500 }}>{sourceLabel(app.job_source)}</span>
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{app.location || "—"}</td>
+                  {/* Tailored Resume Column */}
+                  <td style={{ padding: "10px 12px", textAlign: "center" }}>
+                    {app.tailored_resume_version_id ? (
+                      <button
+                        onClick={function () { openFaloodStudio("application_resume_version", app.tailored_resume_version_id!); }}
+                        title="Open tailored resume in Falood Studio"
+                        style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "3px 9px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                          background: "rgba(99,102,241,0.12)",
+                          color: "var(--accent)",
+                          border: "1px solid rgba(99,102,241,0.3)",
+                          cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
+                        }}
+                        onMouseEnter={function (e) {
+                          var el = e.currentTarget as HTMLButtonElement;
+                          el.style.background = "rgba(99,102,241,0.22)";
+                          el.style.borderColor = "var(--accent)";
+                        }}
+                        onMouseLeave={function (e) {
+                          var el = e.currentTarget as HTMLButtonElement;
+                          el.style.background = "rgba(99,102,241,0.12)";
+                          el.style.borderColor = "rgba(99,102,241,0.3)";
+                        }}
+                      >
+                        <span style={{ fontSize: 12 }}>📄</span> Studio
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "var(--ink-soft)", opacity: 0.35 }}>—</span>
+                    )}
+                  </td>
                   <td style={{ padding: "10px 12px" }}>
                     {readOnly ? (
                       <StatusBadge status={app.status} />

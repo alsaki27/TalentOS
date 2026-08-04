@@ -23,6 +23,7 @@ function normalizeRow(row: any) {
     skills: safeParseJson<string[]>(row.skills),
     resumeData: safeParseJson<any>(row.resumeData),
     chatHistory: safeParseJson<any[]>(row.chatHistory),
+    versions: safeParseJson<any[]>(row.versions || '[]'),
   };
 }
 
@@ -36,7 +37,7 @@ export async function GET(req: NextRequest) {
         `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
                 name, job_description AS "jobDescription", company_name AS "companyName",
                 skills, resume_data AS "resumeData", chat_history AS "chatHistory",
-                candidate_id AS "candidateId"
+                candidate_id AS "candidateId", versions
          FROM falood_saved_applications WHERE id = $1`,
         [id]
       );
@@ -49,7 +50,7 @@ export async function GET(req: NextRequest) {
     const rows = await query<any>(
       `SELECT id, created_at AS "createdAt", updated_at AS "updatedAt",
               name, job_description AS "jobDescription", company_name AS "companyName",
-              skills, resume_data AS "resumeData", chat_history AS "chatHistory"
+              skills, resume_data AS "resumeData", chat_history AS "chatHistory", versions
        FROM falood_saved_applications ORDER BY updated_at DESC`
     );
     return NextResponse.json({ success: true, data: rows.map(normalizeRow) });
@@ -134,6 +135,11 @@ export async function PATCH(req: NextRequest) {
       values.push(JSON.stringify(body.chatHistory || []));
     }
 
+    if ("versions" in body) {
+      updates.push(`versions = $${values.length + 1}`);
+      values.push(JSON.stringify(body.versions || []));
+    }
+
     if (updates.length === 0) {
       return NextResponse.json({ success: false, error: "No fields to update" }, { status: 400 });
     }
@@ -146,7 +152,7 @@ export async function PATCH(req: NextRequest) {
        WHERE id = $${values.length + 1}
        RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
                  name, job_description AS "jobDescription", company_name AS "companyName",
-                 skills, resume_data AS "resumeData", chat_history AS "chatHistory"`,
+                 skills, resume_data AS "resumeData", chat_history AS "chatHistory", versions`,
       [...values, id]
     );
 

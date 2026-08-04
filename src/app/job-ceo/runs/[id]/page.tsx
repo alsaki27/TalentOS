@@ -128,6 +128,7 @@ export default function JobCeoRunStagingPage() {
   const { id: runId } = useParams<{ id: string }>();
   const [rows, setRows] = useState<StagedRow[]>([]);
   const [counts, setCounts] = useState<StageCounts>({});
+  const [run, setRun] = useState<any>(null);
   const [activeStage, setActiveStage] = useState<string>("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -148,6 +149,7 @@ export default function JobCeoRunStagingPage() {
       const data = await res.json();
       setRows(data.rows ?? []);
       setCounts(data.counts ?? {});
+      if (data.run) setRun(data.run);
     } catch (err: any) {
       setError(err.message ?? "Failed to load staging data");
     } finally {
@@ -161,6 +163,8 @@ export default function JobCeoRunStagingPage() {
 
   const totalAll = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
   const stages = ["all", "ingested", "qa_passed", "qa_dropped", "researched", "matched", "logged", "error"];
+  
+  const isLive = run ? !["completed", "failed", "cancelled"].includes(run.status) : true;
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6">
@@ -181,25 +185,27 @@ export default function JobCeoRunStagingPage() {
           <h1 className="text-xl font-bold text-ink">Staging Pipeline Viewer</h1>
           <p className="text-sm text-ink-soft mt-0.5">Live view of jobs moving through the multi-agent pipeline</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={async () => {
-              if (!confirm("Stop this run?")) return;
-              await fetch(`/api/job-ceo/runs/${runId}/cancel`, { method: "POST" });
-              // Refresh or navigate away
-              window.location.href = "/job-ceo";
-            }}
-            className="px-3 py-1.5 text-xs font-medium rounded-md border border-red-500 bg-surface text-red-500 hover:text-red-600 transition-colors"
-          >
-            Stop Run
-          </button>
-          <button
-            onClick={() => fetchData(activeStage)}
-            className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink transition-colors"
-          >
-            Refresh
-          </button>
-        </div>
+        {isLive && (
+          <div className="flex gap-2">
+            <button
+              onClick={async () => {
+                if (!confirm("Stop this run?")) return;
+                await fetch(`/api/job-ceo/runs/${runId}/cancel`, { method: "POST" });
+                // Refresh or navigate away
+                window.location.href = "/job-ceo";
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-red-500 bg-surface text-red-500 hover:text-red-600 transition-colors"
+            >
+              Stop Run
+            </button>
+            <button
+              onClick={() => fetchData(activeStage)}
+              className="px-3 py-1.5 text-xs font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink transition-colors"
+            >
+              Refresh
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Stage Count Cards */}

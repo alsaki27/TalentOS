@@ -34,6 +34,7 @@ export default function JobAgentPage() {
   const [selectedRoleGroups, setSelectedRoleGroups] = useState<Set<string>>(new Set());
   const [selectedKeywordGroups, setSelectedKeywordGroups] = useState<Set<string>>(new Set());
   const [dateInterval, setDateInterval] = useState("today");
+  const [selectedActorSources, setSelectedActorSources] = useState<Set<string>>(new Set(["indeed"]));
   const [running, setRunning] = useState(false);
 
   const [expandedRoleBrowser, setExpandedRoleBrowser] = useState(false);
@@ -69,17 +70,27 @@ export default function JobAgentPage() {
     setRunning(true); setError(""); setMessage("");
     const groups = Array.from(selectedRoleGroups);
     const customKeywords = keywordGroups.filter((g) => selectedKeywordGroups.has(g.id)).flatMap((g) => g.keywords);
+    const actorSources = Array.from(selectedActorSources);
 
     if (groups.length === 0 && customKeywords.length === 0) {
       setError("Select at least one role group or custom keyword group to run.");
       setRunning(false);
       return;
     }
+    if (actorSources.length === 0) {
+      setError("Select at least one source actor (Indeed, Google Jobs, or LinkedIn).");
+      setRunning(false);
+      return;
+    }
     try {
-      const res = await fetch("/api/job-agent/runs", { method: "POST", headers: { "Content-Type": "application/json" },         body: JSON.stringify({ roleGroups: groups, customKeywords, dateInterval })  });
+      const res = await fetch("/api/job-agent/runs", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roleGroups: groups, customKeywords, dateInterval, actorSources })  });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "Run failed");
-      setMessage(`Run started: ${d.runId}`);
+      const msg = d.runs
+        ? `${d.runs.length} run(s) started: ${d.runs.map((r: any) => `${r.actorSource}:${r.runId.slice(0,8)}`).join(", ")}`
+        : `Run started: ${d.runId}`;
+      setMessage(msg);
       load();
     } catch (err: any) { setError(err.message); }
     finally { setRunning(false); }
@@ -131,11 +142,20 @@ export default function JobAgentPage() {
       <h2 className="section-title">Agent Controls</h2>
 
       <div style={{ marginBottom: 16 }}>
-        <h3 style={{ fontSize: 14, marginBottom: 8 }}>Role Groups</h3>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>Role Groups</h3>
+          <button onClick={() => {
+            if (selectedRoleGroups.size === roleGroups.length) setSelectedRoleGroups(new Set());
+            else setSelectedRoleGroups(new Set(roleGroups.map(g => g.id)));
+          }} style={{ fontSize: 13, background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}>
+            {selectedRoleGroups.size === roleGroups.length ? "Deselect All" : "Select All"}
+          </button>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 8 }}>
           {roleGroups.map((g) => (
-            <label key={g.id} className="checkbox-row" style={{ fontSize: 13, opacity: selectedRoleGroups.has(g.id) ? 1 : 0.7 }}>
-              <input type="checkbox" checked={selectedRoleGroups.has(g.id)} onChange={() => trg(g.id)} />{g.id}: {g.label}
+            <label key={g.id} className="checkbox-row" style={{ fontSize: 14, opacity: selectedRoleGroups.has(g.id) ? 1 : 0.75, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
+              <input type="checkbox" checked={selectedRoleGroups.has(g.id)} onChange={() => trg(g.id)} style={{ width: 16, height: 16, cursor: "pointer" }} />
+              <span style={{ fontWeight: selectedRoleGroups.has(g.id) ? 600 : 400 }}>{g.id}: {g.label}</span>
             </label>
           ))}
         </div>
@@ -187,6 +207,35 @@ export default function JobAgentPage() {
           <option value="30 days">30 Days</option>
           <option value="any">Any Time</option>
         </select>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <h3 style={{ fontSize: 14, marginBottom: 8 }}>Source Actors <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>(select one or more)</span></h3>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {([
+            { id: "indeed",  label: "Indeed",    icon: "🔍" },
+            { id: "google",  label: "Google Jobs", icon: "🌐" },
+            { id: "linkedin",label: "LinkedIn",   icon: "💼" },
+          ] as { id: string; label: string; icon: string }[]).map((actor) => (
+            <label key={actor.id} className="checkbox-row" style={{ fontSize: 13, opacity: selectedActorSources.has(actor.id) ? 1 : 0.65, fontWeight: selectedActorSources.has(actor.id) ? 600 : 400 }}>
+              <input
+                type="checkbox"
+                checked={selectedActorSources.has(actor.id)}
+                onChange={() => setSelectedActorSources((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(actor.id)) next.delete(actor.id); else next.add(actor.id);
+                  return next;
+                })}
+              />
+              {actor.icon} {actor.label}
+            </label>
+          ))}
+        </div>
+        {selectedActorSources.size > 1 && (
+          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, margin: 0 }}>
+            ⚠ Running multiple actors will automatically deduplicate results across sources.
+          </p>
+        )}
       </div>
 
       <button className="btn-primary" onClick={runNow} disabled={running}>{running ? "Running…" : "Run Now"}</button>
@@ -247,11 +296,16 @@ export default function JobAgentPage() {
         <p className="muted">No runs yet. Select groups and click Run Now.</p>
       ) : (
         <table className="table" style={{ marginTop: runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") ? 32 : 0 }}>
-          <thead><tr><th>Date</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
+          <thead><tr><th>Date</th><th>Source</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
           <tbody>
             {runs.map((run) => (
               <tr key={run.id}>
                 <td className="muted">{new Date(run.started_at).toLocaleString()}</td>
+                <td>
+                  <span className="badge" style={{ fontSize: 10, textTransform: "uppercase" }}>
+                    {(run as any).actor_source === "google" ? "🌐 Google" : (run as any).actor_source === "linkedin" ? "💼 LinkedIn" : "🔍 Indeed"}
+                  </span>
+                </td>
                 <td title={groupLabel(run.role_groups_ran).full}>{groupLabel(run.role_groups_ran).short}</td>
                 <td>{run.raw_count}</td>
                 <td>{run.deduped_count}</td>

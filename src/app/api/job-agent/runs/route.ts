@@ -35,14 +35,30 @@ export async function POST(req: NextRequest) {
   const dateInterval = typeof body.dateInterval === "string" ? body.dateInterval : "today";
   const roleGroups: string[] = Array.isArray(body.roleGroups) ? body.roleGroups.filter(Boolean) : [];
   const customKeywords: string[] = Array.isArray(body.customKeywords) ? body.customKeywords.filter(Boolean) : [];
+  // actorSources: array of actor keys ("indeed", "google", "linkedin"). Default to ["indeed"].
+  const actorSources: string[] = Array.isArray(body.actorSources) && body.actorSources.length > 0
+    ? body.actorSources.filter((s: unknown) => typeof s === "string" && ["indeed", "google", "linkedin"].includes(s as string))
+    : ["indeed"];
 
-  let result: { runId: string; config: any; roleGroups: string[]; token: any };
-  try {
-    result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords, dateInterval });
-    await executeRunFromRecord(result.runId, result.config, result.roleGroups, result.token, { testMode, useAi, customKeywords, dateInterval });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? "Run failed" }, { status: 500 });
+  const results: { runId: string; actorSource: string; status: string }[] = [];
+
+  for (const actorSource of actorSources) {
+    let result: { runId: string; config: any; roleGroups: string[]; token: any };
+    try {
+      result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords, dateInterval, actorSource: actorSource as any });
+      // Fire-and-forget — cron will poll for completion
+      executeRunFromRecord(result.runId, result.config, result.roleGroups, result.token, { testMode, useAi, customKeywords, dateInterval, actorSource: actorSource as any }).catch((err) => {
+        console.error(`[job-agent/runs] executeRunFromRecord failed for actor=${actorSource}:`, err.message);
+      });
+      results.push({ runId: result.runId, actorSource, status: "pending" });
+    } catch (err: any) {
+      return NextResponse.json({ error: err.message ?? "Run failed", actorSource }, { status: 500 });
+    }
   }
 
-  return NextResponse.json({ runId: result.runId, status: "pending" });
+  // If only one actor, return in legacy shape for backward compatibility
+  if (results.length === 1) {
+    return NextResponse.json({ runId: results[0].runId, status: "pending" });
+  }
+  return NextResponse.json({ runs: results });
 }

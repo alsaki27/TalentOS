@@ -124,7 +124,7 @@ function parseSkillGroups(v: unknown): SkillGroup[] {
   const groups: SkillGroup[] = [];
   for (const g of v) {
     if (!isRecord(g)) continue;
-    const title = expectString(g.title, "title");
+    const title = expectString(g.title, "title") || expectString(g.name, "name") || expectString(g.categoryName, "categoryName");
     const skills = expectStringArray(g.skills, "skills");
     if (!title || !skills) continue;
     groups.push({ title, skills });

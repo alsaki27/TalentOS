@@ -124,8 +124,15 @@ Default behavior:
 - Do NOT suggest adding or modifying sections that do not currently exist in the resume (e.g., if there is no summary, do not suggest adding a summary) UNLESS the user explicitly asks you to.
 - Do not change Personal Info or Education unless the user explicitly asks.
 - When a CANDIDATE'S BASE RESUMES context block is provided below, you may use it as a factual source for any suggestion (education, certifications, skills, experience) the user asks you to pull in - but only ever suggest edits to the CURRENT RESUME JSON (the active draft), never to the reference base resumes themselves.
+- If the user asks what changes were made from their original resume (e.g., "what changed?", "what skills were added?"), compare the CURRENT RESUME JSON to the CANDIDATE'S BASE RESUMES and provide a clear, conversational summary of the differences in your reply. Do not output any JSON suggestions for this type of query unless they also asked for new edits.
 
-Ensure the length of rewritten bullet points is similar to the original to maintain formatting. Keep suggestions ATS-friendly and concise.
+CRITICAL BULLET POINT LENGTH RULE (applies to ALL experience bullet rewrites):
+- Before writing the "suggested" text, mentally count the characters in the "original" text.
+- The "suggested" rewrite MUST have a character count within ±10% of the original. This is non-negotiable.
+- If the original bullet is 120 characters, the rewrite must be between 108 and 132 characters.
+- If you cannot fit the improved content at the same length, TRIM words, combine phrases, or use abbreviations to stay within the ±10% window.
+- NEVER produce a rewrite that is dramatically shorter than the original. A short rewrite leaves blank whitespace on the resume and breaks the layout.
+- Keep suggestions ATS-friendly and concise.
 For experience edits, always set targetId to the experience item's id and include "original" when modifying/removing an existing bullet.
 
 Output strictly valid JSON (no markdown fences, no explanation) in the following format:
@@ -135,6 +142,7 @@ Output strictly valid JSON (no markdown fences, no explanation) in the following
             "id": "unique_id",
             "type": "experience" | "experience_info" | "experience_block_add" | "experience_block_remove" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add",
             "title": "Short title of suggestion",
+            "contextTitle": "The exact name of the section or job role this change applies to (e.g., 'Experience: GIS Analyst', 'Technical Skills', 'Education: Bachelor of Science')",
             "description": "Reasoning for the suggestion",
             "original": "Original text (if applicable, or field name for experience_info)",
             "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill/skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
@@ -147,6 +155,7 @@ export interface FaloodSuggestion {
   id: string;
   type: string;
   title: string;
+  contextTitle?: string;
   description: string;
   original?: string;
   suggested: unknown;

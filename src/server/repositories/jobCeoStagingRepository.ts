@@ -32,7 +32,7 @@ export async function insertStaged(
 ): Promise<number> {
   if (rows.length === 0) return 0;
 
-  var cols = ["run_id", "dedup_signature", "title", "company", "location", "source_url", "external_job_id", "snippet", "description_text", "raw"];
+  var cols = ["run_id", "stage", "dedup_signature", "title", "company", "location", "source_url", "external_job_id", "snippet", "description_text", "raw"];
   var valuesList: unknown[] = [];
   var placeholdersList: string[] = [];
   var idx = 1;
@@ -45,6 +45,7 @@ export async function insertStaged(
 
     var rowPh: string[] = [];
     rowPh.push("$" + idx); valuesList.push(runId); idx++;
+    rowPh.push("$" + idx); valuesList.push(r.stage ?? "ingested"); idx++;
     rowPh.push("$" + idx); valuesList.push(dedupSig); idx++;
     rowPh.push("$" + idx); valuesList.push(r.title ?? null); idx++;
     rowPh.push("$" + idx); valuesList.push(r.company ?? null); idx++;
@@ -136,7 +137,7 @@ export async function claimNextStagedBatch(
     )
     UPDATE job_ceo_staging s
     SET claimed_at = NOW(),
-        claim_expires_at = NOW() + INTERVAL '2 minutes',
+        claim_expires_at = NOW() + INTERVAL '5 minutes',
         updated_at = NOW()
     FROM next_batch n
     WHERE s.id = n.id

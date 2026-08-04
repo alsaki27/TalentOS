@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
 import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
@@ -7,36 +7,126 @@ import { ModernMinimalTemplate } from './templates/ModernMinimalTemplate';
 import { ElegantTimelineTemplate } from './templates/ElegantTimelineTemplate';
 import { CreativeModernTemplate } from './templates/CreativeModernTemplate';
 import { BJetProfessionalTemplate } from './templates/BJetProfessionalTemplate';
-
+import { applySuggestionToResumeData } from './AiSuggestions';
 import { Skeleton } from '@/components/ui/skeleton';
 
 export const ResumePreview: React.FC = () => {
   const { state } = useResume();
-  const { resumeData } = state;
-  const pagePadding = resumeData.pagePadding ?? DEFAULT_PAGE_PADDING;
+  const { resumeData, previewSuggestion } = state;
+  const previewData = useMemo(() => {
+    if (previewSuggestion) {
+      return applySuggestionToResumeData(resumeData, previewSuggestion);
+    }
+    return resumeData;
+  }, [resumeData, previewSuggestion]);
+
+  const pagePadding = previewData.pagePadding ?? DEFAULT_PAGE_PADDING;
 
   const renderTemplate = () => {
-    switch (resumeData.template) {
+    switch (previewData.template) {
       case 'tech-sidebar':
-        return <TechSidebarTemplate data={resumeData} />;
+        return <TechSidebarTemplate data={previewData} />;
       case 'business-professional':
-        return <BusinessProfessionalTemplate data={resumeData} />;
+        return <BusinessProfessionalTemplate data={previewData} />;
       case 'modern-minimal':
-        return <ModernMinimalTemplate data={resumeData} />;
+        return <ModernMinimalTemplate data={previewData} />;
       case 'elegant-timeline':
-        return <ElegantTimelineTemplate data={resumeData} />;
+        return <ElegantTimelineTemplate data={previewData} />;
       case 'creative-modern':
-        return <CreativeModernTemplate data={resumeData} />;
+        return <CreativeModernTemplate data={previewData} />;
       case 'bjet-professional':
-        return <BJetProfessionalTemplate data={resumeData} />;
+        return <BJetProfessionalTemplate data={previewData} />;
       default:
-        return <TechSidebarTemplate data={resumeData} />;
+        return <TechSidebarTemplate data={previewData} />;
     }
   };
 
   const [containerRef, setContainerRef] = React.useState<HTMLDivElement | null>(null);
   const [scale, setScale] = React.useState(0.8);
   const [dimensions, setDimensions] = React.useState({ width: 0, height: 0 });
+
+  useLayoutEffect(() => {
+    if (!containerRef) return;
+    
+    const suggestionsToHighlight: any[] = [];
+
+    // Only include currently hovered preview suggestion
+    if (previewSuggestion) {
+        suggestionsToHighlight.push(previewSuggestion);
+    }
+
+    const appliedElements = new Map<HTMLElement, string[]>();
+
+    suggestionsToHighlight.forEach(suggestion => {
+        const searchStrings: string[] = [];
+        
+        // For accepted suggestions, search for the SUGGESTED (new) text
+        // For rejected/pending, search for the ORIGINAL text
+        const isAccepted = suggestion.status === 'accepted';
+        const targetTextSource = isAccepted ? suggestion.suggested : (suggestion.original || suggestion.suggested);
+        
+        if (!targetTextSource) return;
+
+        if (suggestion.type === 'experience' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if (suggestion.type === 'summary' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if (suggestion.type === 'personal_info' && typeof targetTextSource === 'string') {
+            searchStrings.push(targetTextSource);
+        } else if ((suggestion.type === 'skill' || suggestion.type === 'skill_remove') && Array.isArray(targetTextSource)) {
+            searchStrings.push(...targetTextSource);
+        } else if (suggestion.type === 'skill_reorg' && Array.isArray(targetTextSource)) {
+            targetTextSource.forEach((cat: any) => {
+                if (cat && Array.isArray(cat.skills)) {
+                    searchStrings.push(...cat.skills);
+                }
+            });
+        }
+
+        const cleanSearchStrings = searchStrings
+            .filter(s => typeof s === 'string' && s.trim().length > 2)
+            .map(s => s.replace(/\s+/g, ' ').trim().toLowerCase());
+
+        if (cleanSearchStrings.length === 0) return;
+
+        const walk = document.createTreeWalker(containerRef, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walk.nextNode())) {
+            const text = (node.nodeValue || '').replace(/\s+/g, ' ').trim().toLowerCase();
+            // Match if the text node contains the search string, OR if the text node is a significant chunk (>20 chars) of the search string.
+            // This prevents highlighting small irrelevant words (like "and", "the", dates) that happen to be substrings of the suggestion.
+            if (text && cleanSearchStrings.some(s => text.includes(s) || (s.includes(text) && text.length > 20))) {
+                if (node.parentElement) {
+                    if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(node.parentElement.tagName)) continue;
+                    
+                    const el = node.parentElement;
+                    const existingClasses = appliedElements.get(el) || [];
+                    
+                    if (suggestion.status === 'accepted') {
+                        existingClasses.push('bg-green-200/50', 'outline', 'outline-2', 'outline-green-400');
+                    } else if (suggestion.status === 'rejected') {
+                        existingClasses.push('bg-red-200/50', 'outline', 'outline-2', 'outline-red-400', 'line-through');
+                    } else {
+                        existingClasses.push('bg-yellow-200/50', 'outline', 'outline-2', 'outline-yellow-400', 'transition-colors', 'duration-300', 'rounded-sm', 'shadow-md');
+                    }
+                    
+                    appliedElements.set(el, existingClasses);
+                }
+            }
+        }
+    });
+
+    // Apply classes
+    appliedElements.forEach((classes, el) => {
+        el.classList.add(...classes);
+    });
+
+    return () => {
+        appliedElements.forEach((classes, el) => {
+            el.classList.remove(...classes);
+        });
+    };
+  }, [previewSuggestion, previewData, containerRef, state.chatHistory]);
 
   React.useEffect(() => {
     if (!containerRef) return;
