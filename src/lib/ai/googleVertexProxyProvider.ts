@@ -119,39 +119,73 @@ export async function callVertexProxy(opts: {
     timer = setTimeout(function () { controller.abort(); }, opts.timeoutMs);
   }
   try {
-  const res = await fetch(`${opts.proxyUrl}/generate`, {
-    method: "POST",
-    signal: controller.signal,
-    headers: {
-      "Content-Type": "application/json",
-      "x-proxy-secret": opts.proxySecret,
-    },
-    body: JSON.stringify({
-      system: opts.system,
-      contents: toGeminiContents(opts.messages),
-      tools: geminiTools,
-      model: opts.model,
-      temperature: opts.temperature ?? 0.2,
-      maxOutputTokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-      // Only meaningful (and only sent by the proxy) when no tools are active
-      // this turn - see index.js's buildVertexBody for why the two are
-      // mutually exclusive in Vertex's API.
-      responseMimeType: "application/json",
-    }),
-  });
+    const maxRetries = 3;
+    let res: Response | null = null;
+    let lastErrorBody = "";
+    let lastStatus = 0;
 
-  if (res.status === 401) {
-    throw new Error("Google Vertex Proxy: unauthorized (invalid proxy secret).");
-  }
-  if (res.status === 429) {
-    throw new Error("Google Vertex Proxy: rate limit or quota exceeded.");
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Google Vertex Proxy error (${res.status}): ${body}`);
-  }
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        res = await fetch(`${opts.proxyUrl}/generate`, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "x-proxy-secret": opts.proxySecret,
+          },
+          body: JSON.stringify({
+            system: opts.system,
+            contents: toGeminiContents(opts.messages),
+            tools: geminiTools,
+            model: opts.model,
+            temperature: opts.temperature ?? 0.2,
+            maxOutputTokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+            // Only meaningful (and only sent by the proxy) when no tools are active
+            // this turn - see index.js's buildVertexBody for why the two are
+            // mutually exclusive in Vertex's API.
+            responseMimeType: "application/json",
+          }),
+        });
 
-  const data = await res.json();
+        if (res.ok) break;
+
+        lastStatus = res.status;
+        lastErrorBody = await res.text().catch(() => "");
+
+        if (res.status === 503 || res.status === 502 || res.status === 504) {
+          if (attempt < maxRetries) {
+            console.warn(`[Vertex Proxy] ${res.status} error, retrying in 2s (attempt ${attempt + 1}/${maxRetries})...`);
+            await new Promise((r) => setTimeout(r, 2000));
+            continue;
+          }
+        }
+        break; // break if not a retriable error or out of retries
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
+        if (attempt < maxRetries) {
+          console.warn(`[Vertex Proxy] Network error, retrying in 2s (attempt ${attempt + 1}/${maxRetries})...`, err);
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!res) {
+      throw new Error("Google Vertex Proxy: fetch failed entirely.");
+    }
+
+    if (res.status === 401) {
+      throw new Error("Google Vertex Proxy: unauthorized (invalid proxy secret).");
+    }
+    if (res.status === 429) {
+      throw new Error("Google Vertex Proxy: rate limit or quota exceeded.");
+    }
+    if (!res.ok) {
+      throw new Error(`Google Vertex Proxy error (${lastStatus}): ${lastErrorBody}`);
+    }
+
+    const data = await res.json();
   const parts: GeminiPart[] = data.parts ?? [];
   const content = fromGeminiParts(parts);
   const hasToolUse = content.some((b) => b.type === "tool_use");
