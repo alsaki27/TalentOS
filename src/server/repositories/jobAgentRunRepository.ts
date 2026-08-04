@@ -273,6 +273,7 @@ export async function insertStagedJobs(
 
 export interface ListStagedJobsFilters {
   tier?: string;
+  tiers?: string[];
   group?: string;
   importStatus?: string;
   search?: string;
@@ -297,6 +298,10 @@ export async function listStagedJobs(
   if (filters.tier) {
     conditions.push(`tier = $${idx++}`);
     values.push(filters.tier);
+  }
+  if (filters.tiers && filters.tiers.length > 0) {
+    conditions.push(`tier = ANY($${idx++})`);
+    values.push(filters.tiers);
   }
   if (filters.group) {
     conditions.push(`role_group = $${idx++}`);
@@ -351,7 +356,7 @@ export async function updateStagedJobStatus(
 export async function bulkUpdateStagedJobStatus(
   runId: string,
   status: string,
-  opts: { tier?: string; excludeImportStatus?: string; jobIds?: string[] } = {}
+  opts: { tier?: string; tiers?: string[]; excludeImportStatus?: string; jobIds?: string[] } = {}
 ): Promise<number> {
   const conditions: string[] = ["run_id = $1"];
   const values: (string | string[])[] = [runId];
@@ -360,6 +365,10 @@ export async function bulkUpdateStagedJobStatus(
   if (opts.tier) {
     conditions.push(`tier = $${idx++}`);
     values.push(opts.tier);
+  }
+  if (opts.tiers && opts.tiers.length > 0) {
+    conditions.push(`tier = ANY($${idx++})`);
+    values.push(opts.tiers);
   }
   if (opts.excludeImportStatus) {
     conditions.push(`import_status <> $${idx++}`);

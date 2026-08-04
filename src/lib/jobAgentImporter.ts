@@ -17,9 +17,11 @@ import {
 import { processPendingCategorization } from "@/lib/ai/jobCategorization";
 import { startRun, dispatchAndChain } from "@/server/services/jobCeoService";
 import { insertStaged } from "@/server/repositories/jobCeoStagingRepository";
+import { waitUntil } from "@vercel/functions";
 
 export interface ImportApprovedJobsOptions {
   tier?: "best" | "medium" | "worthy";
+  tiers?: string[];
   jobIds?: string[];
   approveAll?: boolean;
 }
@@ -107,6 +109,12 @@ export async function importApprovedJobs(
       excludeImportStatus: "imported",
     });
   }
+  if (options.tiers && options.tiers.length > 0) {
+    await bulkUpdateStagedJobStatus(runId, "approved", {
+      tiers: options.tiers,
+      excludeImportStatus: "imported",
+    });
+  }
   if (options.jobIds && options.jobIds.length > 0) {
     await bulkUpdateStagedJobStatus(runId, "approved", {
       jobIds: options.jobIds,
@@ -114,10 +122,11 @@ export async function importApprovedJobs(
     });
   }
 
-  const filters: { importStatus: string; tier?: string; jobIds?: string[] } = {
+  const filters: { importStatus: string; tier?: string; tiers?: string[]; jobIds?: string[] } = {
     importStatus: "approved",
   };
   if (options.tier) filters.tier = options.tier;
+  if (options.tiers && options.tiers.length > 0) filters.tiers = options.tiers;
   if (options.jobIds && options.jobIds.length > 0) filters.jobIds = options.jobIds;
 
   const approved = await listStagedJobs(runId, { ...filters, pageSize: 10000 });
@@ -195,9 +204,12 @@ async function importRows(
 
   if (runRecord) {
     // Start the Deep Fetch -> Matchmaker chain immediately for the bridged jobs
-    dispatchAndChain().catch((err) => {
-      console.error("[jobAgentImporter] Bridge dispatch chain failed:", (err as Error).message);
-    });
+    // Using waitUntil so Vercel/Next.js edge functions don't kill the background promise early
+    waitUntil(
+      dispatchAndChain().catch((err) => {
+        console.error("[jobAgentImporter] Bridge dispatch chain failed:", (err as Error).message);
+      })
+    );
   }
 
   return { imported: run.imported_count, skipped: run.skipped_count };

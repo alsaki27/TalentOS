@@ -43,18 +43,32 @@ export default function JobAgentReviewPage() {
     setJobs(d.items ?? []); setTotal(d.total ?? 0); setPage(pg); setLoading(false);
   }, [runId, tierF, statusF]);
 
-  useEffect(() => { fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); }); }, []);
+  const fetchRuns = useCallback(() => {
+    fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); });
+  }, []);
+
+  useEffect(() => {
+    fetchRuns();
+    const interval = setInterval(fetchRuns, 15000);
+    return () => clearInterval(interval);
+  }, [fetchRuns]);
   useEffect(() => { if (runId) loadJobs(1); }, [runId, loadJobs]);
 
-  async function bulkApprove(tier?: string) {
+  async function bulkApprove(tier?: string | string[]) {
     setBusy(true);
-    const r = await fetch(`/api/job-agent/runs/${runId}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tier ? { tier } : { approveAll: true }) });
+    let bodyPayload: any = { approveAll: true };
+    if (Array.isArray(tier)) {
+      bodyPayload = { tiers: tier };
+    } else if (typeof tier === "string") {
+      bodyPayload = { tier };
+    }
+    const r = await fetch(`/api/job-agent/runs/${runId}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyPayload) });
     const d = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setError(d.error || "Failed"); return; }
     setMsg(`${d.imported ?? 0} imported, ${d.skipped ?? 0} skipped`);
     loadJobs(page);
-    fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); });
+    fetchRuns();
   }
 
   async function singleApprove(jobId: string) {
@@ -65,7 +79,7 @@ export default function JobAgentReviewPage() {
     if (!r.ok) { setError(d.error || "Failed"); return; }
     setMsg(`${d.imported ?? 0} imported, ${d.skipped ?? 0} skipped`);
     loadJobs(page);
-    fetch("/api/job-agent/runs").then((r) => { if (r.ok) r.json().then((d: any) => setRuns(d ?? [])); });
+    fetchRuns();
   }
 
   async function updateOne(jobId: string, s: string) { await fetch(`/api/job-agent/runs/${runId}/staged-jobs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jobId, status: s }) }); loadJobs(page); }
@@ -136,8 +150,8 @@ export default function JobAgentReviewPage() {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
           <strong style={{ fontSize: 14 }}>Bulk Actions:</strong>
           <button className="btn-primary" onClick={() => bulkApprove("best")} disabled={busy}>Approve All Best</button>
-          <button onClick={async () => { setBusy(true); await bulkApprove("best"); await bulkApprove("medium"); setBusy(false); }} disabled={busy}>Approve Best + Medium</button>
-          <button onClick={async () => { setBusy(true); await bulkApprove("best"); await bulkApprove("worthy"); setBusy(false); }} disabled={busy}>Approve Best + Worthy</button>
+          <button onClick={() => bulkApprove(["best", "medium"])} disabled={busy}>Approve Best + Medium</button>
+          <button onClick={() => bulkApprove(["best", "worthy"])} disabled={busy}>Approve Best + Worthy</button>
           <button onClick={() => bulkApprove()} disabled={busy}>Approve All Non-Skip</button>
           <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>{total} jobs</span>
         </div>

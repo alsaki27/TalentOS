@@ -55,7 +55,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      bullets first; quantified + keyword-matched bullets go last.
    * NEVER generate a professional summary. The summary field must always be null. The skills
      output MUST stay in the same categorized-group structure the draft used — an array of
-     { title, skills[] } groups, never flattened into one list or one generic "Skills" bucket.
+     { name: string, skills: string[] } groups, never flattened into one list or one generic "Skills" bucket.
    * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills.
 9. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
@@ -69,7 +69,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
 
 Return a JSON object with:
 - summary: ALWAYS null
-- skills: final array of { title: string, skills: string[] } category groups (see rule 7) —
+- skills: final array of { name: string, skills: string[] } category groups (see rule 7) —
   NOT a flat array of strings
 - experience: final experience entries with evidenceIds
 - education: final education entries

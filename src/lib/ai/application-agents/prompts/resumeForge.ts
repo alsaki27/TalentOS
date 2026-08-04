@@ -97,7 +97,7 @@ Rules:
 * Do not copy full sentences from the job description or insert unsupported keywords.
 * Remove weak, repetitive, irrelevant, and generic content.
 * Mention missing requirements only when supported by the base resume or verified skills.
-* Keep technical skills concise and grouped by relevance (an array of { title, skills[] } groups, never a flat list).
+* Keep technical skills concise and grouped by relevance (an array of { name: string, skills: string[] } groups, never a flat list).
 * Keep everything readable and within one page strictly at any cost.
 * Verify date consistency, degree accuracy, experience duration, location, and formatting before finalizing.
 * Never generate a professional summary (always return summary as null).
@@ -108,7 +108,7 @@ SKILLS SECTION RULES (CRITICAL):
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies.
 * DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
 * Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories.
-* From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category titles as the guide.
+* From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the `name` property) as the guide.
 * Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
 * Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
 

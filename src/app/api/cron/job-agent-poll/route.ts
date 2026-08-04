@@ -21,8 +21,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Step 0: Clean up any runs stuck in active states for > 30 minutes.
-  const cleanedUp = await cleanupStuckRuns(30).catch((err) => {
+  // Step 0: Clean up any runs stuck in active states for > 180 minutes.
+  // Apify scrapes can take up to 2 hours, so 180 minutes safely guarantees we don't kill valid scrapes.
+  const cleanedUp = await cleanupStuckRuns(180).catch((err) => {
     console.error("[job-agent-poll] cleanupStuckRuns error:", err.message);
     return 0;
   });
