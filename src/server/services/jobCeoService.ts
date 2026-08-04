@@ -245,9 +245,9 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
   return { processed, researched, skipped };
 }
 
-export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number }> {
+export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number; skipped: number }> {
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
-  if (batch.length === 0) return { processed: 0, matched: 0, logged: 0 };
+  if (batch.length === 0) return { processed: 0, matched: 0, logged: 0, skipped: 0 };
 
   // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
   // Previously listAllJobsForFuzzyDedupe was inside the inner loop; now it runs once.
