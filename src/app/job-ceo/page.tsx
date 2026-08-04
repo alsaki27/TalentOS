@@ -679,6 +679,7 @@ export default function JobCeoPage() {
                   { label: "Researched", val: run.researched_count },
                   { label: "Matched", val: run.matched_count },
                   { label: "Logged", val: run.logged_count },
+                  { label: "Skipped", val: run.skipped_count },
                 ].map(({ label, val }) => (
                   <div key={label} className="text-center p-2 rounded bg-surface border border-border">
                     <div className="text-lg font-bold text-ink">{val}</div>
@@ -712,6 +713,7 @@ export default function JobCeoPage() {
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Researched</th>
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Matched</th>
                 <th className="text-right text-xs font-medium text-ink-soft p-2">Logged</th>
+                <th className="text-right text-xs font-medium text-ink-soft p-2">Skipped</th>
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Created</th>
                 <th className="text-center text-xs font-medium text-ink-soft p-2">Actions</th>
               </tr>
@@ -719,7 +721,7 @@ export default function JobCeoPage() {
             <tbody>
               {runs.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="text-center text-sm text-ink-soft py-8">
+                  <td colSpan={11} className="text-center text-sm text-ink-soft py-8">
                     No runs yet. Trigger a run or wait for the daily scheduled ingest.
                   </td>
                 </tr>
@@ -738,6 +740,7 @@ export default function JobCeoPage() {
                   <td className="text-right text-xs text-ink p-2">{run.researched_count}</td>
                   <td className="text-right text-xs text-ink p-2">{run.matched_count}</td>
                   <td className="text-right text-xs text-ink p-2">{run.logged_count}</td>
+                  <td className="text-right text-xs text-ink p-2">{run.skipped_count}</td>
                   <td className="text-xs text-ink-soft p-2">
                     {new Date(run.created_at).toLocaleDateString()}{" "}
                     {new Date(run.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}

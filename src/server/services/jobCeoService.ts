@@ -343,7 +343,7 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           claimed_at: null as any,
           claim_expires_at: null as any,
         });
-        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
+        return { processed: 1, matched: matchResult.matches.length, logged: 1, skipped: 0 };
       } else {
         await updateStaged(row.id, {
           stage: "logged",
@@ -351,21 +351,22 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
           claimed_at: null as any,
           claim_expires_at: null as any,
         });
-        return { processed: 1, matched: matchResult.matches.length, logged: 1 };
+        return { processed: 1, matched: matchResult.matches.length, logged: 0, skipped: 1 };
       }
     } catch (err) {
       console.error(`[Job CEO] Matchmaker failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
       await updateStaged(row.id, { stage: "error", last_error: (err as Error).message ?? "Unknown", claimed_at: null as any, claim_expires_at: null as any });
-      return { processed: 0, matched: 0, logged: 0 };
+      return { processed: 0, matched: 0, logged: 0, skipped: 0 };
     }
   });
 
   const processed = results.reduce((s, r) => s + r.processed, 0);
   const matched = results.reduce((s, r) => s + r.matched, 0);
   const logged = results.reduce((s, r) => s + r.logged, 0);
+  const skipped = results.reduce((s, r) => s + (r.skipped || 0), 0);
 
-  await bumpRunCounts(runId, { matched_count: matched, logged_count: logged });
-  return { processed, matched, logged };
+  await bumpRunCounts(runId, { matched_count: matched, logged_count: logged, skipped_count: skipped });
+  return { processed, matched, logged, skipped };
 }
 
 export interface DispatchResult {
