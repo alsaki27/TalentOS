@@ -101,7 +101,6 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 // route re-checks the secret too (defense in depth).
 const OPEN_JOB_DATA_STYLE_PATHS = new Set([
   "/api/job-agent/openjobdata-ingest",
-  "/api/job-agent/sources/dispatch",
   "/api/admin/retry-failed-since",
   // match-score's own handler has no auth check of its own (relies entirely
   // on this middleware gate) - only bypass its normal session requirement
