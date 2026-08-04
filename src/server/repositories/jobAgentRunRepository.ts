@@ -30,6 +30,10 @@ export interface JobAgentRunSummary extends JobAgentRunRow {
   worthy_count: number;
   skip_count: number;
   staged_count: number;
+  pending_best_count: number;
+  pending_medium_count: number;
+  pending_worthy_count: number;
+  pending_skip_count: number;
 }
 
 export interface JobAgentStagedJobRow {
@@ -206,26 +210,35 @@ async function getTierCounts(runId: string): Promise<{
   medium_count: number;
   worthy_count: number;
   skip_count: number;
+  pending_best_count: number;
+  pending_medium_count: number;
+  pending_worthy_count: number;
+  pending_skip_count: number;
 }> {
   const sql = `
     SELECT
       COUNT(*) FILTER (WHERE tier = 'best') AS best_count,
       COUNT(*) FILTER (WHERE tier = 'medium') AS medium_count,
       COUNT(*) FILTER (WHERE tier = 'worthy') AS worthy_count,
-      COUNT(*) FILTER (WHERE tier = 'skip') AS skip_count
+      COUNT(*) FILTER (WHERE tier = 'skip') AS skip_count,
+      COUNT(*) FILTER (WHERE tier = 'best' AND import_status IN ('staged', 'approved')) AS pending_best_count,
+      COUNT(*) FILTER (WHERE tier = 'medium' AND import_status IN ('staged', 'approved')) AS pending_medium_count,
+      COUNT(*) FILTER (WHERE tier = 'worthy' AND import_status IN ('staged', 'approved')) AS pending_worthy_count,
+      COUNT(*) FILTER (WHERE tier = 'skip' AND import_status IN ('staged', 'approved')) AS pending_skip_count
     FROM job_agent_staged_jobs
     WHERE run_id = $1
   `;
 
-  const row = await queryOne<{ best_count: number; medium_count: number; worthy_count: number; skip_count: number }>(
-    sql,
-    [runId]
-  );
+  const row = await queryOne<any>(sql, [runId]);
   return {
-    best_count: row?.best_count ?? 0,
-    medium_count: row?.medium_count ?? 0,
-    worthy_count: row?.worthy_count ?? 0,
-    skip_count: row?.skip_count ?? 0,
+    best_count: parseInt(row?.best_count ?? '0', 10),
+    medium_count: parseInt(row?.medium_count ?? '0', 10),
+    worthy_count: parseInt(row?.worthy_count ?? '0', 10),
+    skip_count: parseInt(row?.skip_count ?? '0', 10),
+    pending_best_count: parseInt(row?.pending_best_count ?? '0', 10),
+    pending_medium_count: parseInt(row?.pending_medium_count ?? '0', 10),
+    pending_worthy_count: parseInt(row?.pending_worthy_count ?? '0', 10),
+    pending_skip_count: parseInt(row?.pending_skip_count ?? '0', 10),
   };
 }
 
@@ -289,7 +302,9 @@ export async function listStagedJobs(
   filters: ListStagedJobsFilters = {}
 ): Promise<{ items: JobAgentStagedJobRow[]; total: number }> {
   const page = Math.max(1, filters.page ?? 1);
-  const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 100));
+  // Allow up to 10 000 for internal server-side bulk operations (e.g. importApprovedJobs).
+  // The API route handler independently enforces a 100-item cap for external requests.
+  const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 10000));
 
   const conditions: string[] = ["run_id = $1"];
   const values: any[] = [runId];

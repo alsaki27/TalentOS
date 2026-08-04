@@ -13,7 +13,7 @@ export async function POST(_req: NextRequest) {
   if (response) return response;
 
   try {
-    const count = await cleanupStuckRuns(30);
+    const count = await cleanupStuckRuns(120); // 120 min — Google actor can legitimately run >30 min
     return NextResponse.json({ ok: true, cleanedUp: count });
   } catch (err: any) {
     return NextResponse.json({ error: err.message ?? "Cleanup failed" }, { status: 500 });

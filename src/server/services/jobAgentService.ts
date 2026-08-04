@@ -47,22 +47,25 @@ function toIndeedHoursOld(interval: string | undefined | null): number | undefin
 }
 
 /**
- * Map UI date interval to LinkedIn's postedLimit param.
+ * Map UI date interval to LinkedIn's postedLimit param (cheap_scraper).
+ * r86400 = Past 24 hours
+ * r604800 = Past Week
+ * r2592000 = Past Month
  */
 function toLinkedInPostedLimit(interval: string | undefined | null): string {
   const map: Record<string, string> = {
-    today:    "Past 24 hours",
-    "2 days": "Past 24 hours",
-    "3days":  "Past Week",
-    "3 days": "Past Week",
-    "7 days": "Past Week",
-    week:     "Past Week",
-    "30 days": "Past Month",
-    month:    "Past Month",
-    any:      "Past Month",
+    today:    "r86400",
+    "2 days": "r86400",
+    "3days":  "r604800",
+    "3 days": "r604800",
+    "7 days": "r604800",
+    week:     "r604800",
+    "30 days": "r2592000",
+    month:    "r2592000",
+    any:      "r2592000",
   };
   const normalized = (interval ?? "today").toLowerCase().trim();
-  return map[normalized] ?? "Past 24 hours";
+  return map[normalized] ?? "r86400";
 }
 
 // ─── Actor Input Builders ──────────────────────────────────────────────────────
@@ -74,32 +77,26 @@ function buildIndeedInput(queries: string[], dateInterval: string | undefined, m
     queries,
     location: "United States",
     countryIndeed: "USA",
-    maxItems,
     resultsPerQuery: maxItems,
     hoursOld,
     enforceAnnual: true,
   };
 }
 
-function buildGoogleInput(query: string, dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
-  // Google actor takes ONE query at a time. We run it once per query-batch in the loop.
-  void dateInterval; // Google actor doesn't have date filter — omit
-  const numResults = Math.min(500, maxResults);
+function buildGoogleInput(query: string, _dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
+  // johnvc/google-jobs-scraper recognises: query, location, gl, hl, maxItems, numJobs.
+  // Sending unknown or conflicting params (pagesToFetch, max_results, maxPages, …) causes
+  // the actor to run indefinitely and never return results.  Cap at 100 — Google Jobs is
+  // significantly slower to scrape than Indeed, and 100 jobs per query is more than enough
+  // to fill the funnel before AI classification filters them down.
+  const numJobs = Math.min(100, Math.max(10, maxResults));
   return {
     query,
     location: "United States",
-    country: "us",
-    language: "en",
-    google_domain: "google.com",
-    num_results: numResults,
-    maxItems: numResults,
-    max_results: numResults,
-    pagesToFetch: Math.ceil(numResults / 10),
-    maxPages: Math.ceil(numResults / 10),
-    maxPagesPerQuery: Math.ceil(numResults / 10),
-    max_pages: Math.ceil(numResults / 10),
-    max_pagination: Math.ceil(numResults / 10),
-    cleanup_results: true,
+    gl: "us",
+    hl: "en",
+    maxItems: numJobs,
+    numJobs:  numJobs,
   };
 }
 
@@ -109,6 +106,7 @@ function buildLinkedInInput(queries: string[], dateInterval: string | undefined,
     keyword: queries,
     locations: ["United States"],
     maxRows: maxItems,
+    publishedAt: toLinkedInPostedLimit(dateInterval),
     saveOnlyUniqueItems: true,
   };
 }
@@ -228,16 +226,22 @@ export function normalizeUrlFingerprint(url: string | null | undefined): string 
   if (!url || !url.trim()) return "";
   try {
     const u = new URL(url.trim());
-    // Keep hostname + pathname only, drop query/hash
-    const cleaned = (u.hostname + u.pathname)
+    // Strip common tracking query params but keep the rest (like jk= for Indeed)
+    u.searchParams.delete("utm_source");
+    u.searchParams.delete("utm_medium");
+    u.searchParams.delete("utm_campaign");
+    u.searchParams.delete("ref");
+    u.hash = "";
+    
+    const cleaned = (u.hostname + u.pathname + u.search)
       .toLowerCase()
       .replace(/^www\./, "")
       .replace(/\/+$/, "")
-      .replace(/[^a-z0-9/.-]/g, "");
+      .replace(/[^a-z0-9/.-=?&]/g, "");
     return cleaned;
   } catch {
     // Not a valid URL — use a normalized version of the raw string
-    return url.toLowerCase().replace(/[^a-z0-9/.-]/g, "").substring(0, 200);
+    return url.toLowerCase().replace(/[^a-z0-9/.-=?&]/g, "").substring(0, 200);
   }
 }
 
@@ -335,7 +339,9 @@ export async function executeRunFromRecord(
         apifyInput = buildIndeedInput(searchQueries, options.dateInterval, maxResults);
       }
 
-      const { runId: apifyRunId, datasetId } = await startApifyRun(actorId, currentToken.token, apifyInput);
+      // Google is capped at 100 items so 30 min is ample; Indeed/LinkedIn get 1 hour.
+      const apifyTimeout = actorSource === "google" ? 1800 : 3600;
+      const { runId: apifyRunId, datasetId } = await startApifyRun(actorId, currentToken.token, apifyInput, apifyTimeout);
       await updateRunStatus(runId, { apify_run_id: apifyRunId, apify_dataset_id: datasetId, token_id: currentToken.id });
 
       // Run successfully started! Exit now — cron will poll and call processApifyRunData.
@@ -446,9 +452,15 @@ function getSearchQueries(roleGroups: string[], testMode: boolean, customKeyword
   return merged;
 }
 
-async function startApifyRun(actorId: string, token: string, input: Record<string, unknown>): Promise<{ runId: string; datasetId: string }> {
-  // Set a 2-hour timeout (7200 seconds) so that long scrapes don't time out on Apify's end
-  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&timeout=7200`;
+async function startApifyRun(
+  actorId: string,
+  token: string,
+  input: Record<string, unknown>,
+  timeoutSeconds = 3600
+): Promise<{ runId: string; datasetId: string }> {
+  // Per-actor timeout: Google is capped at 100 results so 30 min is ample;
+  // Indeed/LinkedIn can have larger datasets so they get 1 hour.
+  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&timeout=${timeoutSeconds}`;
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Apify start run failed (${res.status}): ${text}`); }
   const data = await res.json();
@@ -572,8 +584,13 @@ function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; dup
     if (!n.job_title) continue;
     if (isNonUSLocation(n.location)) { dc++; continue; }
 
-    // Duplicate if hash OR url fingerprint already seen (url catches same job with slightly different title)
-    if (seenHashes.has(n.hash) || (n.urlHash && seenUrls.has(n.urlHash))) {
+    // User requested: Dedupe strongly by apply link if available
+    if (n.urlHash && seenUrls.has(n.urlHash)) {
+      dc++;
+      continue;
+    }
+    // Fallback to title/company hash if no reliable URL
+    if (seenHashes.has(n.hash)) {
       dc++;
       continue;
     }
