@@ -42,6 +42,12 @@ enabled = true
 # ANTHROPIC_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY
 # JOB_CEO_INGEST_SECRET — used by /api/job-ceo/ingest endpoint; must match GitHub secret
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
+# GOOGLE_VERTEX_PROXY_URL, GOOGLE_VERTEX_PROXY_SECRET — Cloud Run gateway
+#   (talentos-858973 project, region "global") consumed by
+#   src/lib/ai/googleVertexProxyProvider.ts. Both pushed from GitHub Actions
+#   secrets in deploy.yml, not set by hand — rotate there.
+# GOOGLE_VERTEX_MODEL, GOOGLE_VERTEX_FALLBACK_MODEL — default/fallback model
+#   IDs for that provider when a route has no model_override in ai_automation_routes.
 #
 # Free tier: all secrets are free to set. Only KV and R2 have quotas.
 
