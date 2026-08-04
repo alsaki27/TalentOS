@@ -13,6 +13,10 @@ interface Run {
   worthy_count: number;
   skip_count: number;
   staged_count: number;
+  pending_best_count: number;
+  pending_medium_count: number;
+  pending_worthy_count: number;
+  pending_skip_count: number;
   actor_source?: string;
 }
 interface StagedJob {
