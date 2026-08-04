@@ -25,8 +25,9 @@ const dbUrl = env.DATABASE_URL || process.env.DATABASE_URL;
 const sql = neon(dbUrl);
 
 async function run() {
-  const query = readFileSync('sql/neon_fixes/041_falood_applications_versions.sql', 'utf8');
+  const filePath = process.argv[2] || 'sql/neon_fixes/041_falood_applications_versions.sql';
+  const query = readFileSync(filePath, 'utf8');
   await sql.query(query);
-  console.log("Migration applied.");
+  console.log(`Migration applied: ${filePath}`);
 }
 run();

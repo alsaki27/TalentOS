@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
           results.push({ runId: run.id, status: "already_processing" });
           continue;
         }
-        await processApifyRunData(run.id, run.apify_dataset_id, token, { useAi: true });
+        await processApifyRunData(run.id, run.apify_dataset_id, token, { useAi: true, actorSource: (run.actor_source as any) ?? "indeed" });
         results.push({ runId: run.id, status: "processed" });
         processed++;
       } else if (["FAILED", "ABORTED", "TIMED-OUT"].includes(status)) {

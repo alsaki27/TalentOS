@@ -137,6 +137,7 @@ export default function JobAgentReviewPage() {
           <strong style={{ fontSize: 14 }}>Bulk Actions:</strong>
           <button className="btn-primary" onClick={() => bulkApprove("best")} disabled={busy}>Approve All Best</button>
           <button onClick={async () => { setBusy(true); await bulkApprove("best"); await bulkApprove("medium"); setBusy(false); }} disabled={busy}>Approve Best + Medium</button>
+          <button onClick={async () => { setBusy(true); await bulkApprove("best"); await bulkApprove("worthy"); setBusy(false); }} disabled={busy}>Approve Best + Worthy</button>
           <button onClick={() => bulkApprove()} disabled={busy}>Approve All Non-Skip</button>
           <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>{total} jobs</span>
         </div>

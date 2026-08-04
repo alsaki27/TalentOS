@@ -26,7 +26,7 @@ export interface ResumeDocumentHeader {
 export interface ResumeDocument {
   header: ResumeDocumentHeader;
   summary?: { id: string; text: string };
-  skills: { id: string; title: string; skills: string[] }[];
+  skills: { id: string; name: string; skills: string[] }[];
   experience: {
     id: string;
     title: string;
@@ -99,14 +99,14 @@ function mapEducation(edu: FinalResumeV1["education"]) {
 
 function mapSkills(skills: FinalResumeV1["skills"], baseContent: any) {
   if (skills.length > 0) {
-    return skills.map((g) => ({ id: uid("skg"), title: g.title, skills: [...g.skills] }));
+    return skills.map((g) => ({ id: uid("skg"), name: g.title, skills: [...g.skills] }));
   }
   // Fall back to the base resume's own categorized groups only if the agent pipeline
   // returned nothing at all (e.g. an older run predating the categorized-skills fix).
   const baseSkills: any[] = Array.isArray(baseContent?.skills) ? baseContent.skills : [];
   return baseSkills.map((g) => ({
     id: uid("skg"),
-    title: g?.title ?? "Skills",
+    name: g?.title ?? "Skills",
     skills: Array.isArray(g?.skills) ? g.skills.filter((s: any) => typeof s === "string") : [],
   }));
 }

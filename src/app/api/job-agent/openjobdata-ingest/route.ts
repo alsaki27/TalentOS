@@ -171,6 +171,7 @@ export async function POST(req: NextRequest) {
             relevance_score: c.relevance_score,
             is_false_positive: c.is_false_positive,
             dedup_hash: hash,
+            source_url_hash: null,
             is_duplicate: false,
             import_status: "staged",
             imported_job_id: null,

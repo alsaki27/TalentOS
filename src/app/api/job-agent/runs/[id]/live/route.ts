@@ -80,7 +80,7 @@ export async function GET(
         // Fire-and-forget — intentionally NOT awaited so the HTTP response returns fast.
         // We use waitUntil to prevent the Next.js runtime from killing the promise prematurely.
         waitUntil(
-          processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true })
+          processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true, actorSource: run.actor_source as any })
             .catch((err) => console.error(`[live] processApifyRunData error for ${params.id}:`, err.message))
         );
       }

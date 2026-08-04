@@ -1,49 +1,247 @@
 // src/server/services/jobAgentService.ts
-// Orchestration service with auto token rotation.
-// No manual config inputs ΓÇö tokens, budget limits, and actor params are automatic.
+// Multi-actor Apify orchestration service.
+// Supports: Indeed (familiar_universality/indeed), Google Jobs (johnvc/google-jobs-scraper), LinkedIn (harvestapi/linkedin-job-search)
+// Token rotation, 4-layer deduplication, and actor-aware field normalization.
 
 import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/jobAgentConfigRepository";
-import { createRun, updateRunStatus, insertStagedJobs, getDedupHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
+import { createRun, updateRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
 import { rotateToken, markTokenError, deactivateToken } from "@/server/repositories/jobAgentTokenRepository";
 import { listAllJobsForFuzzyDedupe } from "@/server/repositories/jobsRepository";
 import { getTitlesForGroups, getGroupForSearchQuery, getGroupLabel, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
 import { classifyJob } from "@/lib/ai/jobAgentClassifier";
 
+// ─── Actor Registry ────────────────────────────────────────────────────────────
+
 const APIFY_BASE_URL = "https://api.apify.com/v2";
-const ACTOR_ID = "khadinakbar~google-jobs-scraper";
-const COST_PER_RESULT_USD = 0.003;
-const POLL_INTERVAL_MS = 15_000;
-const POLL_TIMEOUT_MS = 15 * 60_000;
+
+export type ActorSource = "indeed" | "google" | "linkedin";
+
+const ACTOR_IDS: Record<ActorSource, string> = {
+  indeed:  "familiar_universality/indeed",
+  google:  "johnvc/google-jobs-scraper",
+  linkedin: "cheap_scraper/linkedin-job-scraper",
+};
+
+const COST_PER_RESULT_USD = 0.001; // conservative average across actors
 const CLASSIFICATION_DELAY_MS = 300;
 
-/**
- * Map UI-friendly date intervals to the exact enum values the Apify actor expects.
- * The actor's datePosted enum is: ["any", "today", "3days", "week", "month"].
- * Passing anything else (e.g. "7 days") silently breaks filtering.
- */
-const VALID_DATE_POSTED_VALUES = new Set(["any", "today", "3days", "week", "month"]);
+// ─── Date Interval Mappers ─────────────────────────────────────────────────────
 
-function toApifyDatePosted(input: string | undefined | null): string {
-  if (!input) return "today";
-  const normalized = input.toLowerCase().trim();
-  const map: Record<string, string> = {
-    today: "today",
-    "2 days": "3days",
-    "3days": "3days",
-    "3 days": "3days",
-    "7 days": "week",
-    week: "week",
-    "30 days": "month",
-    month: "month",
-    any: "any",
+/**
+ * Map UI date interval to Indeed's hoursOld param.
+ * Note: hoursOld cannot be combined with jobType or isRemote in Indeed actor.
+ */
+function toIndeedHoursOld(interval: string | undefined | null): number | undefined {
+  const map: Record<string, number> = {
+    today:    24,
+    "2 days": 48,
+    "3days":  72,
+    "3 days": 72,
+    "7 days": 168,
+    week:     168,
+    "30 days": 720,
+    month:    720,
   };
-  const mapped = map[normalized];
-  if (mapped && VALID_DATE_POSTED_VALUES.has(mapped)) return mapped;
-  // Defensive fallback: if the input already matches the actor's enum, pass it through.
-  if (VALID_DATE_POSTED_VALUES.has(normalized)) return normalized;
-  console.warn(`[jobAgentService] Unrecognized datePosted "${input}", defaulting to "today"`);
-  return "today";
+  const normalized = (interval ?? "today").toLowerCase().trim();
+  return map[normalized] ?? 24;
 }
+
+/**
+ * Map UI date interval to LinkedIn's postedLimit param.
+ */
+function toLinkedInPostedLimit(interval: string | undefined | null): string {
+  const map: Record<string, string> = {
+    today:    "Past 24 hours",
+    "2 days": "Past 24 hours",
+    "3days":  "Past Week",
+    "3 days": "Past Week",
+    "7 days": "Past Week",
+    week:     "Past Week",
+    "30 days": "Past Month",
+    month:    "Past Month",
+    any:      "Past Month",
+  };
+  const normalized = (interval ?? "today").toLowerCase().trim();
+  return map[normalized] ?? "Past 24 hours";
+}
+
+// ─── Actor Input Builders ──────────────────────────────────────────────────────
+
+function buildIndeedInput(queries: string[], dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
+  const hoursOld = toIndeedHoursOld(dateInterval);
+  const maxItems = Math.max(5, Math.min(500, Math.ceil(maxResults / Math.max(1, queries.length))));
+  return {
+    queries,
+    location: "United States",
+    countryIndeed: "USA",
+    maxItems,
+    resultsPerQuery: maxItems,
+    hoursOld,
+    enforceAnnual: true,
+  };
+}
+
+function buildGoogleInput(query: string, dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
+  // Google actor takes ONE query at a time. We run it once per query-batch in the loop.
+  void dateInterval; // Google actor doesn't have date filter — omit
+  const numResults = Math.min(500, maxResults);
+  return {
+    query,
+    location: "United States",
+    country: "us",
+    language: "en",
+    google_domain: "google.com",
+    num_results: numResults,
+    maxItems: numResults,
+    max_results: numResults,
+    pagesToFetch: Math.ceil(numResults / 10),
+    maxPages: Math.ceil(numResults / 10),
+    maxPagesPerQuery: Math.ceil(numResults / 10),
+    max_pages: Math.ceil(numResults / 10),
+    max_pagination: Math.ceil(numResults / 10),
+    cleanup_results: true,
+  };
+}
+
+function buildLinkedInInput(queries: string[], dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
+  const maxItems = Math.max(5, Math.min(500, Math.ceil(maxResults / Math.max(1, queries.length))));
+  return {
+    keyword: queries,
+    locations: ["United States"],
+    maxRows: maxItems,
+    saveOnlyUniqueItems: true,
+  };
+}
+
+// ─── Output Normalizer ─────────────────────────────────────────────────────────
+
+export interface ApifyDatasetItem {
+  // Canonical fields — populated by normalizeActorItem
+  job_title?: string; title?: string;
+  company_name?: string; company?: string;
+  location?: string;
+  salary_range?: string; salary?: string;
+  date_posted?: string; posted_at?: string;
+  via_platform?: string; platform?: string;
+  source_url?: string; url?: string;
+  apply_link?: string; apply_url?: string;
+  is_remote?: boolean; remote?: boolean;
+  employment_type?: string;
+  search_query?: string; searchQueryUsed?: string; query?: string;
+  description?: string; description_text?: string;
+  _duplicate?: boolean;
+  _actor_source?: ActorSource;
+  // Raw source-specific fields
+  [key: string]: unknown;
+}
+
+/**
+ * Normalize actor-specific output to the canonical ApifyDatasetItem shape.
+ * This is the "translation layer" for each actor's unique field names.
+ */
+function normalizeActorItem(source: ActorSource, raw: Record<string, unknown>): ApifyDatasetItem {
+  if (source === "indeed") {
+    // Indeed fields: title, company, location, job_url, description, date_posted, job_type, is_remote, min_amount, max_amount, currency
+    const minAmt = raw.min_amount as number | undefined;
+    const maxAmt = raw.max_amount as number | undefined;
+    const currency = (raw.currency as string | undefined) ?? "USD";
+    const salaryRange = (minAmt && maxAmt)
+      ? `$${minAmt.toLocaleString()} - $${maxAmt.toLocaleString()} ${currency}/yr`
+      : undefined;
+    return {
+      ...raw,
+      _actor_source: "indeed",
+      job_title:       String(raw.title ?? "").trim(),
+      company_name:    String(raw.company ?? "").trim(),
+      location:        String(raw.location ?? "").trim(),
+      source_url:      String(raw.job_url ?? "").trim(),
+      apply_link:      String(raw.job_url ?? "").trim(),
+      description:     String(raw.description ?? "").trim(),
+      date_posted:     raw.date_posted ? String(raw.date_posted) : undefined,
+      employment_type: raw.job_type ? String(raw.job_type) : undefined,
+      is_remote:       raw.is_remote === true,
+      salary_range:    salaryRange,
+      via_platform:    "Indeed",
+      search_query:    String(raw.query ?? raw.search_query ?? "").trim(),
+    };
+  }
+
+  if (source === "google") {
+    // Google actor fields: title, company_name, location, via, description, detected_extensions, apply_options, job_id, query
+    const applyOptions = Array.isArray(raw.apply_options) ? raw.apply_options as Array<{ title: string; link: string }> : [];
+    const applyLink = applyOptions[0]?.link ?? "";
+    const detectedExt = (raw.detected_extensions ?? {}) as Record<string, unknown>;
+    const scheduleType = detectedExt.schedule_type as string | undefined;
+    return {
+      ...raw,
+      _actor_source: "google",
+      job_title:       String(raw.title ?? "").trim(),
+      company_name:    String(raw.company_name ?? "").trim(),
+      location:        String(raw.location ?? "").trim(),
+      source_url:      applyLink,
+      apply_link:      applyLink,
+      description:     String(raw.description ?? "").trim(),
+      date_posted:     detectedExt.posted_at ? String(detectedExt.posted_at) : undefined,
+      employment_type: scheduleType ?? undefined,
+      is_remote:       String(raw.location ?? "").toLowerCase().includes("remote"),
+      salary_range:    undefined,
+      via_platform:    raw.via ? String(raw.via) : "Google Jobs",
+      search_query:    String(raw.query ?? "").trim(),
+    };
+  }
+
+  if (source === "linkedin") {
+    // cheap_scraper/linkedin-job-scraper fields: jobTitle, companyName, location, jobUrl, jobDescription, publishedAt, salaryInfo
+    const applyLink = String(raw.applyUrl ?? raw.jobUrl ?? "").trim();
+    const salaryArr = Array.isArray(raw.salaryInfo) ? raw.salaryInfo : [];
+    const salaryRange = salaryArr.length > 0 ? salaryArr.join(" - ") : undefined;
+    return {
+      ...raw,
+      _actor_source: "linkedin",
+      job_title:       String(raw.jobTitle ?? raw.title ?? "").trim(),
+      company_name:    String(raw.companyName ?? "").trim(),
+      location:        String(raw.location ?? "").trim(),
+      source_url:      String(raw.jobUrl ?? "").trim(),
+      apply_link:      applyLink,
+      description:     String(raw.jobDescription ?? raw.description ?? "").trim(),
+      date_posted:     raw.publishedAt ? String(raw.publishedAt) : (raw.postedTime ? String(raw.postedTime) : undefined),
+      employment_type: String(raw.contractType ?? "").trim() || undefined,
+      is_remote:       String(raw.location ?? "").toLowerCase().includes("remote"),
+      salary_range:    salaryRange,
+      via_platform:    "LinkedIn",
+      search_query:    String(raw.searchString ?? raw.query ?? "").trim(),
+    };
+  }
+
+  // Fallback (should never reach here)
+  return { ...raw, _actor_source: source };
+}
+
+// ─── URL Fingerprint Helper ───────────────────────────────────────────────────
+
+/**
+ * Normalize a URL into a stable fingerprint for cross-actor dedup.
+ * Strips query params, lowercases, removes trailing slash.
+ * Example: https://www.linkedin.com/jobs/view/123/ → linkedin.com/jobs/view/123
+ */
+export function normalizeUrlFingerprint(url: string | null | undefined): string {
+  if (!url || !url.trim()) return "";
+  try {
+    const u = new URL(url.trim());
+    // Keep hostname + pathname only, drop query/hash
+    const cleaned = (u.hostname + u.pathname)
+      .toLowerCase()
+      .replace(/^www\./, "")
+      .replace(/\/+$/, "")
+      .replace(/[^a-z0-9/.-]/g, "");
+    return cleaned;
+  } catch {
+    // Not a valid URL — use a normalized version of the raw string
+    return url.toLowerCase().replace(/[^a-z0-9/.-]/g, "").substring(0, 200);
+  }
+}
+
+// ─── Options & Result Types ────────────────────────────────────────────────────
 
 export interface ExecuteRunOptions {
   testMode?: boolean;
@@ -51,6 +249,7 @@ export interface ExecuteRunOptions {
   roleGroups?: string[];
   customKeywords?: string[];
   dateInterval?: string;
+  actorSource?: ActorSource;
 }
 
 export interface ExecuteRunResult {
@@ -65,20 +264,11 @@ export interface ExecuteRunResult {
   error?: string;
 }
 
-export interface ApifyDatasetItem {
-  job_title?: string; title?: string; company_name?: string; company?: string;
-  location?: string; salary_range?: string; salary?: string; date_posted?: string;
-  posted_at?: string; via_platform?: string; platform?: string;
-  source_url?: string; url?: string; apply_link?: string; apply_url?: string;
-  is_remote?: boolean; remote?: boolean; employment_type?: string;
-  search_query?: string; searchQueryUsed?: string; query?: string;
-  description?: string; description_text?: string;
-  [key: string]: unknown;
-}
+// ─── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Create a pending run record (fast, no Apify call). Call
- * executeRunFromRecord afterward in background to do the work.
+ * Create a pending run record (fast, no Apify call).
+ * Call executeRunFromRecord afterward in background to do the work.
  */
 export async function createPendingRun(
   options: ExecuteRunOptions = {}
@@ -87,7 +277,7 @@ export async function createPendingRun(
   if (!config.is_active) throw new Error("Job Agent config is inactive.");
 
   const token = await rotateToken();
-  if (!token) throw new Error("No Apify tokens available ΓÇö all exhausted or errored.");
+  if (!token) throw new Error("No Apify tokens available — all exhausted or errored.");
 
   const roleGroups = validateRoleGroups(options.roleGroups ?? []);
   const customKw = options.customKeywords ?? [];
@@ -99,14 +289,15 @@ export async function createPendingRun(
   const searchQueries = getSearchQueries(roleGroups, options.testMode ?? false, customKw);
   if (searchQueries.length === 0) throw new Error("No search queries built.");
 
-  const run = await createRun(config.id, roleGroups, token.id);
+  const actorSource: ActorSource = options.actorSource ?? "indeed";
+  const run = await createRun(config.id, roleGroups, token.id, actorSource);
   return { runId: run.id, config, roleGroups, token };
 }
 
 /**
  * Starts the Apify run for a pending run record. Call this in the background.
  * Because Cloudflare limits execution time to 30s, this function only STARTS the run on Apify.
- * A separate polling mechanism (e.g. cron) must check status and call processApifyRunData().
+ * A separate polling mechanism (cron) must check status and call processApifyRunData().
  */
 export async function executeRunFromRecord(
   runId: string,
@@ -115,8 +306,8 @@ export async function executeRunFromRecord(
   initialToken: { id: string; token: string; label: string | null },
   options: ExecuteRunOptions = {}
 ): Promise<ExecuteRunResult> {
-
   let currentToken = initialToken;
+  const actorSource: ActorSource = options.actorSource ?? "indeed";
 
   while (true) {
     try {
@@ -127,19 +318,27 @@ export async function executeRunFromRecord(
         ? Math.min(50, config.max_results)
         : Math.min(500, config.max_results);
 
-      const apifyInput = {
-        searchQueries,
-        maxResults,
-        datePosted: toApifyDatePosted(options.dateInterval),
-        employmentType: "any",
-        proxyCountry: "US",
-      };
+      const actorId = ACTOR_IDS[actorSource];
 
-      const { runId: apifyRunId, datasetId } = await startApifyRun(ACTOR_ID, currentToken.token, apifyInput);
+      // Google actor takes one query at a time; use the full list joined or first query in test mode.
+      // For proper multi-query Google runs, the UI should dispatch multiple runs.
+      // Here we batch them into a single comma-joined query to keep the API simple.
+      let apifyInput: Record<string, unknown>;
+      if (actorSource === "google") {
+        // For Google, passing too many OR clauses severely limits results. 
+        // We use the first (most generic) query to cast a wide net, and let our AI filter them down.
+        const combinedQuery = searchQueries[0] || "Solar Engineer";
+        apifyInput = buildGoogleInput(combinedQuery, options.dateInterval, maxResults);
+      } else if (actorSource === "linkedin") {
+        apifyInput = buildLinkedInInput(searchQueries, options.dateInterval, maxResults);
+      } else {
+        apifyInput = buildIndeedInput(searchQueries, options.dateInterval, maxResults);
+      }
+
+      const { runId: apifyRunId, datasetId } = await startApifyRun(actorId, currentToken.token, apifyInput);
       await updateRunStatus(runId, { apify_run_id: apifyRunId, apify_dataset_id: datasetId, token_id: currentToken.id });
 
-      // Run successfully started! We exit now so Cloudflare doesn't kill us.
-      // Cron will poll Apify and call processApifyRunData.
+      // Run successfully started! Exit now — cron will poll and call processApifyRunData.
       return { runId, status: "running", rawCount: 0, dedupedCount: 0, classifiedCount: 0, duplicateCount: 0, estimatedCostUsd: 0, tokenLabel: currentToken.label };
     } catch (err: any) {
       const message = err.message ?? "Run failed";
@@ -153,14 +352,14 @@ export async function executeRunFromRecord(
         } else {
           await markTokenError(currentToken.id, message);
         }
-        
+
         const next = await rotateToken();
         if (!next) {
           await updateRunStatus(runId, { status: "failed", error: "All tokens exhausted — no working Apify accounts available.", completed_at: new Date().toISOString() });
           throw new Error("All tokens exhausted.");
         }
         currentToken = next;
-        continue; // retry with the next token
+        continue; // retry with next token
       }
 
       await updateRunStatus(runId, { status: "failed", error: message, completed_at: new Date().toISOString() });
@@ -170,17 +369,19 @@ export async function executeRunFromRecord(
 }
 
 /**
- * Called by a cron job or webhook when an Apify run finishes successfully.
- * Downloads the dataset, dedupes, classifies, and inserts into staged jobs.
+ * Called by a cron job when an Apify run finishes successfully.
+ * Downloads the dataset, normalizes by actor source, dedupes, classifies, and inserts into staged jobs.
  */
 export async function processApifyRunData(
   runId: string,
   datasetId: string,
   token: string,
-  options: { useAi?: boolean } = {}
+  options: { useAi?: boolean; actorSource?: ActorSource } = {}
 ): Promise<void> {
+  const actorSource = options.actorSource ?? "indeed";
   try {
-    const items = await fetchApifyDataset(datasetId, token);
+    const rawItems = await fetchApifyDataset(datasetId, token);
+    const items = rawItems.map((item) => normalizeActorItem(actorSource, item as Record<string, unknown>));
     const rawCount = items.length;
     await updateRunStatus(runId, { raw_count: rawCount });
 
@@ -188,7 +389,16 @@ export async function processApifyRunData(
     const { uniqueJobs, duplicateCount: crossRunDups } = await dedupeAcrossRunsAndJobs(deduped);
     const totalDupes = inRunDups + crossRunDups;
 
-    const classifiedJobs = await classifyJobs(uniqueJobs, options.useAi ?? true);
+    // Vercel serverless functions time out after 10-60s. AI classification takes ~1-2s per batch of 15.
+    // For massive datasets (> 250 unique jobs), force regex fallback to guarantee completion and prevent hanging.
+    const requestedAi = options.useAi ?? true;
+    const safeUseAi = requestedAi && (uniqueJobs.length <= 250);
+    
+    if (requestedAi && !safeUseAi) {
+      console.warn(`[jobAgentService] Dataset too large (${uniqueJobs.length} unique jobs). Falling back to regex classification to prevent serverless timeout.`);
+    }
+
+    const classifiedJobs = await classifyJobs(uniqueJobs, safeUseAi);
     const stagedRows = classifiedJobs.map((j) => toStagedJobRow(runId, j));
     await insertStagedJobs(runId, stagedRows);
 
@@ -218,13 +428,13 @@ export async function checkApifyRunStatus(apifyRunId: string, token: string): Pr
   return data?.data?.status;
 }
 
-/** Convenience: create + execute synchronously (for cron). Note: Cron must now poll later! */
+/** Convenience: create + execute synchronously (for cron). */
 export async function executeRun(options: ExecuteRunOptions = {}): Promise<ExecuteRunResult> {
   const { runId, config, roleGroups, token } = await createPendingRun(options);
   return executeRunFromRecord(runId, config, roleGroups, token, options);
 }
 
-// ΓöÇΓöÇ helpers ΓöÇΓöÇ
+// ─── Internal Helpers ──────────────────────────────────────────────────────────
 
 function getSearchQueries(roleGroups: string[], testMode: boolean, customKeywords: string[]): string[] {
   const titles = getTitlesForGroups(roleGroups);
@@ -237,7 +447,8 @@ function getSearchQueries(roleGroups: string[], testMode: boolean, customKeyword
 }
 
 async function startApifyRun(actorId: string, token: string, input: Record<string, unknown>): Promise<{ runId: string; datasetId: string }> {
-  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}`;
+  // Set a 2-hour timeout (7200 seconds) so that long scrapes don't time out on Apify's end
+  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&timeout=7200`;
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
   if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Apify start run failed (${res.status}): ${text}`); }
   const data = await res.json();
@@ -245,8 +456,6 @@ async function startApifyRun(actorId: string, token: string, input: Record<strin
   if (!runId || !datasetId) throw new Error("Apify response missing runId/datasetId");
   return { runId, datasetId };
 }
-
-// (Removed pollApifyRun)
 
 async function fetchApifyDataset(datasetId: string, token: string): Promise<ApifyDatasetItem[]> {
   const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true`;
@@ -262,61 +471,175 @@ export async function fetchLiveApifyDatasetItems(datasetId: string, token: strin
   return (await res.json()) as ApifyDatasetItem[];
 }
 
-interface NormalizedJob { hash: string; job_title: string; company_name: string | null; location: string | null; salary_range: string | null; salary_min: number | null; salary_max: number | null; date_posted: string | null; via_platform: string | null; source_url: string | null; apply_link: string | null; is_remote: boolean | null; employment_type: string | null; search_query_used: string | null; description_text: string | null; raw: ApifyDatasetItem; }
+// ─── Normalized Job Shape ──────────────────────────────────────────────────────
+
+interface NormalizedJob {
+  hash: string;
+  urlHash: string;          // URL fingerprint for cross-actor dedup
+  job_title: string;
+  company_name: string | null;
+  location: string | null;
+  salary_range: string | null;
+  salary_min: number | null;
+  salary_max: number | null;
+  date_posted: string | null;
+  via_platform: string | null;
+  source_url: string | null;
+  apply_link: string | null;
+  is_remote: boolean | null;
+  employment_type: string | null;
+  search_query_used: string | null;
+  description_text: string | null;
+  raw: ApifyDatasetItem;
+}
 
 function normalizeItem(item: ApifyDatasetItem): NormalizedJob {
-  const jobTitle = String(item.job_title ?? item.title ?? "").trim();
+  const jobTitle  = String(item.job_title ?? item.title ?? "").trim();
   const companyName = String(item.company_name ?? item.company ?? "").trim() || null;
-  const location = String(item.location ?? "").trim() || null;
+  const location  = String(item.location ?? "").trim() || null;
+  const applyLink = String(item.apply_link ?? item.apply_url ?? item.source_url ?? item.url ?? "").trim() || null;
+  const sourceUrl = String(item.source_url ?? item.url ?? applyLink ?? "").trim() || null;
   const salaryRange = String(item.salary_range ?? item.salary ?? "").trim() || null;
   const { salaryMin, salaryMax } = parseSalary(salaryRange);
   const desc = String(item.description ?? item.description_text ?? "").trim();
-  return { hash: dedupHash(jobTitle, companyName, location), job_title: jobTitle, company_name: companyName, location, salary_range: salaryRange, salary_min: salaryMin, salary_max: salaryMax, date_posted: String(item.date_posted ?? item.posted_at ?? "").trim() || null, via_platform: String(item.via_platform ?? item.platform ?? "").trim() || null, source_url: String(item.source_url ?? item.url ?? "").trim() || null, apply_link: String(item.apply_link ?? item.apply_url ?? "").trim() || null, is_remote: typeof item.is_remote === "boolean" ? item.is_remote : typeof item.remote === "boolean" ? item.remote : null, employment_type: String(item.employment_type ?? "").trim() || null, search_query_used: String(item.search_query ?? item.searchQueryUsed ?? item.query ?? "").trim() || null, description_text: desc || null, raw: item };
+  const urlHash = normalizeUrlFingerprint(applyLink ?? sourceUrl);
+
+  return {
+    hash: dedupHash(jobTitle, companyName, location, urlHash),
+    urlHash,
+    job_title: jobTitle,
+    company_name: companyName,
+    location,
+    salary_range: salaryRange,
+    salary_min: salaryMin,
+    salary_max: salaryMax,
+    date_posted: String(item.date_posted ?? item.posted_at ?? "").trim() || null,
+    via_platform: String(item.via_platform ?? item.platform ?? "").trim() || null,
+    source_url: sourceUrl,
+    apply_link: applyLink,
+    is_remote: typeof item.is_remote === "boolean" ? item.is_remote : typeof item.remote === "boolean" ? item.remote : null,
+    employment_type: String(item.employment_type ?? "").trim() || null,
+    search_query_used: String(item.search_query ?? item.searchQueryUsed ?? item.query ?? "").trim() || null,
+    description_text: desc || null,
+    raw: item,
+  };
 }
 
-function parseSalary(s: string | null) { if (!s) return { salaryMin: null as number | null, salaryMax: null as number | null }; const m = s.match(/\$?([\d,]+(?:\.\d+)?)\s*[ΓÇô\-]\s*\$?([\d,]+(?:\.\d+)?)/); if (!m) return { salaryMin: null, salaryMax: null }; const min = parseFloat(m[1].replace(/,/g, "")); const max = parseFloat(m[2].replace(/,/g, "")); return { salaryMin: Number.isFinite(min) ? min : null, salaryMax: Number.isFinite(max) ? max : null }; }
+function parseSalary(s: string | null) {
+  if (!s) return { salaryMin: null as number | null, salaryMax: null as number | null };
+  const m = s.match(/\$?([\d,]+(?:\.\d+)?)\s*[-–]\s*\$?([\d,]+(?:\.\d+)?)/);
+  if (!m) return { salaryMin: null, salaryMax: null };
+  const min = parseFloat(m[1].replace(/,/g, ""));
+  const max = parseFloat(m[2].replace(/,/g, ""));
+  return { salaryMin: Number.isFinite(min) ? min : null, salaryMax: Number.isFinite(max) ? max : null };
+}
 
-export function dedupHash(title: string, company: string | null, location: string | null): string { return `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+/**
+ * Enhanced dedup hash: title + company + location + URL fingerprint.
+ * The URL fingerprint catches cross-actor duplicates where the same job is
+ * posted on both Indeed and LinkedIn (same apply link, different field names).
+ */
+export function dedupHash(title: string, company: string | null, location: string | null, urlHash = ""): string {
+  const base = `${title}|${company ?? ""}|${location ?? ""}`.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  // Append url hash separately so a missing URL doesn't break existing hashes
+  if (urlHash) return `${base}|${urlHash}`;
+  return base;
+}
 
-export function normalizeForFuzzyMatch(s: string | null): string { return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); }
+export function normalizeForFuzzyMatch(s: string | null): string {
+  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
 
 function isNonUSLocation(loc: string | null): boolean {
   if (!loc) return false;
   const l = loc.toLowerCase();
-  // Filter out explicit non-US countries frequently seen in Apify jobs
   const nonUs = ["uk", "united kingdom", "canada", "australia", "india", "europe", "germany", "france", "philippines", "mexico", "brazil", "spain", "ireland", "south africa", "netherlands", "sweden", "poland"];
   for (const c of nonUs) {
     if (l === c || l.endsWith(", " + c)) return true;
   }
-  // Check for UK cities usually seen
   if (l.includes("london, eng") || l.includes("london, uk") || l.includes("toronto, on")) return true;
   return false;
 }
 
-function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; duplicateCount: number } { const seen = new Set<string>(); const deduped: NormalizedJob[] = []; let dc = 0; for (const item of items) { const n = normalizeItem(item); if (!n.job_title) continue; if (isNonUSLocation(n.location)) { dc++; continue; } if (seen.has(n.hash)) { dc++; continue; } seen.add(n.hash); deduped.push(n); } return { deduped, duplicateCount: dc }; }
+function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; duplicateCount: number } {
+  const seenHashes = new Set<string>();
+  const seenUrls   = new Set<string>();
+  const deduped: NormalizedJob[] = [];
+  let dc = 0;
+
+  for (const item of items) {
+    const n = normalizeItem(item);
+    if (!n.job_title) continue;
+    if (isNonUSLocation(n.location)) { dc++; continue; }
+
+    // Duplicate if hash OR url fingerprint already seen (url catches same job with slightly different title)
+    if (seenHashes.has(n.hash) || (n.urlHash && seenUrls.has(n.urlHash))) {
+      dc++;
+      continue;
+    }
+    seenHashes.add(n.hash);
+    if (n.urlHash) seenUrls.add(n.urlHash);
+    deduped.push(n);
+  }
+
+  return { deduped, duplicateCount: dc };
+}
 
 async function dedupeAcrossRunsAndJobs(jobs: NormalizedJob[]): Promise<{ uniqueJobs: NormalizedJob[]; duplicateCount: number }> {
-  const hashes = jobs.map((j) => j.hash);
-  const existingStagedHashes = await getDedupHashes(hashes);
+  const hashes   = jobs.map((j) => j.hash);
+  const urlHashes = jobs.map((j) => j.urlHash).filter(Boolean) as string[];
+
+  // Check existing staged-job hashes (30-day window)
+  const existingStagedHashes  = await getDedupHashes(hashes);
+  // Check existing staged-job URL hashes (catches cross-actor duplicates in the same 30-day window)
+  const existingStagedUrlHashes = urlHashes.length > 0 ? await getSourceUrlHashes(urlHashes) : new Set<string>();
+  // Check final jobs table via fuzzy match
   const existingJobs = await listAllJobsForFuzzyDedupe();
-  const uniqueJobs: NormalizedJob[] = []; let dc = 0;
+
+  const uniqueJobs: NormalizedJob[] = [];
+  let dc = 0;
+
   for (const job of jobs) {
-    if (existingStagedHashes.has(job.hash)) { job.raw._duplicate = true; dc++; continue; }
+    // Layer 3a: hash match
+    if (existingStagedHashes.has(job.hash)) {
+      job.raw._duplicate = true; dc++; continue;
+    }
+    // Layer 3b: URL fingerprint match (cross-actor dedup)
+    if (job.urlHash && existingStagedUrlHashes.has(job.urlHash)) {
+      job.raw._duplicate = true; dc++; continue;
+    }
+    // Layer 4: final jobs table fuzzy match
     const nj = (s: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (existingJobs.some((e) => nj(job.job_title) === nj(e.title) && nj(job.company_name) === nj(e.company) && nj(job.location) === nj(e.location))) { job.raw._duplicate = true; dc++; continue; }
+    if (existingJobs.some((e) =>
+      nj(job.job_title) === nj(e.title) &&
+      nj(job.company_name) === nj(e.company) &&
+      nj(job.location) === nj(e.location)
+    )) {
+      job.raw._duplicate = true; dc++; continue;
+    }
     uniqueJobs.push(job);
   }
+
   return { uniqueJobs, duplicateCount: dc };
 }
 
-interface ClassifiedJob extends NormalizedJob { role_group: string | null; role_group_label: string | null; seniority_guess: string; tier: string; tier_reason: string; ai_keywords: string[]; relevance_score: number; is_false_positive: boolean; }
+// ─── Classification ────────────────────────────────────────────────────────────
+
+interface ClassifiedJob extends NormalizedJob {
+  role_group: string | null;
+  role_group_label: string | null;
+  seniority_guess: string;
+  tier: string;
+  tier_reason: string;
+  ai_keywords: string[];
+  relevance_score: number;
+  is_false_positive: boolean;
+}
 
 async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<ClassifiedJob[]> {
   if (jobs.length === 0) return [];
 
-  // Process in parallel batches of CONCURRENCY to keep total time reasonable.
-  // 500 jobs @ 5s AI call + batch overhead Γëê 100 seconds with 5 concurrent.
-  const CONCURRENCY = 5;
+  const CONCURRENCY = 15;
   const classified: ClassifiedJob[] = [];
 
   for (let batchStart = 0; batchStart < jobs.length; batchStart += CONCURRENCY) {
@@ -351,8 +674,6 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
     );
     classified.push(...batchResults);
 
-    // Small inter-batch pause to avoid hammering the AI provider,
-    // but not the 300ms-per-job delay that made large runs take hours.
     if (batchStart + CONCURRENCY < jobs.length) {
       await new Promise((r) => setTimeout(r, CLASSIFICATION_DELAY_MS));
     }
@@ -362,7 +683,40 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
 }
 
 function toStagedJobRow(runId: string, job: ClassifiedJob): Omit<JobAgentStagedJobRow, "id" | "created_at"> {
-  return { run_id: runId, job_title: job.job_title, company_name: job.company_name, location: job.location, salary_range: job.salary_range, salary_min: job.salary_min, salary_max: job.salary_max, date_posted: job.date_posted, via_platform: job.via_platform, source_url: job.source_url, apply_link: job.apply_link, is_remote: job.is_remote, employment_type: job.employment_type, search_query_used: job.search_query_used, role_group: job.role_group, role_group_label: job.role_group_label, seniority_guess: job.seniority_guess, tier: job.tier, tier_reason: job.tier_reason, ai_keywords: job.ai_keywords, relevance_score: job.relevance_score, is_false_positive: job.is_false_positive, dedup_hash: job.hash, is_duplicate: job.raw._duplicate === true, import_status: "staged", imported_job_id: null, description_text: job.description_text, company_website: null, external_job_id: null, country: null, industry: null };
+  return {
+    run_id: runId,
+    job_title: job.job_title,
+    company_name: job.company_name,
+    location: job.location,
+    salary_range: job.salary_range,
+    salary_min: job.salary_min,
+    salary_max: job.salary_max,
+    date_posted: job.date_posted,
+    via_platform: job.via_platform,
+    source_url: job.source_url,
+    apply_link: job.apply_link,
+    is_remote: job.is_remote,
+    employment_type: job.employment_type,
+    search_query_used: job.search_query_used,
+    role_group: job.role_group,
+    role_group_label: job.role_group_label,
+    seniority_guess: job.seniority_guess,
+    tier: job.tier,
+    tier_reason: job.tier_reason,
+    ai_keywords: job.ai_keywords,
+    relevance_score: job.relevance_score,
+    is_false_positive: job.is_false_positive,
+    dedup_hash: job.hash,
+    source_url_hash: job.urlHash || null,
+    is_duplicate: job.raw._duplicate === true,
+    import_status: "staged",
+    imported_job_id: null,
+    description_text: job.description_text,
+    company_website: null,
+    external_job_id: null,
+    country: null,
+    industry: null,
+  };
 }
 
 export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {

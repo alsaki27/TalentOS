@@ -10,6 +10,7 @@ export interface JobAgentRunRow {
   apify_run_id: string | null;
   apify_dataset_id: string | null;
   status: string;
+  actor_source: string;       // "indeed" | "google" | "linkedin"
   raw_count: number;
   deduped_count: number;
   imported_count: number;
@@ -56,6 +57,7 @@ export interface JobAgentStagedJobRow {
   relevance_score: number | null;
   is_false_positive: boolean;
   dedup_hash: string | null;
+  source_url_hash: string | null;  // URL fingerprint for cross-actor dedup
   is_duplicate: boolean;
   import_status: string;
   imported_job_id: string | null;
@@ -69,7 +71,7 @@ export interface JobAgentStagedJobRow {
 }
 
 const RUN_COLUMNS = `
-  id, config_id, token_id, apify_run_id, apify_dataset_id, status, raw_count,
+  id, config_id, token_id, apify_run_id, apify_dataset_id, status, actor_source, raw_count,
   deduped_count, imported_count, skipped_count, classified_count,
   estimated_cost_usd, error, role_groups_ran, started_at, completed_at, created_at
 `;
@@ -80,12 +82,13 @@ const RUN_COLUMNS = `
 export async function createRun(
   configId: string,
   roleGroups: string[],
-  tokenId: string | null
+  tokenId: string | null,
+  actorSource: string = "indeed"
 ): Promise<JobAgentRunRow> {
   const row = await queryOne<JobAgentRunRow>(
-    `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran)
-     VALUES ($1, $2, 'pending', $3) RETURNING ${RUN_COLUMNS}`,
-    [configId, tokenId, roleGroups]
+    `INSERT INTO job_agent_runs (config_id, token_id, status, role_groups_ran, actor_source)
+     VALUES ($1, $2, 'pending', $3, $4) RETURNING ${RUN_COLUMNS}`,
+    [configId, tokenId, roleGroups, actorSource]
   );
   if (!row) throw new Error("Failed to create job agent run");
   return row;
@@ -248,8 +251,8 @@ export async function insertStagedJobs(
     "salary_max", "date_posted", "via_platform", "source_url", "apply_link", "is_remote",
     "employment_type", "search_query_used", "role_group", "role_group_label",
     "seniority_guess", "tier", "tier_reason", "ai_keywords", "relevance_score",
-    "is_false_positive", "dedup_hash", "is_duplicate", "import_status", "imported_job_id",
-    "description_text", "company_website", "external_job_id", "country", "industry",
+    "is_false_positive", "dedup_hash", "source_url_hash", "is_duplicate", "import_status",
+    "imported_job_id", "description_text", "company_website", "external_job_id", "country", "industry",
   ];
   const values: (string | number | boolean | string[] | null)[] = [];
   const placeholders: string[] = [];
@@ -404,4 +407,23 @@ export async function getDedupHashes(hashes: string[]): Promise<Set<string>> {
     [hashes, sinceIso]
   );
   return new Set(rows.map((r) => r.dedup_hash));
+}
+
+/**
+ * Return a set of source_url_hash values that already exist in staged jobs from the past 30 days.
+ * Used for cross-actor URL-fingerprint deduplication.
+ */
+export async function getSourceUrlHashes(hashes: string[]): Promise<Set<string>> {
+  if (hashes.length === 0) return new Set();
+
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+  const sinceIso = since.toISOString();
+
+  const rows = await query<{ source_url_hash: string }>(
+    `SELECT DISTINCT source_url_hash FROM job_agent_staged_jobs
+     WHERE source_url_hash = ANY($1) AND source_url_hash IS NOT NULL AND created_at >= $2`,
+    [hashes, sinceIso]
+  );
+  return new Set(rows.map((r) => r.source_url_hash));
 }
