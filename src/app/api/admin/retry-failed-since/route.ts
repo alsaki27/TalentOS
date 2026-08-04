@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
 
   const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
   let scoresRetried = 0;
+  const scoreErrors: { job_id: string; candidate_id: string; detail: string }[] = [];
   for (const s of failedScores ?? []) {
     try {
       const res = await fetch(`${baseUrl}/api/jobs/match-score`, {
@@ -78,9 +79,14 @@ export async function POST(req: NextRequest) {
           force_rescore: true,
         }),
       });
-      if (res.ok) scoresRetried++;
-    } catch (err) {
-      console.error(`[retry-failed-since] Failed to re-score job=${s.job_id} candidate=${s.candidate_id}:`, err);
+      if (res.ok) {
+        scoresRetried++;
+      } else {
+        const body = await res.text().catch(() => "");
+        scoreErrors.push({ job_id: s.job_id, candidate_id: s.candidate_id, detail: `HTTP ${res.status}: ${body.slice(0, 300)}` });
+      }
+    } catch (err: any) {
+      scoreErrors.push({ job_id: s.job_id, candidate_id: s.candidate_id, detail: err?.message ?? String(err) });
     }
   }
 
@@ -101,5 +107,6 @@ export async function POST(req: NextRequest) {
     workflowsRetried,
     scoresFound: failedScores?.length ?? 0,
     scoresRetried,
+    scoreErrors,
   });
 }
