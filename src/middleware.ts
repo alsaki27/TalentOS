@@ -103,6 +103,11 @@ const OPEN_JOB_DATA_STYLE_PATHS = new Set([
   "/api/job-agent/openjobdata-ingest",
   "/api/job-agent/sources/dispatch",
   "/api/admin/retry-failed-since",
+  // match-score's own handler has no auth check of its own (relies entirely
+  // on this middleware gate) - only bypass its normal session requirement
+  // for the CRON_SECRET-bearing server-to-server call retry-failed-since
+  // makes; anonymous requests still fall through to the session check below.
+  "/api/jobs/match-score",
 ]);
 function isOpenJobDataIngestAuthorized(req: NextRequest, pathname: string) {
   if (!OPEN_JOB_DATA_STYLE_PATHS.has(pathname)) return false;

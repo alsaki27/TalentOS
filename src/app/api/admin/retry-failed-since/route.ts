@@ -63,7 +63,14 @@ export async function POST(req: NextRequest) {
     try {
       const res = await fetch(`${baseUrl}/api/jobs/match-score`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          // match-score is normally reached via a logged-in session, not
+          // CRON_SECRET - this server-to-server call has no session cookie,
+          // so it needs the same bearer bypass middleware.ts grants the
+          // other automation endpoints (see isOpenJobDataIngestAuthorized).
+          Authorization: `Bearer ${process.env.CRON_SECRET}`,
+        },
         body: JSON.stringify({
           job_id: s.job_id,
           candidate_id: s.candidate_id,
