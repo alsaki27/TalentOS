@@ -94,11 +94,17 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
   return false;
 }
 
-// The nightly OpenJobData GitHub Actions workflow has no session cookie either —
-// same bearer-secret (CRON_SECRET) pattern as /api/cron/*, scoped to this one
-// endpoint. The route itself re-checks the secret too (defense in depth).
+// The nightly OpenJobData GitHub Actions workflow, and the generic job-sources
+// dispatcher (src/app/api/job-agent/sources/dispatch/route.ts) that fans out to
+// TheirStack/LinkUp/etc., both have no session cookie either — same bearer-secret
+// (CRON_SECRET) pattern as /api/cron/*, scoped to just these two endpoints. Each
+// route re-checks the secret too (defense in depth).
+const OPEN_JOB_DATA_STYLE_PATHS = new Set([
+  "/api/job-agent/openjobdata-ingest",
+  "/api/job-agent/sources/dispatch",
+]);
 function isOpenJobDataIngestAuthorized(req: NextRequest, pathname: string) {
-  if (pathname !== "/api/job-agent/openjobdata-ingest") return false;
+  if (!OPEN_JOB_DATA_STYLE_PATHS.has(pathname)) return false;
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
   return req.headers.get("authorization") === `Bearer ${secret}`;
