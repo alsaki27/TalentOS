@@ -119,7 +119,7 @@ function normalizeResumifyNative(d: any): ResumeData {
   const skillsRaw = d.skills && typeof d.skills === "object" && !Array.isArray(d.skills) ? d.skills : {};
   const categorized = asArray<any>(skillsRaw.categorized).map((g) => ({
     id: asString(g?.id) || uid("skg"),
-    name: asString(g?.name) || "Skills",
+    name: asString(g?.name) || asString(g?.title) || "Skills",
     skills: asArray<string>(g?.skills),
   }));
 
@@ -197,7 +197,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
   const skillGroups = asArray<NonNullable<StudioDocumentLike["skills"]>[number]>(d.skills);
   const categorized = skillGroups.map((g) => ({
     id: uid("skg"),
-    name: g?.title ?? "Skills",
+    name: (g as any)?.name ?? g?.title ?? "Skills",
     skills: asArray<string>(g?.skills),
   }));
 
