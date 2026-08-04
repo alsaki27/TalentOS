@@ -35,6 +35,7 @@ on:
           - run-all
           - job-ceo-dispatch
           - job-description-enrichment
+          - retry-failed-since
           - job-agent-poll
 
 
@@ -337,5 +338,27 @@ jobs:
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/enrich")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  # Manual cleanup only, deliberately not part of any cron schedule or
+  # run-all - this bulk-retries everything that failed during the Aug 4
+  # 2026 Vertex gateway outage (stale ai_key_id routing -> gateway auth
+  # header mismatch -> stale Cloudflare secret). Not something that should
+  # ever fire automatically; trigger by hand once, after confirming the
+  # underlying gateway fixes are actually live.
+  retry-failed-since:
+    if: github.event.inputs.job == 'retry-failed-since'
+    runs-on: ubuntu-latest
+    name: Retry everything failed during the Vertex outage
+    steps:
+      - name: Call retry-failed-since
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/admin/retry-failed-since")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::retry-failed-since failed with HTTP $HTTP_CODE"
             exit 1
           fi

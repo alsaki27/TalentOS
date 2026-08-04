@@ -102,6 +102,7 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 const OPEN_JOB_DATA_STYLE_PATHS = new Set([
   "/api/job-agent/openjobdata-ingest",
   "/api/job-agent/sources/dispatch",
+  "/api/admin/retry-failed-since",
 ]);
 function isOpenJobDataIngestAuthorized(req: NextRequest, pathname: string) {
   if (!OPEN_JOB_DATA_STYLE_PATHS.has(pathname)) return false;
