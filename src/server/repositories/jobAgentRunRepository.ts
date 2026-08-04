@@ -292,7 +292,7 @@ export async function listStagedJobs(
   const pageSize = Math.max(1, Math.min(filters.pageSize ?? 50, 100));
 
   const conditions: string[] = ["run_id = $1"];
-  const values: (string | number)[] = [runId];
+  const values: any[] = [runId];
   let idx = 2;
 
   if (filters.tier) {
