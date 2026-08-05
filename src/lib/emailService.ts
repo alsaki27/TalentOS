@@ -67,6 +67,10 @@ export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult
       }
     }
 
+    if (deliveryError) {
+      console.error(`[emailService] Delivery failed for ${opts.to}: ${deliveryError}`);
+    }
+
     const data = await queryOne<{ id: string }>(
       `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at, error_message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
       [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, deliveryError ? "failed" : "sent", opts.sentBy ?? null, new Date().toISOString(), deliveryError]
