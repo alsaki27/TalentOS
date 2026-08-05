@@ -3,39 +3,22 @@
 // Deliberately returns a minimal slice: name + submitted applications (not pre-submission
 // assigned/stacked/in_progress pipeline tickets) + only comments flagged
 // visible_to_candidate. Internal notes, assignment metadata, and other candidates'
-// data are never exposed here.
+// data are never exposed here. Query logic lives in src/lib/portalDashboard.ts,
+// shared with /api/portal/me/dashboard so it isn't duplicated across both routes.
 
 import { NextRequest, NextResponse } from "next/server";
-import { query, queryOne } from "@/server/db/neon";
+import { queryOne } from "@/server/db/neon";
+import { buildCandidatePortalDashboard } from "@/lib/portalDashboard";
 
 export const dynamic = "force-dynamic";
 
-const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
-
-function publicStatus(status: string) {
-  if (status === "interview") return { stage: "interview", label: "Interview stage" };
-  if (status === "offer") return { stage: "offer", label: "Offer received" };
-  if (status === "rejected" || status === "withdrawn") return { stage: "closed", label: "Closed" };
-  if (status === "replied") return { stage: "waiting", label: "Employer responded" };
-  return { stage: "submitted", label: "Submitted" };
-}
-
-// Same definitions as the internal /api/analytics endpoint, scoped to one candidate.
-function rate(count: number, total: number): number {
-  return total === 0 ? 0 : Math.round((count / total) * 1000) / 10;
-}
-
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
-  let candidate: any;
-  let candError: any;
-
-  candidate = await queryOne(
+  const candidate = await queryOne<{ id: string; name: string; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
     `SELECT id, name, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1`,
     [params.token]
   );
-  candError = candidate ? null : { message: "Portal link not found." };
 
-  if (candError || !candidate) {
+  if (!candidate) {
     return NextResponse.json({ error: "Portal link not found." }, { status: 404 });
   }
   if (
@@ -45,62 +28,6 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
   }
 
-  let applications: any[];
-  let appErr: any;
-
-  applications = await query(
-    `SELECT a.id, a.status, a.applied_at, jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location) as jobs FROM applications a LEFT JOIN jobs j ON a.job_id = j.id WHERE a.candidate_id = $1 ORDER BY a.applied_at DESC`,
-    [candidate.id]
-  );
-  appErr = null;
-
-  if (appErr) return NextResponse.json({ error: appErr.message }, { status: 500 });
-
-  const submitted = (applications ?? []).filter((a: any) => !PIPELINE_STATUSES.has(a.status as string));
-  const appIds = submitted.map((a: any) => a.id as string);
-
-  let comments: any[];
-  let commentsErr: any;
-
-  if (appIds.length > 0) {
-    comments = await query(
-      `SELECT id, application_id, body, parent_comment_id, created_at FROM application_comments WHERE application_id::text = ANY($1) AND visible_to_candidate = true ORDER BY created_at DESC`,
-      [appIds]
-    );
-    commentsErr = null;
-  } else {
-    comments = [];
-    commentsErr = null;
-  }
-
-  if (commentsErr) return NextResponse.json({ error: commentsErr.message }, { status: 500 });
-
-  const commentsByApp = new Map<string, { id: string; body: string; created_at: string }[]>();
-  for (const c of comments ?? []) {
-    const list = commentsByApp.get(c.application_id) ?? [];
-    list.push(c);
-    commentsByApp.set(c.application_id, list);
-  }
-
-  const respondedCount = submitted.filter((a: any) => a.status !== "applied").length;
-  const interviewCount = submitted.filter((a: any) => a.status === "interview" || a.status === "offer").length;
-  const offerCount = submitted.filter((a: any) => a.status === "offer").length;
-
-  return NextResponse.json({
-    name: candidate.name,
-    stats: {
-      totalApplications: submitted.length,
-      interviews: interviewCount,
-      offers: offerCount,
-      responseRate: rate(respondedCount, submitted.length),
-    },
-    applications: submitted.map((a: any) => ({
-      id: a.id,
-      status: a.status,
-      public_status: publicStatus(a.status),
-      applied_at: a.applied_at,
-      job: a.jobs,
-      updates: commentsByApp.get(a.id) ?? [],
-    })),
-  });
+  const dashboard = await buildCandidatePortalDashboard(candidate.id, candidate.name);
+  return NextResponse.json(dashboard);
 }

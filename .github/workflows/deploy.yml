@@ -86,12 +86,16 @@ jobs:
             exit 1
           fi
           echo "Worker gzipped upload size: ${SIZE_KIB} KiB"
-          BUDGET_KIB=3072
-          if awk -v s="$SIZE_KIB" 'BEGIN { exit !(s > 2800) }'; then
-            echo "::warning::Bundle is ${SIZE_KIB} KiB — dangerously close to 3072 KiB limit. Reduce dependencies."
+          # Account is on Cloudflare Workers Paid (10 MB / 10240 KiB compressed
+          # limit, not the free plan's 3072 KiB) - budget raised accordingly,
+          # with headroom kept below the hard limit the same way the old
+          # 3072 budget kept headroom below the free-plan limit.
+          BUDGET_KIB=9000
+          if awk -v s="$SIZE_KIB" 'BEGIN { exit !(s > 8500) }'; then
+            echo "::warning::Bundle is ${SIZE_KIB} KiB — approaching the ${BUDGET_KIB} KiB budget. Reduce dependencies."
           fi
           if awk -v s="$SIZE_KIB" -v b="$BUDGET_KIB" 'BEGIN { exit !(s > b) }'; then
-            echo "::error::Worker bundle is ${SIZE_KIB} KiB, over the ${BUDGET_KIB} KiB budget (Cloudflare free-plan hard limit is 3072 KiB / 3 MiB). Deploy would be rejected by Cloudflare - check the output above for the largest dependencies before merging."
+            echo "::error::Worker bundle is ${SIZE_KIB} KiB, over the ${BUDGET_KIB} KiB budget (Cloudflare Workers Paid hard limit is 10240 KiB / 10 MB compressed). Deploy would be rejected by Cloudflare - check the output above for the largest dependencies before merging."
             exit 1
           fi
         env:
