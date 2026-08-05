@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const offset = (page - 1) * pageSize;
   const totalRow = await queryOne<{ total: number }>("SELECT COUNT(*)::int AS total FROM companies", []);
   const data = await query(
-    `SELECT id, name, website, linkedin_url, logo_url, employees_count, address, slogan, description, industry, source, last_seen_at, created_at, updated_at
+    `SELECT id, name, website, linkedin_url, logo_url, employees_count, slogan, source, last_seen_at, created_at
      FROM companies ORDER BY last_seen_at DESC NULLS LAST, updated_at DESC OFFSET $1 LIMIT $2`,
     [offset, pageSize]
   );
