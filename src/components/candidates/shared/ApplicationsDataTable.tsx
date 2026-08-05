@@ -6,8 +6,8 @@ import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 interface DashboardApplication {
   application_id: string;
-  candidate_id: string;
-  candidate_name: string;
+  candidate_id?: string;
+  candidate_name?: string;
   status: string;
   applied_at: string | null;
   follow_up_at: string | null;
@@ -75,6 +75,7 @@ export default function ApplicationsDataTable({
   var [copiedId, setCopiedId] = useState<string | null>(null);
 
   var totalPages = totalCount !== undefined ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
+  var showCandidateColumn = applications.some(function (a) { return !!a.candidate_name; });
 
   if (applications.length === 0) {
     return (
@@ -110,7 +111,7 @@ export default function ApplicationsDataTable({
         <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr>
-              <th onClick={function () { onSort("candidate_name"); }} style={TH_STYLE}>Candidate {renderSortIndicator("candidate_name")}</th>
+              {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={TH_STYLE}>Candidate {renderSortIndicator("candidate_name")}</th>}
               <th onClick={function () { onSort("company_name"); }} style={TH_STYLE}>Company {renderSortIndicator("company_name")}</th>
               <th onClick={function () { onSort("job_title"); }} style={TH_STYLE}>Job Role {renderSortIndicator("job_title")}</th>
               <th style={{ ...TH_STYLE, cursor: "default" }}>Job ID</th>
@@ -130,11 +131,15 @@ export default function ApplicationsDataTable({
 
               return (
                 <tr key={app.application_id} style={{ borderBottom: "1px solid var(--border)", transition: "background 0.15s" }}>
-                  <td style={{ padding: "10px 12px", fontWeight: 600 }}>
-                    <a href={"/candidates/" + app.candidate_id} style={{ color: "var(--ink)", textDecoration: "none" }}>
-                      {app.candidate_name}
-                    </a>
-                  </td>
+                  {showCandidateColumn && (
+                    <td style={{ padding: "10px 12px", fontWeight: 600 }}>
+                      {app.candidate_id ? (
+                        <a href={"/candidates/" + app.candidate_id} style={{ color: "var(--ink)", textDecoration: "none" }}>
+                          {app.candidate_name}
+                        </a>
+                      ) : (app.candidate_name || "—")}
+                    </td>
+                  )}
                   <td style={{ padding: "10px 12px", fontWeight: 600 }}>
                     {app.company_website ? (
                       <a href={app.company_website} target="_blank" rel="noopener noreferrer"
