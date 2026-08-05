@@ -111,6 +111,7 @@ SKILLS SECTION RULES (CRITICAL):
 * From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the 'name' property) as the guide.
 * Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
 * Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
+* NEVER carry forward "Microsoft Office", "MS Office", "Office 365", or bare "Word"/"PowerPoint" into the tailored resume, even if it exists in the base resume's skill categories — drop it silently when copying/expanding categories. Universal office-suite literacy wastes space that should go to real technical differentiators. Excel is the exception: it's a genuine, specific skill many roles require — keep "Excel" as its own entry if the base resume/evidence supports it, just never folded into a generic "Microsoft Office" bucket.
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array.

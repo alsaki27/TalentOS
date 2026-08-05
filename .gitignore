@@ -53,6 +53,7 @@ dataset_linkedin-jobs-scraper_*.json
 
 # IDE and temporary CLI cache (never commit)
 .trae/
+.wrangler/
 .wrangler-dryrun/
 tmp/
 

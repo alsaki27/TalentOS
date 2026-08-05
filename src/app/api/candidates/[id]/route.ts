@@ -15,6 +15,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   try {
     const candidate = await queryOne<Record<string, any>>('SELECT * FROM candidates WHERE id = $1', [params.id]);
     if (!candidate) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // Never send the candidate's password hash to the browser, even to staff.
+    delete candidate.password_hash;
 
     const applications = await query<Record<string, any>>(`
       SELECT a.*,

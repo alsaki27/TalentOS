@@ -10,6 +10,10 @@ export interface JWTPayload {
   user_id: string;
   email: string | null;
   role: string;
+  // Absent = staff token (pre-existing tokens keep working). "candidate" marks a
+  // portal session so candidate and staff sessions can never be confused even if
+  // a cookie name collided somehow — each auth path checks this explicitly.
+  type?: "candidate";
   iat: number;
   exp: number;
 }

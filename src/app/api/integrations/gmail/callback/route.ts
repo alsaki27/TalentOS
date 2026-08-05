@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { exchangeGmailCode, getGoogleEmail, GMAIL_SCOPES } from "@/lib/integrations/googleGmail";
 import { queryOne, execute } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
+import { encryptSecret } from "@/server/security/secretCrypto";
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -31,6 +32,8 @@ export async function GET(req: NextRequest) {
       ? new Date(Date.now() + token.expires_in * 1000).toISOString()
       : null;
 
+    // Tokens are encrypted at rest (AES-256-GCM, same helper as AI API keys) —
+    // never store Gmail access/refresh tokens in plaintext.
     const payload = {
       provider: "gmail" as const,
       owner_type: oauthState.owner_type,
@@ -38,8 +41,8 @@ export async function GET(req: NextRequest) {
       candidate_id: oauthState.candidate_id,
       email,
       scopes: token.scope ? token.scope.split(/\s+/) : GMAIL_SCOPES,
-      access_token: token.access_token,
-      refresh_token: token.refresh_token ?? null,
+      access_token: await encryptSecret(token.access_token),
+      refresh_token: token.refresh_token ? await encryptSecret(token.refresh_token) : null,
       token_expires_at: expiresAt,
       status: "active" as const,
       metadata: { token_type: token.token_type ?? "Bearer" },

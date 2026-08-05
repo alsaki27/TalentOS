@@ -90,6 +90,9 @@ interface CandidateDetail {
   eeo_veteran?: string | null;
   eeo_disability?: string | null;
   portal_token: string;
+  account_created_at: string | null;
+  account_email: string | null;
+  last_login_at: string | null;
   applications: Application[];
   resumes: Resume[];
 }
@@ -330,6 +333,8 @@ export default function CandidateProfilePage() {
   const [events, setEvents] = useState<ApplicationEvent[]>([]);
   const [comments, setComments] = useState<ApplicationComment[]>([]);
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
   const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
@@ -909,10 +914,38 @@ export default function CandidateProfilePage() {
   }
 
   function copyPortalLink() {
-    const url = `${window.location.origin}/portal/${candidate?.portal_token}`;
+    // Invite link: candidate sets a password and/or connects Google to create a
+    // real login. The old anonymous read-only link (/portal/<token>) still works
+    // on its own if ever needed, but this button now drives account creation.
+    const url = `${window.location.origin}/portal/invite/${candidate?.portal_token}`;
     navigator.clipboard.writeText(url);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
+  }
+
+  async function sendPortalInvite() {
+    setInviteSending(true);
+    setInviteMessage("");
+    try {
+      const res = await fetch(`/api/candidates/${candidate?.id}/invite`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setInviteMessage(data.error || "Could not send invite.");
+        return;
+      }
+      if (data.emailSent) {
+        setInviteMessage("Invite email sent.");
+      } else {
+        navigator.clipboard.writeText(data.link);
+        setInviteMessage(
+          data.emailError && data.emailError !== "No recipient address provided" && data.emailError !== "No email on file for this candidate."
+            ? "Email delivery isn't configured yet — link copied to clipboard instead."
+            : "No email on file — invite link copied to clipboard instead."
+        );
+      }
+    } finally {
+      setInviteSending(false);
+    }
   }
 
   function toggleAppSelected(id: string) {
@@ -945,9 +978,24 @@ export default function CandidateProfilePage() {
     <>
       <div className="page-header">
         <h1>{candidate.name}</h1>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy candidate portal link"}</button>
-          <button onClick={() => setShowEdit(true)}>Edit profile</button>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {candidate.account_created_at ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Portal active since {new Date(candidate.account_created_at).toLocaleDateString()}
+                {candidate.last_login_at ? ` · last login ${new Date(candidate.last_login_at).toLocaleDateString()}` : " · never logged in"}
+              </span>
+            ) : (
+              <>
+                <button onClick={sendPortalInvite} disabled={inviteSending}>
+                  {inviteSending ? "Inviting..." : "Invite to portal"}
+                </button>
+                <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy invite link"}</button>
+              </>
+            )}
+            <button onClick={() => setShowEdit(true)}>Edit profile</button>
+          </div>
+          {inviteMessage && <span className="muted" style={{ fontSize: 12 }}>{inviteMessage}</span>}
         </div>
       </div>
 

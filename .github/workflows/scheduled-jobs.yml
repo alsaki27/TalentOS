@@ -15,6 +15,7 @@ on:
     - cron: '0 0 * * *'    # Job agent scrape – daily at 00:00 UTC
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
     - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
+    - cron: '*/20 * * * *' # Gmail sync + AI triage – every 20 minutes
   workflow_dispatch:
     inputs:
       job:
@@ -37,6 +38,7 @@ on:
           - job-description-enrichment
           - retry-failed-since
           - job-agent-poll
+          - gmail-sync
 
 
 jobs:
@@ -338,6 +340,26 @@ jobs:
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/enrich")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  gmail-sync:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/20 * * * *') ||
+      github.event.inputs.job == 'gmail-sync' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Gmail sync + AI triage
+    steps:
+      - name: Call Gmail sync
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/gmail-sync")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Gmail sync failed with HTTP $HTTP_CODE"
             exit 1
           fi
 

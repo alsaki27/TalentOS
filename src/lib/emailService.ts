@@ -3,6 +3,7 @@
 // Replace with Resend/SendGrid integration when ready.
 
 import { query, queryOne, execute } from "@/server/db/neon";
+import { isGraphMailConfigured, sendGraphMail } from "@/lib/msGraphMail";
 
 export interface SendEmailOptions {
   to: string;
@@ -42,13 +43,39 @@ export function renderTemplate(templateBody: string, mergeData: Record<string, s
 
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   try {
-    // Mock: just log to DB. Replace with Resend/SendGrid integration.
+    // Delivery priority: Microsoft Graph (talent@skarion.com via Microsoft 365)
+    // if configured, then Resend, then log-only mock — same graceful-degrade
+    // pattern as encryptSecret() elsewhere in this codebase, so this is safe to
+    // ship regardless of which (if either) is set up yet.
+    let deliveryError: string | null = null;
+
+    if (!opts.to) {
+      deliveryError = "No recipient address provided";
+    } else if (isGraphMailConfigured()) {
+      const result = await sendGraphMail({ to: opts.to, subject: opts.subject, html: opts.body });
+      if (!result.success) deliveryError = result.error ?? "Microsoft Graph send failed";
+    } else if (process.env.RESEND_API_KEY) {
+      const from = process.env.EMAIL_FROM || "TalentOS <onboarding@resend.dev>";
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to: opts.to, subject: opts.subject, html: opts.body }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => "");
+        deliveryError = `Resend error (${res.status}): ${errBody.slice(0, 300)}`;
+      }
+    }
+
     const data = await queryOne<{ id: string }>(
-      `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-      [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, "sent", opts.sentBy ?? null, new Date().toISOString()]
+      `INSERT INTO email_logs (candidate_id, template_id, sequence_id, step_number, subject, body, status, sent_by, sent_at, error_message) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+      [opts.candidateId ?? null, opts.templateId ?? null, opts.sequenceId ?? null, opts.stepNumber ?? null, opts.subject, opts.body, deliveryError ? "failed" : "sent", opts.sentBy ?? null, new Date().toISOString(), deliveryError]
     );
     if (!data) {
       return { success: false, error: "Insert failed" };
+    }
+    if (deliveryError) {
+      return { success: false, error: deliveryError, logId: data.id };
     }
     return { success: true, logId: data.id };
   } catch (err: any) {

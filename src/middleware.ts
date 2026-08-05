@@ -4,15 +4,35 @@ import { queryOne } from "@/server/db/neon";
 import { canAccessPath, getDefaultRouteForRole, normalizeUserRole } from "@/lib/auth";
 
 const ACCESS_TOKEN_COOKIE = "skarion_access_token";
+const CANDIDATE_TOKEN_COOKIE = "skarion_candidate_token";
 
 const PUBLIC_FILE = /\.(.*)$/;
+
+// The pre-existing anonymous magic-link routes (/api/portal/<portal_token>/...)
+// stay public unchanged — the token itself is the secret, same as before this
+// feature existed. Only the new /api/portal/me/* and /api/portal/auth/* paths are
+// real, session-gated endpoints; distinguish by the literal second path segment.
+function isLegacyAnonymousPortalPath(pathname: string) {
+  const match = pathname.match(/^\/api\/portal\/([^/]+)(?:\/|$)/);
+  if (!match) return false;
+  return match[1] !== "me" && match[1] !== "auth";
+}
+
+function isPortalAuthPublicPath(pathname: string) {
+  return (
+    pathname === "/portal/login" ||
+    pathname.startsWith("/portal/invite/") ||
+    pathname.startsWith("/api/portal/auth/") ||
+    pathname.startsWith("/api/portal/invite/")
+  );
+}
 
 function isPublicPath(pathname: string) {
   return (
     pathname === "/login" ||
     pathname === "/signup" ||
-    pathname.startsWith("/portal") ||
-    pathname.startsWith("/api/portal") ||
+    isPortalAuthPublicPath(pathname) ||
+    isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||
     pathname === "/api/health" ||
     pathname === "/api/integrations/gmail/callback" ||
@@ -139,9 +159,43 @@ function isAiKeyReadinessAuthorized(req: NextRequest, pathname: string) {
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
+// Candidate-session-gated paths: everything under /portal (except the public
+// login/invite pages already excluded above) and /api/portal/me/*. Entirely
+// separate cookie/JWT from staff — never touches ACCESS_TOKEN_COOKIE or the
+// profiles table, so staff auth and the job-application routes are unaffected.
+function isCandidatePortalPath(pathname: string) {
+  if (pathname.startsWith("/api/portal/me")) return true;
+  return pathname === "/portal" || pathname.startsWith("/portal/");
+}
+
+async function getVerifiedCandidateSession(token: string) {
+  const jwtPayload = await verifyJWT(token);
+  if (!jwtPayload || jwtPayload.type !== "candidate") return null;
+  const candidate = await queryOne<{ id: string }>("SELECT id FROM candidates WHERE id = $1", [jwtPayload.user_id]);
+  return candidate ? { candidateId: candidate.id } : null;
+}
+
 export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublicPath(pathname)) return NextResponse.next();
+
+  if (isCandidatePortalPath(pathname)) {
+    const candidateToken = req.cookies.get(CANDIDATE_TOKEN_COOKIE)?.value;
+    const candidateSession = candidateToken ? await getVerifiedCandidateSession(candidateToken) : null;
+    if (candidateSession) {
+      const res = NextResponse.next();
+      res.headers.set("x-skarion-candidate-id", candidateSession.candidateId);
+      return res;
+    }
+    if (pathname.startsWith("/api")) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
+    const portalLoginUrl = req.nextUrl.clone();
+    portalLoginUrl.pathname = "/portal/login";
+    portalLoginUrl.search = "";
+    portalLoginUrl.searchParams.set("next", `${pathname}${search}`);
+    return NextResponse.redirect(portalLoginUrl);
+  }
   // Extension API paths: skip middleware auth entirely — each route handler
   // authenticates via its own authenticateExtension() call and handles CORS
   // via withExtensionCors(). Intercepting here drops CORS headers on Cloudflare Workers.
