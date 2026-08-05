@@ -8,6 +8,12 @@ import {
 } from "@/server/auth/candidateAuth";
 import { execute } from "@/server/db/neon";
 
+// Never derive redirects from the incoming request's origin — confirmed
+// unreliable inside this Worker runtime (a sibling route's req.url resolved to
+// "http://n" in production). Same TALENTOS_BASE_URL convention used everywhere
+// else in this codebase.
+const BASE_URL = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -22,13 +28,13 @@ export async function GET(req: NextRequest) {
     savedState = null;
   }
 
-  if (error) return NextResponse.redirect(new URL("/portal/login?error=google", url.origin));
+  if (error) return NextResponse.redirect(new URL("/portal/login?error=google", BASE_URL));
   if (!code || !state || !savedState || savedState.state !== state) {
-    return NextResponse.redirect(new URL("/portal/login?error=state", url.origin));
+    return NextResponse.redirect(new URL("/portal/login?error=state", BASE_URL));
   }
 
   try {
-    const googleUser = await exchangeCandidateGoogleCode(url.origin, code);
+    const googleUser = await exchangeCandidateGoogleCode(code);
 
     // Case 1: this Google account is already linked to a candidate -> log in.
     let candidate = await findCandidateByGoogleSub(googleUser.sub);
@@ -52,13 +58,13 @@ export async function GET(req: NextRequest) {
     }
 
     if (!candidate) {
-      return NextResponse.redirect(new URL("/portal/login?error=no_account", url.origin));
+      return NextResponse.redirect(new URL("/portal/login?error=no_account", BASE_URL));
     }
 
-    const response = await createCandidateAuthResponse(candidate, new URL("/portal", url.origin).toString());
+    const response = await createCandidateAuthResponse(candidate, new URL("/portal", BASE_URL).toString());
     response.cookies.set(CANDIDATE_OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
     return response;
   } catch (err: any) {
-    return NextResponse.redirect(new URL(`/portal/login?error=${encodeURIComponent(err.message || "google")}`, url.origin));
+    return NextResponse.redirect(new URL(`/portal/login?error=${encodeURIComponent(err.message || "google")}`, BASE_URL));
   }
 }

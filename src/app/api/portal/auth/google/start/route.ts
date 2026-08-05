@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   crypto.getRandomValues(array);
   const state = btoa(String.fromCharCode(...array)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
-  const response = NextResponse.redirect(candidateGoogleAuthUrl(url.origin, state));
+  const response = NextResponse.redirect(candidateGoogleAuthUrl(state));
   const secure = process.env.NODE_ENV === "production";
   response.cookies.set(CANDIDATE_OAUTH_STATE_COOKIE, JSON.stringify({ state, invite }), {
     httpOnly: true,

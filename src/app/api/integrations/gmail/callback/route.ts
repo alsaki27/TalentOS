@@ -4,13 +4,19 @@ import { queryOne, execute } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { encryptSecret } from "@/server/security/secretCrypto";
 
+// Never derive redirects from the incoming request's origin — confirmed
+// unreliable inside this Worker runtime (a sibling route's req.url resolved to
+// "http://n" in production). Same TALENTOS_BASE_URL convention used everywhere
+// else in this codebase.
+const BASE_URL = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const error = url.searchParams.get("error");
 
-  if (error) return NextResponse.redirect(new URL(`/account?gmail=error&reason=${encodeURIComponent(error)}`, url.origin));
+  if (error) return NextResponse.redirect(new URL(`/account?gmail=error&reason=${encodeURIComponent(error)}`, BASE_URL));
   if (!code || !state) return NextResponse.json({ error: "code and state are required" }, { status: 400 });
 
   const oauthState = await queryOne<{ state: string; provider: string; expires_at: string; owner_type: string; owner_user_id: string | null; candidate_id: string | null; redirect_after: string | null }>(
@@ -26,7 +32,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const token = await exchangeGmailCode(code, url.origin);
+    const token = await exchangeGmailCode(code);
     const email = await getGoogleEmail(token.access_token, token.id_token);
     const expiresAt = token.expires_in
       ? new Date(Date.now() + token.expires_in * 1000).toISOString()
@@ -92,7 +98,7 @@ export async function GET(req: NextRequest) {
     });
 
     const redirectAfter = oauthState.redirect_after || "/account";
-    return NextResponse.redirect(new URL(`${redirectAfter}${redirectAfter.includes("?") ? "&" : "?"}gmail=connected`, url.origin));
+    return NextResponse.redirect(new URL(`${redirectAfter}${redirectAfter.includes("?") ? "&" : "?"}gmail=connected`, BASE_URL));
   } catch (err: any) {
     return NextResponse.json({ error: err.message || "Gmail OAuth callback failed." }, { status: 500 });
   }

@@ -8,8 +8,14 @@ export const GMAIL_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
 ];
 
-export function googleRedirectUri(origin: string) {
-  return process.env.GOOGLE_OAUTH_REDIRECT_URI || `${origin}/api/integrations/gmail/callback`;
+// Never derive this from the incoming request's origin — confirmed unreliable
+// inside this Worker runtime (a sibling route's req.url resolved to "http://n"
+// in production). GMAIL_OAUTH_REDIRECT_URI is a separate override from
+// GOOGLE_OAUTH_REDIRECT_URI (staff login's own override in server/auth/google.ts)
+// so the two callback flows can never collide if someone sets one but not the other.
+export function googleRedirectUri() {
+  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+  return process.env.GMAIL_OAUTH_REDIRECT_URI || `${baseUrl}/api/integrations/gmail/callback`;
 }
 
 export function newOAuthState(): string {
@@ -21,13 +27,13 @@ export function newOAuthState(): string {
     .replace(/=+$/, "");
 }
 
-export function gmailAuthUrl(params: { state: string; origin: string }) {
+export function gmailAuthUrl(params: { state: string }) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) throw new Error("GOOGLE_CLIENT_ID is required.");
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("redirect_uri", googleRedirectUri(params.origin));
+  url.searchParams.set("redirect_uri", googleRedirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", GMAIL_SCOPES.join(" "));
   url.searchParams.set("access_type", "offline");
@@ -37,7 +43,7 @@ export function gmailAuthUrl(params: { state: string; origin: string }) {
   return url.toString();
 }
 
-export async function exchangeGmailCode(code: string, origin: string) {
+export async function exchangeGmailCode(code: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -51,7 +57,7 @@ export async function exchangeGmailCode(code: string, origin: string) {
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: googleRedirectUri(origin),
+      redirect_uri: googleRedirectUri(),
       grant_type: "authorization_code",
     }),
   });

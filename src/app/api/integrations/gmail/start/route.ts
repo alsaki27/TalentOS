@@ -24,5 +24,5 @@ export async function GET(req: NextRequest) {
     [state, "gmail", ownerType, ownerType === "profile" ? context.profile.user_id : null, redirectAfter, expiresAt]
   );
 
-  return NextResponse.redirect(gmailAuthUrl({ state, origin: url.origin }));
+  return NextResponse.redirect(gmailAuthUrl({ state }));
 }

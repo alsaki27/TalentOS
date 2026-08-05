@@ -17,7 +17,6 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
   }
 
-  const url = new URL(req.url);
   const state = newOAuthState();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
@@ -26,5 +25,5 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     [state, "gmail", "candidate", candidate.id, `/portal/${params.token}`, expiresAt]
   );
 
-  return NextResponse.redirect(gmailAuthUrl({ state, origin: url.origin }));
+  return NextResponse.redirect(gmailAuthUrl({ state }));
 }

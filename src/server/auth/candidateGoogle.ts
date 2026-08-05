@@ -6,17 +6,24 @@
 
 export const CANDIDATE_LOGIN_SCOPES = ["openid", "email", "profile"];
 
-export function candidateGoogleRedirectUri(origin: string) {
-  return `${origin}/api/portal/auth/google/callback`;
+// Never derive this from the incoming request's origin — confirmed unreliable
+// inside this Worker runtime (a sibling route's req.url resolved to "http://n"
+// in production). Same TALENTOS_BASE_URL convention used everywhere else in
+// this codebase. The redirect_uri sent here MUST exactly match what's
+// registered in Google Cloud Console and what's sent again during the token
+// exchange — a request-derived value can't guarantee that consistency.
+function candidateGoogleRedirectUri() {
+  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+  return `${baseUrl}/api/portal/auth/google/callback`;
 }
 
-export function candidateGoogleAuthUrl(origin: string, state: string) {
+export function candidateGoogleAuthUrl(state: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) throw new Error("GOOGLE_CLIENT_ID is not configured.");
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("redirect_uri", candidateGoogleRedirectUri(origin));
+  url.searchParams.set("redirect_uri", candidateGoogleRedirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", CANDIDATE_LOGIN_SCOPES.join(" "));
   url.searchParams.set("state", state);
@@ -24,7 +31,7 @@ export function candidateGoogleAuthUrl(origin: string, state: string) {
   return url.toString();
 }
 
-export async function exchangeCandidateGoogleCode(origin: string, code: string) {
+export async function exchangeCandidateGoogleCode(code: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
@@ -39,7 +46,7 @@ export async function exchangeCandidateGoogleCode(origin: string, code: string) 
       client_secret: clientSecret,
       code,
       grant_type: "authorization_code",
-      redirect_uri: candidateGoogleRedirectUri(origin),
+      redirect_uri: candidateGoogleRedirectUri(),
     }),
     cache: "no-store",
   });
