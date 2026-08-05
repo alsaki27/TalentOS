@@ -232,10 +232,10 @@ export default function ApplicationsDataTable({
                           opacity: isLoading ? 0.5 : 1, outline: "none",
                         }}
                       >
+                        <option value="assigned">Assigned</option>
+                        <option value="stacked">Stacked</option>
+                        <option value="in_progress">In Progress</option>
                         <option value="applied">Applied</option>
-                        <option value="assigned">Applied</option>
-                        <option value="stacked">Applied</option>
-                        <option value="in_progress">Applied</option>
                         <option value="replied">📞 Screening</option>
                         <option value="interview">🎯 Interview</option>
                         <option value="offer">🏆 Offer</option>
