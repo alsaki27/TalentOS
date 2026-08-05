@@ -43,7 +43,7 @@ export function renderTemplate(templateBody: string, mergeData: Record<string, s
 
 export async function sendEmail(opts: SendEmailOptions): Promise<SendEmailResult> {
   try {
-    // Delivery priority: Microsoft Graph (talent@skarion.com via Microsoft 365)
+    // Delivery priority: Microsoft Graph (via Microsoft 365, mailbox set by MS_GRAPH_SENDER_EMAIL)
     // if configured, then Resend, then log-only mock — same graceful-degrade
     // pattern as encryptSecret() elsewhere in this codebase, so this is safe to
     // ship regardless of which (if either) is set up yet.

@@ -1,5 +1,5 @@
 // src/lib/msGraphMail.ts
-// Sends mail as a Microsoft 365 mailbox (e.g. talent@skarion.com) via the
+// Sends mail as a Microsoft 365 mailbox (e.g. support@skarion.com) via the
 // Microsoft Graph API, using an app-only (client credentials) OAuth grant —
 // no interactive login, no stored user password. Requires an Azure AD app
 // registration with the Mail.Send *application* permission, admin-consented,
@@ -10,7 +10,7 @@
 //   MS_GRAPH_TENANT_ID     - Azure AD tenant ID (GUID)
 //   MS_GRAPH_CLIENT_ID     - App registration's Application (client) ID
 //   MS_GRAPH_CLIENT_SECRET - App registration's client secret value
-//   MS_GRAPH_SENDER_EMAIL  - The mailbox to send as, e.g. talent@skarion.com
+//   MS_GRAPH_SENDER_EMAIL  - The mailbox to send as, e.g. support@skarion.com
 
 export function isGraphMailConfigured(): boolean {
   return Boolean(
