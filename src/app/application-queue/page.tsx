@@ -546,15 +546,14 @@ export default function ApplicationQueuePage() {
                 <th>Job</th>
                 <th>Status</th>
                 <th>AI Pipeline</th>
-                <th>Priority</th>
-                <th>Review</th>
+                <th style={{ width: 230 }}>Stage</th>
                 <th>Owner</th>
                 <th>Due</th>
                 <th style={{ width: 120 }}>Ticket ID</th>
                 <th style={{ width: 120 }}>Job ID</th>
                 <th style={{ width: 120 }}>Base Resume ID</th>
                 <th style={{ width: 120 }}>Tailored Resume ID</th>
-                <th style={{ width: 280 }}>Actions</th>
+                <th style={{ width: 220 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -650,12 +649,23 @@ export default function ApplicationQueuePage() {
                     )}
                   </td>
 
-                  <td><span className={`badge badge-priority-${item.priority}`}>{item.priority}</span></td>
-
                   <td>
-                    <span className={`badge badge-review-${item.review_status}`}>
-                      {item.review_status === "pending" ? "⏳ Pending" : item.review_status === "approved" ? "✅ Approved" : item.review_status === "changes_requested" ? "✏️ Changes" : "—"}
-                    </span>
+                    <select
+                      value={item.ae_stage}
+                      disabled={actionLoading === `${item.id}:ae_stage`}
+                      onChange={(e) => changeAeStage(item.id, e.target.value)}
+                      title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
+                      style={{ width: "100%", minWidth: 205, fontSize: 14, fontWeight: 600, padding: "8px 10px" }}
+                    >
+                      {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                    {item.ae_reviewed_by_name && (
+                      <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
+                        Reviewed by {item.ae_reviewed_by_name}
+                      </div>
+                    )}
                   </td>
 
                   <td>
@@ -705,25 +715,6 @@ export default function ApplicationQueuePage() {
                       <button className="btn-compact btn-sm" onClick={() => uploadProof(item)} disabled={actionLoading === `${item.id}:proof`}>
                         {actionLoading === `${item.id}:proof` ? "⟳" : "📎 Proof"}
                       </button>
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <select
-                          className="input btn-compact btn-sm"
-                          value={item.ae_stage}
-                          disabled={actionLoading === `${item.id}:ae_stage`}
-                          onChange={(e) => changeAeStage(item.id, e.target.value)}
-                          title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
-                        >
-                          {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-                            <option key={value} value={value}>{label}</option>
-                          ))}
-                        </select>
-                        {item.ae_reviewed_by_name && (
-                          <span className="text-muted" style={{ fontSize: 10 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
-                            Reviewed by {item.ae_reviewed_by_name}
-                          </span>
-                        )}
-                      </div>
 
                       {isManager && (
                         <>
