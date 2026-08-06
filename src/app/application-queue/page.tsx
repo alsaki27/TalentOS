@@ -549,11 +549,11 @@ export default function ApplicationQueuePage() {
                 <th style={{ width: 230 }}>Stage</th>
                 <th>Owner</th>
                 <th>Due</th>
-                <th style={{ width: 120 }}>Ticket ID</th>
-                <th style={{ width: 120 }}>Job ID</th>
-                <th style={{ width: 120 }}>Base Resume ID</th>
-                <th style={{ width: 120 }}>Tailored Resume ID</th>
-                <th style={{ width: 220 }}>Actions</th>
+                <th style={{ width: 90 }}>Ticket ID</th>
+                <th style={{ width: 90 }}>Job ID</th>
+                <th style={{ width: 90 }}>Base Resume ID</th>
+                <th style={{ width: 90 }}>Tailored Resume ID</th>
+                <th style={{ width: 200 }}>Actions</th>
               </tr>
             </thead>
             <tbody>

@@ -239,10 +239,15 @@ body::before {
   padding: 28px 24px 60px;
 }
 
-/* Application Queue shows extra ID columns (job/base resume/ticket/tailored
-   resume) for debugging - wider than the default page container. */
+/* Application Queue's table needs ~2000px+ to lay out its 13 columns
+   (candidate/job/status/AI pipeline/stage/owner/due + 4 ID columns +
+   actions) without an internal horizontal scrollbar on top of the page's
+   own centering - 1600px still left it scrolling on a 1920-2000px display.
+   Goes almost full-bleed instead of a fixed cap. */
 .page:has(.app-queue-page) {
-  max-width: 1600px;
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
 }
 
 .page-header {
@@ -529,6 +534,15 @@ label {
 
 .table tr:hover td {
   background: var(--surface-raised);
+}
+
+/* Application Queue's 13-column table needs every horizontal pixel it can
+   get - tighter cell padding than the rest of the app's tables, scoped so
+   this doesn't cramp candidates/companies/interviews tables elsewhere. */
+.app-queue-page .table th,
+.app-queue-page .table td {
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .table-compact td {
