@@ -16,31 +16,43 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
   const status = url.searchParams.get("status") || "";
   const tier = url.searchParams.get("tier") || "";
+  const pipelineStage = url.searchParams.get("pipelineStage") || "";
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
   const columns = compact
     ? "c.id, c.name, c.resume_url, c.resume_filename, EXISTS(SELECT 1 FROM base_resumes br WHERE br.candidate_id = c.id) as has_base_resume"
-    : "c.id, c.name, c.email, c.phone, c.status, c.target_tier, c.resume_filename, c.avatar_url, c.created_at";
+    : "c.id, c.name, c.email, c.phone, c.status, c.pipeline_stage, c.target_tier, c.resume_filename, c.avatar_url, c.created_at";
+
+  // Actively-applying candidates surface first, then not-started, then placed, then dropped last.
+  const stageOrder = `CASE c.pipeline_stage
+      WHEN 'applying' THEN 0
+      WHEN 'not_started' THEN 1
+      WHEN 'placed' THEN 2
+      WHEN 'dropped' THEN 3
+      ELSE 4
+    END`;
 
   const dataSql = `
     SELECT ${columns} FROM candidates c
     WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
       AND ($3 = '' OR c.status = $3)
       AND ($4 = '' OR c.target_tier = $4)
-    ORDER BY c.created_at DESC
-    OFFSET $5 LIMIT $6
+      AND ($5 = '' OR c.pipeline_stage = $5)
+    ORDER BY ${stageOrder}, c.name ASC
+    OFFSET $6 LIMIT $7
   `;
   const countSql = `
     SELECT COUNT(*)::int as total FROM candidates
     WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
       AND ($3 = '' OR status = $3)
       AND ($4 = '' OR target_tier = $4)
+      AND ($5 = '' OR pipeline_stage = $5)
   `;
 
   try {
-    const data = await query<Record<string, any>>(dataSql, [search, searchParam, status, tier, offset, pageSize]);
-    const countRow = await queryOne<{ total: number }>(countSql, [search, searchParam, status, tier]);
+    const data = await query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]);
+    const countRow = await queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]);
     return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -59,8 +71,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const sql = `
-      INSERT INTO candidates (name, email, phone, status, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `;
     const data = await queryOne<Record<string, any>>(sql, [
@@ -68,6 +80,7 @@ export async function POST(req: NextRequest) {
       body.email ?? null,
       body.phone ?? null,
       body.status ?? "active",
+      body.pipeline_stage ?? "not_started",
       body.target_tier ?? null,
       body.notes ?? null,
       body.linkedin_url ?? null,

@@ -13,10 +13,25 @@ interface Candidate {
   email: string | null;
   phone: string | null;
   status: string;
+  pipeline_stage: string;
   target_tier: string | null;
   resume_filename: string | null;
   avatar_url: string | null;
 }
+
+const STAGE_LABELS: Record<string, string> = {
+  not_started: "Not Started",
+  applying: "Actively Applying",
+  placed: "Placed",
+  dropped: "Dropped",
+};
+
+const STAGE_BADGE_CLASS: Record<string, string> = {
+  not_started: "badge-waiting",
+  applying: "badge-scheduled",
+  placed: "badge-offer",
+  dropped: "badge-closed",
+};
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
@@ -31,15 +46,16 @@ export default function CandidatesPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
+  const [stageUpdating, setStageUpdating] = useState<string>("");
 
   function buildParams(pageNum: number, size: number) {
     const params = new URLSearchParams();
     params.set("page", String(pageNum));
     params.set("pageSize", String(size));
     if (search) params.set("search", search);
-    if (statusFilter) params.set("status", statusFilter);
+    if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
     return params;
   }
@@ -62,7 +78,25 @@ export default function CandidatesPage() {
   }
 
   // Any filter/search change re-queries from page 1.
-  useEffect(() => { load(1, pageSize); }, [search, statusFilter, tierFilter, pageSize]);
+  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, pageSize]);
+
+  async function changeStage(id: string, stage: string) {
+    setStageUpdating(id);
+    setItems((prev) => prev.map((c) => (c.id === id ? { ...c, pipeline_stage: stage } : c)));
+    try {
+      const res = await fetch(`/api/candidates/${id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline_stage: stage }),
+      });
+      if (!res.ok) throw new Error("Update failed");
+    } catch {
+      load(page, pageSize); // revert optimistic update on failure
+    } finally {
+      setStageUpdating("");
+    }
+  }
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -94,11 +128,11 @@ export default function CandidatesPage() {
     const res = await fetch(`/api/candidates?${buildParams(1, 1000)}`, { cache: "no-store" });
     const data = await res.json();
     const rows = data.items ?? [];
-    const csv = toCsv(rows, ["name", "email", "phone", "status", "target_tier", "resume_filename"]);
+    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "target_tier", "resume_filename"]);
     downloadCsv("candidates.csv", csv);
   }
 
-  const filtersActive = search || statusFilter || tierFilter;
+  const filtersActive = search || stageFilter || tierFilter;
 
   return (
     <>
@@ -109,11 +143,11 @@ export default function CandidatesPage() {
 
       <div className="filter-bar">
         <input placeholder="Search name or email…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
+        <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
+          <option value="">All stages</option>
+          <option value="not_started">Not Started</option>
+          <option value="applying">Actively Applying</option>
           <option value="placed">Placed</option>
-          <option value="paused">Paused</option>
           <option value="dropped">Dropped</option>
         </select>
         <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
@@ -123,7 +157,7 @@ export default function CandidatesPage() {
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setStatusFilter(""); setTierFilter(""); }}>Clear filters</button>
+          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
         <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
@@ -151,7 +185,7 @@ export default function CandidatesPage() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Target tier</th>
-                <th>Status</th>
+                <th>Stage</th>
                 <th>Resume</th>
                 <th></th>
               </tr>
@@ -170,7 +204,19 @@ export default function CandidatesPage() {
                   </td>
                   <td className="muted">{c.email || "—"}</td>
                   <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
-                  <td className="muted">{c.status}</td>
+                  <td>
+                    <select
+                      value={c.pipeline_stage}
+                      disabled={stageUpdating === c.id}
+                      onChange={(e) => changeStage(c.id, e.target.value)}
+                      className={`badge ${STAGE_BADGE_CLASS[c.pipeline_stage] ?? ""}`}
+                      style={{ cursor: "pointer", border: "none" }}
+                    >
+                      {Object.entries(STAGE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="muted">{c.resume_filename || "Not uploaded"}</td>
                   <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
                 </tr>

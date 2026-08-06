@@ -42,7 +42,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const body = await req.json();
 
   const allowedFields = [
-    "name", "email", "phone", "status", "target_tier",
+    "name", "email", "phone", "status", "pipeline_stage", "target_tier",
     "notes", "resume_url", "resume_filename",
     "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
     "linkedin_url", "github_url", "portfolio_url", "visa_status",
