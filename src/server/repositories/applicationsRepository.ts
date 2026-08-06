@@ -42,6 +42,13 @@ export interface ApplicationRow {
   created_at: string | null;
   updated_at: string | null;
   created_by: string | null;
+  ae_stage: string;
+  ae_stage_updated_at: string | null;
+  ae_stage_updated_by_user_id: string | null;
+  ae_stage_updated_by_name: string | null;
+  ae_reviewed_by_user_id: string | null;
+  ae_reviewed_by_name: string | null;
+  ae_reviewed_at: string | null;
 }
 
 export interface ApplicationEventRow {
@@ -110,6 +117,13 @@ export interface UpdateApplicationInput {
   proof_filename?: string | null;
   proof_uploaded_at?: string | null;
   proof_uploaded_by_user_id?: string | null;
+  ae_stage?: string;
+  ae_stage_updated_at?: string | null;
+  ae_stage_updated_by_user_id?: string | null;
+  ae_stage_updated_by_name?: string | null;
+  ae_reviewed_by_user_id?: string | null;
+  ae_reviewed_by_name?: string | null;
+  ae_reviewed_at?: string | null;
 }
 
 export interface ListApplicationsQuery {
@@ -249,6 +263,29 @@ export async function updateApplication(
 }
 
 /**
+ * Auto-advance an application's AE hand-off stage from "in_ai_pipeline" to
+ * "ready_for_review" once its AI workflow finishes - either the normal Final
+ * Polish finalization path, or a manager's manual Kanban "move to completed"
+ * override. Guarded on the current stage so it never clobbers a stage a human
+ * has already moved forward (or back) manually. No-op if the row isn't still
+ * sitting at "in_ai_pipeline".
+ */
+export async function advanceAeStageAfterAiCompletion(
+  applicationId: string,
+  actorName: string
+): Promise<void> {
+  await execute(
+    `UPDATE applications
+     SET ae_stage = 'ready_for_review',
+         ae_stage_updated_at = NOW(),
+         ae_stage_updated_by_user_id = NULL,
+         ae_stage_updated_by_name = $2
+     WHERE id = $1 AND ae_stage = 'in_ai_pipeline'`,
+    [applicationId, actorName]
+  );
+}
+
+/**
  * Delete an application by ID.
  */
 export async function deleteApplication(id: string): Promise<void> {
@@ -363,7 +400,9 @@ export async function listApplicationQueue(
     SELECT a.id, a.app_number, a.status, a.assigned_by, a.assigned_to, a.assigned_by_user_id, a.assigned_to_user_id,
       a.assignment_note, a.assignment_due_at, a.priority, a.review_status, a.review_note, a.reviewed_at,
       a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
-      jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename, 'candidate_number', c.candidate_number) as candidates,
+      a.ae_stage, a.ae_stage_updated_at, a.ae_stage_updated_by_user_id, a.ae_stage_updated_by_name,
+      a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
+      jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename, 'candidate_number', c.candidate_number, 'avatar_url', c.avatar_url) as candidates,
       jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score, 'job_number', j.job_number) as jobs,
       w.status as workflow_status,
       w.id as workflow_id,
@@ -383,24 +422,26 @@ export async function listApplicationQueue(
     ) w ON true
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
     WHERE a.status = ANY($1)
-      AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
-      AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
-      AND ($8 = '' OR a.status = $8)
-      AND ($9 = '' OR a.assigned_to_user_id::text = $9 OR a.assigned_to = $9)
-      AND ($10 = '' OR a.priority = $10)
-      AND ($11 = '' OR a.review_status = $11)
-      AND ($12 <> 'mine' OR $13::text IS NULL OR a.assigned_to_user_id::text = $13::text)
-      AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
-      AND ($12 <> 'review' OR a.review_status = 'pending')
+      -- Every role (including application_engineer) sees the whole queue regardless
+      -- of assignment/owner - "mine" ($8) stays available as a voluntary filter.
+      -- NOTE: the Neon HTTP driver (like plain pg) errors "could not determine
+      -- data type of parameter" for any placeholder never referenced in the SQL
+      -- text - unlike a raw pg.Client test, unused params can't just be left in
+      -- the array. Renumbered end-to-end after dropping the old role-restriction
+      -- params instead of leaving gaps.
+      AND ($2 = '' OR c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3)
+      AND ($4 = '' OR a.status = $4)
+      AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
+      AND ($6 = '' OR a.priority = $6)
+      AND ($7 = '' OR a.review_status = $7)
+      AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
+      AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
+      AND ($8 <> 'review' OR a.review_status = 'pending')
     ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
-    OFFSET $15 LIMIT $16
+    OFFSET $11 LIMIT $12
   `;
   const items = await query<ApplicationRow>(dataSql, [
     statuses,
-    queryParams.userRole ?? "",
-    queryParams.userId ?? null,
-    queryParams.userEmail ?? null,
-    queryParams.userDisplayName ?? null,
     search,
     searchParam,
     status,
@@ -420,22 +461,17 @@ export async function listApplicationQueue(
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
     WHERE a.status = ANY($1)
-      AND ($2 <> 'application_engineer' OR a.assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND a.assigned_to IS NOT DISTINCT FROM $5::text))
-      AND ($6 = '' OR c.name ILIKE $7 OR j.title ILIKE $7 OR j.company ILIKE $7)
-      AND ($8 = '' OR a.status = $8)
-      AND ($9 = '' OR a.assigned_to_user_id::text = $9 OR a.assigned_to = $9)
-      AND ($10 = '' OR a.priority = $10)
-      AND ($11 = '' OR a.review_status = $11)
-      AND ($12 <> 'mine' OR $13::text IS NULL OR a.assigned_to_user_id::text = $13::text)
-      AND ($12 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $14))
-      AND ($12 <> 'review' OR a.review_status = 'pending')
+      AND ($2 = '' OR c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3)
+      AND ($4 = '' OR a.status = $4)
+      AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
+      AND ($6 = '' OR a.priority = $6)
+      AND ($7 = '' OR a.review_status = $7)
+      AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
+      AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
+      AND ($8 <> 'review' OR a.review_status = 'pending')
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     statuses,
-    queryParams.userRole ?? "",
-    queryParams.userId ?? null,
-    queryParams.userEmail ?? null,
-    queryParams.userDisplayName ?? null,
     search,
     searchParam,
     status,
@@ -462,18 +498,13 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
   const statuses = params.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
   const today = new Date().toISOString().slice(0, 10);
 
+  // Stats mirror listApplicationQueue's visibility: every role sees the whole
+  // queue, "mine" below stays a voluntary breakdown, not an access boundary.
   const baseWhere = `
     status = ANY($1)
-    AND ($2 <> 'application_engineer' OR assigned_to_user_id::text IS NOT DISTINCT FROM $3::text OR ($4::text IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $4::text) OR ($5::text IS NOT NULL AND assigned_to IS NOT DISTINCT FROM $5::text))
   `;
 
-  const baseParams = [
-    statuses,
-    params.userRole ?? "",
-    params.userId ?? null,
-    params.userEmail ?? null,
-    params.userDisplayName ?? null,
-  ];
+  const baseParams = [statuses];
 
   const [allRow, mineRow, overdueRow, reviewRow] = await Promise.all([
     queryOne<{ total: number }>(
@@ -481,11 +512,11 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
       baseParams
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id::text = $6::text`,
+      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id::text = $2::text`,
       [...baseParams, params.userId ?? ""]
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $6::date`,
+      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $2::date`,
       [...baseParams, today]
     ),
     queryOne<{ total: number }>(

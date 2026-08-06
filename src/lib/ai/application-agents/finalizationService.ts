@@ -128,7 +128,10 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
          tailored_resume_version_id = inserted.id,
          ai_workflow_id = ${workflowId},
          resume_generation_status = 'ready',
-         resume_generation_completed_at = NOW()
+         resume_generation_completed_at = NOW(),
+         ae_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE applications.ae_stage END,
+         ae_stage_updated_at = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE applications.ae_stage_updated_at END,
+         ae_stage_updated_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.ae_stage_updated_by_name END
        FROM inserted
        WHERE applications.id = ${wf.application_id}
        RETURNING inserted.id`,

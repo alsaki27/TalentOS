@@ -47,6 +47,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "priority", "review_status", "review_note", "reviewed_by_user_id", "reviewed_at",
     "adhoc_job_data", "adhoc_job_raw_text", "source_type",
     "proof_url", "proof_filename", "proof_uploaded_at", "proof_uploaded_by_user_id",
+    // ae_stage is deliberately NOT in assignmentFields below - both AEs and
+    // managers can move it, unlike the assignment/review fields it sits next to.
+    "ae_stage",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
@@ -86,10 +89,41 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
-  if ("status" in updates) {
+  let previousAeStage: string | null = null;
+  if ("status" in updates || "ae_stage" in updates) {
     const current = await findApplicationById(params.id);
     previousStatus = current?.status ?? null;
     previousReviewStatus = current?.review_status ?? null;
+    previousAeStage = current?.ae_stage ?? null;
+  }
+
+  // AE hand-off stage: In AI Pipeline -> Ready for AE Review -> Ready for AE
+  // Application -> AE Applied. Anyone touching it (AE or manager - no role
+  // gate here, unlike assignmentFields above) gets stamped as the last editor.
+  // The reviewer identity is captured separately and persists even after the
+  // ticket moves on to "applied", so whoever applies can see who reviewed it.
+  if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+    updates.ae_stage_updated_at = new Date().toISOString();
+    updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
+    updates.ae_stage_updated_by_name = currentUser.profile.display_name || currentUser.profile.email;
+
+    if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
+      updates.ae_reviewed_by_user_id = currentUser.profile.user_id;
+      updates.ae_reviewed_by_name = currentUser.profile.display_name || currentUser.profile.email;
+      updates.ae_reviewed_at = new Date().toISOString();
+    }
+
+    // Keep the underlying lifecycle status in sync so everything else that
+    // reads applications.status (queue filtering, candidate-dashboard counts,
+    // follow-up automation) doesn't silently drift from what the AE stage
+    // shows. Only when the caller didn't already set status explicitly.
+    if (!("status" in updates)) {
+      if (updates.ae_stage === "applied") {
+        updates.status = "applied";
+      } else if (previousStatus === "applied") {
+        updates.status = "in_progress";
+      }
+    }
   }
 
   if (updates.status === "applied") {

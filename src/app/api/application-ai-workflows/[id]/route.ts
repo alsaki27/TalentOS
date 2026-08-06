@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
 import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } from "@/server/repositories/applicationAiWorkflowRepository";
+import { advanceAeStageAfterAiCompletion } from "@/server/repositories/applicationsRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const dynamic = "force-dynamic";
@@ -136,6 +137,12 @@ export async function POST(
       }
 
       await updateWorkflowStatus(workflowId, isCompleted ? "completed" : "waiting", updates);
+      if (isCompleted) {
+        await advanceAeStageAfterAiCompletion(
+          wf.application_id,
+          context.profile.display_name || context.profile.email || "Manual (Kanban)"
+        );
+      }
       return NextResponse.json({ workflowId, current_stage: targetStage, status: isCompleted ? "completed" : "waiting" });
     }
 

@@ -23,7 +23,12 @@ interface QueueItem {
   proof_filename: string | null;
   proof_uploaded_at: string | null;
   source_type: string | null;
-  candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null } | null;
+  ae_stage: "in_ai_pipeline" | "ready_for_review" | "ready_for_application" | "applied";
+  ae_stage_updated_at: string | null;
+  ae_stage_updated_by_name: string | null;
+  ae_reviewed_by_name: string | null;
+  ae_reviewed_at: string | null;
+  candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null } | null;
   workflow_status?: string | null;
   workflow_id?: string | null;
@@ -58,6 +63,17 @@ const STATUS_ICONS: Record<string, string> = {
   applied: "✅",
 };
 
+// AE hand-off funnel, replacing the old one-way "✅ Applied" button. Both AEs
+// and managers can move a ticket between any of these (see PATCH /api/applications/[id]),
+// which auto-advances in_ai_pipeline -> ready_for_review on its own once Final
+// Polish finishes; the rest is a manual toggle either role can drive.
+const AE_STAGE_LABELS: Record<string, string> = {
+  in_ai_pipeline: "🤖 In AI Pipeline",
+  ready_for_review: "🔍 Ready for AE Review",
+  ready_for_application: "📤 Ready for AE Application",
+  applied: "✅ AE Applied",
+};
+
 // current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens, resume_forge,
 // hiring_panel, final_polish) - it names the stage currently running/about to
 // run, not a count of completed stages. Confirmed live: this table previously
@@ -71,6 +87,11 @@ const WORKFLOW_LABELS: Record<number, string> = {
   2: "👥 Hiring Panel",
   3: "✨ Final Polish",
 };
+
+// same convention as src/app/candidates/page.tsx -- keep in sync if that one changes
+function initials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
+}
 
 function IdCell({ value }: { value: string | null | undefined }) {
   if (!value) return <span className="text-muted" style={{ fontSize: 11 }}>—</span>;
@@ -272,6 +293,18 @@ export default function ApplicationQueuePage() {
       setActionLoading(null);
       if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
       setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
+      load(page, false);
+    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
+  }
+
+  async function changeAeStage(id: string, stage: string) {
+    setActionLoading(`${id}:ae_stage`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ae_stage: stage }) });
+      setActionLoading(null);
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".` });
       load(page, false);
     } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
   }
@@ -532,7 +565,12 @@ export default function ApplicationQueuePage() {
                   <td className="cell-main">
                     {item.candidates ? (
                       <>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {item.candidates.avatar_url ? (
+                            <img className="avatar-circle" src={item.candidates.avatar_url} alt={item.candidates.name} />
+                          ) : (
+                            <span className="avatar-circle">{initials(item.candidates.name)}</span>
+                          )}
                           <Link className="row-link" href={`/candidates/${item.candidates.id}`}>{item.candidates.name}</Link>
                           {item.candidates.candidate_number != null && (
                             <span className="badge badge-info" style={{ fontSize: 11, fontFamily: "monospace" }}>C#{item.candidates.candidate_number}</span>
@@ -668,9 +706,24 @@ export default function ApplicationQueuePage() {
                         {actionLoading === `${item.id}:proof` ? "⟳" : "📎 Proof"}
                       </button>
 
-                      <button className="btn-primary btn-sm" onClick={() => setStatus(item.id, "applied")} disabled={actionLoading === `${item.id}:applied`}>
-                        {actionLoading === `${item.id}:applied` ? "⟳" : "✅ Applied"}
-                      </button>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <select
+                          className="input btn-compact btn-sm"
+                          value={item.ae_stage}
+                          disabled={actionLoading === `${item.id}:ae_stage`}
+                          onChange={(e) => changeAeStage(item.id, e.target.value)}
+                          title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
+                        >
+                          {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
+                        </select>
+                        {item.ae_reviewed_by_name && (
+                          <span className="text-muted" style={{ fontSize: 10 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
+                            Reviewed by {item.ae_reviewed_by_name}
+                          </span>
+                        )}
+                      </div>
 
                       {isManager && (
                         <>
