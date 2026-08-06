@@ -175,7 +175,12 @@ export default function ApplicationQueuePage() {
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
   const [viewFilter, setViewFilter] = useState<TabView>("all");
+  const [candidateFilter, setCandidateFilter] = useState("");
+  const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [pageInput, setPageInput] = useState("");
+  const [pageError, setPageError] = useState("");
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -211,6 +216,7 @@ export default function ApplicationQueuePage() {
     p.set("page", String(pn));
     p.set("pageSize", String(pageSize));
     if (search) p.set("search", search);
+    if (candidateFilter) p.set("candidate_id", candidateFilter);
     if (statusFilter) p.set("status", statusFilter);
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
@@ -255,7 +261,19 @@ export default function ApplicationQueuePage() {
     } finally { setLoading(false); }
   }
 
-  useEffect(() => { load(1); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    fetch("/api/candidates?compact=1&pageSize=500")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setFilterCandidates(Array.isArray(data) ? data : (data.items ?? [])))
+      .catch(console.error);
+  }, []);
+
+  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -346,8 +364,74 @@ export default function ApplicationQueuePage() {
     const u = item.assigned_to_user_id ? userMap.get(item.assigned_to_user_id) : null;
     return u?.display_name || u?.email || item.assigned_to || "Unassigned";
   };
-  const owners = Array.from(new Map(items.filter(i => i.assigned_to_user_id || i.assigned_to).map(i => [i.assigned_to_user_id ?? i.assigned_to ?? "", ownerLabel(i)])).entries()).sort((a, b) => a[1].localeCompare(b[1]));
   const assignmentOwners = [...users].sort((a, b) => ((a.role === "application_engineer" ? 0 : 1) - (b.role === "application_engineer" ? 0 : 1)) || (a.display_name || "").localeCompare(b.display_name || ""));
+  
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  function goToPage(inputVal: string) {
+    const n = parseInt(inputVal);
+    if (isNaN(n) || n < 1) {
+      setPageError("Enter a valid page number");
+      return;
+    }
+    if (n > totalPages) {
+      setPageError(`Page must be 1–${totalPages}`);
+      return;
+    }
+    setPageError("");
+    setPageInput("");
+    load(n);
+  }
+
+  function renderPagination(options: { marginTop: number; marginBottom: number }) {
+    if (total <= 0) return null;
+    return (
+      <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: 6, marginTop: options.marginTop, marginBottom: options.marginBottom }}>
+        <button className="btn-compact" onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
+        {(() => {
+          const pages: Array<number | string> = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pages.push(i);
+          } else if (page <= 4) {
+            pages.push(1, 2, 3, 4, 5, "...", totalPages);
+          } else if (page >= totalPages - 3) {
+            pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+          } else {
+            pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
+          }
+          return pages.map((entry, index) => (
+            <button
+              key={`${entry}-${index}`}
+              className={`btn-compact ${entry === page ? "btn-primary" : ""}`}
+              onClick={() => typeof entry === "number" && entry !== page ? load(entry) : undefined}
+              disabled={loading || entry === "..."}
+              style={{
+                minWidth: 36, textAlign: "center",
+                cursor: entry === "..." || entry === page ? "default" : "pointer",
+                padding: "6px 12px", background: entry === "..." ? "transparent" : undefined,
+                border: entry === "..." ? "none" : undefined, opacity: entry === "..." ? 0.7 : undefined,
+              }}
+            >{entry}</button>
+          ));
+        })()}
+        <button className="btn-compact" onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+        <span className="text-muted" style={{ marginLeft: 16, fontSize: 13 }}>Page</span>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={totalPages}
+          value={pageInput}
+          onChange={(e) => { setPageInput(e.target.value); setPageError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") goToPage(pageInput); }}
+          placeholder={`1–${totalPages}`}
+          style={{ width: 70, padding: "5px 8px", fontSize: 13 }}
+        />
+        <button className="btn-compact" onClick={() => goToPage(pageInput)} style={{ padding: "5px 12px", fontSize: 13 }}>Go</button>
+        {pageError && <span className="form-error" style={{ fontSize: 12, marginLeft: 6 }}>{pageError}</span>}
+      </div>
+    );
+  }
   const selectedItems = items.filter(i => selected.has(i.id));
   const today = new Date().toISOString().slice(0, 10);
   const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
@@ -517,7 +601,6 @@ export default function ApplicationQueuePage() {
     return "";
   }
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const statTabs: { key: TabView; label: string; count: number }[] = [
     { key: "all", label: "All tickets", count: stats.all },
     { key: "mine", label: "Mine", count: stats.mine },
@@ -558,19 +641,21 @@ export default function ApplicationQueuePage() {
 
       <div className="filter-bar">
         <div className="filter-group">
-          <input className="input" placeholder="Search candidate, job, company..." value={search} onChange={e => setSearch(e.target.value)} />
+          <input className="input" placeholder="Search candidate, job, company..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+          <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)}>
+            <option value="">All candidates</option>
+            {filterCandidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
           <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="">All statuses</option>
             <option value="assigned">Assigned</option>
             <option value="stacked">Stacked</option>
             <option value="in_progress">In progress</option>
           </select>
-          {owners.length > 0 && (
-            <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
-              <option value="">All owners</option>
-              {owners.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-          )}
+          <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
+            <option value="">All owners</option>
+            {users.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+          </select>
           <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
             <option value="">All priorities</option>
             <option value="urgent">Urgent</option>
@@ -605,6 +690,8 @@ export default function ApplicationQueuePage() {
           </div>
         </div>
       )}
+
+      {renderPagination({ marginTop: 0, marginBottom: 16 })}
 
       {loading ? (
         <div className="loading-panel" style={{ padding: "40px 0", textAlign: "center", color: "var(--muted)" }}>Loading...</div>
@@ -822,19 +909,7 @@ export default function ApplicationQueuePage() {
         </div>
       )}
 
-      {total > 0 && (
-        <div className="pagination" style={{ display: "flex", justifyContent: "center", gap: 4, padding: "16px 0" }}>
-          <button className="btn-compact" disabled={page <= 1} onClick={() => load(page - 1)}>‹ Prev</button>
-          {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-            const pn = totalPages <= 7 ? i + 1 : Math.max(1, Math.min(page - 3 + i, totalPages - 6 + i));
-            return (
-              <button key={pn} className={`btn-compact ${pn === page ? "btn-primary" : ""}`} onClick={() => load(pn)}>{pn}</button>
-            );
-          })}
-          <button className="btn-compact" disabled={page >= totalPages} onClick={() => load(page + 1)}>Next ›</button>
-          <span className="text-muted" style={{ fontSize: 12, marginLeft: 8 }}>{total} total</span>
-        </div>
-      )}
+      {renderPagination({ marginTop: 16, marginBottom: 0 })}
 
       {editing && (
         <div className="modal-overlay" onClick={() => setEditing(null)}>

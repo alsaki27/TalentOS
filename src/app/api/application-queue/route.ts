@@ -20,12 +20,14 @@ export async function GET(req: NextRequest) {
   const priority = url.searchParams.get("priority") || "";
   const review = url.searchParams.get("review") || "";
   const view = url.searchParams.get("view") || "all";
+  const candidateId = url.searchParams.get("candidate_id") || "";
 
   try {
     const result = await listApplicationQueue({
       page,
       pageSize,
       search,
+      candidateId,
       status,
       owner,
       priority,
