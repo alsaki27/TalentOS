@@ -266,7 +266,20 @@ button,
   background: var(--surface);
   color: var(--ink);
   cursor: pointer;
+  text-decoration: none;
   transition: background-color 140ms var(--ease), border-color 140ms var(--ease), box-shadow 140ms var(--ease), transform 100ms var(--ease), color 140ms var(--ease);
+}
+
+/* A <button> element is browser-default display:inline-block, so width:100%
+   already worked on it — but an <a> styled as a button defaults to
+   display:inline, where width has no effect at all. Scoped to just <a>
+   here (not the base button/.btn rule) so it can't affect any existing
+   button whose content relies on normal block-stacking behavior — .btn-
+   classed buttons keep their default display untouched. */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 button:hover {
@@ -768,6 +781,11 @@ label {
   padding: 12px 14px;
   min-height: 68px;
   transition: transform 140ms var(--ease), box-shadow 140ms var(--ease), background-color 140ms var(--ease);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
 }
 
 .stats-strip .stat-button:nth-child(4n+1),
@@ -1020,16 +1038,39 @@ label {
   width: min(420px, 100%);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 24px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16), 0 24px 60px -20px rgba(var(--shadow-color), 0.5);
+  padding: 28px 26px;
+  /* Consistent vertical rhythm via gap instead of scattered per-child
+     margins — the previous no-gap layout let the Sign in/Sign up toggle
+     touch the Email field directly with zero space between them. */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* .field-group's own margin-bottom (used standalone elsewhere, e.g. modals)
+   would stack on top of .auth-card's gap here and over-space things. */
+.auth-card .field-group {
+  margin-bottom: 0;
 }
 
 .auth-card h1 {
   margin: 0 0 6px;
   font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
+/* .auth-submit is applied to both <button> (inline-block by default, so
+   width:100% already worked) and an <a> styled as a button for "Continue
+   with Google" — <a> defaults to display:inline, where width has no
+   effect at all, which is why that link rendered squished/shrink-to-content
+   instead of full width. */
 .auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
 }
 
