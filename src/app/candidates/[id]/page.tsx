@@ -1292,7 +1292,7 @@ export default function CandidateProfilePage() {
           {baseResumesLoading ? (
             <p className="muted">Loading…</p>
           ) : baseResumes.length === 0 ? (
-            <div className="card" style={{ borderStyle: "dashed", borderColor: "var(--warning)" }}>
+            <div className="card" style={{ borderStyle: "dashed", borderColor: "var(--warn)" }}>
               <p style={{ fontSize: 14, margin: "0 0 8px" }}><strong>No base resumes yet</strong></p>
               <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
                 You need a base resume to build tailored applications with Falood AI. Choose how to start:

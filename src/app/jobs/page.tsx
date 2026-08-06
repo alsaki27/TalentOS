@@ -714,7 +714,7 @@ export default function JobsPage() {
       <div className="filter-bar" style={{ alignItems: "flex-end" }}>
         {savedSearches.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Saved Searches</span>
+            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Saved Searches</span>
             <select
               value={savedSearchId}
               onChange={(e) => {
@@ -728,14 +728,14 @@ export default function JobsPage() {
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Source</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Source</span>
           <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
             <option value="">All sources</option>
             {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Tier</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Tier</span>
           <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
             <option value="">All tiers</option>
             <option value="osp">OSP</option>
@@ -744,7 +744,7 @@ export default function JobsPage() {
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Status</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Status</span>
           <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
             <option value="">All</option>
             <option value="active">Active only</option>
@@ -753,7 +753,7 @@ export default function JobsPage() {
         </div>
         {facets.employmentTypes.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Employment Type</span>
+            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Employment Type</span>
             <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
               <option value="">All employment types</option>
               {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -761,7 +761,7 @@ export default function JobsPage() {
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Category/Tag</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Category/Tag</span>
           <input
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
@@ -770,11 +770,11 @@ export default function JobsPage() {
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Relevance Score</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Relevance Score</span>
           <DualRangeSlider min={0} max={100} value={scoreFilter} onChange={(val) => setScoreFilter(val)} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Work Authorization</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Work Authorization</span>
           <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
             <option value="">All</option>
             <option value="no_sponsorship">No sponsorship</option>
@@ -783,7 +783,7 @@ export default function JobsPage() {
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Created date</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Created date</span>
           <DateRangePicker
             dateStart={dateStart}
             dateEnd={dateEnd}
@@ -791,21 +791,21 @@ export default function JobsPage() {
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Candidates</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Candidates</span>
           <select value={candidateFilter} onChange={(e) => setCandidateFilter(e.target.value)}>
             <option value="">All</option>
             {filterCandidates.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>Assigned by</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Assigned by</span>
           <select value={assignedByFilter} onChange={(e) => setAssignedByFilter(e.target.value)}>
             <option value="">All</option>
             {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--text-muted, #666)" }}>App owner</span>
+          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>App owner</span>
           <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
             <option value="">All</option>
             {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
@@ -955,15 +955,15 @@ export default function JobsPage() {
                     <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
                       {(job.match_scores || []).map((ms) => {
                         const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
-                        let color = "var(--text-muted)";
+                        let color = "var(--ink-soft)";
                         let displayScore = `${ms.score}%`;
                         const isError = ms.score === -1;
                         
                         if (isError) {
                           color = "var(--danger, #dc2626)";
                           displayScore = "Error";
-                        } else if (ms.score >= 80) color = "var(--success, #2a6f4f)";
-                        else if (ms.score >= 60) color = "var(--warning, #eab308)";
+                        } else if (ms.score >= 80) color = "var(--accent)";
+                        else if (ms.score >= 60) color = "var(--warn)";
                         else color = "var(--danger, #dc2626)";
 
                         const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : null;
@@ -1836,7 +1836,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
           <div style={{ maxHeight: "40vh", overflowY: "auto", padding: "4px 8px 4px 0", display: "flex", flexDirection: "column", gap: "8px" }}>
             {candidates.map((c) => {
               const ms = localScores.find(s => s.candidate_id === c.id);
-              let scoreColor = "var(--text-muted)";
+              let scoreColor = "var(--ink-soft)";
               let displayScore = "Match: ??%";
               const isError = ms && ms.score === -1;
               
@@ -1845,10 +1845,10 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                   scoreColor = "var(--danger, #dc2626)";
                   displayScore = "Error";
                 } else if (ms.score >= 80) {
-                  scoreColor = "var(--success, #2a6f4f)";
+                  scoreColor = "var(--accent)";
                   displayScore = `Match: ${ms.score}%`;
                 } else if (ms.score >= 60) {
-                  scoreColor = "var(--warning, #eab308)";
+                  scoreColor = "var(--warn)";
                   displayScore = `Match: ${ms.score}%`;
                 } else {
                   scoreColor = "var(--danger, #dc2626)";
@@ -2022,7 +2022,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
                         )}
                       </div>
                     ) : (
-                      <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warning, #b45309)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warn)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
                         <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
                         No base resumes found for this candidate. The AI workflow will create one automatically.
                       </div>
@@ -2237,7 +2237,7 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
         {results && (
           <div style={{ marginTop: "16px", padding: "10px 12px", borderRadius: "6px", border: "1px solid var(--border)" }}>
             {failedCount === 0 ? (
-              <p style={{ margin: 0, color: "var(--success, #2a6f4f)" }}>All {results.length} tickets created.</p>
+              <p style={{ margin: 0, color: "var(--accent)" }}>All {results.length} tickets created.</p>
             ) : (
               <>
                 <p style={{ margin: "0 0 6px", color: "var(--danger)" }}>{failedCount} of {results.length} failed:</p>

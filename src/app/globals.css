@@ -34,6 +34,31 @@
   --neutral-rgb: 161, 161, 170;
   --shadow-color: 0, 0, 0;
 
+  /* Compatibility aliases: many pages across the app (admin/ai, application-
+     queue, resume-parsing-status, job-agent/review, jobs/[id], candidate-
+     dashboard, falood/*) reference these semantic names in inline styles,
+     but they were never actually defined anywhere in this file. Most of
+     those usages have no fallback at all, so the declaration was simply
+     invalid and silently dropped — no background/color applied whatsoever,
+     not even a wrong one. Defining them here fixes every one of those
+     pages at once with no JSX changes needed. */
+  --surface-1: var(--surface);
+  --surface-2: var(--surface-raised);
+  --surface-3: #232328;
+  --success: var(--accent);
+  --warning: var(--warn);
+  --info: #38bdf8; /* sky-400 */
+  --danger-soft: rgba(var(--danger-rgb), 0.12);
+  --border-color: var(--border);
+  --border-light: rgba(var(--neutral-rgb), 0.16);
+  --bg-secondary: var(--surface);
+  /* --muted-foreground below is redefined further down (outside the
+     shadcn HSL block) as a normal color, since it's used bare as
+     var(--muted-foreground) everywhere in this app, never wrapped in
+     hsl(...) the way the shadcn convention requires — confirmed zero
+     hsl(var(--x)) usage anywhere in the codebase, so that convention was
+     never actually wired up and the HSL-triplet value doesn't work as-is. */
+
   /* shadcn/ui CSS variables (Dark Mode) */
   --background: 240 10% 3.9%; /* zinc-950 */
   --foreground: 0 0% 98%;
@@ -51,6 +76,15 @@
   --destructive-foreground: 0 0% 98%;
   --input: 240 3.7% 15.9%;
   --ring: 226 70% 65%;
+}
+
+/* Overrides --muted-foreground (declared above as an unused shadcn HSL
+   triplet) with a real color, since every actual usage in the app is
+   var(--muted-foreground) used bare — not wrapped in hsl(...) — which is
+   invalid against an HSL-triplet value. A later same-specificity :root
+   rule wins the cascade, so this intentionally comes after the block above. */
+:root {
+  --muted-foreground: var(--ink-soft);
 }
 
 * {
@@ -1181,6 +1215,19 @@ label {
   --neutral-rgb: 154, 159, 168;
   --shadow-color: 0, 0, 0;
 
+  /* Same compatibility aliases as :root above — see that block's comment
+     for why these exist. */
+  --surface-1: var(--surface);
+  --surface-2: var(--surface-raised);
+  --surface-3: #262a33;
+  --success: var(--accent);
+  --warning: var(--warn);
+  --info: #38bdf8;
+  --danger-soft: rgba(var(--danger-rgb), 0.14);
+  --border-color: var(--border);
+  --border-light: rgba(var(--neutral-rgb), 0.18);
+  --bg-secondary: var(--surface);
+
   /* shadcn/ui dark mode */
   --background: 222.2 84% 4.9%;
   --foreground: 210 40% 98%;
@@ -1198,6 +1245,11 @@ label {
   --destructive-foreground: 210 40% 98%;
   --input: 217.2 32.6% 17.5%;
   --ring: 152 45% 40%;
+}
+
+/* See the matching :root override above for why this exists. */
+.dark {
+  --muted-foreground: var(--ink-soft);
 }
 
 /* ─── Print styles for resume PDF export ─── */
