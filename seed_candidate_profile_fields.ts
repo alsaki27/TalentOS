@@ -77,7 +77,7 @@ const updates: CandidateUpdate[] = [
 ];
 
 async function applyMigration() {
-  const sql = fs.readFileSync("sql/neon_fixes/048_candidate_application_profile_fields.sql", "utf-8");
+  const sql = fs.readFileSync("sql/neon_fixes/050_candidate_application_profile_fields.sql", "utf-8");
   const statements = sql
     .split(";")
     .map((s) => s.trim())
