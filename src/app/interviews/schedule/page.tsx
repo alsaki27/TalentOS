@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 interface ApplicationOption {
@@ -38,7 +38,9 @@ const LOCATIONS = ["Zoom", "Google Meet", "In-Person", "Phone", "Other"];
 
 export default function ScheduleInterviewPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [step, setStep] = useState(1);
+  const [prefillLoading, setPrefillLoading] = useState(false);
 
   // Candidate selection
   const [appSearch, setAppSearch] = useState("");
@@ -73,6 +75,31 @@ export default function ScheduleInterviewPage() {
       .then(async (r) => (r.ok ? await r.json() : []))
       .then((t) => setTemplates(Array.isArray(t) ? t : []));
   }, []);
+
+  useEffect(() => {
+    const applicationId = searchParams?.get("applicationId");
+    if (!applicationId) return;
+    setPrefillLoading(true);
+    fetch(`/api/applications/${applicationId}`, { cache: "no-store" })
+      .then(async (r) => (r.ok ? await r.json() : null))
+      .then(async (app) => {
+        if (!app) return;
+        const [candidate, job] = await Promise.all([
+          app.candidate_id ? fetch(`/api/candidates/${app.candidate_id}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)) : null,
+          app.job_id ? fetch(`/api/jobs/${app.job_id}`, { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)) : null,
+        ]);
+        setSelectedApp({
+          id: app.id,
+          candidate_id: app.candidate_id,
+          job_id: app.job_id,
+          candidate_name: candidate?.name || "Unknown",
+          candidate_email: candidate?.email || null,
+          job_title: job?.title || "—",
+          job_company: job?.company || null,
+        });
+      })
+      .finally(() => setPrefillLoading(false));
+  }, [searchParams]);
 
   async function searchApplications() {
     if (!appSearch.trim()) return;
@@ -164,7 +191,9 @@ export default function ScheduleInterviewPage() {
       <div className="card" style={{ maxWidth: 720 }}>
         {/* Step 1: Candidate Selection */}
         <div className="section-title">1. Candidate Application</div>
-        {selectedApp ? (
+        {prefillLoading ? (
+          <div className="loading-panel">Loading application...</div>
+        ) : selectedApp ? (
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: 12, background: "var(--bg)", borderRadius: "var(--radius)", marginBottom: 16 }}>
             <div>
               <div style={{ fontWeight: 700 }}>{selectedApp.candidate_name}</div>
