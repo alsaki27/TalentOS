@@ -299,6 +299,8 @@ export default function JobsPage() {
   const [pendingCategorization, setPendingCategorization] = useState(0);
   const [addingTagForJobId, setAddingTagForJobId] = useState<string | null>(null);
   const [newTagValue, setNewTagValue] = useState("");
+  const [dashboardTimeframe, setDashboardTimeframe] = useState("24");
+  const [dashboardStats, setDashboardStats] = useState<any>(null);
   const categorizingRef = useRef(false);
 
   // Debounce the free-text search box so it doesn't fire a request per keystroke.
@@ -322,6 +324,13 @@ export default function JobsPage() {
       .then(setFilterUsers)
       .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    fetch(`/api/jobs/dashboard-stats?timeframe=${dashboardTimeframe}`)
+      .then(r => r.json())
+      .then(data => { if (!data.error) setDashboardStats(data); })
+      .catch(console.error);
+  }, [dashboardTimeframe]);
 
   function buildParams(pageNum: number, pageSize: number) {
     const params = new URLSearchParams();
@@ -698,6 +707,79 @@ export default function JobsPage() {
           <Link href="/import" className="btn">Universal Import</Link>
           <button onClick={exportCsv}>Export CSV</button>
           <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add job</button>
+        </div>
+      </div>
+
+      <div className="dashboard-section" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", background: "var(--surface-sunken)", padding: "12px 16px", borderRadius: "8px", marginBottom: "16px", border: "1px solid var(--border-soft)", gap: "16px" }}>
+        
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, flexWrap: "wrap" }}>
+          {/* Total Added Small Box */}
+          <div style={{ display: "flex", flexDirection: "column", background: "var(--surface)", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-soft)", minWidth: "90px" }}>
+            <span style={{ fontSize: "11px", color: "var(--ink-soft)", fontWeight: "600", textTransform: "uppercase" }}>Total Added</span>
+            <span style={{ fontSize: "16px", fontWeight: "700" }}>{dashboardStats ? dashboardStats.totalJobs : "-"}</span>
+          </div>
+
+          {/* Active Jobs Small Box */}
+          <div style={{ display: "flex", flexDirection: "column", background: "var(--surface)", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-soft)", minWidth: "90px" }}>
+            <span style={{ fontSize: "11px", color: "var(--ink-soft)", fontWeight: "600", textTransform: "uppercase" }}>Active Jobs</span>
+            <span style={{ fontSize: "16px", fontWeight: "700", color: "var(--accent)" }}>{dashboardStats ? dashboardStats.totalActive : "-"}</span>
+          </div>
+
+          {/* Breakdown by Source */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", borderLeft: "1px solid var(--border-soft)", paddingLeft: "12px", marginLeft: "4px" }}>
+            <span style={{ fontSize: "12px", color: "var(--ink-soft)", fontWeight: "500", marginRight: "4px" }}>Sources:</span>
+            {dashboardStats?.sourceBreakdown?.length > 0 ? (
+              dashboardStats.sourceBreakdown.map((s: any) => (
+                <div key={s.source} style={{ display: "flex", alignItems: "center", background: "var(--surface)", padding: "4px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", border: "1px solid var(--border-soft)", gap: "6px" }}>
+                  <span style={{ color: "var(--ink-soft)" }}>{s.source}</span>
+                  <span style={{ background: "var(--surface-sunken)", padding: "2px 6px", borderRadius: "4px", fontSize: "11px" }}>{s.count}</span>
+                </div>
+              ))
+            ) : (
+              <span style={{ fontSize: "12px", color: "var(--ink-soft)" }}>{dashboardStats ? "No data" : "Loading..."}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Select Dropdown with custom chevron */}
+        <div style={{ position: "relative", minWidth: "140px" }}>
+          <select 
+            value={dashboardTimeframe} 
+            onChange={(e) => setDashboardTimeframe(e.target.value)}
+            style={{ 
+              appearance: "none",
+              WebkitAppearance: "none",
+              width: "100%",
+              padding: "8px 32px 8px 12px", 
+              borderRadius: "6px", 
+              border: "1px solid var(--border-soft)", 
+              background: "var(--surface)", 
+              fontWeight: "500", 
+              fontSize: "13px",
+              cursor: "pointer",
+              color: "var(--ink)"
+            }}
+          >
+            <option value="24">Last 24 Hours</option>
+            <option value="48">Last 2 Days</option>
+            <option value="72">Last 3 Days</option>
+            <option value="120">Last 5 Days</option>
+            <option value="168">Last 7 Days</option>
+          </select>
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            width="14" 
+            height="14" 
+            viewBox="0 0 24 24" 
+            fill="none" 
+            stroke="currentColor" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+            strokeLinejoin="round" 
+            style={{ position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--ink-soft)" }}
+          >
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
         </div>
       </div>
 

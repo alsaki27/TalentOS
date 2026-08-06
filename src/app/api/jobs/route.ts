@@ -98,6 +98,7 @@ export async function GET(req: NextRequest) {
       AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
       AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
       AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+      AND j.created_at >= '2026-07-10'
     ORDER BY
       CASE WHEN $15 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
       CASE WHEN $15 = 'posted_desc' THEN j.posted_at END DESC NULLS LAST,
@@ -121,6 +122,7 @@ export async function GET(req: NextRequest) {
       AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
       AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
       AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+      AND j.created_at >= '2026-07-10'
   `;
 
   try {
