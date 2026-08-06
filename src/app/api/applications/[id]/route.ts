@@ -113,6 +113,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       updates.ae_reviewed_at = new Date().toISOString();
     }
 
+    // Same pattern as the reviewer capture above, for the final hand-off:
+    // whoever moves it to "applied" is attributed here, and (like the
+    // reviewer field) this is never overwritten by any later transition.
+    if (previousAeStage === "ready_for_application" && updates.ae_stage === "applied") {
+      updates.ae_applied_by_user_id = currentUser.profile.user_id;
+      updates.ae_applied_by_name = currentUser.profile.display_name || currentUser.profile.email;
+      updates.ae_applied_at = new Date().toISOString();
+    }
+
     // Keep the underlying lifecycle status in sync so everything else that
     // reads applications.status (queue filtering, candidate-dashboard counts,
     // follow-up automation) doesn't silently drift from what the AE stage

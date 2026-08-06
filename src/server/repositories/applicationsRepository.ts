@@ -49,6 +49,9 @@ export interface ApplicationRow {
   ae_reviewed_by_user_id: string | null;
   ae_reviewed_by_name: string | null;
   ae_reviewed_at: string | null;
+  ae_applied_by_user_id: string | null;
+  ae_applied_by_name: string | null;
+  ae_applied_at: string | null;
 }
 
 export interface ApplicationEventRow {
@@ -124,6 +127,9 @@ export interface UpdateApplicationInput {
   ae_reviewed_by_user_id?: string | null;
   ae_reviewed_by_name?: string | null;
   ae_reviewed_at?: string | null;
+  ae_applied_by_user_id?: string | null;
+  ae_applied_by_name?: string | null;
+  ae_applied_at?: string | null;
 }
 
 export interface ListApplicationsQuery {
@@ -402,6 +408,7 @@ export async function listApplicationQueue(
       a.next_action, a.notes, a.applied_at, a.proof_url, a.proof_filename, a.proof_uploaded_at, a.source_type,
       a.ae_stage, a.ae_stage_updated_at, a.ae_stage_updated_by_user_id, a.ae_stage_updated_by_name,
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
+      a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,
       jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename, 'candidate_number', c.candidate_number, 'avatar_url', c.avatar_url) as candidates,
       jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score, 'job_number', j.job_number) as jobs,
       w.status as workflow_status,

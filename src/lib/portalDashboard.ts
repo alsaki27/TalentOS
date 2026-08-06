@@ -9,12 +9,18 @@ import { query } from "@/server/db/neon";
 
 const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
 
+// Mirrors STATUS_LABELS in src/components/candidates/shared/StatusBadge.tsx
+// exactly — the canonical internal label set — so a candidate never sees
+// different wording for the same underlying status than staff do. Keep
+// these two in sync if either changes. (assigned/stacked/in_progress never
+// reach here — see PIPELINE_STATUSES below, filtered out before a candidate
+// applies at all, since those are internal pre-submission work states.)
 export function publicStatus(status: string) {
-  if (status === "interview") return { stage: "interview", label: "Interview stage" };
-  if (status === "offer") return { stage: "offer", label: "Offer received" };
-  if (status === "rejected" || status === "withdrawn") return { stage: "closed", label: "Closed" };
-  if (status === "replied") return { stage: "waiting", label: "Employer responded" };
-  return { stage: "submitted", label: "Submitted" };
+  if (status === "interview") return { stage: "interview", label: "Interview" };
+  if (status === "offer") return { stage: "offer", label: "Offer" };
+  if (status === "rejected" || status === "withdrawn") return { stage: "closed", label: "Rejected" };
+  if (status === "replied") return { stage: "waiting", label: "Screening" };
+  return { stage: "submitted", label: "Applied" };
 }
 
 function rate(count: number, total: number): number {

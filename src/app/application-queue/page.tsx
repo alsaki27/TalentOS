@@ -28,6 +28,8 @@ interface QueueItem {
   ae_stage_updated_by_name: string | null;
   ae_reviewed_by_name: string | null;
   ae_reviewed_at: string | null;
+  ae_applied_by_name: string | null;
+  ae_applied_at: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
   jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null } | null;
   workflow_status?: string | null;
@@ -73,6 +75,59 @@ const AE_STAGE_LABELS: Record<string, string> = {
   ready_for_application: "📤 Ready for AE Application",
   applied: "✅ AE Applied",
 };
+
+// Drag-to-resize column widths (persisted to localStorage) — order here
+// must match the <colgroup>/<th> order in the table below.
+const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v1";
+const MIN_COLUMN_WIDTH = 50;
+const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  checkbox: 28,
+  candidate: 190,
+  job: 190,
+  status: 110,
+  aiPipeline: 170,
+  stage: 260,
+  owner: 140,
+  due: 90,
+  ticketId: 78,
+  jobId: 78,
+  baseResumeId: 78,
+  tailoredResumeId: 78,
+  actions: 220,
+};
+const COLUMN_ORDER = [
+  "checkbox", "candidate", "job", "status", "aiPipeline", "stage", "owner", "due",
+  "ticketId", "jobId", "baseResumeId", "tailoredResumeId", "actions",
+];
+
+/** Thin draggable strip pinned to a <th>'s right edge. Mouse-drag only
+ *  (matches this app's desktop-oriented admin-tool scope elsewhere). */
+function ColumnResizeHandle({ columnId, currentWidth, onResize }: { columnId: string; currentWidth: number; onResize: (id: string, width: number) => void }) {
+  function onMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = currentWidth;
+    function onMouseMove(ev: MouseEvent) {
+      onResize(columnId, startWidth + (ev.clientX - startX));
+    }
+    function onMouseUp() {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    }
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }
+  return (
+    <span
+      onMouseDown={onMouseDown}
+      title="Drag to resize column"
+      style={{
+        position: "absolute", top: 0, right: -3, bottom: 0, width: 6,
+        cursor: "col-resize", userSelect: "none", zIndex: 1,
+      }}
+    />
+  );
+}
 
 // current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens, resume_forge,
 // hiring_panel, final_polish) - it names the stage currently running/about to
@@ -131,6 +186,25 @@ export default function ApplicationQueuePage() {
   const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
   const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
   const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
+
+  // Per-user drag-resizable column widths, persisted so the layout survives
+  // a reload. Loaded client-side only (localStorage isn't available during
+  // SSR) - starts from defaults, then overridden once mounted if a saved
+  // set exists.
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(DEFAULT_COLUMN_WIDTHS);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY);
+      if (saved) setColumnWidths((prev) => ({ ...prev, ...JSON.parse(saved) }));
+    } catch { /* ignore corrupt/unavailable storage */ }
+  }, []);
+  function resizeColumn(id: string, nextWidth: number) {
+    setColumnWidths((prev) => {
+      const next = { ...prev, [id]: Math.max(MIN_COLUMN_WIDTH, Math.round(nextWidth)) };
+      try { localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }
 
   function buildParams(pn: number) {
     const p = new URLSearchParams();
@@ -538,22 +612,34 @@ export default function ApplicationQueuePage() {
         <div className="empty-state" style={{ padding: "40px 0", textAlign: "center", color: "var(--muted)" }}>No application tickets found.</div>
       ) : (
         <div className="table-shell">
-          <table className="table table-compact">
+          <table className="table table-compact" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              {COLUMN_ORDER.map((id) => (
+                <col key={id} style={{ width: columnWidths[id] ?? DEFAULT_COLUMN_WIDTHS[id] }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th style={{ width: 28 }}><input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} /></th>
-                <th>Candidate</th>
-                <th>Job</th>
-                <th>Status</th>
-                <th>AI Pipeline</th>
-                <th style={{ width: 230 }}>Stage</th>
-                <th>Owner</th>
-                <th>Due</th>
-                <th style={{ width: 90 }}>Ticket ID</th>
-                <th style={{ width: 90 }}>Job ID</th>
-                <th style={{ width: 90 }}>Base Resume ID</th>
-                <th style={{ width: 90 }}>Tailored Resume ID</th>
-                <th style={{ width: 200 }}>Actions</th>
+                {[
+                  { id: "checkbox", label: <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} /> },
+                  { id: "candidate", label: "Candidate" },
+                  { id: "job", label: "Job" },
+                  { id: "status", label: "Status" },
+                  { id: "aiPipeline", label: "AI Pipeline" },
+                  { id: "stage", label: "Stage" },
+                  { id: "owner", label: "Owner" },
+                  { id: "due", label: "Due" },
+                  { id: "ticketId", label: "Ticket ID" },
+                  { id: "jobId", label: "Job ID" },
+                  { id: "baseResumeId", label: "Base Resume ID" },
+                  { id: "tailoredResumeId", label: "Tailored Resume ID" },
+                  { id: "actions", label: "Actions" },
+                ].map((col) => (
+                  <th key={col.id} style={{ position: "relative", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {col.label}
+                    <ColumnResizeHandle columnId={col.id} currentWidth={columnWidths[col.id] ?? DEFAULT_COLUMN_WIDTHS[col.id]} onResize={resizeColumn} />
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -655,7 +741,7 @@ export default function ApplicationQueuePage() {
                       disabled={actionLoading === `${item.id}:ae_stage`}
                       onChange={(e) => changeAeStage(item.id, e.target.value)}
                       title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
-                      style={{ width: "100%", minWidth: 205, fontSize: 14, fontWeight: 600, padding: "8px 10px" }}
+                      style={{ width: "100%", minWidth: 230, fontSize: 14, fontWeight: 600, padding: "8px 10px" }}
                     >
                       {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
@@ -664,6 +750,11 @@ export default function ApplicationQueuePage() {
                     {item.ae_reviewed_by_name && (
                       <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
                         Reviewed by {item.ae_reviewed_by_name}
+                      </div>
+                    )}
+                    {item.ae_applied_by_name && (
+                      <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }} title={item.ae_applied_at ? new Date(item.ae_applied_at).toLocaleString() : undefined}>
+                        Applied by {item.ae_applied_by_name}
                       </div>
                     )}
                   </td>
