@@ -13,12 +13,26 @@
   --ink-soft: #a1a1aa; /* zinc-400 */
   --bg: #09090b; /* zinc-950 - true black */
   --surface: #18181b; /* zinc-900 - cards and panels */
+  --surface-raised: #1c1c20;
   --border: #27272a; /* zinc-800 - thin subtle borders */
   --accent: #818cf8; /* indigo-400 - subtle slate blue/indigo */
   --accent-soft: rgba(129, 140, 248, 0.1);
+  --accent-hover: #6f7aef;
   --warn: #fb923c; /* orange-400 */
   --danger: #f87171; /* red-400 */
-  --radius: 8px;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --radius-sm: 7px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* RGB triplets so badges/glows can build translucent tints that adapt
+     automatically to whichever theme (light :root vs .dark) is active,
+     instead of hardcoded hex pastels that only look right on white. */
+  --accent-rgb: 129, 140, 248;
+  --danger-rgb: 248, 113, 113;
+  --warn-rgb: 251, 146, 60;
+  --neutral-rgb: 161, 161, 170;
+  --shadow-color: 0, 0, 0;
 
   /* shadcn/ui CSS variables (Dark Mode) */
   --background: 240 10% 3.9%; /* zinc-950 */
@@ -49,6 +63,21 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-size: 14px;
+  position: relative;
+}
+
+/* Faint dot-grid texture instead of a flat background — deliberately subtle
+   since this is a dense data tool used for hours, not a landing page; it
+   should read as "considered" at a glance, never distract from content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, rgba(var(--neutral-rgb), 0.06) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(ellipse 70% 50% at 50% 0%, #000 30%, transparent 100%);
+  pointer-events: none;
 }
 
 .topnav {
@@ -187,10 +216,13 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+  animation: page-rise 0.4s var(--ease) both;
 }
 
 .page-header h1 {
-  font-size: 20px;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   margin: 0;
 }
 
@@ -198,6 +230,29 @@ body {
   margin-top: 4px;
   color: var(--ink-soft);
   font-size: 13px;
+}
+
+@keyframes page-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stats-strip {
+  animation: page-rise 0.4s var(--ease) 0.05s both;
+}
+
+.table-shell,
+.card {
+  animation: page-rise 0.35s var(--ease) 0.08s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-header,
+  .stats-strip,
+  .table-shell,
+  .card {
+    animation: none;
+  }
 }
 
 button,
@@ -211,29 +266,41 @@ button,
   background: var(--surface);
   color: var(--ink);
   cursor: pointer;
+  transition: background-color 140ms var(--ease), border-color 140ms var(--ease), box-shadow 140ms var(--ease), transform 100ms var(--ease), color 140ms var(--ease);
 }
 
 button:hover {
-  background: var(--bg);
+  background: var(--surface-raised);
+  border-color: rgba(var(--neutral-rgb), 0.4);
+}
+
+button:active {
+  transform: scale(0.98);
 }
 
 button:focus-visible {
   outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.5;
+  transform: none;
 }
 
 .btn-primary {
   background: var(--accent);
-  color: white;
+  color: #08110c;
   border-color: var(--accent);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.2), 0 0 0 rgba(var(--accent-rgb), 0);
 }
 
 .btn-primary:hover {
-  background: #235c41;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 4px 14px -4px rgba(var(--accent-rgb), 0.5);
 }
 
 .dropdown-wrapper {
@@ -312,12 +379,37 @@ textarea {
   background: var(--surface);
   color: var(--ink);
   width: 100%;
+  transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: rgba(var(--neutral-rgb), 0.45);
 }
 
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--ink);
+  padding-right: 30px;
+}
+
+select option {
+  background: var(--surface);
+  color: var(--ink);
 }
 
 label {
@@ -331,8 +423,9 @@ label {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: 16px;
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16);
 }
 
 .table {
@@ -348,8 +441,9 @@ label {
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16), 0 12px 28px -18px rgba(var(--shadow-color), 0.5);
 }
 
 .table-shell .table {
@@ -360,12 +454,14 @@ label {
 
 .table th {
   text-align: left;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--ink-soft);
-  padding: 10px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface-raised);
   white-space: nowrap;
 }
 
@@ -373,14 +469,19 @@ label {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  transition: background-color 120ms var(--ease);
 }
 
 .table tr:last-child td {
   border-bottom: none;
 }
 
-.table tr:hover {
-  background: var(--bg);
+.table tr {
+  transition: background-color 120ms var(--ease);
+}
+
+.table tr:hover td {
+  background: var(--surface-raised);
 }
 
 .table-compact td {
@@ -399,38 +500,45 @@ label {
 }
 
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 3px 9px;
   border-radius: 100px;
   background: var(--accent-soft);
   color: var(--accent);
   white-space: nowrap;
 }
 
+/* Every badge-* variant below uses a translucent overlay of a semantic
+   color rather than a hardcoded pastel hex — the old hardcoded light-mode
+   pastels (#eef1f5 etc.) read as harsh, out-of-place white rectangles
+   against the dark shell. This adapts correctly in both themes. */
 .badge-assigned {
-  background: #eef1f5;
-  color: #4a5568;
+  background: rgba(var(--neutral-rgb), 0.16);
+  color: var(--ink-soft);
 }
 
 .badge-stacked {
-  background: #f1eefc;
-  color: #5b3eb8;
+  background: rgba(139, 92, 246, 0.16);
+  color: #a78bfa;
 }
 
 .badge-in_progress {
-  background: #fff3e0;
+  background: rgba(var(--warn-rgb), 0.16);
   color: var(--warn);
 }
 
 .badge-applied {
-  background: #eef1f5;
-  color: #4a5568;
+  background: rgba(var(--neutral-rgb), 0.16);
+  color: var(--ink-soft);
 }
 
 .badge-replied {
-  background: #fff3e0;
+  background: rgba(var(--warn-rgb), 0.16);
   color: var(--warn);
 }
 
@@ -561,26 +669,50 @@ label {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 50;
+  animation: modal-fade 0.15s var(--ease) both;
 }
 
 .modal {
-  background: var(--surface);
-  border-radius: var(--radius);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px -16px rgba(var(--shadow-color), 0.6);
   padding: 24px;
   width: 420px;
   max-width: 90vw;
   max-height: 85vh;
   overflow-y: auto;
+  animation: modal-rise 0.2s var(--ease) both;
 }
 
 .modal h2 {
   margin-top: 0;
   font-size: 16px;
+  font-weight: 700;
+}
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal {
+    animation: none;
+  }
 }
 
 .field-group {
@@ -623,14 +755,39 @@ label {
   margin-bottom: 14px;
 }
 
+/* Soft pastel-tinted cards (cycled per position) instead of flat neutral
+   boxes — reads as friendlier/more modern while staying legible on the dark
+   shell. Tint is a translucent overlay of the semantic color, so it still
+   adapts correctly across the light (:root) and dark (.dark) themes. */
 .stat-button,
 .stat-card {
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 10px 12px;
-  min-height: 64px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: rgba(var(--neutral-rgb), 0.1);
+  padding: 12px 14px;
+  min-height: 68px;
+  transition: transform 140ms var(--ease), box-shadow 140ms var(--ease), background-color 140ms var(--ease);
+}
+
+.stats-strip .stat-button:nth-child(4n+1),
+.stats-strip .stat-card:nth-child(4n+1) {
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.stats-strip .stat-button:nth-child(4n+2),
+.stats-strip .stat-card:nth-child(4n+2) {
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.stats-strip .stat-button:nth-child(4n+3),
+.stats-strip .stat-card:nth-child(4n+3) {
+  background: rgba(var(--warn-rgb), 0.14);
+}
+
+.stats-strip .stat-button:nth-child(4n+4),
+.stats-strip .stat-card:nth-child(4n+4) {
+  background: rgba(var(--danger-rgb), 0.12);
 }
 
 .stat-button {
@@ -638,27 +795,31 @@ label {
 }
 
 .stat-button:hover {
-  background: var(--bg);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -10px rgba(var(--shadow-color), 0.5);
 }
 
 .stat-button.active {
-  border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.55);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.35);
 }
 
 .stat-label {
   display: block;
   color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .stat-value {
   display: block;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  margin-top: 4px;
+  letter-spacing: -0.01em;
+  margin-top: 5px;
 }
 
 .workflow-panel {
@@ -965,11 +1126,19 @@ label {
   --ink-soft: #9a9fa8;
   --bg: #0f1115;
   --surface: #1a1d23;
+  --surface-raised: #20232b;
   --border: #2a2d35;
-  --accent: #3d8f6a;
-  --accent-soft: #1a2e25;
+  --accent: #4fae82;
+  --accent-soft: rgba(79, 174, 130, 0.14);
+  --accent-hover: #45a075;
   --warn: #d4723a;
-  --danger: #d44a3a;
+  --danger: #e2584a;
+
+  --accent-rgb: 79, 174, 130;
+  --danger-rgb: 226, 88, 74;
+  --warn-rgb: 212, 114, 58;
+  --neutral-rgb: 154, 159, 168;
+  --shadow-color: 0, 0, 0;
 
   /* shadcn/ui dark mode */
   --background: 222.2 84% 4.9%;
