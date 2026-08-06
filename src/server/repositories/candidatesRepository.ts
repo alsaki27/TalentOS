@@ -27,6 +27,15 @@ export interface CandidateRow {
   eeo_race: string | null;
   eeo_veteran: string | null;
   eeo_disability: string | null;
+  home_address: string | null;
+  birth_date: string | null;
+  open_to_relocation: boolean | null;
+  driving_license: string | null;
+  driving_license_state: string | null;
+  driving_license_expiry: string | null;
+  pe_license_il: string | null;
+  education_gpa: string | null;
+  education_gpa_year: number | null;
   created_at: string | null;
   updated_at: string | null;
 }

@@ -7,10 +7,11 @@ import { textOf } from "@/lib/ai/provider";
 export async function runCopilotFiller(
   options: AgentOptions,
   provider: AiProvider,
-  ctx: AgentContext & { formFields: any[] } // Extended context for this specific agent
+  ctx: AgentContext & { formFields: any[]; priorCorrections?: CopilotFillerInputContext["priorCorrections"] } // Extended context for this specific agent
 ): Promise<CopilotFillPlanV1> {
   const inputContext: CopilotFillerInputContext = {
     formFields: ctx.formFields,
+    priorCorrections: ctx.priorCorrections,
     candidateProfile: {
       name: (ctx as any).candidateProfile?.name || "Unknown Candidate",
       email: (ctx as any).candidateProfile?.email || "",

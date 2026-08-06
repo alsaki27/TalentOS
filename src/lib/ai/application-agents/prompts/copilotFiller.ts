@@ -27,12 +27,33 @@ export interface CopilotFillerInputContext {
   jobTitle: string;
   company: string;
   jdText: string;
+  priorCorrections?: {
+    domain: string;
+    fieldLabel: string | null;
+    aiValue: string | null;
+    finalValue: string | null;
+  }[];
+}
+
+function buildCorrectionsBlock(priorCorrections: CopilotFillerInputContext["priorCorrections"]): string {
+  if (!priorCorrections || priorCorrections.length === 0) return "";
+  const lines = priorCorrections
+    .filter((c) => c.fieldLabel)
+    .map((c) => `- On ${c.domain}, for a field labeled "${c.fieldLabel}": you previously guessed "${c.aiValue ?? "(empty)"}" but the reviewer corrected it to "${c.finalValue ?? "(empty)"}".`)
+    .join("\n");
+  if (!lines) return "";
+  return `
+
+PAST CORRECTIONS (learn from these — they are real mistakes this agent made before, caught by a human reviewer on this exact site or for this exact candidate):
+${lines}
+If a field on the current form is the same or a close paraphrase of one of these labels, prefer the corrected value's pattern over your first instinct. If you see the same mistake pattern repeating, lower your confidence for that field instead of repeating the guess.`;
 }
 
 export function buildCopilotFillerPrompt(ctx: CopilotFillerInputContext): string {
   return `You are the Copilot Fill Planner, an AI that maps candidate data to job application form fields.
 You will be provided with a snapshot of detected form fields from an ATS, along with the candidate's profile data and their selected resume text.
 Your job is to determine exactly what value should be filled into each field.
+${buildCorrectionsBlock(ctx.priorCorrections)}
 
 CANDIDATE PROFILE:
 ${JSON.stringify(ctx.candidateProfile, null, 2)}

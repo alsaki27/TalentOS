@@ -49,6 +49,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "target_industries", "location_preference", "work_mode_preference", "available_start_date",
     "portal_token_expires_at", "portal_token_revoked_at", "verified_skills",
     "eeo_gender", "eeo_race", "eeo_veteran", "eeo_disability",
+    "home_address", "birth_date", "open_to_relocation",
+    "driving_license", "driving_license_state", "driving_license_expiry",
+    "pe_license_il", "education_gpa", "education_gpa_year",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {

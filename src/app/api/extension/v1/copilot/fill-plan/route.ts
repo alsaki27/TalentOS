@@ -4,6 +4,7 @@ import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_
 import { getProviderForAutomation } from "@/lib/ai/routing";
 import { runCopilotFiller } from "@/lib/ai/application-agents/copilotFiller";
 import { AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
+import { getRecentCorrections } from "@/server/repositories/copilotLearningRepository";
 
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -114,9 +115,21 @@ export async function POST(request: NextRequest) {
         return extensionError("internal_error", "No AI provider configured for copilot_fill_planner.", 500);
       }
 
+      // 3b. Pull past corrections for this domain (form-structure variance) and
+      // this candidate (personal-data variance) so the prompt can self-correct.
+      const domain: string = pageContext?.domain || "unknown";
+      const corrections = await getRecentCorrections(domain, appData.candidate_id ?? null);
+      const priorCorrections = corrections.map((c) => ({
+        domain: c.domain,
+        fieldLabel: c.field_label,
+        aiValue: c.ai_value,
+        finalValue: c.final_value,
+      }));
+
       // 4. Build Context and Run Agent
       const config = AGENT_CONFIG_DEFAULTS.copilot_fill_planner;
       const ctx: any = {
+        priorCorrections,
         applicationId: appData.application_id,
         candidateId: appData.candidate_id,
         formFields: formSnapshot,
