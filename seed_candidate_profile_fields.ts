@@ -78,14 +78,21 @@ const updates: CandidateUpdate[] = [
 
 async function applyMigration() {
   const sql = fs.readFileSync("sql/neon_fixes/050_candidate_application_profile_fields.sql", "utf-8");
-  const statements = sql
+  // Strip full-line comments BEFORE splitting on ';' — otherwise a leading
+  // comment block swallows the statement bundled with it in the same chunk
+  // (bit us once already: silently no-op'd the ALTER TABLE on first run).
+  const withoutComments = sql
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+  const statements = withoutComments
     .split(";")
     .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    .filter((s) => s.length > 0);
   for (const stmt of statements) {
     await execute(stmt);
   }
-  console.log("[migration] 0004 applied (or already present).");
+  console.log("[migration] 050 applied (or already present).");
 }
 
 async function main() {

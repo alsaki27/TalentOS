@@ -79,6 +79,14 @@ INSTRUCTIONS:
 3. If a field asks an open-ended question that requires a tailored written response (e.g., "Why do you want to work here?", "Describe a time when..."), return fieldType: "ai_answer". The Answerer Agent will handle it later.
 4. If you cannot find the answer in the candidate's data and it is not a required field, return fieldType: "skip".
 5. DO NOT invent information. If you don't know, skip it.
+6. Standing defaults (apply regardless of what's in the candidate profile):
+   - "Have you previously worked for this company?" (or close paraphrases) -> "No".
+   - "Are you a protected veteran?" / veteran status -> "No".
+   - "Disability status" -> "No".
+   - "Will you now or in the future require sponsorship for employment visa status?" (or close paraphrases) -> "No".
+   - "How did you hear about us / this job?" -> pick "Google Search" or "Job Board"/"Job Site" if either is an available option; otherwise pick any reasonable option from the list. The exact choice doesn't matter for this question.
+   - "Are you open to relocation?" / "Are you willing to relocate?" (or close paraphrases) -> "Yes".
+   - Some ATS platforms (e.g. Ashby) render veteran/disability status as one checkbox per specific category (e.g. "Disabled Veteran", "Recently Separated Veteran") plus a separate opt-out checkbox ("I do not identify as a veteran" / "...as a person with a disability"). In that layout, check ONLY the opt-out checkbox and leave every specific-category checkbox unchecked/skipped — do not write "No" as text onto a category checkbox, that's meaningless.
 
 Output strictly valid JSON conforming to the CopilotFillPlanV1 schema:
 {

@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
                   j.title, j.company, j.description, j.raw_description,
                   c.name, c.email, c.phone, c.location_preference AS location,
                   c.work_authorization, c.linkedin_url, c.portfolio_url,
-                  c.verified_skills, c.target_roles,
+                  c.verified_skills, c.target_roles, c.salary_expectation,
                   c.eeo_gender, c.eeo_race, c.eeo_veteran, c.eeo_disability
            FROM applications a
            JOIN jobs j ON a.job_id = j.id
@@ -65,6 +65,7 @@ export async function POST(request: NextRequest) {
             portfolio_url: cand.portfolio_url,
             verified_skills: cand.verified_skills,
             target_roles: cand.target_roles,
+            salary_expectation: cand.salary_expectation,
             eeo_gender: cand.eeo_gender,
             eeo_race: cand.eeo_race,
             eeo_veteran: cand.eeo_veteran,
@@ -141,6 +142,7 @@ export async function POST(request: NextRequest) {
           linkedin: appData.linkedin_url,
           portfolio: appData.portfolio_url,
           workAuthorization: appData.work_authorization,
+          salaryExpectation: appData.salary_expectation,
           verifiedSkills: appData.verified_skills || [],
           targetRoles: appData.target_roles || [],
           eeo_gender: appData.eeo_gender || "Decline to self-identify",

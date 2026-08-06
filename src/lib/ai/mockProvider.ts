@@ -203,12 +203,138 @@ function buildResponse(automationId: string): AiResponse {
   };
 }
 
+// Rule-based stand-in for copilot_fill_planner — used locally when no live AI
+// route is configured (e.g. missing Vertex proxy / key-encryption secrets that
+// only exist as Cloudflare Worker secrets in production). Parses the
+// CANDIDATE PROFILE / FORM SNAPSHOT / PAST CORRECTIONS blocks that
+// buildCopilotFillerPrompt embeds as raw JSON in the prompt text, and maps
+// fields by label keyword. Deliberately simple — good enough to exercise the
+// analyze -> fill -> correct -> learn loop end-to-end without live AI cost.
+function mockCopilotFillPlan(userText: string): unknown {
+  const extractJson = (marker: string, endMarker: string) => {
+    const start = userText.indexOf(marker);
+    if (start === -1) return null;
+    const jsonStart = start + marker.length;
+    const end = endMarker ? userText.indexOf(endMarker, jsonStart) : userText.length;
+    const slice = userText.slice(jsonStart, end === -1 ? undefined : end).trim();
+    try { return JSON.parse(slice); } catch { return null; }
+  };
+
+  const profile = extractJson("CANDIDATE PROFILE:\n", "\nRESUME TEXT:") || {};
+  const fields = extractJson("FORM SNAPSHOT (Detected Fields):\n", "\nINSTRUCTIONS:") || [];
+  const correctionsBlock = userText.includes("PAST CORRECTIONS");
+  const corrections: { fieldLabel: string; finalValue: string }[] = [];
+  if (correctionsBlock) {
+    const re = /field labeled "([^"]+)": you previously guessed "[^"]*" but the reviewer corrected it to "([^"]*)"/g;
+    let m;
+    while ((m = re.exec(userText))) corrections.push({ fieldLabel: m[1].toLowerCase(), finalValue: m[2] });
+  }
+
+  // Normalized-equality only, deliberately not loose substring matching:
+  // substring matching let a "Last Name" correction ("Saki") bleed into an
+  // unrelated single "Name" field on a different form, since "name" is
+  // trivially a substring of "last name". A wrong match that actively
+  // overwrites a field is worse than a missed match that falls through to
+  // the heuristic map below. (The real AI path doesn't have this problem —
+  // it reads the corrections as prose and uses actual judgment; this
+  // normalize-and-compare stand-in is intentionally conservative instead.)
+  const normalizeLabel = (s: string) => s.toLowerCase().replace(/[*:]/g, "").trim();
+  const findCorrection = (label: string) => {
+    const norm = normalizeLabel(label);
+    return corrections.find((c) => normalizeLabel(c.fieldLabel) === norm);
+  };
+
+  const instructions = (Array.isArray(fields) ? fields : []).map((f: any) => {
+    const label = String(f.label || f.ariaLabel || f.placeholder || f.name || "").toLowerCase();
+    // Standing defaults — always win, regardless of profile data or past corrections.
+    if (/previously worked (for|at) this company|worked (for|at) .* before|rehire/.test(label)) {
+      return { selector: f.selector, fieldType: f.inputType === "checkbox" ? "checkbox" : "text", value: "No", confidence: "high", reasoning: `Standing default: "have you previously worked here" -> No` };
+    }
+    // Two different EEO widget shapes: a single "Veteran Status"/"Disability
+    // Status" field (real <select> or plain text field) vs. one checkbox per
+    // specific category + a separate opt-out checkbox ("I do not identify as
+    // a veteran"/"...person with a disability"). Setting text "No" on a
+    // per-category checkbox would be meaningless — only the opt-out checkbox
+    // should be checked; the category checkboxes stay untouched.
+    if (f.inputType === "checkbox" && /i do not identify as a (veteran|person with a disability)/.test(label)) {
+      return { selector: f.selector, fieldType: "checkbox", value: true, confidence: "high", reasoning: `Standing default: opts out of veteran/disability self-ID` };
+    }
+    if (f.inputType === "checkbox" && /veteran|disability/.test(label)) {
+      return { selector: f.selector, fieldType: "skip", value: "", confidence: "high", reasoning: `Standing default: specific veteran/disability category left unchecked (opt-out checkbox used instead)` };
+    }
+    if (/veteran/.test(label)) {
+      return { selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: `Standing default: veteran status -> No` };
+    }
+    if (/disability/.test(label)) {
+      return { selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: `Standing default: disability status -> No` };
+    }
+    if (/sponsorship|require.*visa/.test(label)) {
+      return { selector: f.selector, fieldType: f.inputType === "checkbox" ? "checkbox" : "text", value: "No", confidence: "high", reasoning: `Standing default: visa sponsorship -> No` };
+    }
+    if (/open to relocat|willing to relocat|relocation for this/.test(label)) {
+      return { selector: f.selector, fieldType: f.inputType === "checkbox" ? "checkbox" : "text", value: "Yes", confidence: "high", reasoning: `Standing default: relocation -> Yes` };
+    }
+    if (/how did you hear|how did you learn|hear about (us|this job)/.test(label)) {
+      const opts: string[] = Array.isArray(f.options) ? f.options : [];
+      const pick = opts.find((o: string) => /google/i.test(o)) || opts.find((o: string) => /job board|job site|indeed|linkedin/i.test(o)) || opts[0] || "Google Search";
+      return { selector: f.selector, fieldType: opts.length ? "select" : "text", value: pick, confidence: "high", reasoning: `Standing default: source question, any reasonable answer works -> picked "${pick}"` };
+    }
+
+    const prior = findCorrection(label);
+    if (prior) {
+      return { selector: f.selector, fieldType: f.inputType === "checkbox" ? "checkbox" : "text", value: prior.finalValue, confidence: "high", reasoning: `Matches a past reviewer correction for a similarly-labeled field: "${label}"` };
+    }
+    if (f.inputType === "file") return { selector: f.selector, fieldType: "skip", value: "", confidence: "low", reasoning: "File upload — handled manually" };
+
+    // Checkbox-group "how did you hear about us" pattern: one checkbox per
+    // source option (name ends "[]") instead of a single <select>. Each
+    // field's own label IS the source name (e.g. "Google Search"), not the
+    // question text, so this needs its own match instead of the option-list
+    // heuristic used for real <select> elements.
+    if (f.inputType === "checkbox" && /\[\]$/.test(f.name || "") && /google|linkedin|indeed|job board|job site|referral|social media|website|campus|networking|press|article|news/i.test(label)) {
+      const isPreferred = /google/i.test(label) || /job board|job site/i.test(label);
+      return { selector: f.selector, fieldType: "checkbox", value: isPreferred, confidence: isPreferred ? "high" : "medium", reasoning: `Standing default: source question, any reasonable answer works — ${isPreferred ? "checking" : "leaving unchecked"} "${label}"` };
+    }
+    const map: [RegExp, string][] = [
+      [/first name/, profile.name ? String(profile.name).split(" ")[0] : ""],
+      [/last name/, profile.name ? String(profile.name).split(" ").slice(1).join(" ") : ""],
+      [/full name|^name$|your name/, profile.name || ""],
+      [/e-?mail/, profile.email || ""],
+      [/phone/, profile.phone || ""],
+      [/linkedin/, profile.linkedin || ""],
+      [/\b(location|city)\b/, profile.location || ""],
+      [/salary|compensation/, profile.salaryExpectation || ""],
+      [/work auth|visa|sponsorship|authorized to work/, profile.workAuthorization || ""],
+    ];
+    const hit = map.find(([re]) => re.test(label));
+    if (hit && hit[1]) {
+      return { selector: f.selector, fieldType: "text", value: hit[1], confidence: "medium", reasoning: `Heuristic label match: "${label}"` };
+    }
+    if (f.required) {
+      return { selector: f.selector, fieldType: "ai_answer", value: "", confidence: "low", reasoning: `Required field with no direct profile match: "${label}" — needs a written answer` };
+    }
+    return { selector: f.selector, fieldType: "skip", value: "", confidence: "low", reasoning: `No profile data maps to: "${label}"` };
+  });
+
+  return { instructions };
+}
+
 export function createMockProvider(): AiProvider {
   return {
     send: async (opts) => {
       const system = opts.system.toLowerCase();
       let automationId = "unknown";
 
+      if (system.includes("copilot fill planner")) {
+        const userText = opts.messages
+          .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+          .filter((c: any) => c.type === "text")
+          .map((c: any) => c.text)
+          .join("\n");
+        const data = mockCopilotFillPlan(userText);
+        const json = JSON.stringify(data);
+        return { content: [{ type: "text", text: json }], stopReason: "end_turn", usage: { input_tokens: 50, output_tokens: json.length } };
+      }
       if (system.includes("job lens")) automationId = "application_job_lens";
       else if (system.includes("resume forge")) automationId = "application_resume_forge";
       else if (system.includes("hiring panel")) automationId = "application_hiring_panel";
