@@ -31,35 +31,177 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-# ─── Word-boundary-safe keyword matcher (from MASTERPROMPT §3) ────────────────
-# Short acronyms MUST use \b boundaries to avoid:
-#   "osp" hitting "hOSPital", "cad" hitting "aCADemic",
-#   "gis" hitting "loGIStics" / "reGIStered"
-_BOUNDED_ROOTS = ["osp", "gis", "cad", "bim", "ftth", "fttx", "pv"]
+# ─── Word-boundary-safe keyword matcher ────────────────────────────────────────
+# Short acronyms MUST use \b word-boundary to avoid false positives:
+#   osp → hOSPital  |  gis → loGIStics  |  cad → aCADemic
+#   noc → kNOCk     |  wan → WANt       |  soc → SOCial
+#   pv  → (too short, boundary needed)   |  rtl → poRTaL
+_BOUNDED_ROOTS = [
+    # Original
+    "osp", "gis", "cad", "bim", "ftth", "fttx", "pv",
+    # New — network / hardware acronyms
+    "noc", "wan", "soc", "rtl", "fpga", "vlsi", "asic", "ccie",
+]
 
-# Longer, unambiguous words are safe as plain substrings.
-# "fiberglass" is explicitly excluded (composites, not telecom).
+# All full-phrase keywords (lowercased) from Groups A-R.
+# Longer phrases are safe as plain substrings — no boundary regex needed.
+# "fiberglass" is explicitly excluded to avoid false fiber hits.
 _SAFE_ROOTS = [
-    # OSP / Fiber new keywords
-    "fiber planning", "network planning", "row permit", "joint-use", 
-    "pole attachment", "utility coordination", "fiber cad",
-    # GIS new keywords
-    "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy",
-    # CAD new keywords
-    "as-built",
-    # Solar / Renewables keywords
-    "solar pv", "solar design", "pv design", "pv designer", "solar system designer", 
-    "commercial solar", "c&i solar", "solar project", "solar electrical", 
-    "solar cad", "solar permit", "distributed generation", "solar interconnection", 
-    "interconnection specialist", "utility interconnection", "renewable energy", 
-    "solar applications", "solar proposal", "solar estimator", "pv estimator", 
-    "solar performance", "energy-yield", "solar preconstruction", "solar commissioning",
-    # Existing keywords
+    # ── Group A: OSP / Fiber ──────────────────────────────────────────────────
+    "osp design engineer", "outside plant engineer", "osp engineer",
+    "fiber design engineer", "ftth design engineer", "fiber optic design engineer",
+    "telecom design engineer", "splice engineer", "fiber splicing engineer",
+    "osp planning engineer", "osp cad designer", "fiber network engineer",
+    "fiber construction engineer", "outside plant designer",
+    "telecommunications engineer", "fiber route engineer",
+    "aerial fiber design engineer", "underground fiber design engineer",
+    "joint use engineer", "make ready engineer", "fiber permitting engineer",
+    "gis fiber design technician", "osp project engineer",
+    "fiber design technician", "osp field engineer",
+    "fiber construction manager", "osp estimator",
+    "telecom infrastructure engineer", "broadband design engineer",
+    "fttx design engineer", "fiber network planner", "osp qc engineer",
+    "fiber splice technician", "broadband network engineer", "fiber engineer",
+    "osp cad drafter", "osp design engineering apprentice",
+    "osp design engineering specialist", "osp engineering technician",
+    "permit design engineer", "permit drafter",
+    # OSP keyword substrings
     "fiber optic", "fiber network", "fiber design", "fiber splic", "fiber route",
     "fiber technician", "fiber construction", "fiber engineer", "fiber permit",
-    "outside plant", "telecom", "broadband", "splice", "splicing",
-    "geospatial", "cartograph", "remote sensing", "drafter", "drafting",
-    "autocad", "piping designer", "structural drafter", "utility drafter",
+    "outside plant", "broadband", "splice", "splicing", "telecom",
+    "fiber planning", "network planning", "row permit", "joint-use",
+    "pole attachment", "utility coordination", "fiber cad",
+
+    # ── Group B: CAD / Drafting ───────────────────────────────────────────────
+    "autocad drafter", "cad technician", "cad designer",
+    "design drafter", "civil cad drafter", "electrical cad drafter",
+    "mechanical cad drafter", "structural drafter", "cad operator",
+    "engineering technician cad", "land surveying drafter",
+    "piping designer", "site design technician", "bim technician",
+    "construction drafter", "telecom drafter", "drafting technician",
+    "cad drafter", "civil cad technician", "civil drafter",
+    "architectural drafter", "mapping technician",
+    # CAD keyword substrings
+    "drafter", "drafting", "autocad", "as-built",
+
+    # ── Group C: GIS / Geospatial ─────────────────────────────────────────────
+    "gis analyst", "gis technician", "gis specialist", "gis coordinator",
+    "gis developer", "gis mapping technician", "geospatial analyst",
+    "gis data analyst", "utility gis analyst", "telecom gis analyst",
+    "gis field technician", "cartographer", "remote sensing analyst",
+    "gis database technician", "gis qa/qc analyst", "land records gis analyst",
+    "environmental gis analyst", "gis support specialist",
+    "gis automation analyst", "utility mapping technician", "geospatial technician",
+    # GIS keyword substrings
+    "geospatial", "cartograph", "remote sensing",
+    "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy",
+
+    # ── Group D: Mechanical / Manufacturing / Product CAD ─────────────────────
+    "mechanical drafter", "mechanical designer", "mechanical cad technician",
+    "product design drafter", "product development designer",
+    "manufacturing drafter", "tool design drafter", "tooling designer",
+    "fixture designer", "sheet metal drafter", "weldment drafter",
+    "solidworks drafter", "solidworks designer", "inventor drafter", "3d cad modeler",
+
+    # ── Group E: Electrical / Controls / PCB CAD / Power Engineering ──────────
+    "electrical drafter", "electrical designer", "electrical design technician",
+    "controls drafter", "instrumentation drafter", "instrumentation designer",
+    "wiring harness designer", "harness drafter", "panel designer",
+    "schematic drafter", "power distribution drafter", "pcb designer",
+    "pcb layout designer", "electrical engineer",
+    "interdisciplinary engineer", "operations engineer – mv systems",
+    "medium voltage specialist",
+
+    # ── Group F: Civil / Land Development CAD ────────────────────────────────
+    "civil drafter", "civil designer", "civil 3d technician",
+    "land development drafter", "site civil drafter", "roadway drafter",
+    "highway drafter", "transportation drafter", "stormwater drafter",
+    "grading drafter", "subdivision drafter", "municipal drafter",
+
+    # ── Group G: Structural / Steel / Rebar Detailing ─────────────────────────
+    "structural steel detailer", "steel detailer", "miscellaneous steel detailer",
+    "rebar detailer", "concrete detailer", "precast detailer",
+    "structural designer", "structural cad technician",
+    "tekla detailer", "sds2 detailer",
+
+    # ── Group H: Architectural / Building / Interiors ─────────────────────────
+    "architectural designer", "architectural cad technician",
+    "revit drafter", "revit technician", "revit designer",
+    "building designer", "residential drafter",
+    "millwork drafter", "casework designer", "kitchen and bath designer",
+    "space planner",
+
+    # ── Group I: MEP / HVAC / Plumbing / Fire Protection ─────────────────────
+    "mep drafter", "mep designer", "hvac drafter", "hvac designer",
+    "plumbing drafter", "plumbing designer", "fire protection drafter",
+    "fire sprinkler designer", "fire sprinkler drafter", "ductwork drafter",
+
+    # ── Group J: Piping / Process / Industrial Plant ─────────────────────────
+    "piping drafter", "process piping drafter", "plant design drafter",
+    "plant layout designer", "p&id drafter", "industrial drafter",
+
+    # ── Group K: Utility / Energy / Renewables ────────────────────────────────
+    "utility designer", "utility cad designer", "substation drafter",
+    "transmission drafter", "distribution designer", "solar designer",
+    "solar drafter", "solar pv designer", "renewable energy drafter",
+    "renewable energy design engineer", "photovoltaic design engineer",
+    "pv design engineer", "pv systems engineer", "solar cad designer",
+    "solar design engineer", "solar electrical design engineer",
+    "solar engineer", "solar project engineer", "solar pv design engineer",
+    "solar applications engineer", "c&i solar design engineer",
+    "senior applications engineer – solar pv & battery storage systems",
+    # Solar keyword substrings
+    "solar pv", "solar design", "pv design", "pv designer", "solar system designer",
+    "commercial solar", "c&i solar", "solar project", "solar electrical",
+    "solar cad", "solar permit", "distributed generation", "solar interconnection",
+    "interconnection specialist", "utility interconnection", "renewable energy",
+    "solar applications", "solar proposal", "solar estimator", "pv estimator",
+    "solar performance", "energy-yield", "solar preconstruction", "solar commissioning",
+
+    # ── Group L: Cross-industry Entry-level ──────────────────────────────────
+    "junior drafter", "associate designer", "design technician",
+    "detailing technician", "layout designer", "drafting intern", "cad intern",
+
+    # ── Group M: Data Center / Colocation ────────────────────────────────────
+    "data center technician", "senior data center technician", "senior data technician",
+    "smart hands technician", "remote hands technician", "colocation technician",
+    "colocation engineer", "data center operations technician",
+    "data center operations specialist", "data center hardware technician",
+    "data center network engineer", "field service technician",
+    "structured cabling technician", "it infrastructure technician",
+    "server hardware technician", "ai accelerator engineer",
+    # Data Center keyword substrings
+    "data center", "colocation", "smart hands", "remote hands",
+
+    # ── Group N: ISP / Network Operations ────────────────────────────────────
+    "network engineer", "senior network engineer", "network operations engineer",
+    "senior network operations engineer", "isp network engineer",
+    "ip network engineer", "service provider network engineer",
+    "core network engineer", "broadband network engineer",
+    "network support engineer", "network support specialist",
+    "telecom network engineer", "network infrastructure engineer",
+    "network technician", "l2 network support", "interconnection engineer",
+
+    # ── Group O: NOC / Network Monitoring ────────────────────────────────────
+    "noc engineer", "senior noc engineer", "24x7 noc engineer", "noc analyst",
+    "network operations center engineer", "network monitoring engineer",
+    "incident response engineer", "it operations engineer",
+    "systems monitoring engineer", "major incident engineer",
+    "operational performance engineer", "operations engineer 1",
+
+    # ── Group P: Solar PV / Battery Storage Engineering ───────────────────────
+    # (Titles already captured in Group K above)
+
+    # ── Group Q: Hardware / Chip / Embedded Design ────────────────────────────
+    "fpga engineer", "fpga design engineer", "fpga & vlsi design engineer",
+    "vlsi design engineer", "rtl design engineer", "asic design engineer",
+    "soc design engineer", "digital design engineer", "hardware design engineer",
+    "embedded hardware engineer", "embedded systems engineer", "electronics engineer",
+
+    # ── Group R: Field Service / Maintenance / Estimating ────────────────────
+    "field service engineer", "field service technician ii",
+    "service engineer", "service technician",
+    "cost estimator", "senior cost estimator",
 ]
 
 _BOUNDED_RE = re.compile(
@@ -67,7 +209,7 @@ _BOUNDED_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Role group definitions (matches TalentOS jobAgentRoleLibrary)
+# Role group definitions — mirrors TalentOS jobAgentRoleLibrary.ts exactly.
 ROLE_GROUPS: Dict[str, Dict[str, Any]] = {
     "A": {
         "label": "OSP / Fiber",
@@ -75,35 +217,196 @@ ROLE_GROUPS: Dict[str, Dict[str, Any]] = {
         "safe": [
             "fiber optic", "fiber network", "fiber design", "fiber splic", "fiber route",
             "fiber technician", "fiber construction", "fiber engineer", "fiber permit",
-            "outside plant", "broadband", "splice", "splicing",
-            "fiber planning", "network planning", "row permit", "joint-use", 
-            "pole attachment", "utility coordination", "fiber cad"
+            "outside plant", "broadband", "splice", "splicing", "telecom",
+            "fiber planning", "network planning", "row permit", "joint-use",
+            "pole attachment", "utility coordination", "fiber cad",
+            "osp design engineer", "outside plant engineer",
+            "fiber design engineer", "ftth design engineer", "fiber optic design engineer",
+            "telecom design engineer", "splice engineer", "fiber splicing engineer",
+            "osp cad drafter", "osp design engineering apprentice",
+            "osp design engineering specialist", "osp engineering technician",
+            "permit design engineer", "permit drafter", "broadband design engineer",
         ],
     },
     "B": {
         "label": "CAD / Drafting",
         "bounded": ["cad", "bim"],
-        "safe": ["autocad", "drafter", "drafting", "piping designer", "structural drafter", "utility drafter", "as-built"],
+        "safe": [
+            "autocad", "drafter", "drafting", "piping designer",
+            "structural drafter", "utility drafter", "as-built",
+            "architectural drafter", "civil cad drafter", "civil cad technician",
+            "civil drafter", "design drafter", "mapping technician",
+        ],
     },
     "C": {
         "label": "GIS / Geospatial",
         "bounded": ["gis"],
         "safe": [
             "geospatial", "cartograph", "remote sensing",
-            "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy"
+            "spatial data", "arcgis", "geodatabase", "parcel mapping", "geoprocessing", "arcpy",
+            "gis analyst", "geospatial analyst", "gis automation analyst",
+            "utility gis analyst", "utility mapping technician", "geospatial technician",
+            "mapping technician",
         ],
     },
-    "D": {"label": "Telecom General", "bounded": [], "safe": ["telecom"]},
+    "D": {
+        "label": "Mechanical / Manufacturing / Product CAD",
+        "bounded": ["bim"],
+        "safe": [
+            "mechanical drafter", "mechanical designer", "mechanical cad technician",
+            "solidworks", "sheet metal drafter", "weldment drafter",
+        ],
+    },
+    "E": {
+        "label": "Electrical / Controls / PCB CAD / Power Engineering",
+        "bounded": [],
+        "safe": [
+            "electrical drafter", "electrical designer", "electrical design technician",
+            "controls drafter", "instrumentation drafter", "wiring harness designer",
+            "panel designer", "schematic drafter", "power distribution drafter",
+            "pcb designer", "pcb layout designer", "electrical engineer",
+            "interdisciplinary engineer", "operations engineer – mv systems",
+            "medium voltage specialist",
+        ],
+    },
+    "F": {
+        "label": "Civil / Land Development CAD",
+        "bounded": [],
+        "safe": [
+            "civil drafter", "civil designer", "civil 3d technician",
+            "land development drafter", "site civil drafter", "roadway drafter",
+            "highway drafter", "transportation drafter", "stormwater drafter",
+        ],
+    },
+    "G": {
+        "label": "Structural / Steel / Rebar Detailing",
+        "bounded": [],
+        "safe": [
+            "structural steel detailer", "steel detailer", "rebar detailer",
+            "precast detailer", "tekla detailer", "sds2 detailer", "structural designer",
+        ],
+    },
+    "H": {
+        "label": "Architectural / Building / Interiors",
+        "bounded": [],
+        "safe": [
+            "architectural drafter", "architectural designer", "revit drafter",
+            "revit technician", "revit designer", "building designer",
+            "millwork drafter", "casework designer", "space planner",
+        ],
+    },
+    "I": {
+        "label": "MEP / HVAC / Plumbing / Fire Protection",
+        "bounded": [],
+        "safe": [
+            "mep drafter", "mep designer", "hvac drafter", "hvac designer",
+            "plumbing drafter", "fire protection drafter", "fire sprinkler designer",
+        ],
+    },
+    "J": {
+        "label": "Piping / Process / Industrial Plant",
+        "bounded": [],
+        "safe": [
+            "piping drafter", "process piping drafter", "plant design drafter",
+            "plant layout designer", "p&id drafter", "industrial drafter",
+        ],
+    },
     "K": {
-        "label": "Solar / Renewable Energy",
+        "label": "Utility / Energy / Renewables",
         "bounded": ["pv"],
         "safe": [
-            "solar pv", "solar design", "pv design", "pv designer", "solar system designer", 
-            "commercial solar", "c&i solar", "solar project", "solar electrical", 
-            "solar cad", "solar permit", "distributed generation", "solar interconnection", 
-            "interconnection specialist", "utility interconnection", "renewable energy", 
-            "solar applications", "solar proposal", "solar estimator", "pv estimator", 
-            "solar performance", "energy-yield", "solar preconstruction", "solar commissioning"
+            "solar pv", "solar design", "pv design", "pv designer", "solar system designer",
+            "commercial solar", "c&i solar", "solar project", "solar electrical",
+            "solar cad", "solar permit", "distributed generation", "solar interconnection",
+            "interconnection specialist", "utility interconnection", "renewable energy",
+            "solar applications", "solar estimator", "pv estimator",
+            "solar performance", "energy-yield", "solar preconstruction", "solar commissioning",
+            "utility designer", "utility cad designer", "substation drafter",
+            "solar designer", "solar drafter", "solar pv designer", "renewable energy drafter",
+            "renewable energy design engineer", "photovoltaic design engineer",
+            "pv design engineer", "pv systems engineer", "solar cad designer",
+            "solar design engineer", "solar electrical design engineer",
+            "solar engineer", "solar project engineer", "solar pv design engineer",
+            "solar applications engineer", "c&i solar design engineer",
+            "senior applications engineer – solar pv & battery storage systems",
+        ],
+    },
+    "L": {
+        "label": "Cross-industry Entry-level",
+        "bounded": ["cad"],
+        "safe": [
+            "junior drafter", "associate designer", "design technician",
+            "detailing technician", "layout designer", "drafting intern",
+        ],
+    },
+    "M": {
+        "label": "Data Center / Colocation",
+        "bounded": [],
+        "safe": [
+            "data center", "colocation", "smart hands", "remote hands",
+            "data center technician", "senior data center technician", "senior data technician",
+            "smart hands technician", "remote hands technician", "colocation technician",
+            "colocation engineer", "data center operations technician",
+            "data center operations specialist", "data center hardware technician",
+            "data center network engineer", "structured cabling technician",
+            "it infrastructure technician", "server hardware technician",
+            "ai accelerator engineer",
+        ],
+    },
+    "N": {
+        "label": "ISP / Network Operations",
+        "bounded": ["wan", "ccie"],
+        "safe": [
+            "network engineer", "senior network engineer", "network operations engineer",
+            "senior network operations engineer", "isp network engineer",
+            "ip network engineer", "service provider network engineer",
+            "core network engineer", "broadband network engineer",
+            "network support engineer", "network support specialist",
+            "telecom network engineer", "network infrastructure engineer",
+            "network technician", "l2 network support", "interconnection engineer",
+        ],
+    },
+    "O": {
+        "label": "NOC / Network Monitoring",
+        "bounded": ["noc"],
+        "safe": [
+            "noc engineer", "senior noc engineer", "24x7 noc engineer", "noc analyst",
+            "network operations center engineer", "network monitoring engineer",
+            "incident response engineer", "it operations engineer",
+            "systems monitoring engineer", "major incident engineer",
+            "operational performance engineer", "operations engineer 1",
+        ],
+    },
+    "P": {
+        "label": "Solar PV / Battery Storage Engineering",
+        "bounded": ["pv"],
+        "safe": [
+            "solar applications engineer", "solar design engineer",
+            "solar electrical design engineer", "solar pv design engineer",
+            "pv design engineer", "pv systems engineer", "photovoltaic design engineer",
+            "c&i solar design engineer", "solar project engineer", "solar engineer",
+            "renewable energy design engineer", "operational performance engineer",
+            "operations engineer 1",
+            "senior applications engineer – solar pv & battery storage systems",
+        ],
+    },
+    "Q": {
+        "label": "Hardware / Chip / Embedded Design",
+        "bounded": ["soc", "rtl", "fpga", "vlsi", "asic"],
+        "safe": [
+            "fpga engineer", "fpga design engineer", "fpga & vlsi design engineer",
+            "vlsi design engineer", "rtl design engineer", "asic design engineer",
+            "soc design engineer", "digital design engineer", "hardware design engineer",
+            "embedded hardware engineer", "embedded systems engineer", "electronics engineer",
+        ],
+    },
+    "R": {
+        "label": "Field Service / Maintenance / Estimating",
+        "bounded": [],
+        "safe": [
+            "field service technician", "field service technician ii",
+            "field service engineer", "service engineer", "service technician",
+            "cost estimator", "senior cost estimator",
         ],
     },
 }

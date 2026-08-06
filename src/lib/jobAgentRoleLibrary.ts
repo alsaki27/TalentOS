@@ -88,7 +88,7 @@ const ROLE_GROUPS: RoleGroup[] = [
   },
   {
     id: "E",
-    label: "Electrical / Controls / PCB CAD",
+    label: "Electrical / Controls / PCB CAD / Power Engineering",
     resumeFamily: "electrical_cad",
     titles: [
       "Electrical Drafter", "Electrical Designer", "Electrical Design Technician",
@@ -96,8 +96,10 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Instrumentation Designer", "Wiring Harness Designer", "Harness Drafter",
       "Panel Designer", "Schematic Drafter", "Power Distribution Drafter",
       "PCB Designer", "PCB Layout Designer",
-      // New additions (Electrical Engineering discipline — not hardware chip design)
       "Electrical Engineer",
+      // Power Engineering additions
+      "Interdisciplinary Engineer", "Operations Engineer – MV Systems",
+      "Medium Voltage Specialist",
     ],
   },
   {
@@ -255,6 +257,7 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Systems Monitoring Engineer",
       "Major Incident Engineer",
       "Operational Performance Engineer",
+      "Operations Engineer 1",
     ],
   },
   {
@@ -298,12 +301,16 @@ const ROLE_GROUPS: RoleGroup[] = [
   },
   {
     id: "R",
-    label: "Field Service / Estimating / Specialist",
+    label: "Field Service / Maintenance / Estimating",
     resumeFamily: "field_service_estimating",
     titles: [
       "Field Service Technician",
+      "Field Service Technician II",
+      "Field Service Engineer",
+      "Service Engineer",
+      "Service Technician",
       "Cost Estimator",
-      "Geospatial Analyst",
+      "Senior Cost Estimator",
     ],
   },
 ];
