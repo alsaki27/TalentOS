@@ -38,8 +38,17 @@ export async function GET(req: NextRequest) {
 
   for (const run of runningRuns) {
     if (!run.apify_run_id || !run.apify_dataset_id || !run.token_id) {
-      await updateRunStatus(run.id, { status: "failed", error: "Missing Apify metadata" });
-      results.push({ runId: run.id, error: "Missing Apify metadata" });
+      // Grace period: if the run was created very recently (< 5 minutes ago), it might
+      // still be waiting for the Apify call to complete. Skip this tick and retry next poll.
+      // Only fail runs that have been stuck without metadata for > 5 minutes.
+      const ageMs = Date.now() - new Date(run.started_at ?? run.created_at ?? 0).getTime();
+      const GRACE_MS = 5 * 60 * 1000; // 5 minutes
+      if (ageMs < GRACE_MS) {
+        results.push({ runId: run.id, status: "awaiting_metadata", ageSeconds: Math.round(ageMs / 1000) });
+        continue;
+      }
+      await updateRunStatus(run.id, { status: "failed", error: "Missing Apify metadata (stuck for > 5 min)" });
+      results.push({ runId: run.id, error: "Missing Apify metadata (stuck for > 5 min)" });
       continue;
     }
 

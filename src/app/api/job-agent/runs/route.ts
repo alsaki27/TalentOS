@@ -40,19 +40,35 @@ export async function POST(req: NextRequest) {
     ? body.actorSources.filter((s: unknown) => typeof s === "string" && ["indeed", "google", "linkedin"].includes(s as string))
     : ["indeed"];
 
-  const results: { runId: string; actorSource: string; status: string }[] = [];
+  const results: { runId: string; actorSource: string; status: string; error?: string }[] = [];
 
   for (const actorSource of actorSources) {
     let result: { runId: string; config: any; roleGroups: string[]; token: any };
     try {
       result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords, dateInterval, actorSource: actorSource as any });
-      // Fire-and-forget — cron will poll for completion
-      executeRunFromRecord(result.runId, result.config, result.roleGroups, result.token, { testMode, useAi, customKeywords, dateInterval, actorSource: actorSource as any }).catch((err) => {
-        console.error(`[job-agent/runs] executeRunFromRecord failed for actor=${actorSource}:`, err.message);
-      });
-      results.push({ runId: result.runId, actorSource, status: "pending" });
     } catch (err: any) {
-      return NextResponse.json({ error: err.message ?? "Run failed", actorSource }, { status: 500 });
+      results.push({ runId: "n/a", actorSource, status: "failed", error: err.message ?? "createPendingRun failed" });
+      continue;
+    }
+
+    try {
+      // IMPORTANT: We AWAIT this so the Apify run_id is written to the DB before
+      // the HTTP response returns. In serverless environments (Vercel/Cloudflare),
+      // background promises are killed when the response is sent. Without await,
+      // apify_run_id is never saved, and the cron poller instantly marks the run
+      // as "Missing Apify metadata".
+      await executeRunFromRecord(
+        result.runId,
+        result.config,
+        result.roleGroups,
+        result.token,
+        { testMode, useAi, customKeywords, dateInterval, actorSource: actorSource as any }
+      );
+      results.push({ runId: result.runId, actorSource, status: "running" });
+    } catch (err: any) {
+      console.error(`[job-agent/runs] executeRunFromRecord failed for actor=${actorSource}:`, err.message);
+      // Run record already has failed status written inside executeRunFromRecord — just report it.
+      results.push({ runId: result.runId, actorSource, status: "failed", error: err.message ?? "executeRunFromRecord failed" });
     }
   }
 

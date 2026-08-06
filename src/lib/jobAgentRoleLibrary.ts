@@ -1,9 +1,10 @@
 // src/lib/jobAgentRoleLibrary.ts
 // Pure data module — no AI, no DB.
-// Role titles organized by group (A–L) for the Apify Job Agent.
+// Role titles organized by group (A–R) for the Apify Job Agent and OpenJobData pipeline.
 //
-// NOTE: Groups A–L are now fully populated. Groups A–C came from the handover
-// reference (2026-07-08). Groups D–L were added per the full title specification.
+// Groups A–L: Original OSP/CAD/GIS/Engineering disciplines.
+// Groups M–R: Added 2026-08-06 — Data Center, ISP/Network, NOC, Solar/Energy Engineering,
+//             Electrical/Field Service, Hardware/Chip Design, and Estimating tracks.
 
 export interface RoleGroup {
   id: string;
@@ -32,6 +33,10 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Telecom Infrastructure Engineer", "Broadband Design Engineer",
       "FTTx Design Engineer", "Fiber Network Planner", "OSP QC Engineer",
       "Fiber Splice Technician", "Broadband Network Engineer", "Fiber Engineer",
+      // New additions
+      "OSP CAD Drafter", "OSP Design Engineering Apprentice",
+      "OSP Design Engineering Specialist", "OSP Engineering Technician",
+      "Permit Design Engineer", "Permit Drafter",
     ],
   },
   {
@@ -46,6 +51,10 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Land Surveying Drafter", "Piping Designer", "Site Design Technician",
       "BIM Technician", "Construction Drafter", "Telecom Drafter",
       "Drafting Technician",
+      // New additions
+      "CAD Drafter", "Civil CAD Technician", "Civil Drafter",
+      "Architectural Drafter", "Geospatial Technician", "Mapping Technician",
+      "Utility Drafter",
     ],
   },
   {
@@ -60,6 +69,8 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Cartographer", "Remote Sensing Analyst", "GIS Database Technician",
       "GIS QA/QC Analyst", "Land Records GIS Analyst",
       "Environmental GIS Analyst", "GIS Support Specialist",
+      // New additions
+      "GIS Automation Analyst", "Utility Mapping Technician",
     ],
   },
   {
@@ -85,6 +96,8 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Instrumentation Designer", "Wiring Harness Designer", "Harness Drafter",
       "Panel Designer", "Schematic Drafter", "Power Distribution Drafter",
       "PCB Designer", "PCB Layout Designer",
+      // New additions (Electrical Engineering discipline — not hardware chip design)
+      "Electrical Engineer",
     ],
   },
   {
@@ -148,6 +161,20 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Utility Designer", "Utility CAD Designer", "Substation Drafter",
       "Transmission Drafter", "Distribution Designer", "Solar Designer",
       "Solar Drafter", "Solar PV Designer", "Renewable Energy Drafter",
+      // New additions
+      "Renewable Energy Design Engineer",
+      "Photovoltaic Design Engineer",
+      "PV Design Engineer",
+      "PV Systems Engineer",
+      "Solar CAD Designer",
+      "Solar Design Engineer",
+      "Solar Electrical Design Engineer",
+      "Solar Engineer",
+      "Solar Project Engineer",
+      "Solar PV Design Engineer",
+      "Solar Applications Engineer",
+      "C&I Solar Design Engineer",
+      "Senior Applications Engineer – Solar PV & Battery Storage Systems",
     ],
   },
   {
@@ -160,13 +187,136 @@ const ROLE_GROUPS: RoleGroup[] = [
       "CAD Intern",
     ],
   },
+
+  // ─── New Groups Added 2026-08-06 ───────────────────────────────────────────
+
+  {
+    id: "M",
+    label: "Data Center / Colocation",
+    resumeFamily: "data_center",
+    titles: [
+      "Data Center Technician",
+      "Senior Data Center Technician",
+      "Senior Data Technician",
+      "Smart Hands Technician",
+      "Remote Hands Technician",
+      "Colocation Technician",
+      "Colocation Engineer",
+      "Data Center Operations Technician",
+      "Data Center Operations Specialist",
+      "Data Center Hardware Technician",
+      "Data Center Network Engineer",
+      "Field Service Technician",
+      "Structured Cabling Technician",
+      "Network Technician",
+      "IT Infrastructure Technician",
+      "Server Hardware Technician",
+      "AI Accelerator Engineer",
+    ],
+  },
+  {
+    id: "N",
+    label: "ISP / Network Operations",
+    resumeFamily: "isp_network",
+    titles: [
+      "Network Engineer",
+      "Senior Network Engineer",
+      "Network Operations Engineer",
+      "Senior Network Operations Engineer",
+      "ISP Network Engineer",
+      "IP Network Engineer",
+      "Service Provider Network Engineer",
+      "Core Network Engineer",
+      "Broadband Network Engineer",
+      "Network Support Engineer",
+      "Network Support Specialist",
+      "Telecom Network Engineer",
+      "WAN Engineer",
+      "Network Infrastructure Engineer",
+      "Network Technician",
+      "L2 Network Support",
+      "CCIE",
+      "Interconnection Engineer",
+    ],
+  },
+  {
+    id: "O",
+    label: "NOC / Network Monitoring",
+    resumeFamily: "noc_monitoring",
+    titles: [
+      "NOC Engineer",
+      "Senior NOC Engineer",
+      "24x7 NOC Engineer",
+      "NOC Analyst",
+      "Network Operations Center Engineer",
+      "Network Monitoring Engineer",
+      "Incident Response Engineer",
+      "IT Operations Engineer",
+      "Systems Monitoring Engineer",
+      "Major Incident Engineer",
+      "Operational Performance Engineer",
+    ],
+  },
+  {
+    id: "P",
+    label: "Solar PV / Battery Storage Engineering",
+    resumeFamily: "solar_pv_storage",
+    titles: [
+      "Solar Applications Engineer",
+      "Senior Applications Engineer – Solar PV & Battery Storage Systems",
+      "Solar Design Engineer",
+      "Solar Electrical Design Engineer",
+      "Solar PV Design Engineer",
+      "PV Design Engineer",
+      "PV Systems Engineer",
+      "Photovoltaic Design Engineer",
+      "C&I Solar Design Engineer",
+      "Solar Project Engineer",
+      "Solar Engineer",
+      "Renewable Energy Design Engineer",
+      "Operational Performance Engineer",
+    ],
+  },
+  {
+    id: "Q",
+    label: "Hardware / Chip / Embedded Design",
+    resumeFamily: "hardware_chip_design",
+    titles: [
+      "FPGA Engineer",
+      "FPGA Design Engineer",
+      "FPGA & VLSI Design Engineer",
+      "VLSI Design Engineer",
+      "RTL Design Engineer",
+      "ASIC Design Engineer",
+      "SoC Design Engineer",
+      "Digital Design Engineer",
+      "Hardware Design Engineer",
+      "Embedded Hardware Engineer",
+      "Embedded Systems Engineer",
+      "Electronics Engineer",
+    ],
+  },
+  {
+    id: "R",
+    label: "Field Service / Estimating / Specialist",
+    resumeFamily: "field_service_estimating",
+    titles: [
+      "Field Service Technician",
+      "Cost Estimator",
+      "Geospatial Analyst",
+    ],
+  },
 ];
 
 const GROUP_BY_ID = new Map(ROLE_GROUPS.map((g) => [g.id, g]));
 const GROUP_BY_TITLE = new Map<string, RoleGroup>();
 for (const group of ROLE_GROUPS) {
   for (const title of group.titles) {
-    GROUP_BY_TITLE.set(title.trim().toLowerCase(), group);
+    const key = title.trim().toLowerCase();
+    // Don't overwrite if already mapped (first group wins for duplicate titles)
+    if (!GROUP_BY_TITLE.has(key)) {
+      GROUP_BY_TITLE.set(key, group);
+    }
   }
 }
 
@@ -227,6 +377,9 @@ const COMBINED_GROUPS: { id: string; label: string; subGroupIds: string[] }[] = 
   { id: "CA", label: "OSP & Infrastructure",      subGroupIds: ["A", "G", "J", "K"] },
   { id: "CB", label: "All CAD Disciplines",        subGroupIds: ["B", "D", "E", "F"] },
   { id: "CC", label: "GIS & Building Design",      subGroupIds: ["C", "H", "I", "L"] },
+  // New combined groups for the new domains
+  { id: "CD", label: "Data Center & Network Ops",  subGroupIds: ["M", "N", "O"] },
+  { id: "CE", label: "Solar & Hardware Design",    subGroupIds: ["P", "Q", "R"] },
 ];
 
 export function getCombinedGroups(): CombinedGroup[] {

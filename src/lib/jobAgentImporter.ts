@@ -199,6 +199,19 @@ async function importRows(
     if (finalInserts.length > 0) {
       await insertStaged(runRecord.id, finalInserts);
     }
+    
+    // Initialize the Job CEO run counts for apify_bridge jobs so the UI displays correctly.
+    // Because they bypass the ingest, QA, and deep fetch stages and land straight in Matchmaker,
+    // their initial ingested, kept, and researched counts would otherwise remain 0.
+    if (stagedInserts.length > 0) {
+      const { bumpRunCounts } = await import("@/server/repositories/jobCeoRunRepository");
+      await bumpRunCounts(runRecord.id, {
+        ingested_count: stagedInserts.length,
+        kept_count: finalInserts.length,
+        researched_count: finalInserts.length,
+        skipped_count: dedupCount,
+      });
+    }
     inserted = finalInserts; // For the insertedByUrl map below
   }
 
