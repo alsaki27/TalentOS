@@ -21,5 +21,9 @@ export async function POST(request: NextRequest) {
     } catch (error: any) {
       return NextResponse.json({ error: { message: error?.message || "Could not update application" } }, { status: 500 });
     }
-  });
+  })(request);
+}
+
+export async function OPTIONS(request: NextRequest) {
+  return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
 }

@@ -17,6 +17,7 @@ import {
   updateApplicationResumeVersion,
   getCurrentDraftForApplication,
   ApplicationResumeVersionRow,
+  ResumeVersionSourceType,
 } from "@/server/repositories/applicationResumeVersionsRepository";
 import {
   listSuggestionsByApplication,
@@ -28,6 +29,15 @@ import { findLatestBaseResumeFull } from "@/server/repositories/baseResumesRepos
 import { query, queryOne } from "@/server/db/neon";
 import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
 import type { ResumeDocument } from "@/lib/falood/types";
+
+// applications.source_type has a broader domain (e.g. "copilot_adhoc",
+// "email_confirmation") than ResumeVersionSourceType — only pass through
+// values that are actually valid resume-version source types, default to
+// "base_resume" otherwise.
+const RESUME_VERSION_SOURCE_TYPES: readonly ResumeVersionSourceType[] = ["base_resume", "original_resume", "blank", "manual"];
+function toResumeVersionSourceType(value: string | null | undefined): ResumeVersionSourceType {
+  return RESUME_VERSION_SOURCE_TYPES.includes(value as ResumeVersionSourceType) ? (value as ResumeVersionSourceType) : "base_resume";
+}
 
 export interface BuildResumeDraftOptions {
   baseResumeVersionId?: string | null;
@@ -135,7 +145,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
         base_resume_id: sourceResult.baseResumeId,
         target_job_id: targetJobId,
         content: draftContent,
-        source_type: app.source_type ?? "base_resume",
+        source_type: toResumeVersionSourceType(app.source_type),
         title: sourceResult.title,
         version_label: "draft",
         created_by: createdByUserId,
@@ -148,7 +158,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
       base_resume_id: sourceResult.baseResumeId,
       target_job_id: targetJobId,
       content: draftContent,
-      source_type: app.source_type ?? "base_resume",
+      source_type: toResumeVersionSourceType(app.source_type),
       title: sourceResult.title,
       version_label: "draft",
       created_by: createdByUserId,

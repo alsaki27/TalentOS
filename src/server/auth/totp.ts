@@ -33,7 +33,7 @@ export function buildTotpUri(secret: string, email: string | null): string {
 }
 
 async function generateCode(secret: string, counter: number): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", decodeBase32(secret), { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
+  const key = await crypto.subtle.importKey("raw", decodeBase32(secret) as BufferSource, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]);
   const buffer = new ArrayBuffer(8);
   const view = new DataView(buffer);
   view.setUint32(0, Math.floor(counter / 0x100000000));

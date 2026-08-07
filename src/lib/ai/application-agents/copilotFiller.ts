@@ -1,8 +1,10 @@
-import type { AiProvider } from "@/lib/ai/provider";
+import type { AiMessage, AiProvider, AiResponse } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
 import { CopilotFillPlanSchema, type CopilotFillPlanV1 } from "./schemas";
 import { buildCopilotFillerPrompt, type CopilotFillerInputContext } from "./prompts/copilotFiller";
 import { textOf } from "@/lib/ai/provider";
+
+type CopilotFillerRequest = Parameters<AiProvider["send"]>[0];
 
 export async function runCopilotFiller(
   options: AgentOptions,
@@ -62,25 +64,25 @@ export async function runCopilotFiller(
     jdText: compact(ctx.job.description || ctx.job.rawDescription || "", 12000),
   };
 
-  const request = {
+  const request: CopilotFillerRequest = {
     system: options.system_prompt ?? "You are Copilot Fill Planner. Return only valid JSON.",
     messages: [
       { role: "user", content: [{ type: "text", text: buildCopilotFillerPrompt(inputContext) }] },
-    ],
+    ] as AiMessage[],
     tools: [],
     temperature: options.temperature,
     maxTokens: options.max_output_tokens,
     timeoutMs: options.timeout_ms,
-  } as const;
+  };
 
-  let response;
+  let response: AiResponse;
   try {
     response = await provider.send(request);
   } catch (firstError) {
     // A provider timeout/abort is recoverable for this non-destructive planner.
     // Retry with a smaller completion budget before surfacing an error.
     try {
-      response = await provider.send({ ...request, temperature: 0, maxTokens: 4096, timeoutMs: Math.min(options.timeout_ms, 20000) });
+      response = await provider.send({ ...request, temperature: 0, maxTokens: 4096, timeoutMs: Math.min(options.timeout_ms ?? 20000, 20000) });
     } catch {
       return fallbackPlan();
     }
@@ -108,11 +110,11 @@ export async function runCopilotFiller(
       response = await provider.send({
         ...request,
         temperature: 0,
-        maxTokens: Math.max(options.max_output_tokens, 12000),
+        maxTokens: Math.max(options.max_output_tokens ?? 0, 12000),
         messages: [
           ...request.messages,
           { role: "user", content: [{ type: "text", text: "Retry: output compact valid JSON only. Use reasoning of 80 characters or fewer. No markdown, no extra text, and include one instruction per field." }] },
-        ],
+        ] as AiMessage[],
       });
       validated = parseResponse(response.content);
     } catch {
