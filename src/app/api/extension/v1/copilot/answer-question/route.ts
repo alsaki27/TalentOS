@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne, query } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
-import { getProviderForAutomation } from "@/lib/ai/routing";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { runCopilotAnswerQuestion } from "@/lib/ai/application-agents/copilotAnswerQuestion";
 import { AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
+import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
       let resumeText = "";
       if (selectedResumeId) {
         const resume = await queryOne<any>(
-          `SELECT parsed_json FROM candidate_resumes WHERE id = $1 AND candidate_id = $2`,
+          `SELECT parsed_json FROM resumes WHERE id = $1 AND candidate_id = $2`,
           [selectedResumeId, appData.candidate_id]
         );
         if (resume && resume.parsed_json) {
@@ -57,14 +58,17 @@ export async function POST(request: NextRequest) {
         [appData.candidate_id]
       );
 
-      // 4. Resolve AI Provider
-      const routeResult = await getProviderForAutomation("copilot_question_answerer");
-      if (!routeResult) {
-        return extensionError("internal_error", "No AI provider configured for copilot_question_answerer.", 500);
-      }
+      // 4. Resolve DB-editable agent config (falls back to hardcoded defaults)
+      const agentConfig = await findAgentConfigByAutomationId("copilot_question_answerer");
+      const defaults = AGENT_CONFIG_DEFAULTS.copilot_question_answerer;
+      const config = {
+        system_prompt: agentConfig?.system_prompt ?? undefined,
+        temperature: agentConfig?.temperature ?? defaults.temperature,
+        maxOutputTokens: agentConfig?.max_output_tokens ?? defaults.maxOutputTokens,
+        timeoutMs: agentConfig?.timeout_ms ?? defaults.timeoutMs,
+      };
 
       // 5. Build Context and Run Agent
-      const config = AGENT_CONFIG_DEFAULTS.copilot_question_answerer;
       const ctx: any = {
         applicationId,
         candidateId: appData.candidate_id,
@@ -86,14 +90,17 @@ export async function POST(request: NextRequest) {
         verifiedSkills: appData.verified_skills || []
       };
 
-      const result = await runCopilotAnswerQuestion(
-        {
-          temperature: config.temperature,
-          max_output_tokens: config.maxOutputTokens,
-          timeout_ms: config.timeoutMs,
-        },
-        routeResult.provider,
-        ctx
+      const { result } = await callWithUsageTracking("copilot_question_answerer", undefined, async (provider) =>
+        runCopilotAnswerQuestion(
+          {
+            system_prompt: config.system_prompt,
+            temperature: config.temperature,
+            max_output_tokens: config.maxOutputTokens,
+            timeout_ms: config.timeoutMs,
+          },
+          provider,
+          ctx
+        )
       );
 
       return NextResponse.json({

@@ -319,6 +319,84 @@ function mockCopilotFillPlan(userText: string): unknown {
   return { instructions };
 }
 
+function userTextOf(opts: { messages: { content: unknown }[] }): string {
+  return opts.messages
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .filter((c: any) => c.type === "text")
+    .map((c: any) => c.text)
+    .join("\n");
+}
+
+function jsonResponse(data: unknown) {
+  const json = JSON.stringify(data);
+  return { content: [{ type: "text" as const, text: json }], stopReason: "end_turn" as const, usage: { input_tokens: 50, output_tokens: json.length } };
+}
+
+// Robust JSON-value extraction: finds the marker, then scans forward
+// tracking bracket/brace depth to find where the JSON value actually ends,
+// instead of guessing at a fixed end-marker string (a fixed end-marker was
+// the root cause of two real bugs earlier this session — the prompt's
+// surrounding text shifted and the marker no longer matched).
+function extractJsonAfter(text: string, marker: string): unknown {
+  const start = text.indexOf(marker);
+  if (start === -1) return null;
+  let i = start + marker.length;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  const open = text[i];
+  const close = open === "{" ? "}" : open === "[" ? "]" : null;
+  if (!close) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let j = i; j < text.length; j++) {
+    const ch = text[j];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(i, j + 1)); } catch { return null; }
+      }
+    }
+  }
+  return null;
+}
+
+// Same standing-default rules as the real prompts (prompts/copilotCompliance.ts) —
+// used to give the mock Compliance agent something real to test against.
+function mockComplianceInstructions(fields: any[]): { instructions: any[] } {
+  const instructions: any[] = [];
+  for (const f of fields) {
+    const label = String(f.label || f.ariaLabel || f.placeholder || f.name || "").toLowerCase();
+    if (f.inputType === "checkbox" && /i do not identify as a (veteran|person with a disability)/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "checkbox", value: true, confidence: "high", reasoning: "Standing default: opts out of veteran/disability self-ID" });
+    } else if (f.inputType === "checkbox" && /veteran|disability/.test(label)) {
+      continue; // specific-category checkbox — left alone, per Compliance's own rule
+    } else if (/previously worked (for|at) this company|worked (for|at) .* before|rehire/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: "Standing default: previously worked here -> No" });
+    } else if (/veteran/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: "Standing default: veteran status -> No" });
+    } else if (/disability/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: "Standing default: disability status -> No" });
+    } else if (/sponsorship|require.*visa/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "text", value: "No", confidence: "high", reasoning: "Standing default: visa sponsorship -> No" });
+    } else if (/open to relocat|willing to relocat|relocation for this/.test(label)) {
+      instructions.push({ selector: f.selector, fieldType: "text", value: "Yes", confidence: "high", reasoning: "Standing default: relocation -> Yes" });
+    } else if (/how did you hear|how did you learn|hear about (us|this job)/.test(label)) {
+      const opts: string[] = Array.isArray(f.options) ? f.options : [];
+      const pick = opts.find((o: string) => /google/i.test(o)) || opts.find((o: string) => /job board|job site/i.test(o)) || opts[0] || "Google Search";
+      instructions.push({ selector: f.selector, fieldType: opts.length ? "select" : "text", value: pick, confidence: "high", reasoning: `Standing default: source question -> "${pick}"` });
+    }
+  }
+  return { instructions };
+}
+
 export function createMockProvider(): AiProvider {
   return {
     send: async (opts) => {
@@ -326,14 +404,32 @@ export function createMockProvider(): AiProvider {
       let automationId = "unknown";
 
       if (system.includes("copilot fill planner")) {
-        const userText = opts.messages
-          .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => c.text)
-          .join("\n");
-        const data = mockCopilotFillPlan(userText);
-        const json = JSON.stringify(data);
-        return { content: [{ type: "text", text: json }], stopReason: "end_turn", usage: { input_tokens: 50, output_tokens: json.length } };
+        const userText = userTextOf(opts);
+        return jsonResponse(mockCopilotFillPlan(userText));
+      }
+      if (system.includes("copilot compliance")) {
+        const userText = userTextOf(opts);
+        const fields = extractJsonAfter(userText, "FORM SNAPSHOT (Detected Fields):");
+        return jsonResponse(mockComplianceInstructions(Array.isArray(fields) ? fields : []));
+      }
+      if (system.includes("copilot form analyst")) {
+        return jsonResponse({ atsGuess: "other:mock", structuralNotes: "" });
+      }
+      if (system.includes("copilot correction reviewer")) {
+        const userText = userTextOf(opts);
+        const aiMatch = userText.match(/AI's VALUE:\s*(.*)/);
+        const finalMatch = userText.match(/FINAL VALUE \(after AE review\):\s*(.*)/);
+        const aiVal = (aiMatch?.[1] ?? "").trim().toLowerCase();
+        const finalVal = (finalMatch?.[1] ?? "").trim().toLowerCase();
+        const isRealCorrection = aiVal !== finalVal;
+        return jsonResponse({ isRealCorrection, reason: "mock: string comparison", shouldEscalateToCeo: false });
+      }
+      if (system.includes("copilot ceo")) {
+        return jsonResponse({ proposals: [], tickets: [] });
+      }
+      if (system.includes("copilot extension's in-panel chat assistant")) {
+        const text = "(mock reply) I don't have a live AI provider configured locally, but the chat endpoint is wired up correctly.";
+        return { content: [{ type: "text" as const, text }], stopReason: "end_turn" as const, usage: { input_tokens: 20, output_tokens: text.length } };
       }
       if (system.includes("job lens")) automationId = "application_job_lens";
       else if (system.includes("resume forge")) automationId = "application_resume_forge";

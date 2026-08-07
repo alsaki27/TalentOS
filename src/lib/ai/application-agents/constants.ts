@@ -55,6 +55,42 @@ export const AGENT_CONFIG_DEFAULTS = {
     approvalPolicy: "auto" as const,
     minimumScore: 0,
   },
+  copilot_ceo: {
+    displayName: "Copilot CEO",
+    temperature: 0.2,
+    maxOutputTokens: 4096,
+    timeoutMs: 60_000,
+    maxAttempts: 1,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+  copilot_form_analyst: {
+    displayName: "Copilot Form Analyst",
+    temperature: 0.1,
+    maxOutputTokens: 1024,
+    timeoutMs: 15_000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+  copilot_compliance: {
+    displayName: "Copilot Compliance",
+    temperature: 0.0,
+    maxOutputTokens: 2048,
+    timeoutMs: 15_000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
+  copilot_correction_reviewer: {
+    displayName: "Copilot Correction Reviewer",
+    temperature: 0.1,
+    maxOutputTokens: 1024,
+    timeoutMs: 15_000,
+    maxAttempts: 1,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
 } as const;
 
 export const SCHEMA_VERSIONS = {

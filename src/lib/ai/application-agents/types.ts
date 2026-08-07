@@ -11,7 +11,11 @@ export type ApplicationAgentId =
   | "application_hiring_panel"
   | "application_final_polish"
   | "copilot_fill_planner"
-  | "copilot_question_answerer";
+  | "copilot_question_answerer"
+  | "copilot_ceo"
+  | "copilot_form_analyst"
+  | "copilot_compliance"
+  | "copilot_correction_reviewer";
 
 export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
   "application_job_lens",
@@ -19,7 +23,11 @@ export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
   "application_hiring_panel",
   "application_final_polish",
   "copilot_fill_planner",
-  "copilot_question_answerer"
+  "copilot_question_answerer",
+  "copilot_ceo",
+  "copilot_form_analyst",
+  "copilot_compliance",
+  "copilot_correction_reviewer"
 ];
 
 export interface ApplicationAgentMeta {
@@ -65,6 +73,30 @@ export const APPLICATION_AGENT_METAS: Record<ApplicationAgentId, ApplicationAgen
     displayName: "Copilot Question Answerer",
     sequenceNumber: 6,
     description: "Answer custom application questions",
+  },
+  copilot_ceo: {
+    id: "copilot_ceo",
+    displayName: "Copilot CEO",
+    sequenceNumber: 7,
+    description: "Reviews sub-agent performance, proposes prompt upgrades, files tickets for unresolved questions",
+  },
+  copilot_form_analyst: {
+    id: "copilot_form_analyst",
+    displayName: "Copilot Form Analyst",
+    sequenceNumber: 8,
+    description: "Classifies ATS platform/form structure per domain (cached)",
+  },
+  copilot_compliance: {
+    id: "copilot_compliance",
+    displayName: "Copilot Compliance",
+    sequenceNumber: 9,
+    description: "Resolves standing-default policy fields (veteran, disability, sponsorship, relocation, rehire)",
+  },
+  copilot_correction_reviewer: {
+    id: "copilot_correction_reviewer",
+    displayName: "Copilot Correction Reviewer",
+    sequenceNumber: 10,
+    description: "Judges whether a recorded fill-plan correction is genuine and worth replaying",
   },
 };
 

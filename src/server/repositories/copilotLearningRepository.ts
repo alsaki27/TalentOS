@@ -30,23 +30,56 @@ function normalize(v: string | null): string {
   return (v ?? "").trim().toLowerCase();
 }
 
-export async function recordFillCorrections(inputs: FillCorrectionInput[]): Promise<number> {
-  let inserted = 0;
+export interface RecordedCorrection {
+  id: string;
+  wasCorrected: boolean;
+  domain: string;
+  fieldLabel: string | null;
+  aiValue: string | null;
+  finalValue: string | null;
+}
+
+export async function recordFillCorrections(inputs: FillCorrectionInput[]): Promise<RecordedCorrection[]> {
+  const recorded: RecordedCorrection[] = [];
   for (const c of inputs) {
     const wasCorrected = normalize(c.aiValue) !== normalize(c.finalValue);
-    await execute(
+    const row = await query<{ id: string }>(
       `INSERT INTO copilot_fill_corrections
          (application_id, candidate_id, domain, field_label, field_selector, field_type,
           ai_value, ai_confidence, ai_reasoning, final_value, was_corrected)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING id`,
       [
         c.applicationId, c.candidateId, c.domain, c.fieldLabel, c.fieldSelector, c.fieldType,
         c.aiValue, c.aiConfidence, c.aiReasoning, c.finalValue, wasCorrected,
       ]
     );
-    inserted++;
+    recorded.push({
+      id: row[0].id,
+      wasCorrected,
+      domain: c.domain,
+      fieldLabel: c.fieldLabel,
+      aiValue: c.aiValue,
+      finalValue: c.finalValue,
+    });
   }
-  return inserted;
+  return recorded;
+}
+
+// Correction Reviewer's async verdict on a single correction — may downgrade
+// a false-positive was_corrected=true (e.g. formatting-only difference) so
+// it stops being replayed as a learned example, and flags whether the
+// mistake looks systematic enough for Copilot CEO to consider.
+export async function applyCorrectionReview(
+  id: string,
+  verdict: { isRealCorrection: boolean; reason: string; shouldEscalateToCeo: boolean }
+): Promise<void> {
+  await execute(
+    `UPDATE copilot_fill_corrections
+     SET was_corrected = $1, ai_reviewed = true, ai_review_reason = $2, escalated_to_ceo = $3
+     WHERE id = $4`,
+    [verdict.isRealCorrection, verdict.reason, verdict.shouldEscalateToCeo, id]
+  );
 }
 
 // Only *corrected* rows are useful as few-shot examples — rows where the AI

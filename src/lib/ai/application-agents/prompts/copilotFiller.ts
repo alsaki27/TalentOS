@@ -33,6 +33,12 @@ export interface CopilotFillerInputContext {
     aiValue: string | null;
     finalValue: string | null;
   }[];
+  // From Copilot Form Analyst (cached per domain) — structural heads-up about
+  // this ATS platform, e.g. "single Name field, not split first/last".
+  // Fields Copilot Compliance already resolved are filtered out of
+  // formFields entirely before this prompt is built — Fill Planner never
+  // sees them, so there's nothing to re-derive or conflict with.
+  formAnalystNotes?: string;
 }
 
 function buildCorrectionsBlock(priorCorrections: CopilotFillerInputContext["priorCorrections"]): string {
@@ -52,9 +58,12 @@ If a field on the current form is the same or a close paraphrase of one of these
 export function buildCopilotFillerPrompt(ctx: CopilotFillerInputContext): string {
   return `You are the Copilot Fill Planner, an AI that maps candidate data to job application form fields.
 You will be provided with a snapshot of detected form fields from an ATS, along with the candidate's profile data and their selected resume text.
-Your job is to determine exactly what value should be filled into each field.
+Your job is to determine exactly what value should be filled into each field. Standing-default
+policy fields (veteran/disability/sponsorship/relocation/rehire/how-did-you-hear) have already
+been resolved by a separate Compliance agent and removed from the FORM SNAPSHOT below — you will
+not see them, so don't look for them.
 ${buildCorrectionsBlock(ctx.priorCorrections)}
-
+${ctx.formAnalystNotes ? `\nFORM ANALYST NOTES (structural heads-up for this platform):\n${ctx.formAnalystNotes}\n` : ""}
 CANDIDATE PROFILE:
 ${JSON.stringify(ctx.candidateProfile, null, 2)}
 

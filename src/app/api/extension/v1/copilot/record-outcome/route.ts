@@ -8,6 +8,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
 import { recordFillCorrections, type FillCorrectionInput } from "@/server/repositories/copilotLearningRepository";
+import { reviewCorrectionAsync } from "@/server/services/copilotCorrectionReviewService";
+import { maybeRunCopilotCeo } from "@/server/services/copilotCeoService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -41,8 +44,20 @@ export async function POST(request: NextRequest) {
         finalValue: f.finalValue != null ? String(f.finalValue) : null,
       }));
 
-      const count = await recordFillCorrections(inputs);
-      return NextResponse.json({ recorded: count }, { status: 201 });
+      const recorded = await recordFillCorrections(inputs);
+
+      // Non-blocking: Correction Reviewer judges each genuinely-corrected
+      // row (skip confirmations — nothing to review there), then a
+      // throttled Copilot CEO pass looks for repeating patterns across the
+      // whole system. Neither ever holds up the AE's response.
+      for (const r of recorded) {
+        if (r.wasCorrected) {
+          backgroundDispatch(reviewCorrectionAsync(r.id));
+        }
+      }
+      backgroundDispatch(maybeRunCopilotCeo());
+
+      return NextResponse.json({ recorded: recorded.length }, { status: 201 });
     } catch (err) {
       return extensionError("internal_error", String(err), 500);
     }

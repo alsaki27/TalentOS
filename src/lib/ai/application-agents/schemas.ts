@@ -356,7 +356,110 @@ export const CopilotAnswerSchema: Schema<CopilotAnswerV1> = {
     
     if (answer === null) return { error: "answer is required" };
     if (!["high", "medium", "low"].includes(confidence as string)) return { error: "confidence must be high, medium, or low" };
-    
+
     return { answer, confidence: confidence as any };
+  }
+};
+
+// ── CopilotFormAnalystV1 ──
+
+export interface CopilotFormAnalystV1 {
+  atsGuess: string;
+  structuralNotes: string;
+}
+
+export const CopilotFormAnalystSchema: Schema<CopilotFormAnalystV1> = {
+  parse(input: unknown): CopilotFormAnalystV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotFormAnalystV1 must be an object" };
+    const atsGuess = expectString(input.atsGuess, "atsGuess");
+    const structuralNotes = expectString(input.structuralNotes, "structuralNotes");
+    if (atsGuess === null) return { error: "atsGuess is required" };
+    return { atsGuess, structuralNotes: structuralNotes ?? "" };
+  }
+};
+
+// ── CopilotComplianceV1 ── (same shape as CopilotFillPlanV1 — a partial fill
+// plan covering only the standing-default fields it recognizes)
+
+export type CopilotComplianceV1 = CopilotFillPlanV1;
+export const CopilotComplianceSchema: Schema<CopilotComplianceV1> = CopilotFillPlanSchema;
+
+// ── CopilotCorrectionReviewV1 ──
+
+export interface CopilotCorrectionReviewV1 {
+  isRealCorrection: boolean;
+  reason: string;
+  shouldEscalateToCeo: boolean;
+}
+
+export const CopilotCorrectionReviewSchema: Schema<CopilotCorrectionReviewV1> = {
+  parse(input: unknown): CopilotCorrectionReviewV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotCorrectionReviewV1 must be an object" };
+    if (typeof input.isRealCorrection !== "boolean") return { error: "isRealCorrection must be a boolean" };
+    if (typeof input.shouldEscalateToCeo !== "boolean") return { error: "shouldEscalateToCeo must be a boolean" };
+    const reason = expectString(input.reason, "reason") ?? "";
+    return { isRealCorrection: input.isRealCorrection, reason, shouldEscalateToCeo: input.shouldEscalateToCeo };
+  }
+};
+
+// ── CopilotCeoReviewV1 ──
+
+export interface CopilotCeoProposal {
+  targetAutomationId: string;
+  rationale: string;
+  systemPrompt?: string;
+}
+
+export interface CopilotCeoTicket {
+  title: string;
+  description: string;
+  suggestedAction?: string;
+  priority: "low" | "normal" | "high" | "urgent";
+  candidateId?: string;
+  applicationId?: string;
+}
+
+export interface CopilotCeoReviewV1 {
+  proposals: CopilotCeoProposal[];
+  tickets: CopilotCeoTicket[];
+}
+
+export const CopilotCeoReviewSchema: Schema<CopilotCeoReviewV1> = {
+  parse(input: unknown): CopilotCeoReviewV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotCeoReviewV1 must be an object" };
+
+    const proposals: CopilotCeoProposal[] = [];
+    if (Array.isArray(input.proposals)) {
+      for (const p of input.proposals) {
+        if (!isRecord(p) || typeof p.targetAutomationId !== "string" || typeof p.rationale !== "string") {
+          return { error: "Invalid proposal: missing targetAutomationId or rationale" };
+        }
+        proposals.push({
+          targetAutomationId: p.targetAutomationId,
+          rationale: p.rationale,
+          systemPrompt: typeof p.systemPrompt === "string" ? p.systemPrompt : undefined,
+        });
+      }
+    }
+
+    const tickets: CopilotCeoTicket[] = [];
+    if (Array.isArray(input.tickets)) {
+      for (const t of input.tickets) {
+        if (!isRecord(t) || typeof t.title !== "string" || typeof t.description !== "string") {
+          return { error: "Invalid ticket: missing title or description" };
+        }
+        const priority = ["low", "normal", "high", "urgent"].includes(t.priority as string) ? (t.priority as CopilotCeoTicket["priority"]) : "normal";
+        tickets.push({
+          title: t.title,
+          description: t.description,
+          suggestedAction: typeof t.suggestedAction === "string" ? t.suggestedAction : undefined,
+          priority,
+          candidateId: typeof t.candidateId === "string" ? t.candidateId : undefined,
+          applicationId: typeof t.applicationId === "string" ? t.applicationId : undefined,
+        });
+      }
+    }
+
+    return { proposals, tickets };
   }
 };

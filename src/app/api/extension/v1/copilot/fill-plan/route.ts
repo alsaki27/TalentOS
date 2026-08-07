@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
-import { getProviderForAutomation } from "@/lib/ai/routing";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { runCopilotFiller } from "@/lib/ai/application-agents/copilotFiller";
+import { runCopilotCompliance } from "@/lib/ai/application-agents/copilotCompliance";
+import { runCopilotFormAnalyst } from "@/lib/ai/application-agents/copilotFormAnalyst";
 import { AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
+import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import { getRecentCorrections } from "@/server/repositories/copilotLearningRepository";
+import { getDomainProfile, upsertDomainProfile } from "@/server/repositories/copilotDomainProfileRepository";
+
+async function agentOptionsFor(automationId: "copilot_fill_planner" | "copilot_compliance" | "copilot_form_analyst") {
+  const [agentConfig, defaults] = await Promise.all([
+    findAgentConfigByAutomationId(automationId),
+    Promise.resolve(AGENT_CONFIG_DEFAULTS[automationId]),
+  ]);
+  return {
+    system_prompt: agentConfig?.system_prompt ?? undefined,
+    temperature: agentConfig?.temperature ?? defaults.temperature,
+    max_output_tokens: agentConfig?.max_output_tokens ?? defaults.maxOutputTokens,
+    timeout_ms: agentConfig?.timeout_ms ?? defaults.timeoutMs,
+  };
+}
 
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -71,7 +88,7 @@ export async function POST(request: NextRequest) {
             eeo_veteran: cand.eeo_veteran,
             eeo_disability: cand.eeo_disability,
           };
-          
+
           // Actually insert an ad-hoc application into DB so we have a real ID for evidence gathering
           const adhocApp = await queryOne<any>(`
             INSERT INTO applications (candidate_id, status, source_type, adhoc_job_data, applied_at)
@@ -110,13 +127,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 3. Resolve AI Provider for Copilot Filler
-      const routeResult = await getProviderForAutomation("copilot_fill_planner");
-      if (!routeResult) {
-        return extensionError("internal_error", "No AI provider configured for copilot_fill_planner.", 500);
-      }
-
-      // 3b. Pull past corrections for this domain (form-structure variance) and
+      // 3. Pull past corrections for this domain (form-structure variance) and
       // this candidate (personal-data variance) so the prompt can self-correct.
       const domain: string = pageContext?.domain || "unknown";
       const corrections = await getRecentCorrections(domain, appData.candidate_id ?? null);
@@ -127,13 +138,48 @@ export async function POST(request: NextRequest) {
         finalValue: c.final_value,
       }));
 
-      // 4. Build Context and Run Agent
-      const config = AGENT_CONFIG_DEFAULTS.copilot_fill_planner;
+      // 4. Copilot Form Analyst — cached per domain, only actually runs the
+      // first time this domain is seen.
+      let formAnalystNotes = "";
+      const cachedProfile = await getDomainProfile(domain);
+      if (cachedProfile) {
+        formAnalystNotes = cachedProfile.structural_notes ?? "";
+      } else if (domain !== "unknown") {
+        try {
+          const formAnalystOptions = await agentOptionsFor("copilot_form_analyst");
+          const { result: analystResult } = await callWithUsageTracking("copilot_form_analyst", undefined, async (provider) =>
+            runCopilotFormAnalyst(formAnalystOptions, provider, { domain, formFields: formSnapshot })
+          );
+          formAnalystNotes = analystResult.structuralNotes;
+          await upsertDomainProfile(domain, analystResult.atsGuess, analystResult.structuralNotes);
+        } catch (err) {
+          console.error("[fill-plan] Form Analyst failed, continuing without it:", err);
+        }
+      }
+
+      // 5. Copilot Compliance — resolves standing-default policy fields
+      // first; Fill Planner never sees the fields Compliance already handled.
+      let complianceInstructions: any[] = [];
+      try {
+        const complianceOptions = await agentOptionsFor("copilot_compliance");
+        const { result: complianceResult } = await callWithUsageTracking("copilot_compliance", undefined, async (provider) =>
+          runCopilotCompliance(complianceOptions, provider, { formFields: formSnapshot })
+        );
+        complianceInstructions = complianceResult.instructions;
+      } catch (err) {
+        console.error("[fill-plan] Compliance agent failed, continuing without it:", err);
+      }
+      const resolvedSelectors = new Set(complianceInstructions.map((i) => i.selector));
+      const remainingFields = formSnapshot.filter((f: any) => !resolvedSelectors.has(f.selector));
+
+      // 6. Copilot Fill Planner — everything Compliance didn't already resolve.
+      const fillPlannerOptions = await agentOptionsFor("copilot_fill_planner");
       const ctx: any = {
         priorCorrections,
+        formAnalystNotes,
         applicationId: appData.application_id,
         candidateId: appData.candidate_id,
-        formFields: formSnapshot,
+        formFields: remainingFields,
         candidateProfile: {
           name: appData.name,
           email: appData.email,
@@ -162,18 +208,12 @@ export async function POST(request: NextRequest) {
         verifiedSkills: appData.verified_skills || []
       };
 
-      const plan = await runCopilotFiller(
-        {
-          temperature: config.temperature,
-          max_output_tokens: config.maxOutputTokens,
-          timeout_ms: config.timeoutMs,
-        },
-        routeResult.provider,
-        ctx
+      const { result: plan } = await callWithUsageTracking("copilot_fill_planner", undefined, async (provider) =>
+        runCopilotFiller(fillPlannerOptions, provider, ctx)
       );
 
       return NextResponse.json({
-        fillPlan: plan.instructions,
+        fillPlan: [...complianceInstructions, ...plan.instructions],
         applicationId: appData.application_id,
         candidateProfile: ctx.candidateProfile,
         resumeName: selectedResumeId ? "Selected Resume" : "No Resume Selected"
