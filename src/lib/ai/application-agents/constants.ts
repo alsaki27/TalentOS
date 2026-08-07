@@ -40,8 +40,8 @@ export const AGENT_CONFIG_DEFAULTS = {
   copilot_fill_planner: {
     displayName: "Copilot Fill Planner",
     temperature: 0.1,
-    maxOutputTokens: 8192,
-    timeoutMs: 30_000,
+    maxOutputTokens: 4096,
+    timeoutMs: 45_000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 0,

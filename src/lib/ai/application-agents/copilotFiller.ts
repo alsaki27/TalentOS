@@ -13,8 +13,16 @@ export async function runCopilotFiller(
     formAnalystNotes?: string;
   } // Extended context for this specific agent
 ): Promise<CopilotFillPlanV1> {
+  const compact = (value: string, max: number) => value.length > max ? `${value.slice(0, max)}\n[truncated for reliability]` : value;
+  const compactFields = ctx.formFields.slice(0, 160).map((field: any) => ({
+    ...field,
+    label: compact(String(field.label || ""), 180),
+    placeholder: compact(String(field.placeholder || ""), 120),
+    ariaLabel: compact(String(field.ariaLabel || ""), 120),
+    options: Array.isArray(field.options) ? field.options.slice(0, 40).map((option: string) => compact(String(option), 120)) : field.options,
+  }));
   const inputContext: CopilotFillerInputContext = {
-    formFields: ctx.formFields,
+    formFields: compactFields,
     priorCorrections: ctx.priorCorrections,
     formAnalystNotes: ctx.formAnalystNotes,
     candidateProfile: {
@@ -30,10 +38,10 @@ export async function runCopilotFiller(
       verifiedSkills: ctx.verifiedSkills,
       targetRoles: (ctx as any).candidateProfile?.targetRoles || [],
     },
-    resumeText: typeof ctx.baseResume.content === "string" ? ctx.baseResume.content : JSON.stringify(ctx.baseResume.content),
+    resumeText: compact(typeof ctx.baseResume.content === "string" ? ctx.baseResume.content : JSON.stringify(ctx.baseResume.content), 14000),
     jobTitle: ctx.job.title,
     company: ctx.job.company || "Unknown Company",
-    jdText: ctx.job.description || ctx.job.rawDescription || "",
+    jdText: compact(ctx.job.description || ctx.job.rawDescription || "", 12000),
   };
 
   const request = {
@@ -47,7 +55,14 @@ export async function runCopilotFiller(
     timeoutMs: options.timeout_ms,
   } as const;
 
-  let response = await provider.send(request);
+  let response;
+  try {
+    response = await provider.send(request);
+  } catch (firstError) {
+    // A provider timeout/abort is recoverable for this non-destructive planner.
+    // Retry with a smaller completion budget before surfacing an error.
+    response = await provider.send({ ...request, temperature: 0, maxTokens: 4096, timeoutMs: Math.max(options.timeout_ms, 45000) });
+  }
 
   const parseResponse = (content: typeof response.content) => {
     const raw = textOf(content);
