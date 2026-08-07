@@ -61,13 +61,24 @@ export const GET = withExtensionCors(async (req) => {
       });
     }
 
-    // Map candidates to their resumes
-    const result = candidates.map(c => ({
-      id: c.id,
-      name: c.name,
-      targetRoles: c.target_roles,
-      resumes: resumeMap[c.id] || []
-    }));
+    // Map candidates to their resumes. base_resume entries are the
+    // purpose-tailored ones (clean names like "Resume_Avirup(GIS)") — when
+    // any exist for a candidate, those are what the AE actually wants to
+    // pick from. Raw uploaded originals (kind: "resume") are only useful as
+    // a fallback when no tailored version exists yet; mixed together they
+    // were confusing noise (a real AE's complaint: near-duplicate filenames,
+    // an unhelpful "Original Upload" label, no indication which matched the
+    // job at hand).
+    const result = candidates.map(c => {
+      const all = resumeMap[c.id] || [];
+      const tailored = all.filter((r) => r.sourceType === "base_resume");
+      return {
+        id: c.id,
+        name: c.name,
+        targetRoles: c.target_roles,
+        resumes: tailored.length > 0 ? tailored : all,
+      };
+    });
 
     return NextResponse.json({ success: true, data: result });
   } catch (error: any) {
