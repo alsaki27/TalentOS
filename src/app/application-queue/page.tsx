@@ -65,6 +65,17 @@ const STATUS_ICONS: Record<string, string> = {
   applied: "✅",
 };
 
+function openCopilotForApplication(item: QueueItem) {
+  const sourceUrl = item.jobs?.source_url;
+  if (!sourceUrl) {
+    alert("This application does not have an external application URL yet.");
+    return;
+  }
+  const url = new URL(sourceUrl, window.location.origin);
+  url.hash = `talentos_application_id=${encodeURIComponent(item.id)}`;
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
 // AE hand-off funnel, replacing the old one-way "✅ Applied" button. Both AEs
 // and managers can move a ticket between any of these (see PATCH /api/applications/[id]),
 // which auto-advances in_ai_pipeline -> ready_for_review on its own once Final
@@ -880,6 +891,16 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {item.jobs?.source_url && !item.jobs.source_url.includes("example.com") && (
+                        <button
+                          className="btn-compact btn-sm"
+                          onClick={() => openCopilotForApplication(item)}
+                          title="Open the ATS page with this application linked to TalentOS Copilot"
+                          style={{ background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.35)", color: "#10b981" }}
+                        >
+                          🧠 Copilot
+                        </button>
+                      )}
                       <div className="dropdown-wrapper">
                         <button className="btn-compact btn-outline btn-sm" onClick={() => faloodOpen === item.id ? setFaloodOpen(null) : openFaloodDropdown(item)} disabled={!item.candidates}>
                           🎨 Studio ▾
