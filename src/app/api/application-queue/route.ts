@@ -16,6 +16,7 @@ export async function GET(req: NextRequest) {
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
   const status = url.searchParams.get("status") || "";
+  const stage = url.searchParams.get("stage") || "";
   const owner = url.searchParams.get("owner") || "";
   const priority = url.searchParams.get("priority") || "";
   const review = url.searchParams.get("review") || "";
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
       search,
       candidateId,
       status,
+      stage,
       owner,
       priority,
       review,

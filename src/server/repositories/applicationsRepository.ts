@@ -138,6 +138,7 @@ export interface ListApplicationsQuery {
   search?: string;
   candidateId?: string;
   status?: string;
+  stage?: string;
   owner?: string;
   priority?: string;
   review?: string;
@@ -393,6 +394,13 @@ export async function listApplicationQueue(
   const pageSize = Math.min(100, Math.max(1, queryParams.pageSize ?? DEFAULT_PAGE_SIZE));
   const search = (queryParams.search || "").trim().replace(/[,()]/g, "");
   const status = queryParams.status || "";
+  const requestedStage = queryParams.stage || "";
+  const stage = new Set([
+    "in_ai_pipeline",
+    "ready_for_review",
+    "ready_for_application",
+    "applied",
+  ]).has(requestedStage) ? requestedStage : "";
   const owner = queryParams.owner || "";
   const priority = queryParams.priority || "";
   const review = queryParams.review || "";
@@ -446,6 +454,7 @@ export async function listApplicationQueue(
       AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
       AND ($8 <> 'review' OR a.review_status = 'pending')
       AND ($13 = '' OR a.candidate_id::text = $13)
+      AND ($14 = '' OR a.ae_stage = $14)
     ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
     OFFSET $11 LIMIT $12
   `;
@@ -463,6 +472,7 @@ export async function listApplicationQueue(
     offset,
     pageSize,
     queryParams.candidateId ?? "",
+    stage,
   ]);
 
   const countSql = `
@@ -480,6 +490,7 @@ export async function listApplicationQueue(
       AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
       AND ($8 <> 'review' OR a.review_status = 'pending')
       AND ($11 = '' OR a.candidate_id::text = $11)
+      AND ($12 = '' OR a.ae_stage = $12)
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     statuses,
@@ -493,6 +504,7 @@ export async function listApplicationQueue(
     queryParams.userId ?? null,
     today,
     queryParams.candidateId ?? "",
+    stage,
   ]);
 
   const stats = await buildQueueStats(queryParams);

@@ -182,6 +182,7 @@ export default function ApplicationQueuePage() {
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, overdue: 0, pendingReview: 0 });
   const [statusFilter, setStatusFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
@@ -229,6 +230,7 @@ export default function ApplicationQueuePage() {
     if (search) p.set("search", search);
     if (candidateFilter) p.set("candidate_id", candidateFilter);
     if (statusFilter) p.set("status", statusFilter);
+    if (stageFilter) p.set("stage", stageFilter);
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
     if (reviewFilter) p.set("review", reviewFilter);
@@ -284,7 +286,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -680,6 +682,12 @@ export default function ApplicationQueuePage() {
             <option value="assigned">Assigned</option>
             <option value="stacked">Stacked</option>
             <option value="in_progress">In progress</option>
+          </select>
+          <select className="input" value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Filter by application stage">
+            <option value="">All stages</option>
+            {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
+            ))}
           </select>
           <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
             <option value="">All owners</option>
