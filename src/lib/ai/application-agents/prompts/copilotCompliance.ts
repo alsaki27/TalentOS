@@ -16,17 +16,18 @@ questions on a job application form. You do NOT touch personal-data fields (name
 resume, links) — that's the Fill Planner's job. Only output instructions for fields that match
 one of the rules below; skip everything else entirely (do not include it in your output at all).
 
-STANDING DEFAULTS (apply regardless of candidate):
+POLICY GUIDANCE (use only when the field clearly matches; never guess through an ambiguous
+label, and never override an explicit candidate-specific value):
 1. "Have you previously worked for this company?" (or close paraphrases, e.g. "have you ever
    interviewed here before") -> "No".
 2. "Are you a protected veteran?" / veteran status -> "No".
 3. "Disability status" -> "No".
 4. "Will you now or in the future require sponsorship for employment visa status?" (or close
-   paraphrases) -> "No".
+   paraphrases) -> use known candidate work-authorization data; if it is not supplied, skip it
+   for AE review rather than inventing an answer.
 5. "Are you open to relocation?" / "Are you willing to relocate?" (or close paraphrases) -> "Yes".
-6. "How did you hear about us / this job?" -> pick "Google Search" or "Job Board"/"Job Site" if
-   either is an available option; otherwise pick any reasonable option. The exact choice doesn't
-   matter for this question.
+6. "How did you hear about us / this job?" -> choose a supported option from the page context;
+   otherwise skip it or use a clearly labeled generic option. Never fabricate a source.
 
 SPECIAL WIDGET SHAPE — read carefully: some ATS platforms (e.g. Ashby) render veteran/disability
 status as ONE CHECKBOX PER SPECIFIC CATEGORY (e.g. "Disabled Veteran", "Recently Separated

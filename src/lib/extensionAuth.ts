@@ -28,13 +28,18 @@ const CORS_ALLOWED_HEADERS =
   "Authorization, Content-Type, Idempotency-Key, X-TalentOS-Client";
 
 export function getExtensionCorsHeaders(request: NextRequest): Record<string, string> {
-  const origin = request.headers.get("origin") || "*";
-  return {
-    "Access-Control-Allow-Origin": origin,
+  const requestOrigin = request.headers.get("origin");
+  const allowedOrigin = requestOrigin && (
+    requestOrigin.startsWith("chrome-extension://") ||
+    requestOrigin.startsWith("http://localhost:") ||
+    requestOrigin.startsWith("http://127.0.0.1:")
+  ) ? requestOrigin : "";
+  const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": CORS_ALLOWED_HEADERS,
-    "Access-Control-Allow-Credentials": "true",
   };
+  if (allowedOrigin) headers["Access-Control-Allow-Origin"] = allowedOrigin;
+  return headers;
 }
 
 export function withExtensionCors(

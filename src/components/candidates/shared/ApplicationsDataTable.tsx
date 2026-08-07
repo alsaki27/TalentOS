@@ -60,6 +60,13 @@ function copyToClipboard(text: string, setFeedback: (v: string | null) => void) 
   });
 }
 
+function openCopilot(application: DashboardApplication) {
+  if (!application.source_url) return;
+  var url = new URL(application.source_url, window.location.origin);
+  url.hash = "talentos_application_id=" + encodeURIComponent(application.application_id);
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
 var TH_STYLE: React.CSSProperties = {
   padding: "10px 12px", fontSize: 10, fontWeight: 700,
   textTransform: "uppercase", letterSpacing: "0.5px",
@@ -120,7 +127,7 @@ export default function ApplicationsDataTable({
               <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "8%" }}>Resume</th>
               <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "14%" }}>Status {renderSortIndicator("status")}</th>
               <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "9%" }}>Applied {renderSortIndicator("applied_at")}</th>
-              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "11%" }}>Actions</th>}
+              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "16%" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -253,6 +260,18 @@ export default function ApplicationsDataTable({
                   {!readOnly && (
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
                       <div style={{ display: "inline-flex", gap: 4 }}>
+                        {app.source_url && (
+                          <button
+                            onClick={function () { openCopilot(app); }}
+                            title="Open this application in TalentOS Copilot"
+                            style={{
+                              height: 28, borderRadius: 6, cursor: "pointer", padding: "0 8px",
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              border: "1px solid rgba(16,185,129,0.35)", background: "rgba(16,185,129,0.10)",
+                              color: "#10b981", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+                            }}
+                          >Copilot</button>
+                        )}
                         <button
                           onClick={function () { handleToggle(app.application_id, app.status, "replied"); }}
                           disabled={isLoading}

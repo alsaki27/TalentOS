@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
       const body = await req.json();
       const { applicationId, candidateId, formSnapshot, selectedResumeId, pageContext } = body;
 
-      if (!formSnapshot) {
+      if (!Array.isArray(formSnapshot) || formSnapshot.length === 0 || formSnapshot.length > 300) {
         return extensionError("validation_error", "formSnapshot is required.", 400);
       }
       if (!applicationId && !candidateId) {
@@ -105,6 +105,9 @@ export async function POST(request: NextRequest) {
            WHERE a.id = $1`,
           [applicationId]
         );
+        if (appData && candidateId && String(appData.candidate_id) !== String(candidateId)) {
+          return extensionError("validation_error", "applicationId does not belong to candidateId.", 400);
+        }
       } else {
         // TalentOS may already have a real application (and a resume tailored
         // specifically for it) for the job on the currently-open page — check
@@ -312,6 +315,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         fillPlan: [...complianceInstructions, ...plan.instructions],
         applicationId: appData.application_id,
+        candidateId: appData.candidate_id,
         candidateProfile: ctx.candidateProfile,
         coverLetterFileSelector: coverLetterFile?.selector ?? null,
         coverLetterTextSelector: coverLetterText?.selector ?? null,
