@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import { queryOne, execute } from "@/server/db/neon";
 import { createTotpSecret, buildTotpUri, verifyTotp } from "@/server/auth/totp";
-import { decryptSecret, encryptSecret } from "@/server/security/secretCrypto";
+import { decryptSecret, encryptSecret, isEncryptionAvailable } from "@/server/security/secretCrypto";
 import { hashPassword } from "@/server/auth/crypto";
 
 function recoveryCode() {
@@ -20,6 +20,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
+  if (!isEncryptionAvailable()) return NextResponse.json({ error: "MFA setup is temporarily unavailable. Contact support." }, { status: 503 });
   const body = await req.json().catch(() => ({}));
   const code = String(body.code ?? "").trim();
   const current = await queryOne<{ secret_encrypted: string; enabled_at: string | null }>("SELECT secret_encrypted, enabled_at FROM candidate_mfa_settings WHERE candidate_id = $1", [context!.candidateId]);

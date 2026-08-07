@@ -153,9 +153,21 @@ async function triageStoredMessage(id: string, accessToken: string) {
   }
 
   const applications = await getCandidateApplicationContext(row.candidate_id);
+  const bodyText = row.body_text || "";
+  const sender = (row.from_email || "").toLowerCase();
+  const subject = (row.subject || "").toLowerCase();
+  const obviousAlertNoise = /(indeed\.com|linkedin\.com)/i.test(sender)
+    && /(job alert|jobs for you|recommended for you|you look like a great fit|jobs you may like|sponsored)/i.test(subject);
+  if (obviousAlertNoise) {
+    await execute(
+      "UPDATE email_communications SET ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1, needs_reply = false, triaged_at = now() WHERE id = $2",
+      ["Ignored automated job-alert/recommendation email.", id]
+    );
+    return;
+  }
   let triage;
   try {
-    triage = await triageEmail({ subject: row.subject, bodyText: row.body_text, fromEmail: row.from_email, applications });
+    triage = await triageEmail({ subject: row.subject, bodyText, fromEmail: row.from_email, applications });
   } catch (err: any) {
     await execute("UPDATE email_communications SET triaged_at = now() WHERE id = $1", [id]);
     return;
@@ -196,7 +208,7 @@ async function triageStoredMessage(id: string, accessToken: string) {
 
   if (triage.matchedApplicationId && (triage.category === "interview_invite" || triage.category === "scheduling")) {
     try {
-      const details = await extractInterviewDetails(row.subject, row.body_text);
+      const details = await extractInterviewDetails(row.subject, bodyText);
       await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2", [JSON.stringify(details), id]);
       if (details.scheduledAt && details.confidence >= 0.75) {
         const existing = await queryOne<{ id: string }>("SELECT id FROM interview_schedules WHERE application_id = $1 AND scheduled_at = $2 LIMIT 1", [triage.matchedApplicationId, details.scheduledAt]);
