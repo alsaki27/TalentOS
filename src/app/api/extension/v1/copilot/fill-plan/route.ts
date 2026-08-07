@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { queryOne } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { runCopilotFiller } from "@/lib/ai/application-agents/copilotFiller";
@@ -9,6 +9,49 @@ import { AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import { getRecentCorrections } from "@/server/repositories/copilotLearningRepository";
 import { getDomainProfile, upsertDomainProfile } from "@/server/repositories/copilotDomainProfileRepository";
+
+// Finds an existing real application for this candidate that corresponds to
+// the job the AE currently has open, so the extension can auto-use the ONE
+// resume TalentOS already tailored for it instead of making the AE pick from
+// a dropdown of every tailored resume the candidate has. Matching can't rely
+// on URL equality — jobs.apply_url records where the posting was originally
+// sourced (e.g. Indeed), while the AE fills out the application on the
+// employer's own ATS domain (e.g. a Zoho Recruit portal) reached by clicking
+// through, so URLs routinely differ for the same real-world job. Company +
+// job title both appearing in the open tab's title is a much more reliable
+// signal and is confirmed live against a real case (RMSI "GIS Technician").
+// Require BOTH signals (score >= 3, only reachable with both since each is
+// worth 2) — either alone is too weak (many companies reuse generic titles
+// like "GIS Technician"; many job titles reuse generic company-name words).
+async function findMatchingApplication(candidateId: string, pageTitle: string) {
+  const title = (pageTitle || "").toLowerCase();
+  if (!title) return null;
+
+  const rows = await query<any>(
+    `SELECT a.id AS application_id, j.title, j.company
+     FROM applications a
+     JOIN jobs j ON a.job_id = j.id
+     WHERE a.candidate_id = $1 AND j.title IS NOT NULL
+     ORDER BY a.created_at DESC
+     LIMIT 200`,
+    [candidateId]
+  );
+
+  let best: any = null;
+  let bestScore = 0;
+  for (const r of rows) {
+    const jobTitle = String(r.title || "").toLowerCase().trim();
+    const company = String(r.company || "").toLowerCase().trim();
+    let score = 0;
+    if (company.length > 2 && title.includes(company)) score += 2;
+    if (jobTitle.length > 2 && title.includes(jobTitle)) score += 2;
+    if (score > bestScore) {
+      bestScore = score;
+      best = r;
+    }
+  }
+  return bestScore >= 3 ? best : null;
+}
 
 async function agentOptionsFor(automationId: "copilot_fill_planner" | "copilot_compliance" | "copilot_form_analyst") {
   const [agentConfig, defaults] = await Promise.all([
@@ -45,6 +88,7 @@ export async function POST(request: NextRequest) {
       }
 
       let appData: any = null;
+      let matchedApplication: { applicationId: string; title: string; company: string } | null = null;
 
       if (applicationId) {
         // 1. Fetch Application, Job, and Candidate
@@ -62,6 +106,31 @@ export async function POST(request: NextRequest) {
           [applicationId]
         );
       } else {
+        // TalentOS may already have a real application (and a resume tailored
+        // specifically for it) for the job on the currently-open page — check
+        // before falling back to an ad-hoc application + manual resume pick.
+        const match = await findMatchingApplication(candidateId, pageContext?.title || "");
+        if (match) {
+          appData = await queryOne<any>(
+            `SELECT a.id as application_id, a.candidate_id, a.job_id,
+                    j.title, j.company, j.description_text AS description, j.raw_description,
+                    c.name, c.email, c.phone, c.location_preference AS location,
+                    c.work_authorization, c.linkedin_url, c.portfolio_url,
+                    c.verified_skills, c.target_roles, c.salary_expectation,
+                    c.eeo_gender, c.eeo_race, c.eeo_veteran, c.eeo_disability
+             FROM applications a
+             JOIN jobs j ON a.job_id = j.id
+             JOIN candidates c ON a.candidate_id = c.id
+             WHERE a.id = $1`,
+            [match.application_id]
+          );
+          if (appData) {
+            matchedApplication = { applicationId: match.application_id, title: match.title, company: match.company };
+          }
+        }
+      }
+
+      if (!appData && !applicationId) {
         // Create an ad-hoc application for the candidate
         const cand = await queryOne<any>(`SELECT * FROM candidates WHERE id = $1`, [candidateId]);
         if (cand) {
@@ -105,9 +174,27 @@ export async function POST(request: NextRequest) {
         return extensionError("not_found", "Application not found.", 404);
       }
 
-      // 2. Fetch Resume Text
+      // 2. Fetch Resume Text — if the page matched a real application,
+      // TalentOS already tailored a specific resume for this exact job;
+      // that overrides whatever the AE has picked in the manual dropdown.
       let resumeText = "";
-      if (selectedResumeId) {
+      let resumeVersionId: string | null = null;
+      if (matchedApplication) {
+        const version = await queryOne<any>(
+          `SELECT id, content, generated_text FROM application_resume_versions
+           WHERE application_id = $1 ORDER BY updated_at DESC LIMIT 1`,
+          [matchedApplication.applicationId]
+        );
+        if (version) {
+          resumeVersionId = version.id;
+          resumeText = version.generated_text
+            ? String(version.generated_text)
+            : version.content
+              ? (typeof version.content === "string" ? version.content : JSON.stringify(version.content))
+              : "";
+        }
+      }
+      if (!resumeText && selectedResumeId) {
         // Try resumes (uploaded) or base_resumes
         let resume = await queryOne<any>(
           `SELECT parsed_json FROM resumes WHERE id = $1 AND candidate_id = $2`,
@@ -229,7 +316,11 @@ export async function POST(request: NextRequest) {
         coverLetterFileSelector: coverLetterFile?.selector ?? null,
         coverLetterTextSelector: coverLetterText?.selector ?? null,
         resumeFileSelector: resumeFile?.selector ?? null,
-        resumeName: selectedResumeId ? "Selected Resume" : "No Resume Selected"
+        matchedApplication,
+        resumeVersionId,
+        resumeName: matchedApplication
+          ? `Tailored resume for ${matchedApplication.title} @ ${matchedApplication.company}`
+          : selectedResumeId ? "Selected Resume" : "No Resume Selected"
       });
     } catch (err) {
       console.error("[Copilot Fill Plan Error]", err);
