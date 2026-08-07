@@ -5,7 +5,7 @@ export const GMAIL_SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 // Never derive this from the incoming request's origin — confirmed unreliable

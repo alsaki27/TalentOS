@@ -73,6 +73,11 @@ export default function PortalDashboardPage() {
   const router = useRouter();
   const [data, setData] = useState<PortalDashboard | null>(null);
   const [error, setError] = useState("");
+  const [mfaEnrolled, setMfaEnrolled] = useState(false);
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaMessage, setMfaMessage] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
 
   useEffect(() => {
     fetch("/api/portal/me/dashboard")
@@ -87,12 +92,28 @@ export default function PortalDashboardPage() {
         if (d) setData(d);
       })
       .catch(() => setError("Could not load your dashboard."));
+    fetch("/api/portal/auth/mfa").then((r) => r.ok ? r.json() : null).then((d) => { if (d) setMfaEnrolled(Boolean(d.enrolled)); }).catch(() => undefined);
   }, [router]);
 
   async function logout() {
     await fetch("/api/portal/auth/logout", { method: "POST" });
     router.push("/portal/login");
     router.refresh();
+  }
+
+  async function setupMfa() {
+    setMfaMessage("");
+    const response = await fetch("/api/portal/auth/mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { setMfaMessage(result.error || "Could not start MFA setup."); return; }
+    if (result.enrolled) setMfaEnrolled(true); else setMfaSetup({ secret: result.secret, otpauthUri: result.otpauthUri });
+  }
+
+  async function confirmMfa() {
+    const response = await fetch("/api/portal/auth/mfa", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: mfaCode }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) { setMfaMessage(result.error || "Could not verify code."); return; }
+    setMfaEnrolled(true); setMfaSetup(null); setRecoveryCodes(result.recoveryCodes || []); setMfaMessage("Google Authenticator is enabled. Save these one-time recovery codes.");
   }
 
   if (error) {
@@ -127,6 +148,13 @@ export default function PortalDashboardPage() {
         <StatCard icon="🎯" value={data.stats.interviews} label="Interviews" index={2} />
         <StatCard icon="🏆" value={data.stats.offers} label="Offers" index={3} />
         <StatCard icon="📈" value={`${data.stats.responseRate}%`} label="Response rate" index={4} />
+      </div>
+
+      <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
+        <strong>Account security</strong>
+        {mfaEnrolled ? <p className="portal-greeting-sub">Google Authenticator is enabled for your next sign-in.</p> : !mfaSetup ? <><p className="portal-greeting-sub">Protect your candidate dashboard with Google Authenticator.</p><button className="portal-btn portal-btn-primary" onClick={setupMfa}>Set up Google Authenticator</button></> : <div style={{ marginTop: 10 }}><p className="portal-greeting-sub">Scan this URI in Google Authenticator, then enter the six-digit code.</p><code style={{ display: "block", wordBreak: "break-all", fontSize: 11 }}>{mfaSetup.otpauthUri}</code><p style={{ fontSize: 12 }}>Manual key: <strong>{mfaSetup.secret}</strong></p><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" /><button className="portal-btn portal-btn-primary" onClick={confirmMfa} style={{ marginLeft: 8 }}>Enable MFA</button></div>}
+        {recoveryCodes.length > 0 && <code style={{ display: "block", marginTop: 8, wordBreak: "break-word" }}>{recoveryCodes.join(" · ")}</code>}
+        {mfaMessage && <p className="portal-greeting-sub">{mfaMessage}</p>}
       </div>
 
       <div className="portal-section-title">Applications</div>

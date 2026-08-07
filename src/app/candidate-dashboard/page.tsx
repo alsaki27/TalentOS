@@ -339,7 +339,7 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
         <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}</div>
         {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>“{task.email_subject}”</div>}
         {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
-        <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Optional AE note before taking over or resolving" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
+        <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Required note before resolving; optional when taking over" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 118 }}>
         {mailUrl && <a href={mailUrl} target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--ink)", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>Open email</a>}

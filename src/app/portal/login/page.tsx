@@ -30,9 +30,12 @@ function PortalLoginForm() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaCode, setMfaCode] = useState("");
 
   useEffect(() => {
     const err = searchParams?.get("error");
+    if (searchParams?.get("mfa") === "1") setMfaRequired(true);
     if (err === "no_account") setError("No portal account is linked to that Google account. Use your invite link first.");
     else if (err) setError("Could not sign in with Google. Please try again.");
   }, [searchParams]);
@@ -55,29 +58,50 @@ function PortalLoginForm() {
       return;
     }
 
+    const data = await res.json().catch(() => ({}));
+    if (data.mfaRequired) { setMfaRequired(true); return; }
+    router.push("/portal");
+    router.refresh();
+  }
+
+  async function verifyMfa(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setLoading(true);
+    const res = await fetch("/api/portal/auth/mfa/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: mfaCode }),
+    });
+    setLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error || "Could not verify authenticator code.");
+      return;
+    }
     router.push("/portal");
     router.refresh();
   }
 
   return (
     <div className="portal-auth-shell">
-      <form className="portal-auth-card" onSubmit={submit}>
+      <form className="portal-auth-card" onSubmit={mfaRequired ? verifyMfa : submit}>
         <div className="portal-logo">
           <PortalLogo />
           <span className="portal-logo-text">Skarion</span>
         </div>
 
         <div>
-          <h1 className="portal-h1">Welcome back</h1>
-          <p className="portal-sub">Sign in to track your job search.</p>
+          <h1 className="portal-h1">{mfaRequired ? "Verify your identity" : "Welcome back"}</h1>
+          <p className="portal-sub">{mfaRequired ? "Enter the 6-digit code from Google Authenticator." : "Sign in to track your job search."}</p>
         </div>
 
-        <div className="portal-field">
+        {!mfaRequired && <div className="portal-field">
           <label>Email</label>
           <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        </div>
+        </div>}
 
-        <div className="portal-field">
+        {!mfaRequired ? <div className="portal-field">
           <label>Password</label>
           <input
             type="password"
@@ -86,7 +110,7 @@ function PortalLoginForm() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
-        </div>
+        </div> : <div className="portal-field"><label>Authenticator code</label><input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} required /></div>}
 
         {error && <p className="portal-error">{error}</p>}
 
@@ -94,12 +118,12 @@ function PortalLoginForm() {
           {loading ? "Signing in…" : "Sign in"}
         </button>
 
-        <div className="portal-divider"><span>or</span></div>
+        {!mfaRequired && <div className="portal-divider"><span>or</span></div>}
 
-        <a href="/api/portal/auth/google/start" className="portal-btn portal-btn-google">
+        {!mfaRequired && <a href="/api/portal/auth/google/start" className="portal-btn portal-btn-google">
           <GoogleIcon />
           Continue with Google
-        </a>
+        </a>}
 
         <p className="portal-footnote">
           Don&apos;t have access yet? Ask your recruiter for an invite link.

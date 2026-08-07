@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { execute } from "@/server/db/neon";
+import { execute, queryOne } from "@/server/db/neon";
 
 const VALID_STATUSES = new Set(["open", "in_progress", "done", "dismissed"]);
 
@@ -17,6 +17,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const resolved = status === "done" || status === "dismissed";
   if (resolved) {
     const note = typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 4000) : null;
+    if (status === "done" && !note) {
+      const emailTask = await queryOne<{ email_communication_id: string | null }>("SELECT email_communication_id FROM action_items WHERE id = $1", [params.id]);
+      if (emailTask?.email_communication_id) return NextResponse.json({ error: "Add an AE resolution note before closing an email task." }, { status: 400 });
+    }
     const resolutionKind = status === "dismissed" ? "dismissed" : (body.takeover ? "manual_takeover" : "manual_resolution");
     await execute(
       "UPDATE action_items SET status = $1, resolved_at = now(), resolved_by_user_id = $2, resolution_note = COALESCE($3, resolution_note), resolution_kind = $4 WHERE id = $5",

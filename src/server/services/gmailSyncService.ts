@@ -14,8 +14,9 @@ import {
   updateGmailHistoryId,
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
-import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, type GmailMessage } from "@/lib/integrations/gmailApi";
+import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
 import { triageEmail, AUTO_WRITE_CATEGORIES, AUTO_WRITE_CONFIDENCE_THRESHOLD, type TriageCandidateContext } from "@/lib/ai/emailTriage";
+import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { logActivity } from "@/lib/activity";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
@@ -138,11 +139,11 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   return row?.id ?? null;
 }
 
-async function triageStoredMessage(id: string) {
+async function triageStoredMessage(id: string, accessToken: string) {
   const row = await queryOne<{
-    id: string; candidate_id: string; subject: string | null; body_text: string; from_email: string | null; direction: string;
+    id: string; candidate_id: string; subject: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
   }>(
-    "SELECT id, candidate_id, subject, body_text, from_email, direction FROM email_communications WHERE id = $1",
+    "SELECT id, candidate_id, subject, body_text, from_email, direction, gmail_message_id FROM email_communications WHERE id = $1",
     [id]
   );
   if (!row || row.direction !== "inbound") {
@@ -170,6 +171,17 @@ async function triageStoredMessage(id: string) {
 
   if (!triage.relevant) return;
 
+  try {
+    const labelName = triage.category === "interview_invite" || triage.category === "scheduling" ? "TalentOS/Interview" : triage.category === "offer" ? "TalentOS/Offer" : "TalentOS/Recruiter";
+    const labelId = await ensureUserLabel(accessToken, labelName);
+    const addLabels = [labelId];
+    if (["interview_invite", "scheduling", "offer", "recruiter_reply"].includes(triage.category)) addLabels.push("STARRED");
+    await modifyMessage(accessToken, row.gmail_message_id, addLabels);
+    await execute("UPDATE email_communications SET gmail_label_ids = $1, gmail_is_starred = $2 WHERE id = $3", [addLabels, addLabels.includes("STARRED"), id]);
+  } catch (labelError) {
+    console.warn("[Gmail sync] Could not apply Gmail label/star:", labelError);
+  }
+
   // Every relevant message becomes an application timeline note. It is kept
   // internal by default and is deduplicated by source email.
   if (triage.matchedApplicationId) {
@@ -180,6 +192,28 @@ async function triageStoredMessage(id: string) {
        ON CONFLICT (email_communication_id) WHERE email_communication_id IS NOT NULL DO NOTHING`,
       [triage.matchedApplicationId, triage.summary || `Relevant ${triage.category.replace("_", " ")} email detected.`, id, triage.confidence]
     );
+  }
+
+  if (triage.matchedApplicationId && (triage.category === "interview_invite" || triage.category === "scheduling")) {
+    try {
+      const details = await extractInterviewDetails(row.subject, row.body_text);
+      await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2", [JSON.stringify(details), id]);
+      if (details.scheduledAt && details.confidence >= 0.75) {
+        const existing = await queryOne<{ id: string }>("SELECT id FROM interview_schedules WHERE application_id = $1 AND scheduled_at = $2 LIMIT 1", [triage.matchedApplicationId, details.scheduledAt]);
+        if (!existing) await execute(
+          "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
+          [triage.matchedApplicationId, "Email-detected interview", details.scheduledAt, details.durationMinutes || 60, details.location, details.meetingLink]
+        );
+      }
+      await execute(
+        `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
+         VALUES ($1, $2, $3, 'interview_followup', $4, $5, 'urgent', 'open', 'manual_or_thread_reply', $6)
+         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+        [row.candidate_id, triage.matchedApplicationId, id, details.scheduledAt ? "Interview detected — confirm attendance" : "Interview email detected — review details", details.scheduledAt || "Interview logistics need AE review.", `email:${id}:interview`]
+      );
+    } catch (interviewError) {
+      console.warn("[Gmail sync] Interview extraction failed:", interviewError);
+    }
   }
 
   const canAutoWrite =
@@ -302,7 +336,7 @@ export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followU
         const storedId = await storeRawMessage(account.candidate_id, account.id, msg);
         outcome.fetched++;
         if (storedId) {
-          await triageStoredMessage(storedId);
+          await triageStoredMessage(storedId, accessToken);
           outcome.triaged++;
         }
       }

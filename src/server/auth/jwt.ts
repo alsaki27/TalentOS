@@ -14,6 +14,7 @@ export interface JWTPayload {
   // portal session so candidate and staff sessions can never be confused even if
   // a cookie name collided somehow — each auth path checks this explicitly.
   type?: "candidate";
+  mfa_pending?: boolean;
   iat: number;
   exp: number;
 }

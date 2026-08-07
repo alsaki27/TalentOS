@@ -1,8 +1,33 @@
 // src/lib/integrations/gmailApi.ts
-// Thin Gmail REST API client for the sync worker. Read-only (gmail.readonly
-// scope) — never sends, modifies, or deletes anything in a candidate's mailbox.
+// Thin Gmail REST API client for the sync worker.
 
 const GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+async function gmailFetch(path: string, accessToken: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", "Bearer " + accessToken);
+  const res = await fetch(GMAIL_BASE + path, { ...init, headers });
+  if (!res.ok) throw new Error("Gmail API failed (" + res.status + "): " + (await res.text().catch(() => "")).slice(0, 300));
+  return res;
+}
+
+export async function modifyMessage(accessToken: string, messageId: string, addLabelIds: string[], removeLabelIds: string[] = []) {
+  await gmailFetch("/messages/" + encodeURIComponent(messageId) + "/modify", accessToken, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ addLabelIds, removeLabelIds }),
+  });
+}
+
+export async function ensureUserLabel(accessToken: string, labelName: string): Promise<string> {
+  const existing = await gmailFetch("/labels", accessToken).then((r) => r.json());
+  const found = (existing.labels || []).find((label: any) => label.name === labelName);
+  if (found?.id) return found.id;
+  const created = await gmailFetch("/labels", accessToken, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: labelName, labelListVisibility: "labelShow", messageListVisibility: "show" }),
+  }).then((r) => r.json());
+  return created.id;
+}
 
 export interface GmailTokenRefreshResult {
   access_token: string;

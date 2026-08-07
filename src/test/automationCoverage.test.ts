@@ -46,6 +46,9 @@ const AUTOMATION_IDS_FROM_CODE = [
   "recruiter_message_gen",
   "ai_digest",
   "chat_assistant",
+  "email_triage",
+  "email_interview_extraction",
+  "email_action_enrichment",
 ];
 
 // These must match exactly what's in ai_automations (06_ai_key_manager_v2.sql
@@ -69,6 +72,9 @@ const SEEDED_AUTOMATIONS = new Set([
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
+  "email_triage",
+  "email_interview_extraction",
+  "email_action_enrichment",
 ]);
 
 describe("Automation coverage", () => {
