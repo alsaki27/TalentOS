@@ -698,7 +698,7 @@ export default function JobsPage() {
   }
 
   return (
-    <>
+    <div className="jobs-page">
       <div className="page-header">
         <h1>Job masterlist</h1>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -788,7 +788,7 @@ export default function JobsPage() {
         </div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+      <div className="jobs-search-row" style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
         <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", minWidth: "max-content" }}>Search Jobs</h3>
         <input
           style={{ flex: 1, padding: "8px 12px" }}
@@ -798,7 +798,7 @@ export default function JobsPage() {
         />
       </div>
 
-      <div className="filter-bar" style={{ alignItems: "flex-end" }}>
+      <div className="filter-bar jobs-filters" style={{ alignItems: "flex-end" }}>
         {savedSearches.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Saved Searches</span>
@@ -906,7 +906,7 @@ export default function JobsPage() {
         <span className="muted" style={{ fontSize: 12, marginLeft: "auto", marginBottom: "8px" }}>{jobs.length} of {total}</span>
       </div>
 
-      <div className="filter-bar">
+      <div className="filter-bar jobs-savebar">
         {!savedSearchId && (
           <input
             placeholder="Name current filters..."
@@ -938,8 +938,8 @@ export default function JobsPage() {
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
-        <div className="table-shell">
-          <table className="table" style={{ tableLayout: "fixed", width: "100%", wordWrap: "break-word" }}>
+        <div className="table-shell jobs-table-shell">
+          <table className="table jobs-table" style={{ tableLayout: "fixed", width: "100%", wordWrap: "break-word" }}>
             <thead>
               <tr>
                 <th style={{ width: 40 }}>
@@ -1093,7 +1093,7 @@ export default function JobsPage() {
                       </div>
                     )}
                   </td>
-                  <td style={{ display: "flex", gap: 6, position: "sticky", right: 0, background: "var(--surface)", zIndex: 1 }}>
+                  <td className="jobs-actions" style={{ display: "flex", gap: 6, position: "sticky", right: 0, background: "var(--surface)", zIndex: 1 }}>
                     <button onClick={() => setShowApplyFor(job)}>Log application</button>
                     <button onClick={() => deleteOne(job.id)}>Delete</button>
                   </td>
@@ -1130,7 +1130,7 @@ export default function JobsPage() {
           onLogged={() => { setShowBulkApply(false); setSelected(new Set()); load(page); }}
         />
       )}
-    </>
+    </div>
   );
 }
 

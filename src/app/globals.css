@@ -808,6 +808,49 @@ label {
   min-width: 140px;
 }
 
+/* Jobs masterlist: keep the control surface readable and make the wide data
+   table intentionally scrollable instead of silently clipping actions. */
+.jobs-page { min-width: 0; }
+.jobs-search-row input { min-width: 0; }
+.jobs-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  align-items: end;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  gap: 12px;
+}
+.jobs-filters > div { min-width: 0; }
+.jobs-filters > div > select,
+.jobs-filters > div > input { width: 100%; min-width: 0; }
+.jobs-filters > .dual-range-slider { min-width: 0; }
+.jobs-filters .muted { align-self: center; justify-self: end; white-space: nowrap; }
+.jobs-savebar { align-items: center; padding: 0 2px 4px; }
+.jobs-savebar input { min-width: 220px; }
+.jobs-table-shell { overflow-x: auto; scrollbar-color: var(--accent) var(--surface-sunken); }
+.jobs-table { min-width: 1120px; }
+.jobs-table th:last-child,
+.jobs-table td.jobs-actions {
+  min-width: 150px;
+  width: 150px;
+  box-shadow: -10px 0 16px -14px rgba(0,0,0,.8);
+}
+.jobs-actions button { white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .jobs-filters { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .jobs-search-row { align-items: stretch !important; flex-direction: column; }
+  .jobs-filters { grid-template-columns: 1fr; padding: 12px; }
+  .jobs-filters .muted { justify-self: start; }
+  .jobs-savebar { align-items: stretch; flex-direction: column; }
+  .jobs-savebar input, .jobs-savebar button { width: 100%; }
+}
+
 .queue-stats {
   display: flex;
   align-items: center;
