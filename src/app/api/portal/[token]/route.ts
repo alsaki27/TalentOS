@@ -13,8 +13,8 @@ import { buildCandidatePortalDashboard } from "@/lib/portalDashboard";
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
-  const candidate = await queryOne<{ id: string; name: string; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
-    `SELECT id, name, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1`,
+  const candidate = await queryOne<{ id: string; name: string; skarion_enrolled_at: string | null; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
+    `SELECT id, name, skarion_enrolled_at, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1`,
     [params.token]
   );
 
@@ -29,5 +29,5 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
   }
 
   const dashboard = await buildCandidatePortalDashboard(candidate.id, candidate.name);
-  return NextResponse.json(dashboard);
+  return NextResponse.json({ ...dashboard, skarionEnrolledAt: candidate.skarion_enrolled_at });
 }

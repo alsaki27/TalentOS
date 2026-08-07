@@ -16,9 +16,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const resolved = status === "done" || status === "dismissed";
   if (resolved) {
+    const note = typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 4000) : null;
+    const resolutionKind = status === "dismissed" ? "dismissed" : (body.takeover ? "manual_takeover" : "manual_resolution");
     await execute(
-      "UPDATE action_items SET status = $1, resolved_at = now(), resolved_by_user_id = $2 WHERE id = $3",
-      [status, context.profile.user_id, params.id]
+      "UPDATE action_items SET status = $1, resolved_at = now(), resolved_by_user_id = $2, resolution_note = COALESCE($3, resolution_note), resolution_kind = $4 WHERE id = $5",
+      [status, context.profile.user_id, note, resolutionKind, params.id]
+    );
+  } else if (status === "in_progress") {
+    await execute(
+      "UPDATE action_items SET status = $1, taken_over_at = COALESCE(taken_over_at, now()), taken_over_by_user_id = $2, resolution_note = COALESCE($3, resolution_note) WHERE id = $4",
+      [status, context.profile.user_id, typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 4000) : null, params.id]
     );
   } else {
     await execute(

@@ -40,6 +40,26 @@ interface CandidateOption {
   application_count: number;
 }
 
+interface PendingEmailTask {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  application_id: string | null;
+  type: string;
+  title: string;
+  description: string | null;
+  suggested_action: string | null;
+  priority: string;
+  status: string;
+  created_at: string;
+  email_communication_id: string | null;
+  email_subject: string | null;
+  email_sent_at: string | null;
+  gmail_thread_id: string | null;
+  job_title: string | null;
+  company_name: string | null;
+}
+
 export async function GET(req: NextRequest) {
   var currentUser = await getCurrentUserContext();
   if (!currentUser) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
@@ -149,10 +169,36 @@ export async function GET(req: NextRequest) {
       if (cand) selectedCandidateName = cand.name;
     }
 
+    var taskParams: unknown[] = [];
+    var taskFilter = "";
+    if (candidateId) {
+      taskFilter = " AND ai.candidate_id = $1";
+      taskParams.push(candidateId);
+    }
+    var pendingEmailTasks = await query<PendingEmailTask>(
+      `SELECT ai.id, ai.candidate_id, c.name AS candidate_name,
+              ai.application_id, ai.type, ai.title, ai.description,
+              ai.suggested_action, ai.priority, ai.status, ai.created_at,
+              ai.email_communication_id, ec.subject AS email_subject,
+              ec.sent_at AS email_sent_at, ec.gmail_thread_id,
+              j.title AS job_title, j.company AS company_name
+       FROM action_items ai
+       JOIN candidates c ON c.id = ai.candidate_id
+       LEFT JOIN email_communications ec ON ec.id = ai.email_communication_id
+       LEFT JOIN applications a ON a.id = ai.application_id
+       LEFT JOIN jobs j ON j.id = a.job_id
+       WHERE ai.status IN ('open', 'in_progress')${taskFilter}
+       ORDER BY CASE ai.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+                ai.created_at DESC
+       LIMIT 100`,
+      taskParams
+    );
+
     return NextResponse.json({
       applications: paged, total, page, pageSize,
       statusCounts, sourceCounts, candidates,
       selectedCandidateName,
+      pendingEmailTasks,
     });
   } catch (error: any) {
     console.error("[Candidate Dashboard API] Error:", error.message);

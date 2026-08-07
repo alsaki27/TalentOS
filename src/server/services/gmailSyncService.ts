@@ -18,7 +18,6 @@ import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, type 
 import { triageEmail, AUTO_WRITE_CATEGORIES, AUTO_WRITE_CONFIDENCE_THRESHOLD, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { logActivity } from "@/lib/activity";
 
-const BACKFILL_QUERY = "newer_than:90d -category:promotions -category:social -category:forums";
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 
 interface SyncOutcome {
@@ -43,7 +42,7 @@ async function ensureFreshAccessToken(account: NonNullable<Awaited<ReturnType<ty
   return refreshed.access_token;
 }
 
-async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow): Promise<string[]> {
+async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow, enrolledAt: string | null): Promise<string[]> {
   if (account.gmail_history_id) {
     try {
       const ids = new Set<string>();
@@ -65,10 +64,12 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow)
   }
 
   const ids = new Set<string>();
+  const afterClause = enrolledAt ? `after:${enrolledAt.replace(/-/g, "/")}` : "newer_than:90d";
+  const backfillQuery = `${afterClause} -category:promotions -category:social -category:forums`;
   let pageToken: string | undefined;
   let pages = 0;
   do {
-    const page = await listMessageIds(accessToken, BACKFILL_QUERY, pageToken);
+    const page = await listMessageIds(accessToken, backfillQuery, pageToken);
     for (const m of page.messages ?? []) ids.add(m.id);
     pageToken = page.nextPageToken;
     pages++;
@@ -113,6 +114,25 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
        WHERE gmail_thread_id = $2 AND direction = 'inbound' AND needs_reply = true AND replied_at IS NULL`,
       [msg.sentAt, msg.threadId]
     );
+
+    // A qualifying outbound message is the machine-verifiable resolution for
+    // invitation/reply tasks. Manual takeover remains available for cases
+    // where the AE handled the conversation outside Gmail.
+    await execute(
+      `UPDATE action_items ai
+       SET status = 'done', resolved_at = COALESCE(resolved_at, now()),
+           resolution_kind = 'outbound_thread_reply',
+           resolved_by_email_communication_id = $1
+       WHERE ai.status IN ('open', 'in_progress')
+         AND ai.resolution_rule = 'manual_or_thread_reply'
+         AND EXISTS (
+           SELECT 1 FROM email_communications inbound
+           WHERE inbound.id = ai.email_communication_id
+             AND inbound.gmail_thread_id = $2
+             AND inbound.direction = 'inbound'
+         )`,
+      [row.id, msg.threadId]
+    );
   }
 
   return row?.id ?? null;
@@ -150,6 +170,18 @@ async function triageStoredMessage(id: string) {
 
   if (!triage.relevant) return;
 
+  // Every relevant message becomes an application timeline note. It is kept
+  // internal by default and is deduplicated by source email.
+  if (triage.matchedApplicationId) {
+    await execute(
+      `INSERT INTO application_comments
+         (application_id, commenter_name, body, visible_to_candidate, source_type, email_communication_id, ai_confidence)
+       VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4)
+       ON CONFLICT (email_communication_id) WHERE email_communication_id IS NOT NULL DO NOTHING`,
+      [triage.matchedApplicationId, triage.summary || `Relevant ${triage.category.replace("_", " ")} email detected.`, id, triage.confidence]
+    );
+  }
+
   const canAutoWrite =
     triage.matchedApplicationId &&
     triage.suggestedStatus &&
@@ -167,14 +199,19 @@ async function triageStoredMessage(id: string) {
       entityId: triage.matchedApplicationId!,
     });
     await execute(
-      `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status)
-       VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'open')`,
+      `INSERT INTO action_items
+         (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
+          resolution_rule, resolution_kind, dedupe_key)
+       VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'done',
+               'informational', 'informational', $6)
+       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
       [
         row.candidate_id,
         triage.matchedApplicationId,
         id,
         `Auto-updated status to "${triage.suggestedStatus}" (FYI)`,
         triage.summary,
+        `email:${id}:status-update`,
       ]
     );
     return;
@@ -183,8 +220,11 @@ async function triageStoredMessage(id: string) {
   const type = triage.needsReply ? "needs_reply" : "status_change_review";
   const priority = triage.category === "offer" ? "urgent" : triage.needsReply ? "high" : "normal";
   await execute(
-    `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, suggested_action, priority, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open')`,
+    `INSERT INTO action_items
+       (candidate_id, application_id, email_communication_id, type, title, description, suggested_action, priority, status,
+        resolution_rule, dedupe_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', 'manual_or_thread_reply', $9)
+     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
     [
       row.candidate_id,
       triage.matchedApplicationId,
@@ -194,6 +234,7 @@ async function triageStoredMessage(id: string) {
       triage.summary,
       triage.suggestedStatus ? `Consider updating application status to "${triage.suggestedStatus}"` : null,
       priority,
+      `email:${id}:action`,
     ]
   );
 }
@@ -249,7 +290,11 @@ export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followU
       if (!account) continue;
 
       const accessToken = await ensureFreshAccessToken(account);
-      const messageIds = await fetchNewMessageIds(accessToken, account);
+      const candidate = await queryOne<{ skarion_enrolled_at: string | null }>(
+        "SELECT skarion_enrolled_at FROM candidates WHERE id = $1",
+        [account.candidate_id]
+      );
+      const messageIds = await fetchNewMessageIds(accessToken, account, candidate?.skarion_enrolled_at ?? null);
 
       for (const messageId of messageIds) {
         const msg = await getMessage(accessToken, messageId, account.email);

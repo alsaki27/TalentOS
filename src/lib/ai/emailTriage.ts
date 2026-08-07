@@ -27,11 +27,12 @@ export type EmailCategory =
   | "rejection"
   | "offer"
   | "recruiter_reply"
+  | "application_invite"
   | "scheduling"
   | "other";
 
 const VALID_CATEGORIES = new Set<EmailCategory>([
-  "interview_invite", "rejection", "offer", "recruiter_reply", "scheduling", "other",
+  "interview_invite", "rejection", "offer", "recruiter_reply", "application_invite", "scheduling", "other",
 ]);
 
 export interface TriageResult {
@@ -57,7 +58,9 @@ function buildPrompt(input: TriageInput): string {
 
   return [
     "You are triaging one email from a job candidate's inbox for a recruiting agency that manages their applications on their behalf.",
-    "Decide if this email is relevant to job-search/recruiting activity (interview scheduling, application status, offers/rejections, recruiter correspondence) — most personal email is NOT relevant and should be marked relevant=false.",
+    "Decide if this email is relevant to an active recruiting workflow (interview scheduling, application status, offers/rejections, recruiter correspondence, or a direct invitation to apply).",
+    "Mark relevant=false for job alerts, recommendation digests, newsletters, marketing, sponsored/promoted mail, bulk talent-network campaigns, and generic Indeed/LinkedIn messages such as 'you look like a great fit' unless the message is a specific human/recruiter exchange or a concrete interview/application request.",
+    "An interview invite or scheduling request is high priority. A direct invitation to apply is relevant and must create a pending human task; it is resolved only by a same-thread outbound reply or explicit AE resolution.",
     "",
     "Candidate's open applications:",
     appList,
@@ -68,7 +71,7 @@ function buildPrompt(input: TriageInput): string {
     input.bodyText.slice(0, 4000),
     "",
     "Respond with ONLY this JSON object, no markdown fences, no other text:",
-    '{"relevant": boolean, "category": "interview_invite"|"rejection"|"offer"|"recruiter_reply"|"scheduling"|"other", "confidence": number (0-1), "matched_application_id": string|null, "suggested_status": string|null, "needs_reply": boolean, "summary": string (one sentence)}',
+    '{"relevant": boolean, "category": "interview_invite"|"rejection"|"offer"|"recruiter_reply"|"application_invite"|"scheduling"|"other", "confidence": number (0-1), "matched_application_id": string|null, "suggested_status": string|null, "needs_reply": boolean, "summary": string (one sentence)}',
   ].join("\n");
 }
 

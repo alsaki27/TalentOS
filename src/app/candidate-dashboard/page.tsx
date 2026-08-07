@@ -47,6 +47,26 @@ interface DashboardData {
   sourceCounts: Record<string, number>;
   candidates: CandidateOption[];
   selectedCandidateName: string | null;
+  pendingEmailTasks: PendingEmailTask[];
+}
+
+interface PendingEmailTask {
+  id: string;
+  candidate_id: string;
+  candidate_name: string;
+  application_id: string | null;
+  type: string;
+  title: string;
+  description: string | null;
+  suggested_action: string | null;
+  priority: string;
+  status: string;
+  created_at: string;
+  email_subject: string | null;
+  email_sent_at: string | null;
+  gmail_thread_id: string | null;
+  job_title: string | null;
+  company_name: string | null;
 }
 
 var DISPLAY_GROUPS: Record<string, string> = {
@@ -118,6 +138,16 @@ function CandidateDashboardInner() {
       if (!res.ok) throw new Error("Failed");
       fetchData();
     } catch (err) { console.error("Status change failed:", err); }
+  }
+
+  async function updateEmailTask(taskId: string, status: string, note?: string) {
+    var res = await fetch("/api/action-items/" + taskId, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: status, resolution_note: note || undefined, takeover: status === "done" }),
+    });
+    if (!res.ok) throw new Error("Could not update email task");
+    fetchData();
   }
 
   var statusCounts = data?.statusCounts ?? {};
@@ -197,6 +227,24 @@ function CandidateDashboardInner() {
         ); })}
       </div>
 
+      {/* AE email work queue */}
+      {(data?.pendingEmailTasks?.length ?? 0) > 0 && (
+        <div className="card" style={{ padding: 18, border: "1px solid rgba(245,158,11,0.35)", borderRadius: 12, background: "linear-gradient(135deg, rgba(245,158,11,0.08), var(--surface))" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "var(--ink)" }}>Email work queue</h3>
+              <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-soft)" }}>AI found recruiting activity that still needs an AE decision or reply.</p>
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#b45309", background: "rgba(245,158,11,0.16)", padding: "5px 9px", borderRadius: 999 }}>{data?.pendingEmailTasks?.length} pending</span>
+          </div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {data?.pendingEmailTasks?.map(function (task) {
+              return <EmailTaskRow key={task.id} task={task} onUpdate={updateEmailTask} />;
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Charts */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16 }}>
         <div className="card" style={{ padding: 18, border: "1px solid var(--border)", borderRadius: 12 }}>
@@ -269,6 +317,35 @@ function CandidateDashboardInner() {
       </div>
 
       {notesAppId && <ApplicationNotesModal applicationId={notesAppId} onClose={function () { setNotesAppId(null); }} />}
+    </div>
+  );
+}
+
+function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (id: string, status: string, note?: string) => Promise<void> }) {
+  var [note, setNote] = useState("");
+  var [busy, setBusy] = useState(false);
+  async function update(status: string) {
+    setBusy(true);
+    try { await onUpdate(task.id, status, note); } finally { setBusy(false); }
+  }
+  var mailUrl = task.gmail_thread_id ? "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(task.gmail_thread_id) : null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)" }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <strong style={{ color: "var(--ink)", fontSize: 13 }}>{task.title}</strong>
+          <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: task.priority === "urgent" ? "#b91c1c" : "var(--accent)" }}>{task.priority}</span>
+        </div>
+        <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}</div>
+        {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>“{task.email_subject}”</div>}
+        {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
+        <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Optional AE note before taking over or resolving" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 118 }}>
+        {mailUrl && <a href={mailUrl} target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--ink)", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>Open email</a>}
+        <button disabled={busy} onClick={function () { update("in_progress"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--accent)", background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Take over</button>
+        <button disabled={busy} onClick={function () { update("done"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Resolve</button>
+      </div>
     </div>
   );
 }

@@ -32,6 +32,7 @@ interface PortalData {
   name: string;
   stats: PortalStats;
   applications: PortalApplication[];
+  skarionEnrolledAt: string | null;
 }
 
 interface PortalGmailAccount {
@@ -50,12 +51,17 @@ export default function CandidatePortalPage() {
   const [notFound, setNotFound] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<"overview" | "dashboard">("overview");
+  const [enrolledAt, setEnrolledAt] = useState("");
+  const [enrollmentSaving, setEnrollmentSaving] = useState(false);
+  const [enrollmentError, setEnrollmentError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
     fetch(`/api/portal/${token}`).then(async (res) => {
       if (!res.ok) { setNotFound(true); setLoading(false); return; }
-      setData(await res.json());
+      const portalData = await res.json();
+      setData(portalData);
+      setEnrolledAt(portalData.skarionEnrolledAt || "");
       setLoading(false);
     });
 
@@ -121,9 +127,23 @@ export default function CandidatePortalPage() {
               Connect the Gmail inbox where employers may send replies, interview requests, or status updates.
             </p>
           </div>
-          <button type="button" className="btn-primary" onClick={() => { window.location.href = `/api/portal/${token}/gmail/start`; }}>
+          <button type="button" className="btn-primary" disabled={!enrolledAt || enrollmentSaving} onClick={() => { window.location.href = `/api/portal/${token}/gmail/start`; }}>
             Connect Gmail
           </button>
+        </div>
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+          <label htmlFor="skarion-enrolled-at" style={{ display: "block", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>When did you enroll with Skarion?</label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <input id="skarion-enrolled-at" type="date" value={enrolledAt} onChange={(e) => setEnrolledAt(e.target.value)} max={new Date().toISOString().slice(0, 10)} />
+            <button type="button" className="btn-secondary" disabled={!enrolledAt || enrollmentSaving} onClick={async () => {
+              setEnrollmentSaving(true); setEnrollmentError(null);
+              const response = await fetch(`/api/portal/${token}/enrollment-date`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enrolledAt }) });
+              if (!response.ok) { const payload = await response.json().catch(() => ({})); setEnrollmentError(payload.error || "Could not save date."); }
+              setEnrollmentSaving(false);
+            }}>{enrollmentSaving ? "Saving..." : "Save date"}</button>
+          </div>
+          {enrollmentError && <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 6 }}>{enrollmentError}</div>}
+          {!enrolledAt && <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>We use this date to safely determine how far back to review recruiting email.</p>}
         </div>
         <div style={{ marginTop: 12 }}>
           {gmailLoading ? (
