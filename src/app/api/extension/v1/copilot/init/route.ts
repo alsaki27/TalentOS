@@ -18,10 +18,16 @@ export const GET = withExtensionCors(async (req) => {
       ORDER BY created_at DESC
     `);
 
-    // 2. Fetch resumes for all candidates
+    // 2. Fetch resumes for all candidates. Excludes rows with no parsed
+    // content — found live (RMSI/Zoho Recruit test) that a candidate can
+    // have two resumes with the IDENTICAL displayed filename, one parsed and
+    // one not; the dropdown gave no way to tell them apart, and picking the
+    // empty one meant Fill Planner got zero resume text to work with while
+    // looking indistinguishable from a normal, working selection.
     const resumes = await query<any>(`
       SELECT id, candidate_id, label, kind, file_url, filename, is_original_upload
       FROM resumes
+      WHERE parsed_json IS NOT NULL
     `);
 
     const baseResumes = await query<any>(`
