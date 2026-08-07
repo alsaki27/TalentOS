@@ -88,6 +88,10 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    if (oauthState.owner_type === "candidate" && oauthState.candidate_id) {
+      await execute("UPDATE candidates SET email_consent_at = now(), email_sync_paused = false WHERE id = $1", [oauthState.candidate_id]);
+    }
+
     await execute("DELETE FROM integration_oauth_states WHERE state = $1", [state]);
     await recordAuditEvent({
       actor_user_id: oauthState.owner_user_id,

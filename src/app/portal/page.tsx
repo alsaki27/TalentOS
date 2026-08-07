@@ -78,6 +78,8 @@ export default function PortalDashboardPage() {
   const [mfaCode, setMfaCode] = useState("");
   const [mfaMessage, setMfaMessage] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [emailPaused, setEmailPaused] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(365);
 
   useEffect(() => {
     fetch("/api/portal/me/dashboard")
@@ -93,6 +95,7 @@ export default function PortalDashboardPage() {
       })
       .catch(() => setError("Could not load your dashboard."));
     fetch("/api/portal/auth/mfa").then((r) => r.ok ? r.json() : null).then((d) => { if (d) setMfaEnrolled(Boolean(d.enrolled)); }).catch(() => undefined);
+    fetch("/api/portal/me/gmail/privacy").then((r) => r.ok ? r.json() : null).then((d) => { if (d) { setEmailPaused(Boolean(d.email_sync_paused)); setRetentionDays(Number(d.email_retention_days || 365)); } }).catch(() => undefined);
   }, [router]);
 
   async function logout() {
@@ -114,6 +117,17 @@ export default function PortalDashboardPage() {
     const result = await response.json().catch(() => ({}));
     if (!response.ok) { setMfaMessage(result.error || "Could not verify code."); return; }
     setMfaEnrolled(true); setMfaSetup(null); setRecoveryCodes(result.recoveryCodes || []); setMfaMessage("Google Authenticator is enabled. Save these one-time recovery codes.");
+  }
+
+  async function updateEmailPrivacy(nextPaused: boolean) {
+    await fetch("/api/portal/me/gmail/privacy", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: nextPaused }) });
+    setEmailPaused(nextPaused);
+  }
+
+  async function deleteEmailHistory() {
+    if (!window.confirm("Delete imported recruiting email history and AI drafts? This cannot be undone.")) return;
+    await fetch("/api/portal/me/gmail/privacy", { method: "DELETE" });
+    setMfaMessage("Imported email history deleted.");
   }
 
   if (error) {
@@ -155,6 +169,16 @@ export default function PortalDashboardPage() {
         {mfaEnrolled ? <p className="portal-greeting-sub">Google Authenticator is enabled for your next sign-in.</p> : !mfaSetup ? <><p className="portal-greeting-sub">Protect your candidate dashboard with Google Authenticator.</p><button className="portal-btn portal-btn-primary" onClick={setupMfa}>Set up Google Authenticator</button></> : <div style={{ marginTop: 10 }}><p className="portal-greeting-sub">Scan this URI in Google Authenticator, then enter the six-digit code.</p><code style={{ display: "block", wordBreak: "break-all", fontSize: 11 }}>{mfaSetup.otpauthUri}</code><p style={{ fontSize: 12 }}>Manual key: <strong>{mfaSetup.secret}</strong></p><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" /><button className="portal-btn portal-btn-primary" onClick={confirmMfa} style={{ marginLeft: 8 }}>Enable MFA</button></div>}
         {recoveryCodes.length > 0 && <code style={{ display: "block", marginTop: 8, wordBreak: "break-word" }}>{recoveryCodes.join(" · ")}</code>}
         {mfaMessage && <p className="portal-greeting-sub">{mfaMessage}</p>}
+      </div>
+
+      <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
+        <strong>Email privacy controls</strong>
+        <p className="portal-greeting-sub">Pause inbox review or delete imported email history at any time.</p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="portal-btn portal-btn-primary" onClick={() => updateEmailPrivacy(!emailPaused)}>{emailPaused ? "Resume email review" : "Pause email review"}</button>
+          <label style={{ fontSize: 12 }}>Retention <select value={retentionDays} onChange={async (e) => { const value = Number(e.target.value); setRetentionDays(value); await fetch("/api/portal/me/gmail/privacy", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ retentionDays: value }) }); }}><option value={90}>90 days</option><option value={365}>1 year</option><option value={730}>2 years</option><option value={3650}>10 years</option></select></label>
+          <button className="portal-btn" onClick={deleteEmailHistory}>Delete imported history</button>
+        </div>
       </div>
 
       <div className="portal-section-title">Applications</div>

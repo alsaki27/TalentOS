@@ -49,6 +49,7 @@ const AUTOMATION_IDS_FROM_CODE = [
   "email_triage",
   "email_interview_extraction",
   "email_action_enrichment",
+  "email_reply_draft",
 ];
 
 // These must match exactly what's in ai_automations (06_ai_key_manager_v2.sql
@@ -75,6 +76,7 @@ const SEEDED_AUTOMATIONS = new Set([
   "email_triage",
   "email_interview_extraction",
   "email_action_enrichment",
+  "email_reply_draft",
 ]);
 
 describe("Automation coverage", () => {

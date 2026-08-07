@@ -38,5 +38,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
   }
 
+  const task = await queryOne<{ candidate_id: string; application_id: string | null; email_communication_id: string | null }>(
+    "SELECT candidate_id, application_id, email_communication_id FROM action_items WHERE id = $1",
+    [params.id]
+  );
+  if (task) {
+    await execute(
+      `INSERT INTO candidate_workflow_events
+         (candidate_id, application_id, action_item_id, email_communication_id, event_type, actor_type, actor_user_id, payload)
+       VALUES ($1, $2, $3, $4, $5, 'ae', $6, $7)`,
+      [task.candidate_id, task.application_id, params.id, task.email_communication_id, `action_item_${status}`, context.profile.user_id, JSON.stringify({ resolution_note: body.resolution_note || null })]
+    );
+  }
+
   return NextResponse.json({ ok: true });
 }

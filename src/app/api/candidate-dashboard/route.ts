@@ -50,6 +50,8 @@ interface PendingEmailTask {
   description: string | null;
   suggested_action: string | null;
   priority: string;
+  due_at: string | null;
+  escalated_at: string | null;
   status: string;
   created_at: string;
   email_communication_id: string | null;
@@ -178,7 +180,7 @@ export async function GET(req: NextRequest) {
     var pendingEmailTasks = await query<PendingEmailTask>(
       `SELECT ai.id, ai.candidate_id, c.name AS candidate_name,
               ai.application_id, ai.type, ai.title, ai.description,
-              ai.suggested_action, ai.priority, ai.status, ai.created_at,
+              ai.suggested_action, ai.priority, ai.status, ai.created_at, ai.due_at, ai.escalated_at,
               ai.email_communication_id, ec.subject AS email_subject,
               ec.sent_at AS email_sent_at, ec.gmail_thread_id,
               j.title AS job_title, j.company AS company_name

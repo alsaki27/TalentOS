@@ -182,6 +182,7 @@ async function triageStoredMessage(id: string, accessToken: string) {
   );
 
   if (!triage.relevant) return;
+  await logWorkflowEvent({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, eventType: "email_triaged_relevant", payload: { category: triage.category, confidence: triage.confidence, needsReply: triage.needsReply } });
 
   try {
     const labelName = triage.category === "interview_invite" || triage.category === "scheduling" ? "TalentOS/Interview" : triage.category === "offer" ? "TalentOS/Offer" : "TalentOS/Recruiter";
@@ -216,6 +217,24 @@ async function triageStoredMessage(id: string, accessToken: string) {
           "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
           [triage.matchedApplicationId, "Email-detected interview", details.scheduledAt, details.durationMinutes || 60, details.location, details.meetingLink]
         );
+        const conflict = await queryOne<{ id: string }>(
+          `SELECT s.id FROM interview_schedules s
+           JOIN applications a ON a.id = s.application_id
+           WHERE a.candidate_id = $1 AND s.application_id <> $2
+             AND s.scheduled_at IS NOT NULL
+             AND s.scheduled_at < ($3::timestamptz + ($4 * interval '1 minute'))
+             AND (s.scheduled_at + (COALESCE(s.duration_minutes, 60) * interval '1 minute')) > $3::timestamptz
+           LIMIT 1`,
+          [row.candidate_id, triage.matchedApplicationId, details.scheduledAt, details.durationMinutes || 60]
+        );
+        if (conflict) {
+          await execute(
+            `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
+             VALUES ($1, $2, $3, 'calendar_conflict', 'Interview calendar conflict detected', 'Another interview overlaps this scheduled time. AE must resolve the conflict.', 'urgent', 'open', 'manual_only', $4)
+             ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+            [row.candidate_id, triage.matchedApplicationId, id, `email:${id}:calendar-conflict`]
+          );
+        }
       }
       await execute(
         `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
@@ -223,6 +242,7 @@ async function triageStoredMessage(id: string, accessToken: string) {
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
         [row.candidate_id, triage.matchedApplicationId, id, details.scheduledAt ? "Interview detected — confirm attendance" : "Interview email detected — review details", details.scheduledAt || "Interview logistics need AE review.", `email:${id}:interview`]
       );
+      await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + interval '24 hours') WHERE email_communication_id = $1 AND status = 'open'", [id]);
     } catch (interviewError) {
       console.warn("[Gmail sync] Interview extraction failed:", interviewError);
     }
@@ -282,6 +302,51 @@ async function triageStoredMessage(id: string, accessToken: string) {
       priority,
       `email:${id}:action`,
     ]
+  );
+  await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + CASE WHEN priority = 'high' THEN interval '48 hours' ELSE interval '72 hours' END) WHERE email_communication_id = $1 AND status = 'open'", [id]);
+}
+
+async function escalateOverdueActionItems() {
+  const overdue = await query<{ id: string; candidate_id: string; application_id: string | null; priority: string }>(
+    `SELECT id, candidate_id, application_id, priority FROM action_items
+     WHERE status IN ('open', 'in_progress') AND due_at IS NOT NULL AND due_at < now()
+       AND escalated_at IS NULL`
+  );
+  for (const item of overdue) {
+    await execute("UPDATE action_items SET priority = 'urgent', escalated_at = now(), escalation_count = escalation_count + 1 WHERE id = $1", [item.id]);
+    await logWorkflowEvent({ candidateId: item.candidate_id, applicationId: item.application_id, actionItemId: item.id, eventType: "action_item_escalated", payload: { previousPriority: item.priority } });
+  }
+  return overdue.length;
+}
+
+async function enforceEmailRetention() {
+  await execute(
+    `DELETE FROM email_communications ec
+     USING candidates c
+     WHERE ec.candidate_id = c.id
+       AND ec.sent_at < now() - (interval '1 day' * c.email_retention_days)`
+  );
+  await execute(
+    `DELETE FROM candidate_email_drafts d
+     USING candidates c
+     WHERE d.candidate_id = c.id
+       AND d.created_at < now() - (interval '1 day' * c.email_retention_days)`
+  );
+}
+
+async function logWorkflowEvent(params: {
+  candidateId: string;
+  applicationId?: string | null;
+  actionItemId?: string | null;
+  emailCommunicationId?: string | null;
+  eventType: string;
+  payload?: Record<string, unknown>;
+}) {
+  await execute(
+    `INSERT INTO candidate_workflow_events
+       (candidate_id, application_id, action_item_id, email_communication_id, event_type, actor_type, payload)
+     VALUES ($1, $2, $3, $4, $5, 'ai', $6)`,
+    [params.candidateId, params.applicationId || null, params.actionItemId || null, params.emailCommunicationId || null, params.eventType, JSON.stringify(params.payload || {})]
   );
 }
 
@@ -362,6 +427,8 @@ export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followU
     outcomes.push(outcome);
   }
 
+  await escalateOverdueActionItems();
+  await enforceEmailRetention();
   const followUpsEnqueued = await enqueueOverdueFollowUps();
   return { accounts: outcomes, followUpsEnqueued };
 }

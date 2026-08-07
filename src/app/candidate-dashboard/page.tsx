@@ -60,6 +60,8 @@ interface PendingEmailTask {
   description: string | null;
   suggested_action: string | null;
   priority: string;
+  due_at: string | null;
+  escalated_at: string | null;
   status: string;
   created_at: string;
   email_subject: string | null;
@@ -324,9 +326,19 @@ function CandidateDashboardInner() {
 function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (id: string, status: string, note?: string) => Promise<void> }) {
   var [note, setNote] = useState("");
   var [busy, setBusy] = useState(false);
+  var [draft, setDraft] = useState<{ subject: string; body_text: string } | null>(null);
   async function update(status: string) {
     setBusy(true);
     try { await onUpdate(task.id, status, note); } finally { setBusy(false); }
+  }
+  async function createDraft() {
+    setBusy(true);
+    try {
+      var response = await fetch("/api/action-items/" + task.id + "/draft-reply", { method: "POST" });
+      var result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not create draft");
+      setDraft(result.draft);
+    } finally { setBusy(false); }
   }
   var mailUrl = task.gmail_thread_id ? "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(task.gmail_thread_id) : null;
   return (
@@ -339,10 +351,14 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
         <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}</div>
         {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>“{task.email_subject}”</div>}
         {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
+        {task.escalated_at && <div style={{ marginTop: 4, color: "#b91c1c", fontSize: 11, fontWeight: 800 }}>ESCALATED — overdue AE action</div>}
+        {task.due_at && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 11 }}>Due {new Date(task.due_at).toLocaleString()}</div>}
         <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Required note before resolving; optional when taking over" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
+        {draft && <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border)" }}><strong style={{ fontSize: 12 }}>Draft reply: {draft.subject}</strong><textarea value={draft.body_text} onChange={function (e) { setDraft({ subject: draft.subject, body_text: e.target.value }); }} style={{ display: "block", width: "100%", minHeight: 90, marginTop: 6, padding: 8, fontSize: 12, background: "var(--surface)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 6 }} /></div>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 118 }}>
         {mailUrl && <a href={mailUrl} target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--ink)", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>Open email</a>}
+        <button disabled={busy} onClick={createDraft} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Draft reply</button>
         <button disabled={busy} onClick={function () { update("in_progress"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--accent)", background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Take over</button>
         <button disabled={busy} onClick={function () { update("done"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Resolve</button>
       </div>
