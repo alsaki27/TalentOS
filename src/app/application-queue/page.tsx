@@ -68,7 +68,7 @@ const STATUS_ICONS: Record<string, string> = {
 function openCopilotForApplication(item: QueueItem) {
   const sourceUrl = item.jobs?.source_url;
   if (!sourceUrl) {
-    alert("This application does not have an external application URL yet.");
+    alert("This application log has no external application URL yet. Add the ATS URL to open Copilot.");
     return;
   }
   const url = new URL(sourceUrl, window.location.origin);
@@ -891,7 +891,7 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-                      {item.jobs?.source_url && !item.jobs.source_url.includes("example.com") && (
+                      {(item.jobs?.source_url || item.id) && (
                         <button
                           className="btn-compact btn-sm"
                           onClick={() => openCopilotForApplication(item)}
