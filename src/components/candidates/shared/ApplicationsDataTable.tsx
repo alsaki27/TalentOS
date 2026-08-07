@@ -108,19 +108,19 @@ export default function ApplicationsDataTable({
   return (
     <>
       <div className="table-shell" style={{ borderRadius: 10, border: "1px solid var(--border)", overflow: "hidden" }}>
-        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
           <thead>
             <tr>
-              {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={TH_STYLE}>Candidate {renderSortIndicator("candidate_name")}</th>}
-              <th onClick={function () { onSort("company_name"); }} style={TH_STYLE}>Company {renderSortIndicator("company_name")}</th>
-              <th onClick={function () { onSort("job_title"); }} style={TH_STYLE}>Job Role {renderSortIndicator("job_title")}</th>
-              <th style={{ ...TH_STYLE, cursor: "default" }}>Job ID</th>
-              <th style={{ ...TH_STYLE, cursor: "default" }}>Source</th>
-              <th style={{ ...TH_STYLE, cursor: "default" }}>Location</th>
-              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center" }}>Resume</th>
-              <th onClick={function () { onSort("status"); }} style={TH_STYLE}>Status {renderSortIndicator("status")}</th>
-              <th onClick={function () { onSort("applied_at"); }} style={TH_STYLE}>Applied {renderSortIndicator("applied_at")}</th>
-              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center" }}>Actions</th>}
+              {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "12%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}
+              <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "14%" }}>Company {renderSortIndicator("company_name")}</th>
+              <th onClick={function () { onSort("job_title"); }} style={{ ...TH_STYLE }}>Job Role {renderSortIndicator("job_title")}</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "9%" }}>Job ID</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "9%" }}>Source</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "12%" }}>Location</th>
+              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "8%" }}>Resume</th>
+              <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "14%" }}>Status {renderSortIndicator("status")}</th>
+              <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "9%" }}>Applied {renderSortIndicator("applied_at")}</th>
+              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "11%" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -224,21 +224,26 @@ export default function ApplicationsDataTable({
                       <select
                         value={app.status}
                         disabled={isLoading}
+                        className={`badge badge-${app.status}`}
                         onChange={function (e) { handleStatusChange(app.application_id, e.target.value); }}
                         style={{
-                          padding: "5px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600,
-                          background: "var(--bg)", border: "1px solid var(--border)",
-                          color: isLoading ? "var(--ink-soft)" : "var(--ink)", cursor: "pointer",
+                          cursor: "pointer",
                           opacity: isLoading ? 0.5 : 1, outline: "none",
+                          WebkitAppearance: "none", MozAppearance: "none", appearance: "none",
+                          paddingRight: "16px",
+                          border: "none",
+                          minWidth: "110px",
+                          textAlign: "center"
                         }}
+                        title="Click to change status"
                       >
                         <option value="assigned">Assigned</option>
                         <option value="stacked">Stacked</option>
                         <option value="in_progress">In Progress</option>
                         <option value="applied">Applied</option>
-                        <option value="replied">📞 Screening</option>
-                        <option value="interview">🎯 Interview</option>
-                        <option value="offer">🏆 Offer</option>
+                        <option value="replied">Screening</option>
+                        <option value="interview">Interview</option>
+                        <option value="offer">Offer</option>
                         <option value="rejected">Rejected</option>
                         <option value="withdrawn">Withdrawn</option>
                       </select>

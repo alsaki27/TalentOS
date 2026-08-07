@@ -8,30 +8,30 @@
 /* Internal ops tool — optimized for scanability, not marketing polish. */
 
 :root {
-  /* Core Brand Colors (Dark Mode) */
-  --ink: #f4f4f5; /* zinc-100 */
-  --ink-soft: #a1a1aa; /* zinc-400 */
-  --bg: #09090b; /* zinc-950 - true black */
-  --surface: #18181b; /* zinc-900 - cards and panels */
-  --surface-raised: #1c1c20;
-  --border: #27272a; /* zinc-800 - thin subtle borders */
-  --accent: #818cf8; /* indigo-400 - subtle slate blue/indigo */
-  --accent-soft: rgba(129, 140, 248, 0.1);
-  --accent-hover: #6f7aef;
+  /* Core Brand Colors (Dark Mode) - Midnight Neon Theme */
+  --ink: #f8fafc; /* slate-50 */
+  --ink-soft: #94a3b8; /* slate-400 */
+  --bg: #020617; /* slate-950 - deep midnight blue */
+  --surface: rgba(15, 23, 42, 0.7); /* slate-900 with opacity for glassmorphism */
+  --surface-raised: rgba(30, 41, 59, 0.85); /* slate-800 */
+  --border: #334155; /* slate-700 - thin subtle borders */
+  --accent: #8b5cf6; /* violet-500 - neon purple */
+  --accent-soft: rgba(139, 92, 246, 0.15);
+  --accent-hover: #a78bfa; /* violet-400 */
   --warn: #fb923c; /* orange-400 */
-  --danger: #f87171; /* red-400 */
-  --radius: 10px;
+  --danger: #f43f5e; /* rose-500 */
+  --radius: 12px;
   --radius-lg: 16px;
-  --radius-sm: 7px;
-  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --radius-sm: 8px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* RGB triplets so badges/glows can build translucent tints that adapt
      automatically to whichever theme (light :root vs .dark) is active,
      instead of hardcoded hex pastels that only look right on white. */
-  --accent-rgb: 129, 140, 248;
-  --danger-rgb: 248, 113, 113;
+  --accent-rgb: 139, 92, 246; /* violet-500 */
+  --danger-rgb: 244, 63, 94; /* rose-500 */
   --warn-rgb: 251, 146, 60;
-  --neutral-rgb: 161, 161, 170;
+  --neutral-rgb: 148, 163, 184; /* slate-400 */
   --shadow-color: 0, 0, 0;
 
   /* Compatibility aliases: many pages across the app (admin/ai, application-
@@ -44,38 +44,32 @@
      pages at once with no JSX changes needed. */
   --surface-1: var(--surface);
   --surface-2: var(--surface-raised);
-  --surface-3: #232328;
+  --surface-3: rgba(51, 65, 85, 0.85); /* slate-700 */
   --success: var(--accent);
   --warning: var(--warn);
-  --info: #38bdf8; /* sky-400 */
+  --info: #3b82f6; /* blue-500 */
   --danger-soft: rgba(var(--danger-rgb), 0.12);
   --border-color: var(--border);
   --border-light: rgba(var(--neutral-rgb), 0.16);
   --bg-secondary: var(--surface);
-  /* --muted-foreground below is redefined further down (outside the
-     shadcn HSL block) as a normal color, since it's used bare as
-     var(--muted-foreground) everywhere in this app, never wrapped in
-     hsl(...) the way the shadcn convention requires — confirmed zero
-     hsl(var(--x)) usage anywhere in the codebase, so that convention was
-     never actually wired up and the HSL-triplet value doesn't work as-is. */
 
-  /* shadcn/ui CSS variables (Dark Mode) */
-  --background: 240 10% 3.9%; /* zinc-950 */
-  --foreground: 0 0% 98%;
-  --card: 240 10% 3.9%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 3.9%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 226 70% 65%; /* indigo-400 */
+  /* shadcn/ui CSS variables (Dark Mode - Midnight Neon) */
+  --background: 226 58% 5%; /* slate-950 approx */
+  --foreground: 210 40% 98%;
+  --card: 222 47% 11%; /* slate-900 approx */
+  --card-foreground: 210 40% 98%;
+  --popover: 222 47% 11%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 258 90% 66%; /* violet-500 approx */
   --primary-foreground: 0 0% 100%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  --input: 240 3.7% 15.9%;
-  --ring: 226 70% 65%;
+  --secondary: 217.2 32.6% 17.5%; /* slate-800 approx */
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%; /* slate-400 approx */
+  --destructive: 349 89% 60%; /* rose-500 approx */
+  --destructive-foreground: 210 40% 98%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 258 90% 66%;
 }
 
 /* Overrides --muted-foreground (declared above as an unused shadcn HSL
@@ -299,14 +293,17 @@ button,
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
-  padding: 8px 14px;
+  padding: 8px 16px;
   border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(30, 41, 59, 0.6); /* Glassmorphic background */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: var(--ink);
   cursor: pointer;
   text-decoration: none;
-  transition: background-color 140ms var(--ease), border-color 140ms var(--ease), box-shadow 140ms var(--ease), transform 100ms var(--ease), color 140ms var(--ease);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
 
 /* A <button> element is browser-default display:inline-block, so width:100%
@@ -321,9 +318,11 @@ a.btn {
   justify-content: center;
 }
 
-button:hover {
-  background: var(--surface-raised);
-  border-color: rgba(var(--neutral-rgb), 0.4);
+button:hover, .btn:hover {
+  background: rgba(51, 65, 85, 0.8);
+  border-color: rgba(139, 92, 246, 0.5); /* Neon purple subtle border */
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
+  transform: translateY(-1px);
 }
 
 button:active {
@@ -342,17 +341,17 @@ button:disabled {
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #08110c;
-  border-color: var(--accent);
+  background: linear-gradient(135deg, #8b5cf6, #3b82f6); /* Violet to Blue gradient */
+  color: #ffffff;
+  border: none;
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.2), 0 0 0 rgba(var(--accent-rgb), 0);
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
 }
 
 .btn-primary:hover {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
-  box-shadow: 0 4px 14px -4px rgba(var(--accent-rgb), 0.5);
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  transform: translateY(-1px) scale(1.02);
 }
 
 .dropdown-wrapper {
@@ -473,11 +472,19 @@ label {
 }
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.55); /* Glassmorphic background */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: var(--radius-lg);
   padding: 16px;
-  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.card:hover {
+  border-color: rgba(139, 92, 246, 0.2);
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4), 0 0 20px rgba(139, 92, 246, 0.1);
 }
 
 .table {
@@ -501,7 +508,7 @@ label {
 .table-shell .table {
   border: none;
   border-radius: 0;
-  min-width: 920px;
+  width: 100%;
 }
 
 .table th {
@@ -636,7 +643,7 @@ label {
 }
 
 .badge-no_show {
-  background: #fbeaea;
+  background: rgba(244, 63, 94, 0.15); /* rose-500/15 */
   color: var(--danger);
 }
 
@@ -646,70 +653,70 @@ label {
 }
 
 .badge-rejected {
-  background: #fbeaea;
+  background: rgba(244, 63, 94, 0.15);
   color: var(--danger);
 }
 
 .badge-offer {
-  background: #e7f2ec;
+  background: rgba(139, 92, 246, 0.15); /* violet/15 */
   color: var(--accent);
   font-weight: 700;
 }
 
 .badge-submitted {
-  background: #eef1f5;
-  color: #4a5568;
+  background: rgba(148, 163, 184, 0.15); /* slate-400/15 */
+  color: #cbd5e1; /* slate-300 */
 }
 
 .badge-waiting {
-  background: #fff3e0;
+  background: rgba(251, 146, 60, 0.15); /* orange-400/15 */
   color: var(--warn);
 }
 
 .badge-closed {
-  background: #fbeaea;
+  background: rgba(244, 63, 94, 0.15);
   color: var(--danger);
 }
 
 .badge-urgent,
 .badge-priority-urgent {
-  background: #fbeaea;
+  background: rgba(244, 63, 94, 0.15);
   color: var(--danger);
 }
 
 .badge-priority-high {
-  background: #fff3e0;
+  background: rgba(251, 146, 60, 0.15);
   color: var(--warn);
 }
 
 .badge-priority-normal {
-  background: #eef1f5;
-  color: #4a5568;
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
 }
 
 .badge-priority-low {
-  background: #e7f2ec;
+  background: rgba(139, 92, 246, 0.15);
   color: var(--accent);
 }
 
 .badge-review-pending {
-  background: #fff3e0;
+  background: rgba(251, 146, 60, 0.15);
   color: var(--warn);
 }
 
 .badge-review-approved {
-  background: #e7f2ec;
+  background: rgba(139, 92, 246, 0.15);
   color: var(--accent);
 }
 
 .badge-review-changes_requested {
-  background: #fbeaea;
+  background: rgba(244, 63, 94, 0.15);
   color: var(--danger);
 }
 
 .badge-review-not_required {
-  background: #eef1f5;
-  color: #4a5568;
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
 }
 
 .muted {

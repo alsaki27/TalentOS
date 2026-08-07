@@ -149,33 +149,45 @@ export default function FollowUpsPage() {
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected application(s) entirely?`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, { method: "DELETE", cache: "no-store" })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "DELETE", table: "applications", ids: Array.from(selected) })
+    });
     load(page, pageSize);
   }
 
   async function markSelectedDone() {
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, {
-      method: "PATCH",
-      cache: "no-store",
+    await fetch("/api/bulk", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ follow_up_at: null, event_note: "Bulk follow-up reminders completed." }),
-    })));
+      body: JSON.stringify({
+        action: "PATCH",
+        table: "applications",
+        ids: Array.from(selected),
+        updateData: { follow_up_at: null, event_note: "Bulk follow-up reminders completed." }
+      })
+    });
     load(page, pageSize);
   }
 
   async function snoozeSelected(days: number) {
     const due = new Date();
     due.setDate(due.getDate() + days);
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/applications/${id}`, {
-      method: "PATCH",
-      cache: "no-store",
+    await fetch("/api/bulk", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        follow_up_at: due.toISOString().slice(0, 10),
-        follow_up_source: "manual",
-        event_note: `Bulk follow-up reminders snoozed ${days} day(s).`,
-      }),
-    })));
+        action: "PATCH",
+        table: "applications",
+        ids: Array.from(selected),
+        updateData: {
+          follow_up_at: due.toISOString().slice(0, 10),
+          follow_up_source: "manual",
+          event_note: `Bulk follow-up reminders snoozed ${days} day(s).`
+        }
+      })
+    });
     load(page, pageSize);
   }
 
@@ -269,9 +281,9 @@ export default function FollowUpsPage() {
 
       {loading ? (
         <div className="loading-panel">Loading follow-ups...</div>
-      ) : total === 0 ? (
+      ) : total === 0 && feedback?.kind !== "error" ? (
         <div className="empty">{filtersActive ? "No follow-ups match these filters." : "No follow-ups scheduled. Set a follow-up date from a candidate's profile."}</div>
-      ) : (
+      ) : total > 0 ? (
         <div className="table-shell">
         <table className="table table-compact">
           <thead>
@@ -337,7 +349,7 @@ export default function FollowUpsPage() {
           </tbody>
         </table>
         </div>
-      )}
+      ) : null}
 
       {total > 0 && (
         <Pagination

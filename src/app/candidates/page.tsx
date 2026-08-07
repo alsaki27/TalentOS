@@ -120,7 +120,11 @@ export default function CandidatesPage() {
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected candidate(s)? This also removes their applications and resume variants.`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/candidates/${id}`, { method: "DELETE", cache: "no-store" })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "DELETE", table: "candidates", ids: Array.from(selected) })
+    });
     load(page, pageSize);
   }
 
@@ -201,6 +205,7 @@ export default function CandidatesPage() {
                       <span className="avatar-circle">{initials(c.name)}</span>
                     )}
                     <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
+                    {c.email?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
                   </td>
                   <td className="muted">{c.email || "—"}</td>
                   <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>

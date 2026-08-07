@@ -35,6 +35,7 @@ function isPublicPath(pathname: string) {
     isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||
     pathname === "/api/health" ||
+    pathname === "/api/skarion-ai" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||
     pathname.startsWith("/api/auth") ||
@@ -43,6 +44,7 @@ function isPublicPath(pathname: string) {
     PUBLIC_FILE.test(pathname)
   );
 }
+
 
 async function getVerifiedSession(token: string) {
   const jwtPayload = await verifyJWT(token);

@@ -176,7 +176,7 @@ export async function bulkUpdateApplicationKeywordStatuses(
 ): Promise<ApplicationKeywordRow[]> {
   if (updates.length === 0) return [];
 
-  // Supabase does not support true bulk UPDATE with different values per row.
+  // Postgres does not easily support true bulk UPDATE with different values per row without complex UNNEST.
   // We do sequential updates — the table is small (tens of keywords per application).
   const results: ApplicationKeywordRow[] = [];
   for (const u of updates) {

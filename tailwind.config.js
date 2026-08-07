@@ -7,8 +7,11 @@ module.exports = {
   darkMode: 'class',
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['var(--font-inter)', 'sans-serif'],
+      },
       colors: {
-        // Original TalentOS colors
+        // Updated Midnight Neon Colors
         ink: 'var(--ink)',
         'ink-soft': 'var(--ink-soft)',
         bg: 'var(--bg)',
@@ -50,7 +53,7 @@ module.exports = {
         },
       },
       borderRadius: {
-        DEFAULT: '8px',
+        DEFAULT: '12px', // Softer, more modern corners
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
@@ -64,11 +67,24 @@ module.exports = {
           from: { height: 'var(--radix-accordion-content-height)' },
           to: { height: '0' },
         },
+        'pulse-glow': {
+          '0%, 100%': { opacity: 1, filter: 'brightness(1)' },
+          '50%': { opacity: .8, filter: 'brightness(1.2)' },
+        }
       },
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
+        'pulse-glow': 'pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
       },
+      boxShadow: {
+        'neon-blue': '0 0 15px rgba(59, 130, 246, 0.5)',
+        'neon-purple': '0 0 15px rgba(139, 92, 246, 0.5)',
+        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+      },
+      backdropBlur: {
+        'glass': '12px',
+      }
     },
   },
   plugins: [require('tailwindcss-animate')],

@@ -96,11 +96,11 @@ export default function NavBar() {
   const moreActive = moreLinks.some((link) => pathname?.startsWith(link.href)) || pathname?.startsWith("/communications");
 
   return (<>
-    <nav className="topnav relative flex items-center justify-between px-6 py-3.5 bg-surface border-b border-border">
-      <span className="brand font-semibold text-[15px] text-ink tracking-tight">Skarion Tracker</span>
+    <nav className="topnav relative flex items-center justify-between px-6 py-3.5 bg-surface/80 backdrop-blur-xl border-b border-white/5 sticky top-0 z-50 shadow-glass">
+      <span className="brand font-bold text-[16px] text-ink tracking-tight bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">Skarion Tracker</span>
 
       <button
-        className="nav-mobile-toggle lg:hidden text-ink-soft"
+        className="nav-mobile-toggle lg:hidden text-ink-soft hover:text-ink transition-colors"
         aria-label="Toggle navigation menu"
         aria-expanded={mobileOpen}
         onClick={() => setMobileOpen((v) => !v)}
@@ -109,83 +109,83 @@ export default function NavBar() {
       </button>
 
       <div
-        className={`navlinks ${mobileOpen ? "flex" : "hidden"} lg:flex flex-col lg:flex-row items-start lg:items-center gap-3 lg:gap-5
+        className={`navlinks ${mobileOpen ? "flex" : "hidden"} lg:flex flex-col lg:flex-row items-start lg:items-center gap-4 lg:gap-6
           absolute lg:static left-0 right-0 top-full lg:top-auto
-          bg-surface lg:bg-transparent border-b lg:border-0 border-border
+          bg-surface lg:bg-transparent border-b lg:border-0 border-white/5
           px-6 py-4 lg:p-0 z-40 shadow-lg lg:shadow-none`}
       >
-        <Link href="/candidates" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Candidates</Link>
-        <Link href="/candidate-dashboard" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Dashboard</Link>
-        {canViewJobs && <Link href="/jobs" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Jobs</Link>}
-        <Link href="/ats-score" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">ATS Score Analysis</Link>
-        <Link href="/falood" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Falood AI</Link>
-        <Link href="/application-queue" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
+        <Link href="/candidates" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Candidates</Link>
+        <Link href="/candidate-dashboard" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Dashboard</Link>
+        {canViewJobs && <Link href="/jobs" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Jobs</Link>}
+        <Link href="/ats-score" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">ATS Score Analysis</Link>
+        <Link href="/falood" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Falood AI</Link>
+        <Link href="/application-queue" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
           Application Queue
           {notifications && (notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent) > 0 && (
-            <span className="nav-badge">{notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent}</span>
+            <span className="nav-badge bg-rose-500/20 text-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.3)]">{notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent}</span>
           )}
         </Link>
-        <Link href="/follow-ups" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">
+        <Link href="/follow-ups" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
           Follow-ups
-          {notifications && notifications.followUps.due > 0 && <span className="nav-badge">{notifications.followUps.due}</span>}
+          {notifications && notifications.followUps.due > 0 && <span className="nav-badge bg-orange-500/20 text-orange-400">{notifications.followUps.due}</span>}
         </Link>
         <div className="nav-more relative" ref={moreRef}>
           <button
-            className="nav-more-trigger text-sm font-medium text-ink-soft hover:text-ink transition-colors"
+            className="nav-more-trigger text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1"
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
             style={{ color: moreActive ? "var(--ink)" : undefined }}
           >
-            More ▾
+            More <span className="text-[10px] opacity-70">▾</span>
           </button>
           {moreOpen && (
-            <div className="nav-more-menu absolute top-7 left-0 min-w-[160px] bg-surface border border-border rounded-lg shadow-lg p-1.5 flex flex-col z-50">
+            <div className="nav-more-menu absolute top-8 left-0 min-w-[180px] bg-surface/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] p-1.5 flex flex-col z-50">
               {moreLinks.map((link) => (
-                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)} className="px-2.5 py-2 rounded-md text-sm font-medium text-ink hover:bg-bg transition-colors">
+                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)} className="px-3 py-2 rounded-lg text-[13px] font-medium text-ink-soft hover:text-white hover:bg-white/5 transition-all">
                   {link.label}
                 </Link>
               ))}
             </div>
           )}
         </div>
-        <Link href="/account" className="text-sm font-medium text-ink-soft hover:text-ink transition-colors">Account</Link>
+        <Link href="/account" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Account</Link>
 
         {/* On mobile the collapsible panel also carries the user actions, since nav-user is hidden below lg. */}
-        <div className="flex lg:hidden items-center gap-3 text-xs text-ink-soft pt-2 mt-2 border-t border-border w-full">
+        <div className="flex lg:hidden items-center gap-4 text-xs text-ink-soft pt-4 mt-2 border-t border-white/5 w-full">
           {canQuickApply && (
             <button
-              className="text-sm font-medium text-ink hover:text-accent transition-colors"
+              className="text-[13px] font-semibold text-violet-400 hover:text-violet-300 transition-colors"
               onClick={() => setShowModal(true)}
-              style={{ color: "var(--accent)" }}
             >
               + New Application
             </button>
           )}
           <NotificationBell />
           <ThemeToggle />
-          <button onClick={logout} className="text-xs">Sign out</button>
+          <button onClick={logout} className="text-[13px] font-medium hover:text-white transition-colors">Sign out</button>
         </div>
       </div>
 
-      <div className="nav-user hidden lg:flex items-center gap-3 text-xs text-ink-soft">
+      <div className="nav-user hidden lg:flex items-center gap-4 text-[13px] text-ink-soft">
         {canQuickApply && (
           <button
-            className="text-sm font-medium text-ink hover:text-accent transition-colors"
+            className="text-[13px] font-semibold text-violet-400 hover:text-violet-300 hover:drop-shadow-[0_0_8px_rgba(139,92,246,0.5)] transition-all"
             onClick={() => setShowModal(true)}
-            style={{ color: "var(--accent)" }}
           >
             + New Application
           </button>
         )}
-        <NotificationBell />
-        <ThemeToggle />
-        {me?.profile && (
-          <span className="hidden md:inline">
-            {me.profile.display_name || me.profile.email || "User"}
-            <span className="role-pill">{me.profile.role.replaceAll("_", " ")}</span>
-          </span>
-        )}
-        <button onClick={logout} className="text-xs">Sign out</button>
+        <div className="flex items-center gap-3 pl-4 border-l border-white/10">
+          <NotificationBell />
+          <ThemeToggle />
+          {me?.profile && (
+            <span className="hidden xl:flex items-center gap-2">
+              <span className="font-medium text-white">{me.profile.display_name || me.profile.email || "User"}</span>
+              <span className="role-pill bg-violet-500/10 text-violet-400 border border-violet-500/20 shadow-[0_0_10px_rgba(139,92,246,0.1)]">{me.profile.role.replaceAll("_", " ")}</span>
+            </span>
+          )}
+          <button onClick={logout} className="text-[13px] font-medium hover:text-white transition-colors">Sign out</button>
+        </div>
       </div>
     </nav>
     {showModal && <QuickApplicationModal userRole={me?.profile.role ?? ""} onClose={() => setShowModal(false)} />}

@@ -318,9 +318,7 @@ export async function executeRunFromRecord(
       await updateRunStatus(runId, { status: "running" });
 
       const searchQueries = getSearchQueries(roleGroups, options.testMode ?? false, options.customKeywords ?? []);
-      const maxResults = options.testMode
-        ? Math.min(50, config.max_results)
-        : Math.min(500, config.max_results);
+      const maxResults = 5; // FORCED FOR EXPERIMENT
 
       const actorId = ACTOR_IDS[actorSource];
 

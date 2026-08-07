@@ -12,19 +12,31 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const candidateId = new URL(req.url).searchParams.get("candidateId");
-  if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
+  const candidateIdsStr = new URL(req.url).searchParams.get("candidateIds");
+  
+  if (!candidateId && !candidateIdsStr) return NextResponse.json({ error: "candidateId or candidateIds is required" }, { status: 400 });
 
   let applicationIds: string[];
 
-  const applications = await query<any>(
-    `SELECT id FROM applications WHERE candidate_id = $1`,
-    [candidateId]
-  );
-  applicationIds = (applications ?? []).map((a: any) => a.id as string);
+  if (candidateIdsStr) {
+    const ids = candidateIdsStr.split(",");
+    const applications = await query<any>(
+      `SELECT id FROM applications WHERE candidate_id = ANY($1)`,
+      [ids]
+    );
+    applicationIds = (applications ?? []).map((a: any) => a.id as string);
+  } else {
+    const applications = await query<any>(
+      `SELECT id FROM applications WHERE candidate_id = $1`,
+      [candidateId]
+    );
+    applicationIds = (applications ?? []).map((a: any) => a.id as string);
+  }
+  
   if (applicationIds.length === 0) return NextResponse.json([]);
 
   const packets = await query<any>(
-    `SELECT ap.*, a.status as application_status, a.review_status as application_review_status, a.review_note as application_review_note, j.title as job_title, j.company as job_company FROM application_packets ap LEFT JOIN applications a ON a.id = ap.application_id LEFT JOIN jobs j ON j.id = a.job_id WHERE ap.application_id::text = ANY($1) ORDER BY ap.created_at DESC`,
+    `SELECT ap.*, a.candidate_id as candidate_id, a.status as application_status, a.review_status as application_review_status, a.review_note as application_review_note, j.title as job_title, j.company as job_company FROM application_packets ap LEFT JOIN applications a ON a.id = ap.application_id LEFT JOIN jobs j ON j.id = a.job_id WHERE ap.application_id::text = ANY($1) ORDER BY ap.created_at DESC`,
     [applicationIds]
   );
 

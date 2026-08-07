@@ -532,7 +532,16 @@ export default function ApplicationQueuePage() {
 
   async function bulkStatus(s: string) {
     setFeedback(null);
-    await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, completed_at: s === "applied" ? new Date().toISOString() : null }) })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "PATCH",
+        table: "applications",
+        ids: Array.from(selectedItems).map(i => i.id),
+        updateData: { status: s, completed_at: s === "applied" ? new Date().toISOString() : null }
+      })
+    });
     setFeedback({ kind: "success", text: "Bulk update done." });
     load(page, false);
   }
@@ -540,7 +549,16 @@ export default function ApplicationQueuePage() {
   async function bulkReassign() {
     if (!bulkOwnerId) return;
     const owner = users.find(u => u.user_id === bulkOwnerId);
-    await Promise.all(selectedItems.map(i => fetch(`/api/applications/${i.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }) })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "PATCH",
+        table: "applications",
+        ids: Array.from(selectedItems).map(i => i.id),
+        updateData: { assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }
+      })
+    });
     setBulkOwnerId("");
     setFeedback({ kind: "success", text: "Reassigned." });
     load(page, false);
@@ -773,7 +791,7 @@ export default function ApplicationQueuePage() {
                         </div>
                         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
                           {item.jobs.job_category && <span className="badge badge-info" style={{ fontSize: 11 }}>{item.jobs.job_category}</span>}
-                          {item.jobs.source_url && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Posting</a>}
+                          {item.jobs.source_url && !item.jobs.source_url.includes("example.com") && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Posting</a>}
                         </div>
                       </>
                     ) : <span className="text-muted">Ad-hoc</span>}
@@ -881,16 +899,18 @@ export default function ApplicationQueuePage() {
                               ))
                             )}
                             <div className="dropdown-divider" />
-                            <button className="dropdown-item muted" onClick={() => { setStatus(item.id, "in_progress"); setFaloodOpen(null); }}>Mark in progress only</button>
+                            <button className="dropdown-item muted" onClick={() => { setStatus(item.id, "in_progress"); setFaloodOpen(null); }} disabled={!item.assigned_to_user_id}>
+                              {item.assigned_to_user_id ? "Mark in progress only" : "Assign owner first"}
+                            </button>
                           </div>
                         )}
                       </div>
 
-                      <button className="btn-compact btn-sm" onClick={() => requestReview(item)} disabled={actionLoading === `${item.id}:review`}>
+                      <button className="btn-compact btn-sm" onClick={() => requestReview(item)} disabled={actionLoading === `${item.id}:review` || item.workflow_status === "failed" || !item.base_resume_id || !item.workflow_resume_version_id} title={item.workflow_status === "failed" ? "Workflow failed" : (!item.base_resume_id || !item.workflow_resume_version_id ? "Missing artifacts" : "")}>
                         {actionLoading === `${item.id}:review` ? "⟳" : "🔍 Review"}
                       </button>
 
-                      <button className="btn-compact btn-sm" onClick={() => uploadProof(item)} disabled={actionLoading === `${item.id}:proof`}>
+                      <button className="btn-compact btn-sm" onClick={() => uploadProof(item)} disabled={actionLoading === `${item.id}:proof` || item.workflow_status === "failed" || !item.base_resume_id || !item.workflow_resume_version_id}>
                         {actionLoading === `${item.id}:proof` ? "⟳" : "📎 Proof"}
                       </button>
 

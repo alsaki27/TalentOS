@@ -11,11 +11,15 @@ export const metadata = {
   description: "Candidate and job application tracking",
 };
 
+import { Inter } from "next/font/google";
+
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   cookies();
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body>
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} dark`}>
+      <body className="font-sans">
         <ThemeProvider>
           <AuthGate />
           <NavBar />

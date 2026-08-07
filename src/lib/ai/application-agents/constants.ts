@@ -100,6 +100,15 @@ export const AGENT_CONFIG_DEFAULTS = {
     approvalPolicy: "auto" as const,
     minimumScore: 0,
   },
+  application_job_hunter: {
+    displayName: "Job Hunter",
+    temperature: 0.1,
+    maxOutputTokens: 8192,
+    timeoutMs: 30000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
 } as const;
 
 export const SCHEMA_VERSIONS = {

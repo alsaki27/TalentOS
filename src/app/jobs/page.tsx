@@ -536,7 +536,11 @@ export default function JobsPage() {
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected job(s)? This also removes any applications logged against them.`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/jobs/${id}`, { method: "DELETE" })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "DELETE", table: "jobs", ids: Array.from(selected) })
+    });
     load(page);
   }
 
@@ -934,22 +938,22 @@ export default function JobsPage() {
         <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
         <div className="table-shell">
-          <table className="table">
+          <table className="table" style={{ tableLayout: "fixed", width: "100%", wordWrap: "break-word" }}>
             <thead>
               <tr>
-                <th style={{ width: 28 }}>
+                <th style={{ width: 40 }}>
                   <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
                 </th>
-                <th>Job</th>
-                <th>Company</th>
-                <th>Category</th>
-                <th>Tier</th>
-                <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
+                <th style={{ width: "22%" }}>Job</th>
+                <th style={{ width: "15%" }}>Company</th>
+                <th style={{ width: "20%" }}>Category</th>
+                <th style={{ width: "10%" }}>Tier</th>
+                <th style={{ width: "10%", cursor: "pointer" }} onClick={togglePostedSort}>
                   Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
                 </th>
-                <th>Match Scores</th>
-                <th>Applicants</th>
-                <th style={{ position: "sticky", right: 0, background: "var(--surface)", zIndex: 2 }}></th>
+                <th style={{ width: "12%" }}>Match Scores</th>
+                <th style={{ width: "11%" }}>Applicants</th>
+                <th style={{ width: 40, position: "sticky", right: 0, background: "var(--surface)", zIndex: 2 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -958,6 +962,7 @@ export default function JobsPage() {
                   <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
                   <td>
                     <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
+                    {job.source_url?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
                     <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
                     {(job.salary_min || job.salary_max) ? (
                       <div className="muted" style={{ fontSize: 12 }}>
@@ -973,7 +978,7 @@ export default function JobsPage() {
                       <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
                     ) : job.company || "—"}
                   </td>
-                  <td style={{ maxWidth: 260 }}>
+                  <td>
                     {job.category_status === "pending" ? (
                       <span className="muted">Categorizing…</span>
                     ) : job.category_status === "failed" ? (

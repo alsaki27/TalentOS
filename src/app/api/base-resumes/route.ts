@@ -288,10 +288,21 @@ export async function GET(req: NextRequest) {
   if (response) return response;
 
   const candidateId = new URL(req.url).searchParams.get("candidateId");
-  if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
+  const candidateIdsStr = new URL(req.url).searchParams.get("candidateIds");
+  
+  if (!candidateId && !candidateIdsStr) return NextResponse.json({ error: "candidateId or candidateIds is required" }, { status: 400 });
+
+  if (candidateIdsStr) {
+    const ids = candidateIdsStr.split(",");
+    const data = await query(
+      'SELECT id, candidate_id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = ANY($1) ORDER BY created_at DESC',
+      [ids]
+    );
+    return NextResponse.json(data ?? []);
+  }
 
   const data = await query(
-    'SELECT id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
+    'SELECT id, candidate_id, name, target_industry, target_roles, style_id, status, created_at, updated_at FROM base_resumes WHERE candidate_id = $1 ORDER BY created_at DESC',
     [candidateId]
   );
 
