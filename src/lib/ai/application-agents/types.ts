@@ -15,7 +15,8 @@ export type ApplicationAgentId =
   | "copilot_ceo"
   | "copilot_form_analyst"
   | "copilot_compliance"
-  | "copilot_correction_reviewer";
+  | "copilot_correction_reviewer"
+  | "copilot_cover_letter";
 
 export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
   "application_job_lens",
@@ -27,7 +28,8 @@ export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
   "copilot_ceo",
   "copilot_form_analyst",
   "copilot_compliance",
-  "copilot_correction_reviewer"
+  "copilot_correction_reviewer",
+  "copilot_cover_letter"
 ];
 
 export interface ApplicationAgentMeta {
@@ -97,6 +99,12 @@ export const APPLICATION_AGENT_METAS: Record<ApplicationAgentId, ApplicationAgen
     displayName: "Copilot Correction Reviewer",
     sequenceNumber: 10,
     description: "Judges whether a recorded fill-plan correction is genuine and worth replaying",
+  },
+  copilot_cover_letter: {
+    id: "copilot_cover_letter",
+    displayName: "Copilot Cover Letter",
+    sequenceNumber: 11,
+    description: "Drafts a 1-page cover letter from the tailored resume, candidate info, and job description",
   },
 };
 

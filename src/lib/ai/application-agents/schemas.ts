@@ -402,6 +402,21 @@ export const CopilotCorrectionReviewSchema: Schema<CopilotCorrectionReviewV1> = 
   }
 };
 
+// ── CopilotCoverLetterV1 ──
+
+export interface CopilotCoverLetterV1 {
+  letterText: string;
+}
+
+export const CopilotCoverLetterSchema: Schema<CopilotCoverLetterV1> = {
+  parse(input: unknown): CopilotCoverLetterV1 | { error: string } {
+    if (!isRecord(input)) return { error: "CopilotCoverLetterV1 must be an object" };
+    const letterText = expectString(input.letterText, "letterText");
+    if (letterText === null || letterText.trim().length === 0) return { error: "letterText is required" };
+    return { letterText };
+  }
+};
+
 // ── CopilotCeoReviewV1 ──
 
 export interface CopilotCeoProposal {

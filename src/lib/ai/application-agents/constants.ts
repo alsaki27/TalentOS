@@ -91,6 +91,15 @@ export const AGENT_CONFIG_DEFAULTS = {
     approvalPolicy: "auto" as const,
     minimumScore: 0,
   },
+  copilot_cover_letter: {
+    displayName: "Copilot Cover Letter",
+    temperature: 0.5,
+    maxOutputTokens: 4096,
+    timeoutMs: 45_000,
+    maxAttempts: 2,
+    approvalPolicy: "auto" as const,
+    minimumScore: 0,
+  },
 } as const;
 
 export const SCHEMA_VERSIONS = {

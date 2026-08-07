@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
         // 1. Fetch Application, Job, and Candidate
         appData = await queryOne<any>(
           `SELECT a.id as application_id, a.candidate_id, a.job_id,
-                  j.title, j.company, j.description, j.raw_description,
+                  j.title, j.company, j.description_text AS description, j.raw_description,
                   c.name, c.email, c.phone, c.location_preference AS location,
                   c.work_authorization, c.linkedin_url, c.portfolio_url,
                   c.verified_skills, c.target_roles, c.salary_expectation,
@@ -212,10 +212,23 @@ export async function POST(request: NextRequest) {
         runCopilotFiller(fillPlannerOptions, provider, ctx)
       );
 
+      // Cover letter / resume file detection — simple label matching is
+      // enough here; these just tell the extension which buttons/actions to
+      // surface, the actual generation and file handling happens client-side.
+      const coverLetterFile = formSnapshot.find((f: any) =>
+        f.inputType === "file" && /cover.?letter/i.test(`${f.label} ${f.name}`));
+      const coverLetterText = formSnapshot.find((f: any) =>
+        (f.type === "textarea" || f.inputType === "text") && /cover.?letter|letter of interest/i.test(`${f.label} ${f.name}`));
+      const resumeFile = formSnapshot.find((f: any) =>
+        f.inputType === "file" && /resume|\bcv\b/i.test(`${f.label} ${f.name}`));
+
       return NextResponse.json({
         fillPlan: [...complianceInstructions, ...plan.instructions],
         applicationId: appData.application_id,
         candidateProfile: ctx.candidateProfile,
+        coverLetterFileSelector: coverLetterFile?.selector ?? null,
+        coverLetterTextSelector: coverLetterText?.selector ?? null,
+        resumeFileSelector: resumeFile?.selector ?? null,
         resumeName: selectedResumeId ? "Selected Resume" : "No Resume Selected"
       });
     } catch (err) {
