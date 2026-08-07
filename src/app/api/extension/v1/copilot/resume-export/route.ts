@@ -38,7 +38,17 @@ export async function GET(request: NextRequest) {
       );
 
       if (!row) {
-        return NextResponse.json({ found: false });
+        const version = await queryOne<{ generated_text: string | null; content: unknown }>(
+          `SELECT generated_text, content FROM application_resume_versions
+           WHERE application_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+          [applicationId]
+        );
+        const resumeText = version?.generated_text || (version?.content
+          ? typeof version.content === "string" ? version.content : JSON.stringify(version.content)
+          : "");
+        return resumeText
+          ? NextResponse.json({ found: true, inlineText: resumeText, generatedLocally: true })
+          : NextResponse.json({ found: false });
       }
 
       return NextResponse.json({
