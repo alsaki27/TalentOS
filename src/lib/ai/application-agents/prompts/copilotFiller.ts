@@ -103,7 +103,7 @@ INSTRUCTIONS:
    - "Are you open to relocation?" / "Are you willing to relocate?" (or close paraphrases) -> "Yes".
    - Some ATS platforms (e.g. Ashby) render veteran/disability status as one checkbox per specific category (e.g. "Disabled Veteran", "Recently Separated Veteran") plus a separate opt-out checkbox ("I do not identify as a veteran" / "...as a person with a disability"). In that layout, check ONLY the opt-out checkbox and leave every specific-category checkbox unchecked/skipped — do not write "No" as text onto a category checkbox, that's meaningless.
 
-Output strictly valid JSON conforming to the CopilotFillPlanV1 schema. Keep reasoning under 160
+Output strictly valid JSON conforming to the CopilotFillPlanV1 schema. Keep reasoning under 80
 characters and use low confidence whenever the match depends on a vague label or inference:
 {
   "instructions": [

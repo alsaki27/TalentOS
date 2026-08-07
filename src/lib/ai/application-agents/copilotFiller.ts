@@ -36,7 +36,7 @@ export async function runCopilotFiller(
     jdText: ctx.job.description || ctx.job.rawDescription || "",
   };
 
-  const response = await provider.send({
+  const request = {
     system: options.system_prompt ?? "You are Copilot Fill Planner. Return only valid JSON.",
     messages: [
       { role: "user", content: [{ type: "text", text: buildCopilotFillerPrompt(inputContext) }] },
@@ -45,19 +45,43 @@ export async function runCopilotFiller(
     temperature: options.temperature,
     maxTokens: options.max_output_tokens,
     timeoutMs: options.timeout_ms,
-  });
+  } as const;
 
-  const raw = textOf(response.content);
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  let parsed;
-  try {
-    parsed = JSON.parse(stripped);
-  } catch (err) {
-    throw new Error(`Copilot Filler agent returned invalid JSON: ${err}`);
+  let response = await provider.send(request);
+
+  const parseResponse = (content: typeof response.content) => {
+    const raw = textOf(content);
+    const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stripped);
+    } catch {
+      return null;
+    }
+    const validated = CopilotFillPlanSchema.parse(parsed);
+    return "error" in validated ? null : validated;
+  };
+
+  let validated = parseResponse(response.content);
+  if (!validated) {
+    // Providers occasionally truncate a long plan or emit an unescaped quote in
+    // reasoning. Retry once with a compact instruction that materially reduces
+    // the response surface; never attempt to invent a repair of candidate data.
+    response = await provider.send({
+      ...request,
+      temperature: 0,
+      maxTokens: Math.max(options.max_output_tokens, 12000),
+      messages: [
+        ...request.messages,
+        { role: "user", content: [{ type: "text", text: "Retry: output compact valid JSON only. Use reasoning of 80 characters or fewer. No markdown, no extra text, and include one instruction per field." }] },
+      ],
+    });
+    validated = parseResponse(response.content);
   }
-
-  const validated = CopilotFillPlanSchema.parse(parsed);
-  if ("error" in validated) throw new Error(`Copilot Filler output validation failed: ${validated.error}`);
-
+  if (!validated) {
+    // Keep Analyze usable and force manual review rather than failing the whole
+    // request when the model cannot produce a valid plan.
+    return { instructions: [] };
+  }
   return validated;
 }
