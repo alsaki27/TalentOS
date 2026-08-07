@@ -1,299 +1,349 @@
-# HANDOVER — July 14, 2026
+# TalentOS / Skarion Handover
 
-**Project:** TalentOS (Skarion Tracker)  
-**Branch:** `istiaque-updates` (merging with `origin/latest-updates`)  
-**Database:** Neon Postgres  
+**Date:** 2026-08-07
+**Backend:** `alsaki27/TalentOS`
+**Extension:** `skarion-dev/talentos-copilot-extension`
+**Backend branch:** `neon-cloudflare-migration`
+**Live backend:** https://skarion-talent-os.skarion-talentos.workers.dev
 
----
+This is the takeover guide for the TalentOS application workflow, Candidate Portal, Gmail intelligence, AE work queue, and Chrome Copilot extension.
 
-## 1. Database Connection Fix
+## 1. Product goal
 
-### Problem
-`NeonDbError: TypeError: fetch failed` on every page load. The app was completely unusable.
+TalentOS connects three workflows:
 
-### Root Cause
-`src/server/db/neon.ts` passed `fetchOptions: { cache: "no-store" }` to the `neon()` constructor. This is a Next.js-specific `fetch` extension — the Neon HTTP driver passes it directly to the global `fetch()`, which on Node.js/undici doesn't recognize `cache` and throws.
+1. A candidate signs in, secures the account with Google Authenticator, and optionally connects Gmail.
+2. Gmail is reviewed for recruiting activity only. AI ignores personal mail, job-alert noise, and marketing.
+3. AEs receive actionable tasks, can review source email, draft a reply, manually add missing applications, update stages, and resolve work with an audit note.
 
-Second issue: the `DATABASE_URL` in `.env.local` contained `channel_binding=require`, a raw-TCP Postgres parameter the HTTP driver can't use.
+The Chrome extension lets an AE open a real ATS application, select the correct candidate, analyze the form, fill it with the correct resume/context, review changes, save corrections, and attach generated documents.
 
-### Fix
-- Removed `fetchOptions: { cache: "no-store" }` from `neon()` initialization
-- Added automatic stripping of `channel_binding` from the URL in `getDatabaseUrl()`
-- Added comment documenting why these params must not be passed
+## 2. Repository state
 
-### File
-`src/server/db/neon.ts`
+Latest backend commit: `67735be` — “Flag and capture untracked candidate applications”
+Remote: `origin/neon-cloudflare-migration`
 
----
+Recent backend milestones:
 
-## 2. Job Agent — Date Posted Filter
-
-### Problem
-Only the "Today" option worked. Selecting "2 Days", "7 Days", or "30 Days" returned zero results or silently ignored the filter.
-
-### Root Cause
-The Apify actor `khadinakbar~google-jobs-scraper` accepts only a specific enum for `datePosted`: `any`, `today`, `3days`, `week`, `month`. The UI was passing raw strings `2 days`, `7 days`, `30 days` which the actor didn't recognize.
-
-### Fix
-Added `toApifyDatePosted()` mapping function in `jobAgentService.ts`:
-
-| UI Selection | Sent to Apify |
+| Commit | Result |
 |---|---|
-| Today | `today` |
-| 2 Days | `3days` |
-| 7 Days | `week` |
-| 30 Days | `month` |
-| Any Time | `any` |
+| `6a834fe` | Modernized responsive jobs workspace |
+| `bfe41aa` | Added Copilot action to application queue |
+| `162d24f` | Hardened malformed Copilot JSON handling |
+| `6ecf539` | Added tailored resume PDF fallback |
+| `0f7fbfe` | Added candidate email work queue and enrollment-date backfill |
+| `1b917a3` | Added MFA, Gmail labels/stars, interview extraction, and fixtures |
+| `975afb1` | Hardened MFA encryption and personal-email safeguards |
+| `9791b57` | Added drafts, retention, privacy, SLAs, conflicts, and workflow events |
+| `dde838a` | Synced applied status from Copilot extension |
+| `67735be` | Added untracked-application detection and AE manual application creation |
 
-Unrecognized values default to `"today"` with a console warning.
+Recent extension milestones:
 
-### File
-`src/server/services/jobAgentService.ts`
+| Commit | Result |
+|---|---|
+| `383b1ac` | Initial TalentOS Application Copilot |
+| `34b0ac7` | Linked Copilot to application records |
+| `49c80f7` | Added ATS browser fixture test suite |
+| `bfac18f` | Fixed linked application handoff |
+| `505939b` | Added tailored resume download |
+| `c6d4579` | Added resume fallback handling |
+| `543a9fd` | Added form submission status sync |
 
----
+## 3. Candidate authentication and Gmail flow
 
-## 3. Job Agent — AI Control Center Integration
+### Candidate authentication
 
-### Problem
-The job agent classifier (`jobAgentClassifier.ts`) called `callWithUsageTracking("job_categorization", …)` but completely ignored the `ai_agent_configs` table. System prompt, temperature, max tokens, and the active flag were all hardcoded. No default config existed for `job_categorization`.
+1. Candidate signs in with password or Google OAuth.
+2. If MFA is enabled, TalentOS issues a short-lived pending-MFA cookie instead of a full session.
+3. Candidate enters a six-digit TOTP code.
+4. Recovery codes are hashed and one-time-use.
+5. Five invalid attempts cause a temporary lockout.
 
-### Fix
-- Rewrote `classifyWithAi()` to call `findAgentConfigByAutomationId("job_categorization")` before each classification
-- Uses configured `system_prompt`, `temperature`, `max_output_tokens`, `timeout_ms`, and `is_active`
-- When no admin-set system prompt exists, uses a built-in rule set that preserves the correct tier logic for OSP/Fiber (Group A) vs entry-level groups (B–L)
-- Falls back to the deterministic regex classifier if the config is disabled or AI fails
-- Logs provider/model/route used on every classification
-- **Parallelized classification**: changed from sequential (`for` loop with 300ms delay per job) to 5 concurrent calls per batch. 500 jobs now completes in ~100s instead of ~44 minutes
+Files:
 
-### Files
-`src/lib/ai/jobAgentClassifier.ts`  
-`src/server/services/jobAgentService.ts` (classifyJobs function)
+- `src/server/auth/candidateAuth.ts`
+- `src/server/auth/totp.ts`
+- `src/app/api/portal/auth/mfa/route.ts`
+- `src/app/api/portal/auth/mfa/verify/route.ts`
+- `src/app/portal/login/page.tsx`
+- `src/app/portal/page.tsx`
 
----
+### Gmail onboarding
 
-## 4. Job Agent — Review Page Bulk Approve Fix
+1. Candidate enters the Skarion enrollment date.
+2. Candidate consents to Gmail access.
+3. OAuth requests `gmail.modify`, required for labels and stars.
+4. The callback records `email_consent_at`.
+5. Initial sync searches after the enrollment date; later syncs use Gmail history IDs.
+6. Paused candidates are skipped by the sync worker.
+7. Retention cleanup removes imported email/drafts past the candidate's retention period.
 
-### Problem
-"Approve All Best" and "Approve Best + Medium" buttons imported zero jobs. Only "Approve All Non-Skip" worked.
+Files:
 
-### Root Cause
-`importApprovedJobs()` filtered staged jobs by `importStatus: "approved"`, but the UI never marked jobs as approved before calling import. Jobs remained in `import_status = 'staged'` and weren't found.
+- `src/lib/integrations/googleGmail.ts`
+- `src/lib/integrations/gmailApi.ts`
+- `src/app/api/integrations/gmail/callback/route.ts`
+- `src/server/services/gmailSyncService.ts`
+- `src/server/repositories/gmailIntegrationRepository.ts`
 
-### Fix
-- Tier-based and jobIds-based approvals now first call `bulkUpdateStagedJobStatus(runId, "approved", …)` to mark target jobs, then import them
-- Imported/skipped counts now increment instead of overwrite, so multiple partial imports (Best, then Medium) don't reset each other's counts
-- `excludeImportStatus: "imported"` prevents re-approving already-imported rows
+Existing Gmail users must reconnect after the `gmail.modify` scope change. A read-only token cannot write labels or stars.
 
-### File
-`src/lib/jobAgentImporter.ts`
+## 4. Email intelligence and AE workflow
 
----
+Relevant recruiting messages can produce:
 
-## 5. Job Agent — Token Priority Fix
+- Internal application timeline notes.
+- AE action items.
+- Gmail labels and stars.
+- High-confidence stage updates for approved categories.
+- Interview extraction and schedule creation.
+- Calendar-conflict tasks.
+- Untracked-application tasks.
 
-### Problem
-New tokens defaulted to priority `0`, which always won rotation (lowest priority runs first). The UI starts at `1`.
+The system suppresses obvious personal messages before AI when known sender domains match commerce/delivery/travel/banking patterns plus order/receipt/delivery subjects. The prompt also excludes personal receipts, DoorDash/Uber Eats, shopping, shipping, rideshare, banking, medical, travel, social, account-security mail, Indeed/LinkedIn alerts, newsletters, and marketing.
 
-### Fix
-`insertToken()` now auto-computes the next available priority when none is supplied: `MAX(priority) + 1`, or `1` if the table is empty.
+### Untracked applications
 
-### File
-`src/server/repositories/jobAgentTokenRepository.ts`
+Application confirmations such as “Application received,” “Thank you for applying,” or “Successfully applied” are detected. If no matching TalentOS application exists, the system creates:
 
----
+`Application found outside TalentOS`
 
-## 6. Job Agent — Live Scraping Feed Rework
+The AE enters company, job title, and optional application URL. TalentOS creates or reuses the job, creates the application with source type `email_confirmation`, links the task, and records an audit event.
 
-### Problems
-1. LiveFeedBoard only mounted for `status === "running"`, but runs start as `"pending"`. The board never appeared during initialization.
-2. Multiple concurrent `processApifyRunData` calls created duplicate staged-job rows (no idempotency guard).
-3. Without `CRON_SECRET`, the Apify run finished but `processApifyRunData` was never called — data stayed stuck in "running" forever.
-4. Errors were silently logged; the UI showed no feedback.
+Files:
 
-### Fixes
-- **LiveFeedBoard** now shows for `pending`, `running`, and `processing` statuses
-- Added status label display (Initializing… / Scraping… / Processing…) with per-stage loading messages
-- Added "last updated" timestamp and error display
-- **Live API endpoint** (`runs/[id]/live/route.ts`) now auto-triggers `processApifyRunData` when it detects the Apify run has `SUCCEEDED`
-- Added `processingSet` guard to prevent concurrent processing
-- Run status transitions: `pending` → `running` → `processing` → `succeeded`/`failed`
-- On processing failure, the run is marked `failed` with the error
-- **Dashboard** (page.tsx) shows live feed for all active states; status badges show correct labels (⏳ pending…, ⏳ scraping…, ⚙ classifying…)
+- `src/lib/ai/emailTriage.ts`
+- `src/server/services/gmailSyncService.ts`
+- `src/app/api/action-items/[id]/add-application/route.ts`
+- `src/app/candidate-dashboard/page.tsx`
 
-### Files
-`src/app/job-agent/LiveFeedBoard.tsx`  
-`src/app/api/job-agent/runs/[id]/live/route.ts`  
-`src/app/job-agent/page.tsx`
+### AE dashboard
 
----
+The Candidate Application Dashboard shows:
 
-## 7. Job Agent — Cron Dedup Fix
+- Candidate, job, company, and source email.
+- Priority, due time, and escalation state.
+- Open-email link.
+- Draft-reply action.
+- Take-over action.
+- Resolve action requiring an AE note.
+- Add-application action for untracked confirmations.
 
-### Problem
-The daily cron (`/api/cron/job-agent`) passed `customKeywords: titles` alongside `roleGroups: cg.subGroupIds`. Since `getSearchQueries()` already expands role groups to titles, every title was sent to Apify twice — doubling the query list and wasting API calls.
+Same-thread outbound mail can automatically resolve reply tasks. Manual AE resolution is audited.
 
-### Fix
-Removed `customKeywords: titles` from the cron route. Role group titles are already included by `getSearchQueries()`.
+### Reply drafts
 
-### File
-`src/app/api/cron/job-agent/route.ts`
+`email_reply_draft` creates a reviewable draft only. It never sends email automatically.
 
----
+Files:
 
-## 8. Scoring & ATS — AI Routing Migration
+- `src/lib/ai/emailReplyDraft.ts`
+- `src/app/api/action-items/[id]/draft-reply/route.ts`
 
-### Problem
-"Generate Score" on the jobs page and "ATS Score Analysis" page both failed with `429 OpenAI quota exceeded`. Four endpoints were using `new OpenAI({ apiKey: process.env.OPENAI_API_KEY })` directly, completely bypassing the AI Control Center routing system.
+## 5. AI Control Center
 
-### Fix
-All 4 endpoints now use `callWithUsageTracking()` with proper automation IDs:
+New candidate-workflow agents:
 
-| File | Automation ID | Previous approach |
+| Automation ID | Purpose | Route |
 |---|---|---|
-| `src/lib/atsScoring.ts` | `ats_extraction` + `ats_narrative` | `new OpenAI()` x2 |
-| `src/app/api/jobs/match-score/route.ts` | `job_match_score` | `new OpenAI()` |
-| `src/app/api/jobs/autofill-form/route.ts` | `job_autofill` | `new OpenAI()` |
-| `src/app/api/jobs/[id]/analyze/route.ts` | `jd_analysis` (reuses existing) | `new OpenAI()` |
+| `email_triage` | Relevance, category, match, reply need | Gemini 2.5 Flash Lite |
+| `email_interview_extraction` | Interview logistics | Gemini 2.5 Flash Lite |
+| `email_action_enrichment` | Reserved enrichment/label agent | Gemini 2.5 Flash Lite |
+| `email_reply_draft` | Reviewable recruiter reply | Gemini 2.5 Flash Lite |
 
-The `import OpenAI from "openai"` is completely removed from all 4 files. The `response_format: { type: "json_object" }` / `json_schema` patterns are replaced with prompt-level JSON instructions plus a `parseJson()`/`safeJsonParse()` wrapper, which is provider-agnostic (works with Google, Anthropic, DeepSeek, etc.).
+New AI code must use `callWithUsageTracking`, have Control Center config/routes, strict JSON parsing, and human fallback.
 
-### Files
-`src/lib/atsScoring.ts`  
-`src/app/api/jobs/match-score/route.ts`  
-`src/app/api/jobs/autofill-form/route.ts`  
-`src/app/api/jobs/[id]/analyze/route.ts`
+The pre-existing `copilot_cover_letter` route was configured for Gemini 2.5 Pro before this work. Do not change that route without evaluating quality.
 
----
+## 6. Database migrations
 
-## 9. AI Routing — Auto-Retry on Rate Limit
+Apply these after the earlier email/Copilot migrations:
 
-### Problem
-When the global fallback chain picked the exhausted OpenAI key, `callWithUsageTracking` threw immediately with a 429 error. There was no retry with the next available provider.
+| Migration | Purpose |
+|---|---|
+| `sql/neon_fixes/055_candidate_email_workflow.sql` | Enrollment date, email notes, task resolution, dedupe |
+| `sql/neon_fixes/056_candidate_mfa_and_email_actions.sql` | MFA, Gmail write fields, interview agents |
+| `sql/neon_fixes/057_candidate_workflow_controls.sql` | Consent, pause/retention, SLAs, drafts, workflow events |
+| `sql/neon_fixes/058_email_confirmation_application_source.sql` | Allows `email_confirmation` application source |
 
-### Fix
-- `callWithUsageTracking()` now retries up to 3 times on `rate_limit` / `auth_error`
-- Failed providers are excluded via `excludeKeyIds` and `excludeProviderNames`
-- `getProviderForAutomation()` now accepts `excludeProviderNames` to skip providers that already failed in the current call chain
-- The global fallback path in `getProviderForAutomation()` now iterates through ALL providers (Anthropic → NVIDIA → Google Vertex → Google → OpenAI → GLM → DB keys) instead of calling `getActiveProviderAsync()` once
-- On retry, the system logs which provider failed and which is being tried next
+Required production configuration:
 
-### File
-`src/lib/ai/routing.ts`
+- `DATABASE_URL` or `NEON_DATABASE_URL`
+- `JWT_SECRET`
+- `AI_KEYS_ENCRYPTION_SECRET`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GMAIL_OAUTH_REDIRECT_URI`
+- `TALENTOS_BASE_URL`
+- `CRON_SECRET`
 
----
+MFA setup returns a controlled error if `AI_KEYS_ENCRYPTION_SECRET` is missing; it must not store an unencrypted TOTP secret.
 
-## 10. `.env.local` — Disarmed Exhausted OpenAI Key
+## 7. Manual test plan
 
-### Problem
-`OPENAI_API_KEY=sk-proj-…` was still active in `.env.local`. The global fallback chain picked it first, got 429 on every call, and even with retry logic there was no other working key to fall back to.
+### Authentication and MFA
 
-### Fix
-Commented out the `OPENAI_API_KEY` line with a note directing users to configure AI keys via `/admin/ai` → API Keys.
+1. Sign in without MFA and confirm `/portal` loads.
+2. Enable Google Authenticator from Account Security.
+3. Scan the URI/secret and confirm with a six-digit code.
+4. Sign out and confirm the next login requires MFA.
+5. Use a recovery code; confirm it works once only.
+6. Enter five invalid codes; confirm temporary lockout.
+7. Test password and Google OAuth login with MFA enabled.
+8. Remove encryption configuration in staging; confirm MFA setup fails safely.
 
-### File
-`.env.local`
+### Gmail consent/privacy
 
----
+1. Connect a new Gmail account and confirm Google shows modify access.
+2. Confirm `email_consent_at` is populated.
+3. Confirm initial sync honors the enrollment date.
+4. Pause sync, run Gmail cron, and confirm the account is skipped.
+5. Resume sync and confirm it runs again.
+6. Change retention to 90 days and run cleanup.
+7. Delete imported history; confirm email records/drafts are deleted while applications remain.
+8. Revoke Gmail access and confirm the account enters reconnect/error state.
 
-## 11. AI Control Center — Save Configuration Fixes
+### Personal-email suppression
 
-### Problems
-1. **Route save never persisted** — `sql.transaction(queries)` passed an array of pre-executed promises from `sql.query()`. The Neon driver's `transaction()` expects a callback returning `tx.query()` promises. Every save silently failed.
-2. **`prompt_version` and `output_schema_version` never saved** — validation checked `typeof === "number"` but the DB column is `text` and the frontend sends strings.
-3. **New agent config insert failed with NOT NULL violation** — `display_name` has no default. Saving without typing a name threw a DB error.
+Use controlled messages for:
 
-### Fixes
-- Route save now uses `sql.transaction((tx) => { return [tx.query(...), ...]; })` — queries execute within a single atomic transaction
-- `prompt_version` and `output_schema_version` validation changed to `String(body.field)` → accepts strings, numbers, or leaves undefined
-- New config INSERT falls back to the automation's label (e.g. "Job Match Score") as default `display_name`
+- DoorDash order receipt.
+- Amazon shipping notice.
+- Uber trip receipt.
+- Bank payment alert.
+- Medical appointment.
+- LinkedIn job alert.
+- Indeed “great fit” recommendation.
 
-### Files
-`src/app/api/admin/ai/agents/[id]/routes/route.ts`  
-`src/app/api/admin/ai/agents/[id]/route.ts`
+Expected: no AE task, application note, stage change, or recruiting Gmail label/star.
 
----
+### Recruiting workflow
 
-## 12. Jobs Page — Pagination Improvements
+Test each with and without a matching TalentOS application:
 
-### Changes
-- Pagination now renders at **both top and bottom** of the table
-- Added a **page number input** with a "Go" button
-- Enter a page number and press Enter or click Go to jump directly
-- Invalid values show a red error: `"Enter a valid page number"` or `"Page must be 1–X"`
-- Pagination logic extracted into a reusable `renderPagination({ marginTop, marginBottom })` function
-- Bottom pagination has added spacing above the table (`marginTop: 32`)
+- Greenhouse confirmation.
+- Lever recruiter reply.
+- Workday status update.
+- Ashby scheduling email.
+- Zoho invitation.
+- Rejection.
+- Offer.
+- Reschedule/cancellation.
+- Forwarded recruiter email.
+- Missing date/timezone.
+- Application confirmation with no TalentOS match.
 
-### File
-`src/app/jobs/page.tsx`
+Expected:
 
----
+- Correct messages attach to the correct application.
+- Unmatched confirmations create `untracked_application`.
+- Interview messages are starred/labeled and create a task.
+- Missing logistics remain human-reviewable.
+- Duplicate sync does not create duplicate tasks/notes/schedules.
 
-## 13. Scheduled Cron — Daily Job Agent Scrape
+### AE queue
 
-### Problem
-`vercel.json` had the poll cron (`* * * * *`) but no cron entry for the actual job agent run. The daily automated scrape was never scheduled.
+1. Open Candidate Application Dashboard.
+2. Confirm candidate/job/email details.
+3. Generate and edit a reply draft; confirm nothing is sent.
+4. Take over with a note.
+5. Try resolving without a note; confirm rejection.
+6. Resolve with a note; confirm task closure and audit event.
+7. Add a missing application; confirm job/application creation.
+8. Leave a task overdue, run Gmail cron, and confirm urgent escalation.
+9. Create overlapping interviews and confirm a calendar-conflict task.
 
-### Fix
-Added cron entry:
-```json
-{ "path": "/api/cron/job-agent", "schedule": "0 0 * * *" }
-```
-`0 0 * * *` = midnight UTC = **6:00 AM Bangladesh Standard Time (UTC+6)** daily.
+### Copilot extension
 
-Requires `CRON_SECRET` to be set in Vercel environment variables.
+1. Load the unpacked extension in Chrome.
+2. Configure the TalentOS API key.
+3. Test Greenhouse, Lever, Workday, Ashby, and Zoho forms.
+4. Confirm candidate/application handoff.
+5. Analyze, inspect, fill, manually correct, Save & Learn.
+6. Test malformed/aborted AI response recovery.
+7. Test tailored resume and cover-letter attachment fallback.
+8. Submit a form and confirm applied-status sync.
 
-### File
-`vercel.json`
+## 8. Improvements still recommended
 
----
+### High priority
 
-## 14. Database — Records Cleanup
+1. Install Node and run `npm run typecheck`, `npm test`, `npm run lint`, and Playwright.
+2. Apply migrations in staging Neon before production.
+3. Add mocked Gmail API tests for list/get/modify/labels.
+4. Integrate Google Calendar for real attendee responses, cancellations, reminders, and conflicts. Current conflict detection uses TalentOS schedules only.
+5. Add a Gmail reconnect banner for old `gmail.readonly` scopes.
+6. Wire `email_action_enrichment` into the sync path or remove it until used; it is currently registered for future use.
+7. Add deterministic classification tests for personal receipts and application confirmations.
 
-### What was done
-All run history and scraped job data were deleted from the Neon database:
+### Medium priority
 
-```sql
-DELETE FROM job_agent_staged_jobs;
-DELETE FROM job_agent_runs;
-```
+1. Add AE assignment and configurable SLA/escalation notifications.
+2. Add recruiter contact extraction and deduplication.
+3. Add draft approval/save/send endpoints, with explicit AE confirmation before sending.
+4. Add “wrong application match” correction/rematch.
+5. Add candidate-visible consent/audit history.
+6. Add GDPR-style export/delete tooling and deletion reports.
+7. Add a richer workflow-event timeline UI.
 
-### Preserved
-- 45 Apify API tokens (`job_agent_apify_tokens`)
-- 2 configurations (`job_agent_configs`)
-- 2 keyword groups (`job_agent_keyword_groups`)
-- All AI keys, routes, and other non-Job-Agent tables
+Safety rules:
 
----
+- Never auto-send AI email.
+- Never auto-change stages from ambiguous mail.
+- Never expose internal AI notes unless explicitly marked candidate-visible.
+- Never treat generic job alerts as applications.
+- Never store Gmail tokens or MFA secrets without encryption.
 
-## 15. New Migration Files
+## 9. Developer takeover
 
-| File | Purpose | Must apply? |
-|---|---|---|
-| `migrations/job_agent_ai_config.sql` | Seeds default `ai_agent_configs` row for `job_categorization` | Yes |
-| `migrations/scoring_ai_automations.sql` | Seeds 4 new automation rows + default agent configs (`job_match_score`, `ats_extraction`, `ats_narrative`, `job_autofill`) | Yes |
-| `neon/cleanup_job_agent_runs.sql` | Cleanup script (already executed; keep for reference) | No |
+Backend:
 
----
+~~~powershell
+cd C:\path\to\TalentOS
+git checkout neon-cloudflare-migration
+git pull origin neon-cloudflare-migration
+npm install
+npm run typecheck
+npm test
+npm run lint
+npm run build
+~~~
 
-## What You Need to Do Next
+Extension:
 
-1. **Apply the migrations** to Neon:
-   ```sql
-   \i migrations/scoring_ai_automations.sql
-   \i migrations/job_agent_ai_config.sql
-   ```
+~~~powershell
+cd C:\path\to\talentos-copilot-extension
+git checkout main
+git pull origin main
+npm install
+~~~
 
-2. **Add a working AI key**: Go to `/admin/ai` → API Keys → add a Google or Anthropic key. Then Assign it to the automations in Agents & Routing.
+Load the extension through `chrome://extensions` with Developer Mode enabled. Configure the TalentOS API base URL and extension API key.
 
-3. **Set `CRON_SECRET`** in Vercel env vars to enable daily cron.
+Debugging map:
 
-4. **Restart dev server** — all changes require recompilation.
+- Gmail sync: `src/server/services/gmailSyncService.ts`
+- Gmail OAuth/tokens: `src/lib/integrations/googleGmail.ts`, `src/server/repositories/gmailIntegrationRepository.ts`
+- Email triage: `src/lib/ai/emailTriage.ts`
+- Interview extraction: `src/lib/ai/emailInterviewExtraction.ts`
+- Reply drafts: `src/lib/ai/emailReplyDraft.ts`
+- AE queue: `src/app/candidate-dashboard/page.tsx`, `src/app/api/candidate-dashboard/route.ts`
+- Candidate MFA: `src/server/auth/candidateAuth.ts`, `src/server/auth/totp.ts`, `src/app/api/portal/auth/mfa/*`
+- Copilot: `src/app/api/extension/v1/copilot/*` and the extension repository
+- AI routing: `src/lib/ai/routing.ts`
+- AI Control Center: `src/app/admin/ai`, `src/app/api/admin/ai/*`
 
-5. **Push the branch** if not already done:
-   ```powershell
-   cd C:\Shohan\Skarion\TalentOS
-   git add -A
-   git commit -m "All AI routing, job agent, and pagination fixes from July 14"
-   git checkout -b istiaque-updates
-   git push origin istiaque-updates
-   ```
+Change discipline:
+
+1. Add migrations for schema changes.
+2. Register every AI automation in the Control Center.
+3. Use `callWithUsageTracking` only.
+4. Add strict parsing and human fallback.
+5. Add audit events and fixtures.
+6. Run typecheck/tests/build.
+7. Commit and push when coding is complete.
+
+## 10. Validation status
+
+The latest source changes passed `git diff --check` before push. Runtime typecheck, unit tests, E2E tests, Gmail calls, and Neon migration execution still need to run in an environment with Node, dependencies, secrets, and database access. That is the receiving developer’s first action after pulling the branch.
