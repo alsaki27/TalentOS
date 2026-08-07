@@ -327,6 +327,9 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
   var [note, setNote] = useState("");
   var [busy, setBusy] = useState(false);
   var [draft, setDraft] = useState<{ subject: string; body_text: string } | null>(null);
+  var [company, setCompany] = useState("");
+  var [jobTitle, setJobTitle] = useState("");
+  var [applyUrl, setApplyUrl] = useState("");
   async function update(status: string) {
     setBusy(true);
     try { await onUpdate(task.id, status, note); } finally { setBusy(false); }
@@ -340,6 +343,16 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
       setDraft(result.draft);
     } finally { setBusy(false); }
   }
+  async function addApplication() {
+    if (!company.trim() || !jobTitle.trim()) return;
+    setBusy(true);
+    try {
+      var response = await fetch("/api/action-items/" + task.id + "/add-application", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company, jobTitle, applyUrl }) });
+      var result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Could not add application");
+      await onUpdate(task.id, "done", "AE added the missing application to TalentOS.");
+    } finally { setBusy(false); }
+  }
   var mailUrl = task.gmail_thread_id ? "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(task.gmail_thread_id) : null;
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)" }}>
@@ -351,6 +364,7 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
         <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}</div>
         {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>“{task.email_subject}”</div>}
         {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
+        {task.type === "untracked_application" && <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6, maxWidth: 700 }}><input value={company} onChange={function (e) { setCompany(e.target.value); }} placeholder="Company" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /><input value={jobTitle} onChange={function (e) { setJobTitle(e.target.value); }} placeholder="Job title" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /><input value={applyUrl} onChange={function (e) { setApplyUrl(e.target.value); }} placeholder="Application URL (optional)" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /></div>}
         {task.escalated_at && <div style={{ marginTop: 4, color: "#b91c1c", fontSize: 11, fontWeight: 800 }}>ESCALATED — overdue AE action</div>}
         {task.due_at && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 11 }}>Due {new Date(task.due_at).toLocaleString()}</div>}
         <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Required note before resolving; optional when taking over" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
@@ -358,6 +372,7 @@ function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (i
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 118 }}>
         {mailUrl && <a href={mailUrl} target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--ink)", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>Open email</a>}
+        {task.type === "untracked_application" && <button disabled={busy || !company.trim() || !jobTitle.trim()} onClick={addApplication} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Add application</button>}
         <button disabled={busy} onClick={createDraft} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Draft reply</button>
         <button disabled={busy} onClick={function () { update("in_progress"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--accent)", background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Take over</button>
         <button disabled={busy} onClick={function () { update("done"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Resolve</button>

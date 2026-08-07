@@ -3,7 +3,7 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 
-export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | null;
+export type ApplicationSourceType = "base_resume" | "original_resume" | "blank" | "manual" | "email_confirmation" | null;
 
 export interface ApplicationRow {
   id: string;

@@ -156,12 +156,14 @@ async function triageStoredMessage(id: string, accessToken: string) {
   const bodyText = row.body_text || "";
   const sender = (row.from_email || "").toLowerCase();
   const subject = (row.subject || "").toLowerCase();
+  const personalSender = /(doordash|ubereats|uber\.com|lyft|instacart|amazon|walmart|target|fedex|ups|usps|delta|united|airbnb|venmo|paypal|chase|bankofamerica|cvs|walgreens)/i.test(sender);
+  const personalSignal = /(order|receipt|delivery|shipment|tracking|invoice|payment|reservation|ride|trip|verification code|one-time password)/i.test(subject);
   const obviousAlertNoise = /(indeed\.com|linkedin\.com)/i.test(sender)
     && /(job alert|jobs for you|recommended for you|you look like a great fit|jobs you may like|sponsored)/i.test(subject);
-  if (obviousAlertNoise) {
+  if (obviousAlertNoise || (personalSender && personalSignal)) {
     await execute(
       "UPDATE email_communications SET ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1, needs_reply = false, triaged_at = now() WHERE id = $2",
-      ["Ignored automated job-alert/recommendation email.", id]
+      [obviousAlertNoise ? "Ignored automated job-alert/recommendation email." : "Ignored personal commerce, delivery, travel, or account email.", id]
     );
     return;
   }
@@ -193,6 +195,15 @@ async function triageStoredMessage(id: string, accessToken: string) {
     await execute("UPDATE email_communications SET gmail_label_ids = $1, gmail_is_starred = $2 WHERE id = $3", [addLabels, addLabels.includes("STARRED"), id]);
   } catch (labelError) {
     console.warn("[Gmail sync] Could not apply Gmail label/star:", labelError);
+  }
+
+  const applicationConfirmationSignal = /(application (was )?(received|submitted)|thank you for applying|we received your application|application confirmation|successfully applied)/i.test(subject + "\n" + bodyText);
+  if (applicationConfirmationSignal && !triage.matchedApplicationId) {
+    triage.relevant = true;
+    triage.category = "application_confirmation";
+    triage.needsReply = false;
+    triage.summary = "Application confirmation detected, but no matching TalentOS application was found.";
+    triage.confidence = Math.max(triage.confidence, 0.9);
   }
 
   // Every relevant message becomes an application timeline note. It is kept
@@ -246,6 +257,17 @@ async function triageStoredMessage(id: string, accessToken: string) {
     } catch (interviewError) {
       console.warn("[Gmail sync] Interview extraction failed:", interviewError);
     }
+  }
+
+  if (triage.category === "application_confirmation" && !triage.matchedApplicationId) {
+    await execute(
+      `INSERT INTO action_items (candidate_id, email_communication_id, type, title, description, suggested_action, priority, status, resolution_rule, dedupe_key)
+       VALUES ($1, $2, 'untracked_application', 'Application found outside TalentOS', $3, 'AE: confirm company and role, then add the application manually.', 'high', 'open', 'manual_only', $4)
+       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+      [row.candidate_id, id, triage.summary, `email:${id}:untracked-application`]
+    );
+    await execute("UPDATE action_items SET due_at = COALESCE(due_at, now() + interval '48 hours') WHERE email_communication_id = $1 AND type = 'untracked_application'", [id]);
+    return;
   }
 
   const canAutoWrite =

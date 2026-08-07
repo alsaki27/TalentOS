@@ -7,4 +7,7 @@ export const recruitingEmailFixtures = [
   { provider: "indeed", subject: "You look like a great fit!", body: "Here are jobs recommended for you based on your profile.", expectedCategory: "other", relevant: false },
   { provider: "linkedin", subject: "Job alerts for you", body: "New jobs match your preferences. Sponsored recommendations included.", expectedCategory: "other", relevant: false },
   { provider: "greenhouse", subject: "Rejection notice", body: "Thank you for your time. We will not be moving forward.", expectedCategory: "rejection", relevant: true },
+  { provider: "greenhouse", subject: "Application received: GIS Analyst", body: "We received your application and will review it shortly.", expectedCategory: "application_confirmation", relevant: true },
+  { provider: "doordash", subject: "Your order is on the way", body: "Your food delivery is arriving soon. Receipt attached.", expectedCategory: "other", relevant: false },
+  { provider: "amazon", subject: "Your order has shipped", body: "Track your package and view your receipt.", expectedCategory: "other", relevant: false },
 ] as const;
