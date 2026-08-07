@@ -253,7 +253,15 @@ export async function POST(request: NextRequest) {
       try {
         const complianceOptions = await agentOptionsFor("copilot_compliance");
         const { result: complianceResult } = await callWithUsageTracking("copilot_compliance", undefined, async (provider) =>
-          runCopilotCompliance(complianceOptions, provider, { formFields: formSnapshot })
+          runCopilotCompliance(complianceOptions, provider, {
+            formFields: formSnapshot,
+            candidatePolicy: {
+              workAuthorization: appData.work_authorization,
+              veteran: appData.eeo_veteran,
+              disability: appData.eeo_disability,
+              salaryExpectation: appData.salary_expectation,
+            },
+          })
         );
         complianceInstructions = complianceResult.instructions;
       } catch (err) {

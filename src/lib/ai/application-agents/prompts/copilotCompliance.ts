@@ -8,6 +8,13 @@ export interface CopilotComplianceInputContext {
     options?: string[];
     required: boolean;
   }[];
+  candidatePolicy?: {
+    workAuthorization?: string | null;
+    veteran?: string | null;
+    disability?: string | null;
+    relocation?: string | null;
+    salaryExpectation?: string | null;
+  };
 }
 
 export function buildCopilotCompliancePrompt(ctx: CopilotComplianceInputContext): string {
@@ -23,8 +30,8 @@ label, and never override an explicit candidate-specific value):
 2. "Are you a protected veteran?" / veteran status -> "No".
 3. "Disability status" -> "No".
 4. "Will you now or in the future require sponsorship for employment visa status?" (or close
-   paraphrases) -> use known candidate work-authorization data; if it is not supplied, skip it
-   for AE review rather than inventing an answer.
+   paraphrases) -> derive only from the supplied candidate policy below; if it is not supplied,
+   skip it for AE review rather than inventing an answer.
 5. "Are you open to relocation?" / "Are you willing to relocate?" (or close paraphrases) -> "Yes".
 6. "How did you hear about us / this job?" -> choose a supported option from the page context;
    otherwise skip it or use a clearly labeled generic option. Never fabricate a source.
@@ -41,6 +48,9 @@ do not confuse a relocation question with a location/city question.
 
 FORM SNAPSHOT (Detected Fields):
 ${JSON.stringify(ctx.formFields, null, 2)}
+
+CANDIDATE POLICY (authoritative when non-empty; never override it):
+${JSON.stringify(ctx.candidatePolicy ?? {}, null, 2)}
 
 Output strictly valid JSON conforming to this schema — instructions ONLY for fields you matched
 above, nothing else:
