@@ -4,11 +4,10 @@ import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { runCopilotFiller } from "@/lib/ai/application-agents/copilotFiller";
 import { runCopilotCompliance } from "@/lib/ai/application-agents/copilotCompliance";
-import { runCopilotFormAnalyst } from "@/lib/ai/application-agents/copilotFormAnalyst";
 import { AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import { getRecentCorrections } from "@/server/repositories/copilotLearningRepository";
-import { getDomainProfile, upsertDomainProfile } from "@/server/repositories/copilotDomainProfileRepository";
+import { getDomainProfile } from "@/server/repositories/copilotDomainProfileRepository";
 
 // Finds an existing real application for this candidate that corresponds to
 // the job the AE currently has open, so the extension can auto-use the ONE
@@ -234,17 +233,6 @@ export async function POST(request: NextRequest) {
       const cachedProfile = await getDomainProfile(domain);
       if (cachedProfile) {
         formAnalystNotes = cachedProfile.structural_notes ?? "";
-      } else if (domain !== "unknown") {
-        try {
-          const formAnalystOptions = await agentOptionsFor("copilot_form_analyst");
-          const { result: analystResult } = await callWithUsageTracking("copilot_form_analyst", undefined, async (provider) =>
-            runCopilotFormAnalyst(formAnalystOptions, provider, { domain, formFields: formSnapshot })
-          );
-          formAnalystNotes = analystResult.structuralNotes;
-          await upsertDomainProfile(domain, analystResult.atsGuess, analystResult.structuralNotes);
-        } catch (err) {
-          console.error("[fill-plan] Form Analyst failed, continuing without it:", err);
-        }
       }
 
       // 5. Copilot Compliance — resolves standing-default policy fields

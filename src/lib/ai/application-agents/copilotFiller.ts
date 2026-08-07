@@ -13,6 +13,24 @@ export async function runCopilotFiller(
     formAnalystNotes?: string;
   } // Extended context for this specific agent
 ): Promise<CopilotFillPlanV1> {
+  const fallbackPlan = (): CopilotFillPlanV1 => {
+    const profile: any = (ctx as any).candidateProfile || {};
+    const valueFor = (field: any): string | null => {
+      const label = `${field.label || ""} ${field.name || ""} ${field.placeholder || ""}`.toLowerCase();
+      if (/first.?name|given.?name/.test(label)) return String(profile.name || "").split(/\s+/)[0] || null;
+      if (/last.?name|surname|family.?name/.test(label)) return String(profile.name || "").split(/\s+/).slice(1).join(" ") || null;
+      if (/^email$|email.?address|e-mail/.test(label)) return profile.email || null;
+      if (/phone|mobile|telephone|contact.?number/.test(label)) return profile.phone || null;
+      if (/linkedin/.test(label)) return profile.linkedin || null;
+      if (/portfolio|personal.?website|website|url/.test(label)) return profile.portfolio || null;
+      if (/city|location|address/.test(label)) return profile.location || null;
+      return null;
+    };
+    return { instructions: ctx.formFields.map((field: any) => {
+      const value = valueFor(field);
+      return { selector: field.selector, fieldType: value ? "text" : "skip", value: value || "", confidence: value ? "high" : "low", reasoning: value ? "Matched candidate profile" : "Needs manual review" } as any;
+    }) };
+  };
   const compact = (value: string, max: number) => value.length > max ? `${value.slice(0, max)}\n[truncated for reliability]` : value;
   const compactFields = ctx.formFields.slice(0, 160).map((field: any) => ({
     ...field,
@@ -61,7 +79,11 @@ export async function runCopilotFiller(
   } catch (firstError) {
     // A provider timeout/abort is recoverable for this non-destructive planner.
     // Retry with a smaller completion budget before surfacing an error.
-    response = await provider.send({ ...request, temperature: 0, maxTokens: 4096, timeoutMs: Math.max(options.timeout_ms, 45000) });
+    try {
+      response = await provider.send({ ...request, temperature: 0, maxTokens: 4096, timeoutMs: Math.min(options.timeout_ms, 20000) });
+    } catch {
+      return fallbackPlan();
+    }
   }
 
   const parseResponse = (content: typeof response.content) => {
@@ -82,21 +104,25 @@ export async function runCopilotFiller(
     // Providers occasionally truncate a long plan or emit an unescaped quote in
     // reasoning. Retry once with a compact instruction that materially reduces
     // the response surface; never attempt to invent a repair of candidate data.
-    response = await provider.send({
-      ...request,
-      temperature: 0,
-      maxTokens: Math.max(options.max_output_tokens, 12000),
-      messages: [
-        ...request.messages,
-        { role: "user", content: [{ type: "text", text: "Retry: output compact valid JSON only. Use reasoning of 80 characters or fewer. No markdown, no extra text, and include one instruction per field." }] },
-      ],
-    });
-    validated = parseResponse(response.content);
+    try {
+      response = await provider.send({
+        ...request,
+        temperature: 0,
+        maxTokens: Math.max(options.max_output_tokens, 12000),
+        messages: [
+          ...request.messages,
+          { role: "user", content: [{ type: "text", text: "Retry: output compact valid JSON only. Use reasoning of 80 characters or fewer. No markdown, no extra text, and include one instruction per field." }] },
+        ],
+      });
+      validated = parseResponse(response.content);
+    } catch {
+      return fallbackPlan();
+    }
   }
   if (!validated) {
     // Keep Analyze usable and force manual review rather than failing the whole
     // request when the model cannot produce a valid plan.
-    return { instructions: [] };
+    return fallbackPlan();
   }
   return validated;
 }
