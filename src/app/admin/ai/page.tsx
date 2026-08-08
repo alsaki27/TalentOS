@@ -1027,6 +1027,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [search, setSearch] = useState("");
   const [groupFilter, setGroupFilter] = useState("");
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [runningBaseResumeKeywords, setRunningBaseResumeKeywords] = useState(false);
   const [keyModelsMap, setKeyModelsMap] = useState<Record<string, { models: any[]; default_model: string | null }>>({});
 
   useEffect(() => { loadAll(); }, []);
@@ -1122,6 +1123,21 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     finally { setSaving(false); }
   }
 
+  async function runAllBaseResumeKeywords() {
+    setRunningBaseResumeKeywords(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/admin/base-resume-keywords/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to run base-resume keyword agent");
+      const completed = (data.results ?? []).filter((item: any) => item.status === "completed").length;
+      const failed = (data.results ?? []).filter((item: any) => item.status === "failed").length;
+      setMessage({ type: failed ? "error" : "success", text: `BaseResume_TO_JobSearchKeyword finished: ${completed} completed${failed ? `, ${failed} failed` : ""}.` });
+      loadAll();
+    } catch (e: any) { setMessage({ type: "error", text: e.message }); }
+    finally { setRunningBaseResumeKeywords(false); }
+  }
+
   function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", rank: p.length }]); }
   function removeRouteRow(idx: number) { setEditRoutes(p => p.filter((_, i) => i !== idx)); }
 
@@ -1135,6 +1151,9 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
           <option value="">All groups</option>
           {groups.map(g => <option key={g} value={g}>{g}</option>)}
         </select>
+        <button className="btn-secondary" style={{ marginLeft: "auto" }} onClick={runAllBaseResumeKeywords} disabled={runningBaseResumeKeywords}>
+          {runningBaseResumeKeywords ? "Generating…" : "Run keyword agent for all active resumes"}
+        </button>
       </div>
 
       {message && (
