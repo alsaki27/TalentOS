@@ -28,7 +28,7 @@ export interface AiResponse {
 }
 
 export interface AiProvider {
-  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[]; temperature?: number; maxTokens?: number; timeoutMs?: number }): Promise<AiResponse>;
+  send(opts: { system: string; messages: AiMessage[]; tools: AiTool[]; temperature?: number; maxTokens?: number; timeoutMs?: number; responseSchema?: Record<string, unknown> }): Promise<AiResponse>;
 }
 
 export function textOf(content: AiContentBlock[]): string {

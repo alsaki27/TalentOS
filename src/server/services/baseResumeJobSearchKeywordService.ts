@@ -6,6 +6,27 @@ import { textOf } from "@/lib/ai/provider";
 export const BASE_RESUME_KEYWORD_AGENT_ID = "BaseResume_TO_JobSearchKeyword";
 export const MAX_BASE_RESUME_KEYWORDS = 48;
 
+const BASE_RESUME_KEYWORD_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "OBJECT",
+  properties: {
+    keywords: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          term: { type: "STRING" },
+          category: { type: "STRING" },
+          evidence: { type: "STRING" },
+          reason: { type: "STRING" },
+        },
+        required: ["term", "category", "evidence", "reason"],
+      },
+    },
+    additional_rules: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["keywords", "additional_rules"],
+};
+
 type KeywordState = {
   term: string;
   status: "active" | "dismissed";
@@ -98,6 +119,34 @@ function parseJsonResponse(raw: string): AgentOutput {
     }
   }
   throw new Error(`Base resume keyword agent returned invalid JSON: ${parseError?.message || "unknown syntax error"}`);
+}
+
+function parseLineResponse(raw: string): AgentOutput {
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const keywordIndex = lines.findIndex((line) => /^keywords\s*:?$/i.test(line));
+  const rulesIndex = lines.findIndex((line) => /^rules?\s*:?$/i.test(line));
+  if (keywordIndex < 0 || rulesIndex <= keywordIndex) {
+    throw new Error("Base resume keyword agent returned neither valid JSON nor the fallback line format");
+  }
+
+  const stripBullet = (line: string) => line.replace(/^(?:[-*•]|\d+[.)])\s*/, "").trim();
+  const keywords = lines
+    .slice(keywordIndex + 1, rulesIndex)
+    .map(stripBullet)
+    .filter((term) => term.length > 1)
+    .slice(0, MAX_BASE_RESUME_KEYWORDS)
+    .map((term) => ({ term, category: "skill", evidence: "direct", reason: "AI-generated search term" }));
+  const additional_rules = lines.slice(rulesIndex + 1).map(stripBullet).filter(Boolean).slice(0, 8);
+  if (keywords.length < 10) throw new Error("Base resume keyword agent fallback returned too few keywords");
+  return { keywords, additional_rules };
+}
+
+function parseUsableAgentResponse(raw: string): AgentOutput {
+  const parsed = parseJsonResponse(raw);
+  if (!Array.isArray(parsed.keywords) || parsed.keywords.length < 10) {
+    throw new Error("Base resume keyword agent returned too few keywords");
+  }
+  return parsed;
 }
 
 function safeProfessionalSnapshot(content: any): any {
@@ -254,6 +303,7 @@ export async function generateBaseResumeJobSearchProfile(options: {
       temperature: Number(config?.temperature ?? 0.2),
       maxTokens: Number(config?.max_output_tokens ?? 5000),
       timeoutMs: Number(config?.timeout_ms ?? 45000),
+      responseSchema: BASE_RESUME_KEYWORD_RESPONSE_SCHEMA,
     };
     const call = await callWithUsageTracking(
       BASE_RESUME_KEYWORD_AGENT_ID,
@@ -261,7 +311,7 @@ export async function generateBaseResumeJobSearchProfile(options: {
       async (provider) => {
         const firstResponse = await provider.send(request);
         try {
-          return { response: firstResponse, parsed: parseJsonResponse(textOf(firstResponse.content)) };
+          return { response: firstResponse, parsed: parseUsableAgentResponse(textOf(firstResponse.content)) };
         } catch (firstError: any) {
           // Keep the primary Pro route, but give it one strict JSON-only retry.
           // This handles occasional missing commas/truncated string output
@@ -272,9 +322,20 @@ export async function generateBaseResumeJobSearchProfile(options: {
             temperature: 0,
           });
           try {
-            return { response: retryResponse, parsed: parseJsonResponse(textOf(retryResponse.content)) };
+            return { response: retryResponse, parsed: parseUsableAgentResponse(textOf(retryResponse.content)) };
           } catch {
-            throw firstError;
+            const lineResponse = await provider.send({
+              ...request,
+              responseSchema: undefined,
+              maxTokens: 1800,
+              system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (20 to 48 lines).\nRULES:\nThen 4 to 8 concise ingestion rules, one per line. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
+              temperature: 0,
+            });
+            try {
+              return { response: lineResponse, parsed: parseLineResponse(textOf(lineResponse.content)) };
+            } catch {
+              throw firstError;
+            }
           }
         }
       }

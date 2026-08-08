@@ -110,6 +110,7 @@ export async function callVertexProxy(opts: {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  responseSchema?: Record<string, unknown>;
 }): Promise<AiResponse> {
   const geminiTools = toGeminiTools(opts.tools);
 
@@ -144,6 +145,7 @@ export async function callVertexProxy(opts: {
             // this turn - see index.js's buildVertexBody for why the two are
             // mutually exclusive in Vertex's API.
             responseMimeType: "application/json",
+            responseSchema: opts.responseSchema,
           }),
         });
 
@@ -212,9 +214,9 @@ export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider
   if (!proxyUrl || !proxySecret) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
       const model = modelOverride || process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
-      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs });
+      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema });
     },
   };
 }
@@ -227,8 +229,8 @@ export function getGoogleVertexFallbackProvider(): AiProvider | null {
   if (!proxyUrl || !proxySecret || !fallbackModel) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
-      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs });
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
+      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema });
     },
   };
 }

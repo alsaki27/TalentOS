@@ -58,7 +58,7 @@ function roughTokenEstimate(text) {
 }
 
 function buildVertexBody(body, model) {
-  const { system, contents, tools, temperature = 0.2, maxOutputTokens = 1500, responseMimeType } = body;
+  const { system, contents, tools, temperature = 0.2, maxOutputTokens = 1500, responseMimeType, responseSchema } = body;
 
   const generationConfig = {
     temperature,
@@ -71,6 +71,7 @@ function buildVertexBody(body, model) {
   // function-call protocol, so only set this when no tools are offered.
   if (responseMimeType && (!tools || tools.length === 0)) {
     generationConfig.responseMimeType = responseMimeType;
+    if (responseSchema) generationConfig.responseSchema = responseSchema;
   }
 
   const vertexBody = {
