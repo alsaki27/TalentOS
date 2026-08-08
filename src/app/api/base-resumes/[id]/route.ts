@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { queryOne, execute } from "@/server/db/neon";
+import { generateBaseResumeJobSearchProfile } from "@/server/services/baseResumeJobSearchKeywordService";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -52,6 +53,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // If content changed, invalidate match scores for this candidate
   if (body.content && data?.candidate_id) {
     await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]);
+  }
+
+  if ((body.content || body.target_industry || body.target_roles) && data?.candidate_id) {
+    try {
+      await generateBaseResumeJobSearchProfile({
+        baseResumeId: data.id,
+        triggerType: "resume_updated",
+        userId: context!.profile.user_id,
+      });
+    } catch (keywordError: any) {
+      console.error("[BASE_RESUME_UPDATE] keyword agent failed", keywordError?.message || keywordError);
+    }
   }
 
   return NextResponse.json(data);

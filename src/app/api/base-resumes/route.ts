@@ -17,6 +17,7 @@ import { downloadFromSharePoint } from "@/lib/integrations/sharepoint";
 import { convertPdfToMarkdown } from "@/lib/markitdown";
 import { extractLinkedInUrlFromBinary, extractLinkedInUrlFromText, extractText, parseResumeFields, parseResumeTextWithProvider } from "@/lib/resumeParsing";
 import { getOpenAiProvider } from "@/lib/ai/openaiProvider";
+import { generateBaseResumeJobSearchProfile } from "@/server/services/baseResumeJobSearchKeywordService";
 
 // #region debug-point A:base-resume-seeding-debug
 function reportBaseResumeSeedingDebug(
@@ -439,6 +440,18 @@ export async function POST(req: NextRequest) {
       entityName: name,
       metadata: { candidate_id: candidateId, starting_source: startingSource },
     });
+
+    // Build the reviewable search contract immediately after a base resume is
+    // created. A generation failure must not roll back the user's resume.
+    try {
+      await generateBaseResumeJobSearchProfile({
+        baseResumeId: data.id,
+        triggerType: "new_base_resume",
+        userId: context!.profile.user_id,
+      });
+    } catch (keywordError: any) {
+      console.error("[BASE_RESUME_CREATE] keyword agent failed", keywordError?.message || keywordError);
+    }
 
     return NextResponse.json(data, { status: 201 });
   } catch (err: any) {
