@@ -19,6 +19,7 @@ type ProfileRow = {
   last_generated_at: string | null;
   last_generation_model: string | null;
   last_generation_prompt_version: string | null;
+  last_generation_error: string | null;
 };
 
 async function activeCandidate(candidateId: string) {
@@ -49,7 +50,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
             COALESCE(p.generation_status, 'not_generated') AS generation_status,
             p.last_generated_at,
             p.last_generation_model,
-            p.last_generation_prompt_version
+            p.last_generation_prompt_version,
+            p.last_generation_error
        FROM base_resumes br
        LEFT JOIN candidate_resume_search_profiles p ON p.base_resume_id = br.id
       WHERE br.candidate_id = $1

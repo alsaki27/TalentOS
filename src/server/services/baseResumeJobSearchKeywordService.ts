@@ -66,7 +66,15 @@ function safeProfessionalSnapshot(content: any): any {
     delete snapshot.header.email;
     delete snapshot.header.linkedin;
   }
-  return snapshot;
+  // Keep a malformed or unexpectedly large resume from making the proxy call
+  // appear to hang. The full resume remains in base_resumes; the AI only needs
+  // a bounded professional snapshot for keyword discovery.
+  const serialized = JSON.stringify(snapshot);
+  if (serialized.length <= 24000) return snapshot;
+  return {
+    truncated: true,
+    content_excerpt: serialized.slice(0, 24000),
+  };
 }
 
 function normalizeRules(value: AgentOutput["additional_rules"]): string[] {

@@ -23,7 +23,13 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ ok: true, mode: "single", result });
     } catch (error: any) {
-      return NextResponse.json({ error: error?.message || "Keyword generation failed" }, { status: 502 });
+      const rawMessage = String(error?.message || "");
+      const timedOut = error?.name === "AbortError" || /aborted|timeout|timed out/i.test(rawMessage);
+      const message = timedOut
+        ? "Gemini keyword generation timed out. Try again, or check the agent route in AI Control Center."
+        : rawMessage || "Keyword generation failed";
+      const status = timedOut ? 504 : 502;
+      return NextResponse.json({ error: message }, { status });
     }
   }
 

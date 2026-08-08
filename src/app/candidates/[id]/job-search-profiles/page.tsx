@@ -18,6 +18,7 @@ type Profile = {
   last_generated_at?: string | null;
   last_generation_model?: string | null;
   last_generation_prompt_version?: string | null;
+  last_generation_error?: string | null;
 };
 
 type KeywordState = NonNullable<Profile["keyword_states"]>[number];
@@ -182,7 +183,7 @@ export default function CandidateJobSearchProfilesPage() {
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {canEdit && <button className="btn-secondary" onClick={() => regenerate(profile)} disabled={saving === profile.base_resume_id}>Generate keywords with AI</button>}
+                    {canEdit && <button className="btn-secondary" onClick={() => regenerate(profile)} disabled={saving === profile.base_resume_id}>{saving === profile.base_resume_id ? "Generating with Gemini…" : "Generate keywords with AI"}</button>}
                     {canEdit && <button className="btn-primary" onClick={() => save(profile)} disabled={saving === profile.base_resume_id}>{saving === profile.base_resume_id ? "Working…" : "Save review"}</button>}
                   </div>
                 </div>
@@ -204,6 +205,7 @@ export default function CandidateJobSearchProfilesPage() {
                     </div>}
                     {dismissedKeywords.length > 0 && <div style={{ marginTop: 10 }}><span className="muted" style={{ fontSize: 12 }}>Dismissed ({dismissedKeywords.length})</span><div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 5 }}>{dismissedKeywords.map((item) => <span key={item.term} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 7px", borderRadius: 999, background: "var(--surface-2, #f1f5f9)", color: "var(--muted)", textDecoration: "line-through", fontSize: 12 }}>{item.term}{canEdit && <button type="button" onClick={() => setKeywordStatus(profile.base_resume_id, item.term, "active")} style={{ border: 0, background: "transparent", cursor: "pointer", padding: 0, textDecoration: "none" }}>Restore</button>}</span>)}</div></div>}
                     <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>AI proposals are capped at 48 active terms. Dismissed terms remain in review history and will not be resurrected by an AI rerun.</p>
+                    {profile.last_generation_error && <p className="alert alert-error" style={{ marginTop: 8, fontSize: 12 }}>{profile.last_generation_error}</p>}
                   </div>
                   <div>
                     <label>Additional rules</label>
