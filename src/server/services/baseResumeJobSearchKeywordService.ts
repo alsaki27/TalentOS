@@ -5,6 +5,9 @@ import { textOf } from "@/lib/ai/provider";
 
 export const BASE_RESUME_KEYWORD_AGENT_ID = "BaseResume_TO_JobSearchKeyword";
 export const MAX_BASE_RESUME_KEYWORDS = 48;
+export const MIN_BASE_RESUME_KEYWORDS = 30;
+export const MIN_BASE_RESUME_RULES = 4;
+const CURRENT_BASE_RESUME_PROMPT_VERSION = "v1.2";
 
 const BASE_RESUME_KEYWORD_RESPONSE_SCHEMA: Record<string, unknown> = {
   type: "OBJECT",
@@ -198,20 +201,27 @@ function parseLineResponse(raw: string): AgentOutput {
     .slice(0, MAX_BASE_RESUME_KEYWORDS)
     .map((term) => ({ term, category: "skill", evidence: "direct", reason: "AI-generated search term" }));
   const additional_rules = lines.slice(rulesIndex + 1).map(stripBullet).filter(Boolean).slice(0, 8);
-  if (keywords.length < 10) throw new Error("Base resume keyword agent fallback returned too few keywords");
+  if (keywords.length < MIN_BASE_RESUME_KEYWORDS) throw new Error(`Base resume keyword agent fallback returned fewer than ${MIN_BASE_RESUME_KEYWORDS} keywords`);
+  if (additional_rules.length < MIN_BASE_RESUME_RULES) throw new Error(`Base resume keyword agent fallback returned fewer than ${MIN_BASE_RESUME_RULES} rules`);
   return { keywords, additional_rules };
+}
+
+function requireCompleteAgentOutput(parsed: AgentOutput): AgentOutput {
+  if (!Array.isArray(parsed.keywords) || parsed.keywords.length < MIN_BASE_RESUME_KEYWORDS) {
+    throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_KEYWORDS} keywords`);
+  }
+  if (normalizeRules(parsed.additional_rules).length < MIN_BASE_RESUME_RULES) {
+    throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_RULES} rules`);
+  }
+  return parsed;
 }
 
 export function parseUsableAgentResponse(raw: string): AgentOutput {
   try {
-    const parsed = parseJsonResponse(raw);
-    if (!Array.isArray(parsed.keywords) || parsed.keywords.length < 10) {
-      throw new Error("Base resume keyword agent returned too few keywords");
-    }
-    return parsed;
+    return requireCompleteAgentOutput(parseJsonResponse(raw));
   } catch (strictError) {
     try {
-      return parseLooseKeywordResponse(raw);
+      return requireCompleteAgentOutput(parseLooseKeywordResponse(raw));
     } catch {
       throw strictError;
     }
@@ -368,8 +378,12 @@ export async function generateBaseResumeJobSearchProfile(options: {
   const reviewKeywords = reviewStates.filter((item) => item.status === "active").map((item) => item.term);
 
   const config = await findAgentConfigByAutomationId(BASE_RESUME_KEYWORD_AGENT_ID);
-  const systemPrompt = config?.system_prompt || FALLBACK_SYSTEM_PROMPT;
-  const promptVersion = config?.prompt_version || "v1.2";
+  const configuredPromptVersion = cleanText(config?.prompt_version, 32);
+  const usesStalePrompt = configuredPromptVersion === "v1.0" || configuredPromptVersion === "v1.1";
+  // A deployment can briefly run before the idempotent SQL seed updates the
+  // DB config. Do not let that window silently run the old prompt again.
+  const systemPrompt = config?.system_prompt && !usesStalePrompt ? config.system_prompt : FALLBACK_SYSTEM_PROMPT;
+  const promptVersion = usesStalePrompt || !configuredPromptVersion ? CURRENT_BASE_RESUME_PROMPT_VERSION : configuredPromptVersion;
   const professionalSnapshot = safeProfessionalSnapshot(baseResume.content);
   const inputSnapshot = {
     candidate_name: baseResume.candidate_name,
@@ -440,13 +454,13 @@ export async function generateBaseResumeJobSearchProfile(options: {
               responseSchema: undefined,
               responseMimeType: null,
               maxTokens: 1800,
-              system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (20 to 48 lines).\nRULES:\nThen 4 to 8 concise ingestion rules, one per line. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
+            system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (30 to 48 lines).\nRULES:\nThen 4 to 8 concise ingestion rules, one per line. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
               temperature: 0,
             });
             try {
               return { response: lineResponse, parsed: parseLineResponse(textOf(lineResponse.content)) };
             } catch {
-              throw firstError;
+              throw new Error(`Base resume keyword agent could not produce a complete ${MIN_BASE_RESUME_KEYWORDS}–${MAX_BASE_RESUME_KEYWORDS}-keyword result with at least ${MIN_BASE_RESUME_RULES} rules after structured and plain-text recovery: ${firstError?.message || "unknown response error"}`);
             }
           }
         }
@@ -454,10 +468,11 @@ export async function generateBaseResumeJobSearchProfile(options: {
     );
     const parsed = call.result.parsed;
     const aiStates = normalizeAgentKeywords(parsed.keywords);
-    if (aiStates.length < 10) throw new Error("Base resume keyword agent returned too few usable keywords");
+    if (aiStates.length < MIN_BASE_RESUME_KEYWORDS) throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_KEYWORDS} usable keywords`);
     const mergedStates = mergeWithHumanReview(aiStates, existingStates);
     const activeKeywords = mergedStates.filter((item) => item.status === "active").slice(0, MAX_BASE_RESUME_KEYWORDS).map((item) => item.term);
     const rules = normalizeRules(parsed.additional_rules);
+    if (rules.length < MIN_BASE_RESUME_RULES) throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_RULES} usable rules`);
     const completedAt = new Date().toISOString();
     const profile = await queryOne<any>(
       `INSERT INTO candidate_resume_search_profiles
