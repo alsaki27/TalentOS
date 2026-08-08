@@ -43,19 +43,61 @@ function keyFor(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function repairCommonJsonSyntax(raw: string): string {
+  let repaired = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const character = raw[index];
+    if (inString) {
+      if (escaped) {
+        repaired += character;
+        escaped = false;
+      } else if (character === "\\") {
+        repaired += character;
+        escaped = true;
+      } else if (character === '"') {
+        repaired += character;
+        inString = false;
+      } else if (character === "\n" || character === "\r") {
+        repaired += "\\n";
+      } else {
+        repaired += character;
+      }
+      continue;
+    }
+
+    if (character === '"') inString = true;
+    repaired += character;
+    if (character === "}" || character === "]") {
+      let next = index + 1;
+      while (/\s/.test(raw[next] ?? "")) next += 1;
+      if (raw[next] === "{" || raw[next] === "[") repaired += ",";
+    }
+  }
+
+  // Models occasionally leave a trailing comma before a closing brace.
+  return repaired.replace(/,\s*([}\]])/g, "$1");
+}
+
 function parseJsonResponse(raw: string): AgentOutput {
   const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const first = cleaned.indexOf("{");
   const last = cleaned.lastIndexOf("}");
   if (first < 0 || last <= first) throw new Error("Base resume keyword agent returned no JSON object");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(cleaned.slice(first, last + 1));
-  } catch (error: any) {
-    throw new Error(`Base resume keyword agent returned invalid JSON: ${error.message}`);
+  const candidate = cleaned.slice(first, last + 1);
+  let parseError: any;
+  for (const text of [candidate, repairCommonJsonSyntax(candidate)]) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (!parsed || typeof parsed !== "object") throw new Error("response is not an object");
+      return parsed as AgentOutput;
+    } catch (error: any) {
+      parseError = error;
+    }
   }
-  if (!parsed || typeof parsed !== "object") throw new Error("Base resume keyword agent returned an invalid object");
-  return parsed as AgentOutput;
+  throw new Error(`Base resume keyword agent returned invalid JSON: ${parseError?.message || "unknown syntax error"}`);
 }
 
 function safeProfessionalSnapshot(content: any): any {
@@ -199,25 +241,45 @@ export async function generateBaseResumeJobSearchProfile(options: {
   );
 
   try {
+    const request = {
+      system: systemPrompt,
+      messages: [{
+        role: "user" as const,
+        content: [{
+          type: "text" as const,
+          text: `Create the job-search contract for this base resume. Keep the final keyword list between 30 and ${MAX_BASE_RESUME_KEYWORDS} terms. Return one valid JSON object only.\n\n${JSON.stringify(inputSnapshot)}`,
+        }],
+      }],
+      tools: [],
+      temperature: Number(config?.temperature ?? 0.2),
+      maxTokens: Number(config?.max_output_tokens ?? 5000),
+      timeoutMs: Number(config?.timeout_ms ?? 45000),
+    };
     const call = await callWithUsageTracking(
       BASE_RESUME_KEYWORD_AGENT_ID,
       { userId: options.userId ?? undefined },
-      (provider) => provider.send({
-        system: systemPrompt,
-        messages: [{
-          role: "user",
-          content: [{
-            type: "text",
-            text: `Create the job-search contract for this base resume. Keep the final keyword list between 30 and ${MAX_BASE_RESUME_KEYWORDS} terms.\n\n${JSON.stringify(inputSnapshot)}`,
-          }],
-        }],
-        tools: [],
-        temperature: Number(config?.temperature ?? 0.2),
-        maxTokens: Number(config?.max_output_tokens ?? 5000),
-        timeoutMs: Number(config?.timeout_ms ?? 45000),
-      })
+      async (provider) => {
+        const firstResponse = await provider.send(request);
+        try {
+          return { response: firstResponse, parsed: parseJsonResponse(textOf(firstResponse.content)) };
+        } catch (firstError: any) {
+          // Keep the primary Pro route, but give it one strict JSON-only retry.
+          // This handles occasional missing commas/truncated string output
+          // without persisting untrusted or partial keyword data.
+          const retryResponse = await provider.send({
+            ...request,
+            system: `${systemPrompt}\n\nYour previous response was not valid JSON. Retry once. Output only a complete JSON object, with no markdown, comments, or unescaped line breaks inside strings. Keep reasons short and keep the keyword list focused.`,
+            temperature: 0,
+          });
+          try {
+            return { response: retryResponse, parsed: parseJsonResponse(textOf(retryResponse.content)) };
+          } catch {
+            throw firstError;
+          }
+        }
+      }
     );
-    const parsed = parseJsonResponse(textOf(call.result.content));
+    const parsed = call.result.parsed;
     const aiStates = normalizeAgentKeywords(parsed.keywords);
     if (aiStates.length < 10) throw new Error("Base resume keyword agent returned too few usable keywords");
     const mergedStates = mergeWithHumanReview(aiStates, existingStates);
