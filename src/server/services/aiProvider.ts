@@ -96,7 +96,7 @@ export function buildProviderFromDbKey(
         return null;
       }
       return {
-        send({ system, messages, tools, temperature, maxTokens }) {
+        send({ system, messages, tools, temperature, maxTokens, responseSchema, responseMimeType }) {
           return callVertexProxy({
             proxyUrl,
             proxySecret,
@@ -106,6 +106,8 @@ export function buildProviderFromDbKey(
             tools,
             temperature,
             maxTokens,
+            responseSchema,
+            responseMimeType,
           });
         },
       };

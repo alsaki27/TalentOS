@@ -26,7 +26,7 @@ function fromAnthropicContent(content: any[]): AiContentBlock[] {
   });
 }
 
-export function getAnthropicProvider(): AiProvider | null {
+export function getAnthropicProvider(modelOverride?: string | null): AiProvider | null {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
@@ -47,7 +47,7 @@ export function getAnthropicProvider(): AiProvider | null {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+          model: modelOverride || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
           max_tokens: maxTokens ?? MAX_TOKENS,
           system,
           messages: messages.map((m) => ({ role: m.role, content: toAnthropicContent(m.content) })),

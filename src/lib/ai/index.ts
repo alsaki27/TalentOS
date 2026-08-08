@@ -43,35 +43,35 @@ export const AI_TASK_CATEGORIES: { value: AiTaskCategory; label: string }[] = [
   { value: "default", label: "Default (fallback)" },
 ];
 
-export function getProviderByName(name: string): ActiveProvider | null {
+export function getProviderByName(name: string, modelOverride?: string | null): ActiveProvider | null {
   switch (name) {
     case "openai": {
-      const provider = getOpenAiProvider();
+      const provider = getOpenAiProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "openai" };
       break;
     }
     case "glm": {
-      const provider = getGlmProvider();
+      const provider = getGlmProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "glm" };
       break;
     }
     case "google_vertex_proxy": {
-      const provider = getGoogleVertexProxyProvider();
+      const provider = getGoogleVertexProxyProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "google_vertex_proxy" };
       break;
     }
     case "google": {
-      const provider = getGoogleProvider();
+      const provider = getGoogleProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "google" };
       break;
     }
     case "nvidia": {
-      const provider = getNvidiaProvider();
+      const provider = getNvidiaProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "nvidia" };
       break;
     }
     case "anthropic": {
-      const provider = getAnthropicProvider();
+      const provider = getAnthropicProvider(modelOverride ?? undefined);
       if (provider) return { provider, name: "anthropic" };
       break;
     }

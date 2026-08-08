@@ -161,13 +161,14 @@ export async function getProviderForAutomation(
     } else if (route.provider) {
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
-      const envProvider = getProviderByName(route.provider);
+      const envProvider = getProviderByName(route.provider, route.model_override);
       if (envProvider) {
         return {
           provider: envProvider.provider,
           name: route.provider as AutomationRouteResult["name"],
           aiKeyId: null,
           automationId,
+          model: route.model_override,
           routeRank: route.rank,
           limitSkipped,
         };

@@ -22,8 +22,8 @@ describe("Google Vertex proxy response modes", () => {
     await callVertexProxy({ ...baseRequest, responseMimeType: null });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(body.generationConfig.responseMimeType).toBeUndefined();
-    expect(body.generationConfig.responseSchema).toBeUndefined();
+    expect(body.responseMimeType).toBeNull();
+    expect(body.responseSchema).toBeUndefined();
     fetchMock.mockRestore();
   });
 
@@ -39,8 +39,8 @@ describe("Google Vertex proxy response modes", () => {
     await callVertexProxy({ ...baseRequest, responseSchema });
 
     const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
-    expect(body.generationConfig.responseMimeType).toBe("application/json");
-    expect(body.generationConfig.responseSchema).toEqual(responseSchema);
+    expect(body.responseMimeType).toBe("application/json");
+    expect(body.responseSchema).toEqual(responseSchema);
     fetchMock.mockRestore();
   });
 });

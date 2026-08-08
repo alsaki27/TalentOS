@@ -59,6 +59,11 @@ Evidence policy:
 Output exactly one JSON object with this shape:
 {"keywords":[{"term":"...","category":"title|skill|tool|domain|work_product","evidence":"direct|transferable|adjacent","reason":"short evidence-based reason"}],"additional_rules":["short rule"]}
 
+Formatting policy:
+- Return one complete object; never truncate the response.
+- Keep every string short, single-line, and free of unescaped quotes or line breaks.
+- Do not include markdown fences, comments, trailing commas, or text before or after the object.
+
 Keyword policy:
 - Return 30–48 unique, high-signal terms; never more than 48.
 - Start with the most useful job titles, then the core tools, domains, work products, and commonly used title aliases.
@@ -73,7 +78,7 @@ Rules policy:
 - Treat candidate-specific constraints from the resume/profile as binding; do not invent constraints.
 
 Return JSON only. No markdown, no explanation outside the JSON.$$,
-  'v1.0',
+  'v1.1',
   'BaseResumeJobSearchKeywordV1',
   0.2,
   5000,

@@ -104,6 +104,27 @@ describe("callWithUsageTracking error paths", () => {
     const sql = mockExecute.mock.calls[0][0];
     expect(sql).toContain("ai_usage_events");
   });
+
+  it("passes a named route's model override to the provider and usage metadata", async () => {
+    const routedProvider = { send: vi.fn() };
+    mockQuery.mockResolvedValueOnce([{
+      id: "route-1",
+      automation_id: "BaseResume_TO_JobSearchKeyword",
+      ai_key_id: null,
+      provider: "google_vertex_proxy",
+      rank: 1,
+      is_enabled: true,
+      model_override: "gemini-2.5-pro",
+    }]);
+    mockGetProviderByName.mockReturnValueOnce({ provider: routedProvider, name: "google_vertex_proxy" });
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("BaseResume_TO_JobSearchKeyword");
+
+    expect(mockGetProviderByName).toHaveBeenCalledWith("google_vertex_proxy", "gemini-2.5-pro");
+    expect(resolved?.model).toBe("gemini-2.5-pro");
+    expect(resolved?.provider).toBe(routedProvider);
+  });
 });
 
 describe("buildProviderFromDbKey — new providers", () => {
