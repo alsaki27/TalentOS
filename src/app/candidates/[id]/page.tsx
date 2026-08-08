@@ -993,6 +993,11 @@ export default function CandidateProfilePage() {
                 <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy invite link"}</button>
               </>
             )}
+            {candidate.status === "active" && (
+              <Link href={"/candidates/" + candidate.id + "/job-search-profiles"}>
+                <button>Job search profiles</button>
+              </Link>
+            )}
             <button onClick={() => setShowEdit(true)}>Edit profile</button>
           </div>
           {inviteMessage && <span className="muted" style={{ fontSize: 12 }}>{inviteMessage}</span>}
