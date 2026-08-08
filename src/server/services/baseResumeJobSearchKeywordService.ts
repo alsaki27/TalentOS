@@ -6,7 +6,6 @@ import { textOf } from "@/lib/ai/provider";
 export const BASE_RESUME_KEYWORD_AGENT_ID = "BaseResume_TO_JobSearchKeyword";
 export const MAX_BASE_RESUME_KEYWORDS = 48;
 export const MIN_BASE_RESUME_KEYWORDS = 30;
-export const MIN_BASE_RESUME_RULES = 4;
 const CURRENT_BASE_RESUME_PROMPT_VERSION = "v1.2";
 
 const BASE_RESUME_KEYWORD_RESPONSE_SCHEMA: Record<string, unknown> = {
@@ -72,7 +71,7 @@ Coverage policy:
 - Remove employer names, dates, contact details, duplicate aliases, and near-duplicate variants unless the alias is materially different on job boards.
 
 Rules policy:
-- Return 4–8 concise ingestion rules. Separate prefer, flag, and exclude logic when possible.
+- Return 0–8 concise ingestion rules when the resume supports useful preferences, flags, or exclusions. An empty rule list is valid when no defensible rule can be derived.
 - Base seniority guidance on demonstrated scope and held roles, not certification alone. Prefer roles matching the candidate's demonstrated level, but do not hard-reject an adjacent title unless an explicit constraint requires it.
 - Use the header location only as a location preference. Do not infer relocation willingness, remote eligibility, sponsorship, or commute limits.
 - Exclude only clearly unsupported or explicitly unwanted work; do not exclude a neighboring domain merely because it was not a primary focus.
@@ -202,16 +201,12 @@ function parseLineResponse(raw: string): AgentOutput {
     .map((term) => ({ term, category: "skill", evidence: "direct", reason: "AI-generated search term" }));
   const additional_rules = lines.slice(rulesIndex + 1).map(stripBullet).filter(Boolean).slice(0, 8);
   if (keywords.length < MIN_BASE_RESUME_KEYWORDS) throw new Error(`Base resume keyword agent fallback returned fewer than ${MIN_BASE_RESUME_KEYWORDS} keywords`);
-  if (additional_rules.length < MIN_BASE_RESUME_RULES) throw new Error(`Base resume keyword agent fallback returned fewer than ${MIN_BASE_RESUME_RULES} rules`);
   return { keywords, additional_rules };
 }
 
 function requireCompleteAgentOutput(parsed: AgentOutput): AgentOutput {
   if (!Array.isArray(parsed.keywords) || parsed.keywords.length < MIN_BASE_RESUME_KEYWORDS) {
     throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_KEYWORDS} keywords`);
-  }
-  if (normalizeRules(parsed.additional_rules).length < MIN_BASE_RESUME_RULES) {
-    throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_RULES} rules`);
   }
   return parsed;
 }
@@ -454,13 +449,13 @@ export async function generateBaseResumeJobSearchProfile(options: {
               responseSchema: undefined,
               responseMimeType: null,
               maxTokens: 1800,
-            system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (30 to 48 lines).\nRULES:\nThen 4 to 8 concise ingestion rules, one per line. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
+              system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (30 to 48 lines).\nRULES:\nThen zero to 8 concise ingestion rules, one per line. Leave this section empty when no defensible rules are supported by the resume. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
               temperature: 0,
             });
             try {
               return { response: lineResponse, parsed: parseLineResponse(textOf(lineResponse.content)) };
             } catch {
-              throw new Error(`Base resume keyword agent could not produce a complete ${MIN_BASE_RESUME_KEYWORDS}–${MAX_BASE_RESUME_KEYWORDS}-keyword result with at least ${MIN_BASE_RESUME_RULES} rules after structured and plain-text recovery: ${firstError?.message || "unknown response error"}`);
+              throw new Error(`Base resume keyword agent could not produce a complete ${MIN_BASE_RESUME_KEYWORDS}–${MAX_BASE_RESUME_KEYWORDS}-keyword result after structured and plain-text recovery: ${firstError?.message || "unknown response error"}`);
             }
           }
         }
@@ -472,7 +467,6 @@ export async function generateBaseResumeJobSearchProfile(options: {
     const mergedStates = mergeWithHumanReview(aiStates, existingStates);
     const activeKeywords = mergedStates.filter((item) => item.status === "active").slice(0, MAX_BASE_RESUME_KEYWORDS).map((item) => item.term);
     const rules = normalizeRules(parsed.additional_rules);
-    if (rules.length < MIN_BASE_RESUME_RULES) throw new Error(`Base resume keyword agent returned fewer than ${MIN_BASE_RESUME_RULES} usable rules`);
     const completedAt = new Date().toISOString();
     const profile = await queryOne<any>(
       `INSERT INTO candidate_resume_search_profiles

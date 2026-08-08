@@ -18,4 +18,18 @@ describe("BaseResume_TO_JobSearchKeyword response recovery", () => {
       "Exclude clearly unrelated work.",
     ]);
   });
+
+  it("accepts a complete keyword set when no additional rules are defensible", () => {
+    const keywords = Array.from({ length: 30 }, (_, index) => ({
+      term: `Source term ${index + 1}`,
+      category: "skill",
+      evidence: "direct",
+      reason: "Listed in the resume",
+    }));
+
+    const parsed = parseUsableAgentResponse(JSON.stringify({ keywords, additional_rules: [] }));
+
+    expect(parsed.keywords).toHaveLength(30);
+    expect(parsed.additional_rules).toEqual([]);
+  });
 });

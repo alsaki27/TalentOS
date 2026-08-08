@@ -170,7 +170,7 @@ export default function CandidateJobSearchProfilesPage() {
       </div>
 
       <div className="alert" style={{ marginBottom: 16 }}>
-        The {"BaseResume_TO_JobSearchKeyword"} agent generates 30–48 focused terms and rules from each resume. Managers and admins can dismiss individual terms, restore them, add terms, and edit the rules before ingestion uses them.
+        The {"BaseResume_TO_JobSearchKeyword"} agent generates 30–48 focused terms and optional rules from each resume. Managers and admins can dismiss individual terms, restore them, add terms, and edit the rules before ingestion uses them.
       </div>
       {!canEdit && <div className="alert" style={{ marginBottom: 16 }}>View-only: keyword review changes are limited to managers and admins.</div>}
       {message && <div className={"alert " + (message.kind === "error" ? "alert-error" : "alert-success")} style={{ marginBottom: 16 }}>{message.text}</div>}
