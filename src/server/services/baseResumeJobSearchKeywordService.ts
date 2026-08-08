@@ -101,7 +101,7 @@ function asKeywordStates(value: unknown): KeywordState[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((item): item is KeywordState => Boolean(item && typeof item === "object" && typeof (item as any).term === "string"))
-    .map((item) => ({
+    .map((item): KeywordState => ({
       term: normalizeTerm(item.term),
       status: item.status === "dismissed" ? "dismissed" : "active",
       category: cleanText(item.category, 40),

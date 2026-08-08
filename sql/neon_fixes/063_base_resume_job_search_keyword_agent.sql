@@ -106,8 +106,7 @@ ON CONFLICT (automation_id, rank) DO UPDATE SET
   model_override = EXCLUDED.model_override,
   updated_at = NOW();
 
--- Bhaskar's hand-seeded 131/138-keyword profiles are replaced by the agent.
-DELETE FROM candidate_resume_search_profiles
-WHERE candidate_id IN (
-  SELECT id FROM candidates WHERE candidate_number = 10038 AND lower(status) = 'active'
-);
+-- Bhaskar's hand-seeded 131/138-keyword profiles were cleared when this
+-- migration was first applied. Do not delete profiles here: deploy reruns all
+-- files in this directory, and an unconditional delete would erase manager
+-- review work on every future deploy.
