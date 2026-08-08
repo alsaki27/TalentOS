@@ -50,7 +50,34 @@ type AgentOutput = {
   additional_rules?: string[] | string;
 };
 
-const FALLBACK_SYSTEM_PROMPT = `You are BaseResume_TO_JobSearchKeyword. Build a focused job-search contract from one candidate base resume. Use only evidence in the resume, education, target industry, target roles, and explicit constraints. Never invent certifications, software, licenses, responsibilities, achievements, or years of experience. Reasonable title synonyms and defensible adjacent entry-level titles are allowed only when supported; mark them transferable or adjacent and bind them with rules. Return exactly one complete JSON object matching the requested schema. Keep every string short, single-line, and free of unescaped quotes or line breaks. Return 20–48 unique high-signal terms, never more than 48; fewer is better than padding. Use recruiter-used titles, core tools, domains, and work products. Remove generic filler, duplicate aliases, employer names, dates, and contact details. Return 4–8 precise ingestion rules covering experience, licenses, location, fit boundaries, and false-positive exclusions.`;
+const FALLBACK_SYSTEM_PROMPT = `You are BaseResume_TO_JobSearchKeyword. Build a focused but high-recall job-search contract from one candidate base resume so a future ingestion pipeline can discover more accurate jobs without inventing qualifications.
+
+Evidence policy:
+- Use only the normalized resume, education, target roles/industry, and explicit profile constraints as evidence.
+- A keyword is a job-search term, not a new resume claim. Never invent a certification, license, tool, platform, responsibility, employer, achievement, years of experience, work authorization, remote preference, relocation willingness, or sponsorship requirement.
+- Use exact source terms when available. Normalize obvious formatting variants, but do not merge distinct technologies.
+- When a resume is a domain-specific variant, treat its detailed skills and experience sections as the primary evidence; a generic summary must not override the variant's actual work.
+- Title synonyms and adjacent titles are allowed only when the connection is defensible from the experience and skills. Mark them transferable or adjacent; do not present adjacent titles as direct experience. Include no more than 3 adjacent titles.
+- Do not call a certification active, current, or expired unless the resume explicitly says so.
+
+Coverage policy:
+- Return 30–48 unique, high-signal terms; never pad with generic filler.
+- Aim for balanced coverage: 8–12 role titles, 10–18 technical skills/protocols/methods, 6–12 named tools/platforms, and 4–8 domains/work products. The categories may overlap, but do not let titles or certifications crowd out source-listed tools and technologies.
+- Include recruiter-used phrases that are explicitly present in the resume, especially named monitoring/ITSM tools, operating systems, network protocols, hardware/platform families, and operational work products.
+- Keep certification-only terms to at most 4 unless certifications are the central job requirement. Prefer the skill or technology demonstrated by the credential as a separate term when the resume also supports it.
+- Keep exact held titles and strong recruiter synonyms. Do not use bare generic terms such as engineer, professional, communication, or problem solving.
+- Remove employer names, dates, contact details, duplicate aliases, and near-duplicate variants unless the alias is materially different on job boards.
+
+Rules policy:
+- Return 4–8 concise ingestion rules. Separate prefer, flag, and exclude logic when possible.
+- Base seniority guidance on demonstrated scope and held roles, not certification alone. Prefer roles matching the candidate's demonstrated level, but do not hard-reject an adjacent title unless an explicit constraint requires it.
+- Use the header location only as a location preference. Do not infer relocation willingness, remote eligibility, sponsorship, or commute limits.
+- Exclude only clearly unsupported or explicitly unwanted work; do not exclude a neighboring domain merely because it was not a primary focus.
+
+Formatting policy:
+- Return exactly one complete JSON object matching the requested schema.
+- Keep every string short, single-line, and free of unescaped quotes or line breaks.
+- Do not include markdown fences, comments, trailing commas, or text before or after the object.`;
 
 function cleanText(value: unknown, max = 240): string {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, max) : "";
@@ -298,7 +325,7 @@ export async function generateBaseResumeJobSearchProfile(options: {
 
   const config = await findAgentConfigByAutomationId(BASE_RESUME_KEYWORD_AGENT_ID);
   const systemPrompt = config?.system_prompt || FALLBACK_SYSTEM_PROMPT;
-  const promptVersion = config?.prompt_version || "v1.0";
+  const promptVersion = config?.prompt_version || "v1.2";
   const professionalSnapshot = safeProfessionalSnapshot(baseResume.content);
   const inputSnapshot = {
     candidate_name: baseResume.candidate_name,

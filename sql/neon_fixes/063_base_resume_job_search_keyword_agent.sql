@@ -53,8 +53,11 @@ VALUES (
 Evidence policy:
 - Use the base resume, education, target roles, and target industry as the source of truth.
 - Never invent a certification, software skill, license, industry, responsibility, or achievement.
-- You may include a reasonable title synonym or adjacent entry-level title when the degree, experience, and transferable work make the connection defensible.
-- Do not confuse a search keyword with a resume claim: a title can be a discovery term, but the rules must prevent false-positive roles.
+- A keyword is a job-search term, not a new resume claim. Never invent years of experience, work authorization, remote preference, relocation willingness, or sponsorship requirements.
+- Use exact source terms when available. Normalize obvious formatting variants, but do not merge distinct technologies.
+- When a resume is a domain-specific variant, treat its detailed skills and experience sections as the primary evidence; a generic summary must not override the variant's actual work.
+- You may include a reasonable title synonym or adjacent title when the experience and skills make the connection defensible. Mark it transferable or adjacent; include no more than 3 adjacent titles and never present them as direct experience.
+- Do not call a certification active, current, or expired unless the resume explicitly says so.
 
 Output exactly one JSON object with this shape:
 {"keywords":[{"term":"...","category":"title|skill|tool|domain|work_product","evidence":"direct|transferable|adjacent","reason":"short evidence-based reason"}],"additional_rules":["short rule"]}
@@ -65,8 +68,11 @@ Formatting policy:
 - Do not include markdown fences, comments, trailing commas, or text before or after the object.
 
 Keyword policy:
-- Return 30–48 unique, high-signal terms; never more than 48.
-- Start with the most useful job titles, then the core tools, domains, work products, and commonly used title aliases.
+- Return 30–48 unique, high-signal terms; never pad with generic filler.
+- Aim for balanced coverage: 8–12 role titles, 10–18 technical skills/protocols/methods, 6–12 named tools/platforms, and 4–8 domains/work products. The categories may overlap, but do not let titles or certifications crowd out source-listed tools and technologies.
+- Include recruiter-used phrases explicitly present in the resume, especially named monitoring/ITSM tools, operating systems, network protocols, hardware/platform families, and operational work products.
+- Keep certification-only terms to at most 4 unless certifications are the central job requirement.
+- Start with the most useful held titles and strong recruiter synonyms, then cover source-listed technologies, tools, domains, and work products.
 - Prefer terms recruiters and job boards actually use. Avoid generic terms such as engineer, professional, communication, Microsoft Office, or problem solving unless they are part of a meaningful title/phrase.
 - Do not fill space with minor synonyms. Consolidate near-duplicates.
 - For a broad transferable profile, include adjacent titles only when the rules clearly describe the boundary.
@@ -74,11 +80,14 @@ Keyword policy:
 Rules policy:
 - Return 4–8 practical rules covering experience level, licenses/certifications, location/relocation, core-fit requirements, and false-positive exclusions.
 - Rules must be usable by a future ingestion pipeline and readable by a human reviewer.
+- Base seniority guidance on demonstrated scope and held roles, not certification alone. Prefer roles matching the candidate's demonstrated level, but do not hard-reject an adjacent title unless an explicit constraint requires it.
+- Use the header location only as a location preference. Do not infer relocation willingness, remote eligibility, sponsorship, or commute limits.
+- Exclude only clearly unsupported or explicitly unwanted work; do not exclude a neighboring domain merely because it was not a primary focus.
 - Keep rules precise: say what to reject, what to prefer, and which secondary tools are acceptable without treating them as proven experience.
 - Treat candidate-specific constraints from the resume/profile as binding; do not invent constraints.
 
 Return JSON only. No markdown, no explanation outside the JSON.$$,
-  'v1.1',
+  'v1.2',
   'BaseResumeJobSearchKeywordV1',
   0.2,
   5000,
