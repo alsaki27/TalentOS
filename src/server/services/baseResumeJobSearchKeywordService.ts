@@ -148,6 +148,40 @@ function parseJsonResponse(raw: string): AgentOutput {
   throw new Error(`Base resume keyword agent returned invalid JSON: ${parseError?.message || "unknown syntax error"}`);
 }
 
+function decodeLooseJsonString(value: string): string {
+  try {
+    return JSON.parse(`"${value}"`);
+  } catch {
+    return value.replace(/\\n/g, " ").replace(/\\r/g, " ").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  }
+}
+
+/**
+ * Gemini can occasionally emit a nearly-valid JSON array with one missing
+ * comma. The strict parser and retry remain the preferred path, but extracting
+ * the explicitly named term fields lets us salvage a complete keyword set
+ * instead of throwing away 30+ valid proposals because one delimiter broke.
+ */
+function parseLooseKeywordResponse(raw: string): AgentOutput {
+  const keywords = Array.from(raw.matchAll(/"term"\s*:\s*"((?:\\.|[^"\\])*)"/g))
+    .map((match) => ({
+      term: decodeLooseJsonString(match[1]),
+      category: "skill",
+      evidence: "direct",
+      reason: "AI-generated search term from a recoverable structured response",
+    }))
+    .filter((item) => item.term.trim().length > 1)
+    .slice(0, MAX_BASE_RESUME_KEYWORDS);
+  if (keywords.length < 10) throw new Error("Base resume keyword agent returned too few recoverable keywords");
+
+  const rulesBlock = raw.match(/"additional_rules"\s*:\s*\[([\s\S]*?)(?:\]|$)/i)?.[1] ?? "";
+  const additional_rules = Array.from(rulesBlock.matchAll(/"((?:\\.|[^"\\])*)"/g))
+    .map((match) => decodeLooseJsonString(match[1]).trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  return { keywords, additional_rules };
+}
+
 function parseLineResponse(raw: string): AgentOutput {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const keywordIndex = lines.findIndex((line) => /^keywords\s*:?$/i.test(line));
@@ -168,12 +202,20 @@ function parseLineResponse(raw: string): AgentOutput {
   return { keywords, additional_rules };
 }
 
-function parseUsableAgentResponse(raw: string): AgentOutput {
-  const parsed = parseJsonResponse(raw);
-  if (!Array.isArray(parsed.keywords) || parsed.keywords.length < 10) {
-    throw new Error("Base resume keyword agent returned too few keywords");
+export function parseUsableAgentResponse(raw: string): AgentOutput {
+  try {
+    const parsed = parseJsonResponse(raw);
+    if (!Array.isArray(parsed.keywords) || parsed.keywords.length < 10) {
+      throw new Error("Base resume keyword agent returned too few keywords");
+    }
+    return parsed;
+  } catch (strictError) {
+    try {
+      return parseLooseKeywordResponse(raw);
+    } catch {
+      throw strictError;
+    }
   }
-  return parsed;
 }
 
 function safeProfessionalSnapshot(content: any): any {
@@ -322,6 +364,8 @@ export async function generateBaseResumeJobSearchProfile(options: {
   if (!existingStates.length && Array.isArray(existing?.keywords)) {
     existingStates.push(...existing.keywords.map((term: string) => ({ term, status: "active" as const, source: "manual" as const })));
   }
+  const reviewStates = existingStates.filter((item) => item.status === "dismissed" || item.source === "manual");
+  const reviewKeywords = reviewStates.filter((item) => item.status === "active").map((item) => item.term);
 
   const config = await findAgentConfigByAutomationId(BASE_RESUME_KEYWORD_AGENT_ID);
   const systemPrompt = config?.system_prompt || FALLBACK_SYSTEM_PROMPT;
@@ -344,13 +388,16 @@ export async function generateBaseResumeJobSearchProfile(options: {
   await query(
     `INSERT INTO candidate_resume_search_profiles
       (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, updated_by)
-     VALUES ($1, $2, '{}', '[]'::jsonb, '', 'running', NULL, $3)
+     VALUES ($1, $2, $3, $4::jsonb, '', 'running', NULL, $5)
      ON CONFLICT (base_resume_id) DO UPDATE SET
+       keywords = EXCLUDED.keywords,
+       keyword_states = EXCLUDED.keyword_states,
+       additional_rules = EXCLUDED.additional_rules,
        generation_status = 'running',
        last_generation_error = NULL,
        updated_by = EXCLUDED.updated_by,
        updated_at = NOW()`,
-    [baseResume.candidate_id, baseResume.id, options.userId ?? null]
+    [baseResume.candidate_id, baseResume.id, reviewKeywords, JSON.stringify(reviewStates), options.userId ?? null]
   );
 
   try {
@@ -449,11 +496,14 @@ export async function generateBaseResumeJobSearchProfile(options: {
     await query(
       `INSERT INTO candidate_resume_search_profiles
         (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, updated_by)
-       VALUES ($1, $2, '{}', '[]'::jsonb, '', 'failed', $3, $4)
+       VALUES ($1, $2, $3, $4::jsonb, '', 'failed', $5, $6)
        ON CONFLICT (base_resume_id) DO UPDATE SET
+         keywords = EXCLUDED.keywords,
+         keyword_states = EXCLUDED.keyword_states,
+         additional_rules = EXCLUDED.additional_rules,
          generation_status = 'failed', last_generation_error = EXCLUDED.last_generation_error,
          updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-      [baseResume.candidate_id, baseResume.id, message, options.userId ?? null]
+      [baseResume.candidate_id, baseResume.id, reviewKeywords, JSON.stringify(reviewStates), message, options.userId ?? null]
     );
     throw error;
   }

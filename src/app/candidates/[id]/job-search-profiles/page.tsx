@@ -119,11 +119,15 @@ export default function CandidateJobSearchProfilesPage() {
   }
 
   async function regenerate(profile: Profile) {
+    const currentDraft = drafts[profile.base_resume_id] ?? { keywordStates: [], additionalRules: "", newKeyword: "" };
+    const reviewStates = currentDraft.keywordStates.filter((item) => item.status === "dismissed" || item.source === "manual");
+    const reviewKeywords = reviewStates.filter((item) => item.status === "active").map((item) => item.term);
     setSaving(profile.base_resume_id);
     setMessage(null);
     setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
-      ? { ...row, generation_status: "running", last_generation_error: null }
+      ? { ...row, keywords: reviewKeywords, keyword_states: reviewStates, additional_rules: "", generation_status: "running", last_generation_error: null }
       : row));
+    setDrafts((current) => ({ ...current, [profile.base_resume_id]: { ...currentDraft, keywordStates: reviewStates, additionalRules: "" } }));
     try {
       const res = await fetch("/api/admin/base-resume-keywords/run", {
         method: "POST",
@@ -145,8 +149,9 @@ export default function CandidateJobSearchProfilesPage() {
     } catch (error: any) {
       setMessage({ kind: "error", text: error.message || "AI keyword generation failed" });
       setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
-        ? { ...row, generation_status: "failed", last_generation_error: error.message || "AI keyword generation failed" }
+        ? { ...row, keywords: reviewKeywords, keyword_states: reviewStates, additional_rules: "", generation_status: "failed", last_generation_error: error.message || "AI keyword generation failed" }
         : row));
+      setDrafts((current) => ({ ...current, [profile.base_resume_id]: { ...currentDraft, keywordStates: reviewStates, additionalRules: "" } }));
     } finally {
       setSaving(null);
     }
@@ -179,13 +184,17 @@ export default function CandidateJobSearchProfilesPage() {
             const activeKeywords = draft.keywordStates.filter((item) => item.status === "active");
             const dismissedKeywords = draft.keywordStates.filter((item) => item.status === "dismissed");
             const count = activeKeywords.length;
+            const lastGenerated = profile.last_generated_at ? new Date(profile.last_generated_at) : null;
+            const lastGeneratedLabel = lastGenerated && !Number.isNaN(lastGenerated.getTime())
+              ? lastGenerated.toLocaleString()
+              : "never";
             return (
               <section className="card" key={profile.base_resume_id}>
                 <div className="page-header" style={{ marginBottom: 12 }}>
                   <div>
                     <h2 style={{ margin: 0, fontSize: 18 }}>{profile.resume_name}</h2>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {profile.resume_status} · resume updated {new Date(profile.resume_updated_at).toLocaleDateString()} · {count}/48 active keywords · {profile.generation_status ?? "not generated"}
+                      {profile.resume_status} · resume updated {new Date(profile.resume_updated_at).toLocaleDateString()} · {count}/48 active keywords · {profile.generation_status ?? "not generated"} · last generated {lastGeneratedLabel}
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
