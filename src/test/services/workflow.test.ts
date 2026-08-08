@@ -142,6 +142,11 @@ describe("applicationAiWorkflowService", () => {
       "application_final_polish",
       "copilot_fill_planner",
       "copilot_question_answerer",
+      "copilot_ceo",
+      "copilot_form_analyst",
+      "copilot_compliance",
+      "copilot_correction_reviewer",
+      "copilot_cover_letter",
     ]);
   });
 });
