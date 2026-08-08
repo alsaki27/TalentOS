@@ -111,6 +111,7 @@ export async function callVertexProxy(opts: {
   maxTokens?: number;
   timeoutMs?: number;
   responseSchema?: Record<string, unknown>;
+  responseMimeType?: string | null;
 }): Promise<AiResponse> {
   const geminiTools = toGeminiTools(opts.tools);
 
@@ -144,7 +145,7 @@ export async function callVertexProxy(opts: {
             // Only meaningful (and only sent by the proxy) when no tools are active
             // this turn - see index.js's buildVertexBody for why the two are
             // mutually exclusive in Vertex's API.
-            responseMimeType: "application/json",
+            responseMimeType: opts.responseMimeType === undefined ? "application/json" : opts.responseMimeType,
             responseSchema: opts.responseSchema,
           }),
         });
@@ -214,9 +215,9 @@ export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider
   if (!proxyUrl || !proxySecret) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
       const model = modelOverride || process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
-      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema });
+      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
     },
   };
 }
@@ -229,8 +230,8 @@ export function getGoogleVertexFallbackProvider(): AiProvider | null {
   if (!proxyUrl || !proxySecret || !fallbackModel) return null;
 
   return {
-    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
-      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema });
+    send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
+      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
     },
   };
 }

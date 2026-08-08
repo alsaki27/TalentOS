@@ -121,6 +121,9 @@ export default function CandidateJobSearchProfilesPage() {
   async function regenerate(profile: Profile) {
     setSaving(profile.base_resume_id);
     setMessage(null);
+    setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
+      ? { ...row, generation_status: "running", last_generation_error: null }
+      : row));
     try {
       const res = await fetch("/api/admin/base-resume-keywords/run", {
         method: "POST",
@@ -141,6 +144,9 @@ export default function CandidateJobSearchProfilesPage() {
       } }));
     } catch (error: any) {
       setMessage({ kind: "error", text: error.message || "AI keyword generation failed" });
+      setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
+        ? { ...row, generation_status: "failed", last_generation_error: error.message || "AI keyword generation failed" }
+        : row));
     } finally {
       setSaving(null);
     }

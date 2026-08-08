@@ -265,6 +265,32 @@ export async function generateBaseResumeJobSearchProfile(options: {
     "SELECT keyword_states, keywords FROM candidate_resume_search_profiles WHERE base_resume_id = $1",
     [options.baseResumeId]
   );
+
+  // A browser tab can be closed or a Worker request can be terminated after
+  // the audit row is inserted. Reap only genuinely stale runs, then prevent
+  // duplicate clicks/tabs from launching multiple expensive model calls.
+  await query(
+    `UPDATE base_resume_keyword_agent_runs
+        SET status = 'failed',
+            error_message = 'Generation interrupted before completion',
+            completed_at = NOW()
+      WHERE base_resume_id = $1
+        AND status = 'started'
+        AND created_at < NOW() - INTERVAL '10 minutes'`,
+    [options.baseResumeId]
+  );
+  const activeRun = await queryOne<{ id: string }>(
+    `SELECT id
+       FROM base_resume_keyword_agent_runs
+      WHERE base_resume_id = $1
+        AND status = 'started'
+        AND created_at >= NOW() - INTERVAL '10 minutes'
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [options.baseResumeId]
+  );
+  if (activeRun) throw new Error("Keyword generation is already running for this base resume. Wait for it to finish before trying again.");
+
   const existingStates = asKeywordStates(existing?.keyword_states);
   if (!existingStates.length && Array.isArray(existing?.keywords)) {
     existingStates.push(...existing.keywords.map((term: string) => ({ term, status: "active" as const, source: "manual" as const })));
@@ -287,6 +313,17 @@ export async function generateBaseResumeJobSearchProfile(options: {
      VALUES ($1, $2, $3, 'started', $4, $5::jsonb, $6)
      RETURNING id`,
     [baseResume.candidate_id, baseResume.id, options.triggerType ?? "manual", promptVersion, JSON.stringify(inputSnapshot), options.userId ?? null]
+  );
+  await query(
+    `INSERT INTO candidate_resume_search_profiles
+      (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, updated_by)
+     VALUES ($1, $2, '{}', '[]'::jsonb, '', 'running', NULL, $3)
+     ON CONFLICT (base_resume_id) DO UPDATE SET
+       generation_status = 'running',
+       last_generation_error = NULL,
+       updated_by = EXCLUDED.updated_by,
+       updated_at = NOW()`,
+    [baseResume.candidate_id, baseResume.id, options.userId ?? null]
   );
 
   try {
@@ -327,6 +364,7 @@ export async function generateBaseResumeJobSearchProfile(options: {
             const lineResponse = await provider.send({
               ...request,
               responseSchema: undefined,
+              responseMimeType: null,
               maxTokens: 1800,
               system: `${systemPrompt}\n\nReturn a plain-text fallback because JSON failed. Use exactly this format:\nKEYWORDS:\nThen one concise keyword or job title per line (20 to 48 lines).\nRULES:\nThen 4 to 8 concise ingestion rules, one per line. Do not use JSON, markdown tables, explanations, or paragraphs outside those sections.`,
               temperature: 0,
