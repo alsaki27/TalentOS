@@ -32,7 +32,6 @@ export default function CandidateJobSearchProfilesPage() {
   const [canEdit, setCanEdit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
-  const [runningAll, setRunningAll] = useState(false);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
@@ -146,28 +145,6 @@ export default function CandidateJobSearchProfilesPage() {
     }
   }
 
-  async function regenerateAllActive() {
-    setRunningAll(true);
-    setMessage(null);
-    try {
-      const res = await fetch("/api/admin/base-resume-keywords/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "AI keyword generation failed");
-      const completed = (data.results ?? []).filter((item: any) => item.status === "completed").length;
-      const failed = (data.results ?? []).filter((item: any) => item.status === "failed").length;
-      setMessage({ kind: failed ? "error" : "success", text: `Finished ${completed} active base resumes${failed ? `; ${failed} failed` : ""}. Refreshing profiles…` });
-      window.setTimeout(() => window.location.reload(), 700);
-    } catch (error: any) {
-      setMessage({ kind: "error", text: error.message || "AI keyword generation failed" });
-    } finally {
-      setRunningAll(false);
-    }
-  }
-
   return (
     <main className="page-shell">
       <div className="page-header" style={{ alignItems: "flex-start" }}>
@@ -178,9 +155,6 @@ export default function CandidateJobSearchProfilesPage() {
             {candidateName || "Active candidate"} · define the baseline search contract for each base resume.
           </p>
         </div>
-        {canEdit && <button className="btn-primary" onClick={regenerateAllActive} disabled={runningAll}>
-          {runningAll ? "Generating all active resumes…" : "Generate all active resumes"}
-        </button>}
       </div>
 
       <div className="alert" style={{ marginBottom: 16 }}>
@@ -208,7 +182,7 @@ export default function CandidateJobSearchProfilesPage() {
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {canEdit && <button className="btn-secondary" onClick={() => regenerate(profile)} disabled={saving === profile.base_resume_id}>Regenerate with AI</button>}
+                    {canEdit && <button className="btn-secondary" onClick={() => regenerate(profile)} disabled={saving === profile.base_resume_id}>Generate keywords with AI</button>}
                     {canEdit && <button className="btn-primary" onClick={() => save(profile)} disabled={saving === profile.base_resume_id}>{saving === profile.base_resume_id ? "Working…" : "Save review"}</button>}
                   </div>
                 </div>
