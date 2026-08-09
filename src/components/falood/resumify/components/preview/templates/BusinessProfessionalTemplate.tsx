@@ -4,9 +4,10 @@ import { Globe, Link2, Code2, Mail, Phone, MapPin } from 'lucide-react';
 
 interface TemplateProps {
   data: ResumeData;
+  variant?: 1 | 2 | 3 | 4;
 }
 
-export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
+export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, variant = 1 }) => {
   const { personalInfo, summary, experience, education, projects, skills, customSections, sections, colors, fontSize, fontFamily } = data;
 
   const visibleSections = sections.filter(s => s.visible).sort((a, b) => a.order - b.order);
@@ -30,32 +31,47 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
     return url.startsWith('http') ? url : `https://${url}`;
   };
 
+  const isExecutive = variant === 2;
+  const isBanner = variant === 3;
+  const isEditorial = variant === 4;
+  const sectionHeadingStyle: React.CSSProperties = isBanner
+    ? { color: colors.background, backgroundColor: colors.primary, borderColor: colors.primary, padding: '4px 8px' }
+    : isEditorial
+      ? { color: colors.primary, borderColor: colors.accent, borderBottomWidth: 2, letterSpacing: '0.12em' }
+      : isExecutive
+        ? { color: colors.primary, borderColor: colors.secondary, borderTopWidth: 1, borderBottomWidth: 1, paddingTop: 4 }
+        : { color: colors.primary, borderColor: colors.primary };
+
   return (
     <div
-      className={`w-full h-full leading-relaxed `}
+      className={`w-full h-full leading-relaxed ${isEditorial ? 'pl-4 border-l-4' : ''}`}
       style={{ fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Georgia, serif',
-        pageBreakInside: 'avoid'
+        pageBreakInside: 'avoid',
+        ...(isEditorial ? { borderColor: colors.primary } : {})
       }}
     >
       {/* Header */}
-      <div className="text-center mb-4 pb-4" style={{ borderColor: colors.primary }}>
+      <div
+        className={`${isExecutive || isEditorial ? 'text-left' : 'text-center'} mb-4 pb-4 ${isBanner ? 'px-5 pt-4' : ''}`}
+        style={isBanner ? { backgroundColor: colors.primary, color: colors.background } : { borderColor: colors.primary }}
+      >
         <h1
-          className="text-xl font-bold mb-2"
-          style={{ color: colors.primary }}
+          className={`${isBanner ? 'text-2xl tracking-wide' : isExecutive ? 'text-2xl border-b-2 pb-2' : 'text-xl'} font-bold mb-2`}
+          style={{ color: isBanner ? colors.background : colors.primary, borderColor: colors.primary }}
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
         {personalInfo.jobTitle && (
           <h2
             className="text-lg mb-3 mt-2"
-            style={{ color: colors.secondary }}
+            style={{ color: isBanner ? colors.background : colors.secondary, opacity: isBanner ? 0.9 : 1 }}
           >
             {personalInfo.jobTitle}
           </h2>
         )}
         {/* Contact Info */}
-        <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 text-xs">
+        <div className={`flex ${isExecutive || isEditorial ? 'justify-start' : 'justify-center'} flex-wrap gap-x-4 gap-y-1 text-xs`}>
           {personalInfo.email && (
             <div className="flex items-center gap-1">
               {/* <Mail className="w-3 h-3" style={{ color: colors.accent }} /> */}
@@ -118,7 +134,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               <div>
                 <h3
                   className="text-sm font-bold mb-2 pb-1 border-b uppercase tracking-wide"
-                  style={{ color: colors.primary, borderColor: colors.primary }}
+                  style={sectionHeadingStyle}
                 >
                   Professional Summary
                 </h3>
@@ -130,7 +146,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               <div>
                 <h3
                   className="text-sm font-bold mb-3 pb-1 border-b uppercase tracking-wide"
-                  style={{ color: colors.primary, borderColor: colors.primary }}
+                  style={sectionHeadingStyle}
                 >
                   Professional Experience
                 </h3>
@@ -176,7 +192,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               <div>
                 <h3
                   className="text-sm font-bold mb-3 pb-1 border-b uppercase tracking-wide"
-                  style={{ color: colors.primary, borderColor: colors.primary }}
+                  style={sectionHeadingStyle}
                 >
                   Education
                 </h3>
@@ -218,7 +234,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               <div>
                 <h3
                   className="text-sm font-bold mb-3 pb-1 border-b uppercase tracking-wide"
-                  style={{ color: colors.primary, borderColor: colors.primary }}
+                  style={sectionHeadingStyle}
                 >
                   Key Projects
                 </h3>
@@ -258,7 +274,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
               <div>
                 <h3
                   className="text-sm font-bold mb-2 pb-1 border-b uppercase tracking-wide"
-                  style={{ color: colors.primary, borderColor: colors.primary }}
+                  style={sectionHeadingStyle}
                 >
                   Technical Skills
                 </h3>
@@ -288,7 +304,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data }) 
                   <div key={customSection.id}>
                     <h3
                       className="text-sm font-bold mb-2 pb-1 border-b uppercase tracking-wide"
-                      style={{ color: colors.primary, borderColor: colors.primary }}
+                      style={sectionHeadingStyle}
                     >
                       {customSection.title}
                     </h3>

@@ -27,7 +27,13 @@ export const ResumePreview: React.FC = () => {
       case 'tech-sidebar':
         return <TechSidebarTemplate data={previewData} />;
       case 'business-professional':
-        return <BusinessProfessionalTemplate data={previewData} />;
+        return <BusinessProfessionalTemplate data={previewData} variant={1} />;
+      case 'business-professional-2':
+        return <BusinessProfessionalTemplate data={previewData} variant={2} />;
+      case 'business-professional-3':
+        return <BusinessProfessionalTemplate data={previewData} variant={3} />;
+      case 'business-professional-4':
+        return <BusinessProfessionalTemplate data={previewData} variant={4} />;
       case 'modern-minimal':
         return <ModernMinimalTemplate data={previewData} />;
       case 'elegant-timeline':

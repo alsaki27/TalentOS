@@ -98,7 +98,7 @@ export interface ResumeData {
   pagePadding: number;
 }
 
-export type TemplateType = 'tech-sidebar' | 'business-professional' | 'modern-minimal' | 'elegant-timeline' | 'creative-modern' | 'bjet-professional';
+export type TemplateType = 'tech-sidebar' | 'business-professional' | 'business-professional-2' | 'business-professional-3' | 'business-professional-4' | 'modern-minimal' | 'elegant-timeline' | 'creative-modern' | 'bjet-professional';
 
 export interface TemplateConfig {
   id: TemplateType;
@@ -143,13 +143,43 @@ export const TEMPLATE_CONFIGS: TemplateConfig[] = [
   },
   {
     id: 'business-professional',
-    name: 'Business Professional',
-    description: 'Clean and formal design for corporate roles',
+    name: 'Business Professional 1',
+    description: 'Classic centered design for corporate roles',
     category: 'business',
     layout: 'single-column',
     fontFamily: 'Georgia',
     colorScheme: ['#1f2937', '#4b5563', '#6b7280'],
     features: ['Single column', 'Professional typography', 'Minimal design']
+  },
+  {
+    id: 'business-professional-2',
+    name: 'Business Professional 2',
+    description: 'Left-aligned executive design with refined rules',
+    category: 'business',
+    layout: 'single-column',
+    fontFamily: 'Georgia',
+    colorScheme: ['#1f2937', '#4b5563', '#9ca3af'],
+    features: ['Executive header', 'Double rules', 'Traditional layout']
+  },
+  {
+    id: 'business-professional-3',
+    name: 'Business Professional 3',
+    description: 'Confident corporate design with a strong banner',
+    category: 'business',
+    layout: 'single-column',
+    fontFamily: 'Georgia',
+    colorScheme: ['#1f2937', '#4b5563', '#d1d5db'],
+    features: ['Banner header', 'Strong hierarchy', 'Boardroom style']
+  },
+  {
+    id: 'business-professional-4',
+    name: 'Business Professional 4',
+    description: 'Polished editorial design with a subtle side accent',
+    category: 'business',
+    layout: 'single-column',
+    fontFamily: 'Georgia',
+    colorScheme: ['#1f2937', '#4b5563', '#6b7280'],
+    features: ['Side accent', 'Editorial headings', 'Compact spacing']
   },
   {
     id: 'modern-minimal',
