@@ -32,6 +32,7 @@ function PortalLoginForm() {
   const [error, setError] = useState("");
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
+  const [mfaMode, setMfaMode] = useState<"totp" | "recovery">("totp");
 
   useEffect(() => {
     const err = searchParams?.get("error");
@@ -93,7 +94,11 @@ function PortalLoginForm() {
 
         <div>
           <h1 className="portal-h1">{mfaRequired ? "Verify your identity" : "Welcome back"}</h1>
-          <p className="portal-sub">{mfaRequired ? "Enter the 6-digit code from Google Authenticator." : "Sign in to track your job search."}</p>
+          <p className="portal-sub">{mfaRequired
+            ? mfaMode === "totp"
+              ? "Enter the 6-digit code from Google Authenticator."
+              : "Enter one of your one-time recovery codes."
+            : "Sign in to track your job search."}</p>
         </div>
 
         {!mfaRequired && <div className="portal-field">
@@ -110,7 +115,29 @@ function PortalLoginForm() {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
-        </div> : <div className="portal-field"><label>Authenticator code</label><input inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} required /></div>}
+        </div> : <div className="portal-field">
+          <label>{mfaMode === "totp" ? "Authenticator code" : "Recovery code"}</label>
+          <input
+            inputMode={mfaMode === "totp" ? "numeric" : "text"}
+            autoComplete="one-time-code"
+            maxLength={mfaMode === "totp" ? 6 : 19}
+            value={mfaCode}
+            onChange={(e) => setMfaCode(
+              mfaMode === "totp"
+                ? e.target.value.replace(/\D/g, "").slice(0, 6)
+                : e.target.value.toUpperCase().replace(/[^A-F0-9-]/g, "").slice(0, 19)
+            )}
+            placeholder={mfaMode === "totp" ? "123456" : "ABCD-EF01-2345-6789"}
+            required
+          />
+          <button
+            type="button"
+            className="portal-btn portal-btn-google"
+            onClick={() => { setMfaMode((mode) => mode === "totp" ? "recovery" : "totp"); setMfaCode(""); setError(""); }}
+          >
+            {mfaMode === "totp" ? "Use a recovery code" : "Use Google Authenticator"}
+          </button>
+        </div>}
 
         {error && <p className="portal-error">{error}</p>}
 

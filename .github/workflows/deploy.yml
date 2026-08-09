@@ -64,7 +64,7 @@ jobs:
         run: npm run test:e2e
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          TEST_BASE_URL: https://skarion-talent-os.skarion-talentos.workers.dev
+          TEST_BASE_URL: https://talent.skarion.com
           TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
           TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}
 
@@ -149,6 +149,36 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CRM_INTEGRATION_SECRET: ${{ secrets.CRM_INTEGRATION_SECRET }}
 
+      - name: Set required authentication and encryption secrets
+        run: |
+          if [ -z "$JWT_SECRET" ] || [ -z "$AI_KEYS_ENCRYPTION_SECRET" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET, and CRON_SECRET must be configured in GitHub Secrets."
+            exit 1
+          fi
+          echo "$JWT_SECRET" | npx wrangler secret put JWT_SECRET
+          echo "$AI_KEYS_ENCRYPTION_SECRET" | npx wrangler secret put AI_KEYS_ENCRYPTION_SECRET
+          echo "$CRON_SECRET" | npx wrangler secret put CRON_SECRET
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          AI_KEYS_ENCRYPTION_SECRET: ${{ secrets.AI_KEYS_ENCRYPTION_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+      - name: Set required Google OAuth secrets
+        run: |
+          if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
+            echo "::error::GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured in GitHub Secrets."
+            exit 1
+          fi
+          echo "$GOOGLE_CLIENT_ID" | npx wrangler secret put GOOGLE_CLIENT_ID
+          echo "$GOOGLE_CLIENT_SECRET" | npx wrangler secret put GOOGLE_CLIENT_SECRET
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+
       - name: Set Google Vertex Proxy secrets (talentos-858973 gateway)
         # googleVertexProxyProvider.ts reads these 4 as process.env on the
         # Worker itself - GitHub Actions secrets are the source of truth,
@@ -171,7 +201,7 @@ jobs:
       - name: Verify live health after deploy
         run: |
           for i in 1 2 3 4 5; do
-            RESPONSE=$(curl -s -w '\n%{http_code}' "https://skarion-talent-os.skarion-talentos.workers.dev/api/health" || echo "000")
+            RESPONSE=$(curl -s -w '\n%{http_code}' "https://talent.skarion.com/api/health" || echo "000")
             CODE=$(echo "$RESPONSE" | tail -1)
             BODY=$(echo "$RESPONSE" | sed '$d')
             if [ "$CODE" = "200" ]; then
@@ -194,7 +224,7 @@ jobs:
           for i in 1 2 3 4 5; do
             RESPONSE=$(curl -s -w '\n%{http_code}' \
               -H "Authorization: Bearer $CRON_SECRET" \
-              "https://skarion-talent-os.skarion-talentos.workers.dev/api/admin/ai-key-readiness" || echo "000")
+              "https://talent.skarion.com/api/admin/ai-key-readiness" || echo "000")
             CODE=$(echo "$RESPONSE" | tail -1)
             BODY=$(echo "$RESPONSE" | sed '$d')
             if [ "$CODE" = "200" ]; then
@@ -215,5 +245,20 @@ jobs:
           done
           echo "::error::AI key readiness check failed - encryption may not be configured"
           exit 1
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+
+      - name: Verify Google OAuth runtime readiness
+        run: |
+          RESPONSE=$(curl -s -w '\n%{http_code}' \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "https://talent.skarion.com/api/admin/integrations/google/readiness")
+          CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          echo "$BODY"
+          if [ "$CODE" != "200" ] || ! echo "$BODY" | grep -q '"ready":true'; then
+            echo "::error::Google OAuth runtime is not ready after deploy (HTTP $CODE)."
+            exit 1
+          fi
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}

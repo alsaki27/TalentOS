@@ -4,6 +4,7 @@ import { queryOne, execute } from "@/server/db/neon";
 import { createTotpSecret, buildTotpUri, verifyTotp } from "@/server/auth/totp";
 import { decryptSecret, encryptSecret, isEncryptionAvailable } from "@/server/security/secretCrypto";
 import { hashPassword } from "@/server/auth/crypto";
+import { envFlag } from "@/server/runtimeConfig";
 
 function recoveryCode() {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
@@ -11,6 +12,7 @@ function recoveryCode() {
 }
 
 export async function GET() {
+  if (!envFlag("CANDIDATE_MFA_ENABLED")) return NextResponse.json({ error: "MFA_DISABLED" }, { status: 503 });
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
   const row = await queryOne<{ enabled_at: string | null }>("SELECT enabled_at FROM candidate_mfa_settings WHERE candidate_id = $1", [context!.candidateId]);
@@ -18,6 +20,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!envFlag("CANDIDATE_MFA_ENABLED")) return NextResponse.json({ error: "MFA_DISABLED" }, { status: 503 });
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
   if (!isEncryptionAvailable()) return NextResponse.json({ error: "MFA setup is temporarily unavailable. Contact support." }, { status: 503 });
@@ -28,7 +31,9 @@ export async function POST(req: NextRequest) {
   const pending = current;
   if (!pending) {
     const secret = createTotpSecret();
-    await execute("INSERT INTO candidate_mfa_settings (candidate_id, secret_encrypted) VALUES ($1, $2) ON CONFLICT (candidate_id) DO UPDATE SET secret_encrypted = EXCLUDED.secret_encrypted, enabled_at = NULL, updated_at = now()", [context!.candidateId, await encryptSecret(secret)]);
+    const encryptedSecret = await encryptSecret(secret);
+    if (!encryptedSecret.startsWith("enc:")) return NextResponse.json({ error: "MFA_ENCRYPTION_FAILED" }, { status: 503 });
+    await execute("INSERT INTO candidate_mfa_settings (candidate_id, secret_encrypted) VALUES ($1, $2) ON CONFLICT (candidate_id) DO UPDATE SET secret_encrypted = EXCLUDED.secret_encrypted, enabled_at = NULL, updated_at = now()", [context!.candidateId, encryptedSecret]);
     return NextResponse.json({ setupRequired: true, secret, otpauthUri: buildTotpUri(secret, context!.candidate.account_email) });
   }
   if (!(await verifyTotp(await decryptSecret(pending.secret_encrypted), code))) return NextResponse.json({ error: "Enter the current 6-digit authenticator code." }, { status: 400 });

@@ -5,19 +5,21 @@
 // treatment as any other import source.
 
 import { filterNewJobs } from "@/lib/jobDedup";
-import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
-import { createJobs } from "@/server/repositories/jobsRepository";
 import {
   listStagedJobs,
   bulkUpdateStagedJobStatus,
-  updateRunStatus,
   getRunById,
   type JobAgentStagedJobRow,
 } from "@/server/repositories/jobAgentRunRepository";
-import { processPendingCategorization } from "@/lib/ai/jobCategorization";
-import { startRun } from "@/server/services/jobCeoService";
-import { insertStaged, checkAndRecordDedup } from "@/server/repositories/jobCeoStagingRepository";
+import {
+  createApprovedBridgeRun,
+  listBatchBridgeCandidates,
+  type ApprovedBridgeCandidate,
+  type ApprovedBridgeRejection,
+  type BatchBridgeCandidateRow,
+} from "@/server/repositories/jobAgentBridgeRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { logActivity } from "@/lib/activity";
 
 export interface ImportApprovedJobsOptions {
   tier?: "best" | "medium" | "worthy";
@@ -75,6 +77,159 @@ function stagedJobToJobRow(staged: JobAgentStagedJobRow): Record<string, unknown
     company_website: staged.company_website ?? null,
     external_job_id: staged.external_job_id ?? null,
     raw_source_payload: rawSourcePayload ? JSON.stringify(rawSourcePayload) : null,
+  };
+}
+
+function canonicalBridgeSignature(staged: JobAgentStagedJobRow): string {
+  const title = staged.job_title.trim().toLowerCase().replace(/\s+/g, " ");
+  const company = (staged.company_name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const location = (staged.location ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (title && company) return `${title}|${company}|${location || "unknown-location"}`;
+
+  const sourceUrl = (staged.source_url ?? staged.apply_link ?? "").trim().toLowerCase();
+  if (sourceUrl) return `url|${sourceUrl}`;
+  return `staged|${staged.id}`;
+}
+
+function toApprovedBridgeCandidate(staged: JobAgentStagedJobRow): ApprovedBridgeCandidate {
+  return {
+    sourceStagedId: staged.id,
+    signature: canonicalBridgeSignature(staged),
+    title: staged.job_title,
+    company: staged.company_name,
+    location: staged.location,
+    sourceUrl: staged.source_url,
+    externalJobId: staged.external_job_id,
+    descriptionText: staged.description_text,
+    raw: stagedJobToJobRow(staged),
+  };
+}
+
+function batchCandidateScore(staged: BatchBridgeCandidateRow): number {
+  let score = 0;
+  if (staged.apply_link) score += 8;
+  if (staged.source_url) score += 5;
+  if ((staged.description_text ?? "").trim().length >= 100) score += 4;
+  if (staged.parsed_posted_at || staged.date_posted) score += 3;
+  if (staged.salary_min != null || staged.salary_max != null || staged.salary_range) score += 2;
+  if (staged.company_website) score += 1;
+  return score;
+}
+
+const ACTOR_TIE_BREAK: Record<BatchBridgeCandidateRow["actor_source"], number> = {
+  indeed: 0,
+  linkedin: 1,
+  google: 2,
+};
+
+export function pickDeterministicBatchWinners(rows: BatchBridgeCandidateRow[]): {
+  winners: BatchBridgeCandidateRow[];
+  duplicateIds: string[];
+} {
+  const bySignature = new Map<string, BatchBridgeCandidateRow[]>();
+  for (const row of rows) {
+    const signature = canonicalBridgeSignature(row);
+    const group = bySignature.get(signature) ?? [];
+    group.push(row);
+    bySignature.set(signature, group);
+  }
+
+  const winners: BatchBridgeCandidateRow[] = [];
+  const duplicateIds: string[] = [];
+  for (const group of bySignature.values()) {
+    group.sort((left, right) => {
+      const scoreDelta = batchCandidateScore(right) - batchCandidateScore(left);
+      if (scoreDelta !== 0) return scoreDelta;
+      const sourceDelta = ACTOR_TIE_BREAK[left.actor_source] - ACTOR_TIE_BREAK[right.actor_source];
+      if (sourceDelta !== 0) return sourceDelta;
+      return left.id.localeCompare(right.id);
+    });
+    winners.push(group[0]);
+    duplicateIds.push(...group.slice(1).map((row) => row.id));
+  }
+  return { winners, duplicateIds };
+}
+
+async function dispatchBridgeRun(runId: string, triggerType: string): Promise<void> {
+  await logActivity({
+    type: "job_ceo_run_started",
+    description: `Job CEO run started (${triggerType})`,
+    entityType: "job_ceo_run",
+    entityId: runId,
+  });
+
+  const baseUrl =
+    process.env.TALENTOS_BASE_URL ||
+    (process.env.NODE_ENV === "development"
+      ? "http://localhost:3000"
+      : "https://talent.skarion.com");
+  const cronSecret = process.env.CRON_SECRET;
+  await backgroundDispatch(
+    fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+      method: "POST",
+      headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined,
+    }).catch((err) => {
+      console.error("[jobAgentImporter] Bridge dispatch self-fetch failed:", (err as Error).message);
+    })
+  );
+}
+
+export interface ImportApprovedBatchResult {
+  jobCeoRunId: string | null;
+  imported: number;
+  duplicates: number;
+  batchClaimAccepted: boolean;
+}
+
+/** Import every eligible nightly row into one idempotent Job CEO bridge run. */
+export async function importApprovedBatch(
+  batchId: string,
+  finalizationClaimToken: string
+): Promise<ImportApprovedBatchResult> {
+  const candidates = await listBatchBridgeCandidates(batchId);
+  const { winners, duplicateIds } = pickDeterministicBatchWinners(candidates);
+
+  const dedupCandidates = winners.map((staged) => ({
+    source_url: staged.source_url,
+    title: staged.job_title,
+    company: staged.company_name,
+    posted_at: parsePostedAt(staged.date_posted),
+    applicants_count: null as number | null,
+    _staged_id: staged.id,
+  }));
+  const { newRows } = await filterNewJobs(dedupCandidates);
+  const newIds = new Set(newRows.map((row) => row._staged_id));
+  const historicalDuplicateIds = winners.filter((row) => !newIds.has(row.id)).map((row) => row.id);
+  const rejections: ApprovedBridgeRejection[] = [
+    ...duplicateIds.map((sourceStagedId) => ({
+      sourceStagedId,
+      reason: "same_batch_duplicate",
+      markDuplicate: true,
+    })),
+    ...historicalDuplicateIds.map((sourceStagedId) => ({
+      sourceStagedId,
+      reason: "existing_job_duplicate",
+      markDuplicate: true,
+    })),
+  ];
+
+  const winnerById = new Map(winners.map((row) => [row.id, row]));
+  const bridgeCandidates = newRows
+    .map((row) => winnerById.get(row._staged_id))
+    .filter((row): row is BatchBridgeCandidateRow => Boolean(row))
+    .map(toApprovedBridgeCandidate);
+
+  const bridge = await createApprovedBridgeRun(bridgeCandidates, "job_agent_nightly", {
+    batchId,
+    claimToken: finalizationClaimToken,
+  }, rejections);
+  if (bridge.runId) await dispatchBridgeRun(bridge.runId, "job_agent_nightly");
+
+  return {
+    jobCeoRunId: bridge.runId,
+    imported: bridge.insertedSourceIds.length,
+    duplicates: bridge.duplicateCount,
+    batchClaimAccepted: bridge.batchClaimAccepted,
   };
 }
 
@@ -139,6 +294,11 @@ async function importRows(
 ): Promise<{ imported: number; skipped: number }> {
   if (stagedJobs.length === 0) return { imported: 0, skipped: 0 };
 
+  const dateExcludedIds = stagedJobs
+    .filter((job) => job.date_window_status === "excluded")
+    .map((job) => job.id);
+  stagedJobs = stagedJobs.filter((job) => job.date_window_status !== "excluded");
+
   // Build candidate rows matching the existing dedup interface.
   const candidates = stagedJobs.map((staged) => ({
     source_url: staged.source_url,
@@ -150,94 +310,43 @@ async function importRows(
     _job_row: stagedJobToJobRow(staged),
   }));
 
-  let { newRows, duplicates } = await filterNewJobs(candidates);
+  const { newRows } = await filterNewJobs(candidates);
+  const acceptedIds = new Set(newRows.map((row) => row._staged_id));
+  const existingJobDuplicateIds = stagedJobs
+    .filter((staged) => !acceptedIds.has(staged.id))
+    .map((staged) => staged.id);
+  const rejections: ApprovedBridgeRejection[] = [
+    ...dateExcludedIds.map((sourceStagedId) => ({
+      sourceStagedId,
+      reason: "date_window_excluded",
+      markDuplicate: false,
+    })),
+    ...existingJobDuplicateIds.map((sourceStagedId) => ({
+      sourceStagedId,
+      reason: "existing_job_duplicate",
+      markDuplicate: true,
+    })),
+  ];
 
-  let inserted: any[] = [];
-  let runRecord: any = null;
-  if (newRows.length > 0) {
-    // Apify -> Job CEO Bridge
-    runRecord = await startRun({
-      source: "apify_bridge",
-      triggerType: "job_agent_import"
+  const stagedById = new Map(stagedJobs.map((staged) => [staged.id, staged]));
+  const bridgeCandidates = newRows
+    .map((row) => stagedById.get(row._staged_id))
+    .filter((row): row is JobAgentStagedJobRow => Boolean(row))
+    .map(toApprovedBridgeCandidate);
+  const bridge = await createApprovedBridgeRun(
+    bridgeCandidates,
+    "job_agent_import",
+    undefined,
+    rejections,
+  );
+
+  if (bridge.runId) {
+    await logActivity({
+      type: "job_ceo_run_started",
+      description: "Job CEO run started (job_agent_import)",
+      entityType: "job_ceo_run",
+      entityId: bridge.runId,
     });
-
-    const stagedInserts = newRows.map((c: any) => {
-      const row = c._job_row as Record<string, unknown>;
-      return {
-        run_id: runRecord.id,
-        stage: "qa_passed" as any, // Skip QA, you already approved it
-        title: row.title as string,
-        company: row.company as string,
-        location: row.location as string,
-        source_url: row.source_url as string,
-        external_job_id: row.external_job_id as string,
-        description_text: row.description_text as string,
-        raw: row, // Pass all the Apify fields (salary, etc.) so Matchmaker saves them
-      };
-    });
-
-    // Run Job CEO deduplication to ensure we don't insert jobs that were already staged
-    // (e.g. if the user approved the same job from two different runs before it was ingested)
-    const sigPayload = stagedInserts
-      .map((i) => ({
-        signature: i.title && i.company ? `${i.title.toLowerCase()}|${i.company.toLowerCase()}` : null,
-        title: i.title,
-        company: i.company,
-      }))
-      .filter((s) => s.signature !== null) as Array<{ signature: string; title: string; company: string }>;
-
-    const uniqueSignatures = await checkAndRecordDedup(runRecord.id, sigPayload);
-    const dedupCount = sigPayload.length - uniqueSignatures.size;
-    duplicates += dedupCount;
-
-    // Filter staged inserts to only those whose signature was unique
-    const finalInserts = stagedInserts.filter(i => {
-      const sig = i.title && i.company ? `${i.title.toLowerCase()}|${i.company.toLowerCase()}` : null;
-      return sig ? uniqueSignatures.has(sig) : true;
-    });
-
-    if (finalInserts.length > 0) {
-      await insertStaged(runRecord.id, finalInserts);
-    }
-    
-    // Initialize the Job CEO run counts for apify_bridge jobs so the UI displays correctly.
-    // Because they bypass the ingest, QA, and deep fetch stages and land straight in Matchmaker,
-    // their initial ingested, kept, and researched counts would otherwise remain 0.
-    if (stagedInserts.length > 0) {
-      const { bumpRunCounts } = await import("@/server/repositories/jobCeoRunRepository");
-      await bumpRunCounts(runRecord.id, {
-        ingested_count: stagedInserts.length,
-        kept_count: finalInserts.length,
-        researched_count: finalInserts.length,
-        skipped_count: dedupCount,
-      });
-    }
-    inserted = finalInserts; // For the insertedByUrl map below
-  }
-
-  // Mark all inserted staged jobs as imported.
-  // We can just use the stagedJobs list that we successfully submitted to `job_ceo_staging`.
-  const importedStagedIds: string[] = stagedJobs
-    .filter(staged => newRows.some(row => row._staged_id === staged.id))
-    .map(staged => staged.id);
-
-  if (importedStagedIds.length > 0) {
-    await bulkUpdateStagedJobStatus(runId, "imported", { jobIds: importedStagedIds });
-  }
-
-  // Update run counts incrementally so multiple partial imports (e.g. Best, then Medium)
-  // do not overwrite each other.
-  const currentRun = await getRunById(runId);
-  const run = await updateRunStatus(runId, {
-    imported_count: (currentRun?.imported_count ?? 0) + importedStagedIds.length,
-    skipped_count: (currentRun?.skipped_count ?? 0) + duplicates,
-  });
-
-  // Trigger AI categorization in the background for newly imported jobs.
-  // Not needed here anymore since they aren't in the jobs table yet. The Matchmaker
-  // or a background cron will handle it when they finally arrive in the jobs table.
-
-  if (runRecord) {
     // Kick off the Job CEO dispatch chain for the bridged jobs.
     // waitUntil from @vercel/functions is a no-op on Cloudflare Workers, so we instead
     // fire a self-fetch to /api/job-ceo/dispatch — the same pattern used by ingest/route.ts.
@@ -247,7 +356,7 @@ async function importRows(
       process.env.TALENTOS_BASE_URL ||
       (process.env.NODE_ENV === "development"
         ? "http://localhost:3000"
-        : "https://skarion-talent-os.skarion-talentos.workers.dev");
+        : "https://talent.skarion.com");
     const cronSecret = process.env.CRON_SECRET;
     await backgroundDispatch(
       fetch(`${baseUrl}/api/job-ceo/dispatch`, {
@@ -259,5 +368,11 @@ async function importRows(
     );
   }
 
-  return { imported: run.imported_count, skipped: run.skipped_count };
+  const run = await getRunById(runId);
+  return {
+    imported: run?.imported_count ?? bridge.insertedSourceIds.length,
+    skipped: run?.skipped_count ?? bridge.duplicateCount,
+  };
 }
+
+export { canonicalBridgeSignature, stagedJobToJobRow, toApprovedBridgeCandidate };

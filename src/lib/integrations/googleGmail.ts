@@ -1,5 +1,6 @@
 // src/lib/integrations/googleGmail.ts
 // Gmail OAuth helpers. Uses Web Crypto API for Cloudflare Workers compatibility.
+import { gmailOAuthRedirectUri } from "@/server/runtimeConfig";
 
 export const GMAIL_SCOPES = [
   "openid",
@@ -14,8 +15,7 @@ export const GMAIL_SCOPES = [
 // GOOGLE_OAUTH_REDIRECT_URI (staff login's own override in server/auth/google.ts)
 // so the two callback flows can never collide if someone sets one but not the other.
 export function googleRedirectUri() {
-  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
-  return process.env.GMAIL_OAUTH_REDIRECT_URI || `${baseUrl}/api/integrations/gmail/callback`;
+  return gmailOAuthRedirectUri();
 }
 
 export function newOAuthState(): string {
@@ -74,6 +74,26 @@ export async function exchangeGmailCode(code: string) {
     token_type?: string;
     id_token?: string;
   };
+}
+
+export async function getGrantedGmailScopes(accessToken: string, returnedScope?: string): Promise<string[]> {
+  let scopeText = returnedScope?.trim() || "";
+  if (!scopeText) {
+    const response = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+      { cache: "no-store" },
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || typeof data.scope !== "string") {
+      throw new Error("Could not verify the Gmail scopes granted by Google.");
+    }
+    scopeText = data.scope;
+  }
+  const scopes = Array.from(new Set(scopeText.split(/\s+/).filter(Boolean)));
+  if (!scopes.includes("https://www.googleapis.com/auth/gmail.modify")) {
+    throw new Error("Google did not grant the required gmail.modify permission. Reconnect and approve Gmail access.");
+  }
+  return scopes;
 }
 
 function base64urlDecode(str: string): string {

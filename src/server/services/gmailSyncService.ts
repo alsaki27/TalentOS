@@ -18,6 +18,7 @@ import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, modif
 import { triageEmail, AUTO_WRITE_CATEGORIES, AUTO_WRITE_CONFIDENCE_THRESHOLD, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { logActivity } from "@/lib/activity";
+import { gmailSuppressionReason } from "@/lib/integrations/gmailSuppression";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 
@@ -26,6 +27,7 @@ interface SyncOutcome {
   candidateId: string;
   fetched: number;
   triaged: number;
+  suppressed: number;
   error?: string;
 }
 
@@ -65,7 +67,8 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow,
   }
 
   const ids = new Set<string>();
-  const afterClause = enrolledAt ? `after:${enrolledAt.replace(/-/g, "/")}` : "newer_than:90d";
+  const enrolledEpoch = enrolledAt ? Math.floor(new Date(enrolledAt).getTime() / 1000) : 0;
+  const afterClause = enrolledEpoch > 0 ? `after:${enrolledEpoch}` : "newer_than:90d";
   const backfillQuery = `${afterClause} -category:promotions -category:social -category:forums`;
   let pageToken: string | undefined;
   let pages = 0;
@@ -154,16 +157,12 @@ async function triageStoredMessage(id: string, accessToken: string) {
 
   const applications = await getCandidateApplicationContext(row.candidate_id);
   const bodyText = row.body_text || "";
-  const sender = (row.from_email || "").toLowerCase();
   const subject = (row.subject || "").toLowerCase();
-  const personalSender = /(doordash|ubereats|uber\.com|lyft|instacart|amazon|walmart|target|fedex|ups|usps|delta|united|airbnb|venmo|paypal|chase|bankofamerica|cvs|walgreens)/i.test(sender);
-  const personalSignal = /(order|receipt|delivery|shipment|tracking|invoice|payment|reservation|ride|trip|verification code|one-time password)/i.test(subject);
-  const obviousAlertNoise = /(indeed\.com|linkedin\.com)/i.test(sender)
-    && /(job alert|jobs for you|recommended for you|you look like a great fit|jobs you may like|sponsored)/i.test(subject);
-  if (obviousAlertNoise || (personalSender && personalSignal)) {
+  const suppressionReason = gmailSuppressionReason({ from: row.from_email, subject: row.subject, bodyText });
+  if (suppressionReason) {
     await execute(
       "UPDATE email_communications SET ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1, needs_reply = false, triaged_at = now() WHERE id = $2",
-      [obviousAlertNoise ? "Ignored automated job-alert/recommendation email." : "Ignored personal commerce, delivery, travel, or account email.", id]
+      [`Suppressed before AI processing: ${suppressionReason}.`, id]
     );
     return;
   }
@@ -417,21 +416,25 @@ export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followU
   const outcomes: SyncOutcome[] = [];
 
   for (const accountRow of accounts) {
-    const outcome: SyncOutcome = { accountId: accountRow.id, candidateId: accountRow.candidate_id, fetched: 0, triaged: 0 };
+    const outcome: SyncOutcome = { accountId: accountRow.id, candidateId: accountRow.candidate_id, fetched: 0, triaged: 0, suppressed: 0 };
     try {
       const account = await getDecryptedGmailAccount(accountRow.id);
       if (!account) continue;
 
       const accessToken = await ensureFreshAccessToken(account);
-      const candidate = await queryOne<{ skarion_enrolled_at: string | null }>(
-        "SELECT skarion_enrolled_at FROM candidates WHERE id = $1",
+      const candidate = await queryOne<{ email_consent_at: string | null }>(
+        "SELECT email_consent_at FROM candidates WHERE id = $1",
         [account.candidate_id]
       );
-      const messageIds = await fetchNewMessageIds(accessToken, account, candidate?.skarion_enrolled_at ?? null);
+      const messageIds = await fetchNewMessageIds(accessToken, account, candidate?.email_consent_at ?? null);
 
       for (const messageId of messageIds) {
         const msg = await getMessage(accessToken, messageId, account.email);
         if (!msg) continue;
+        if (gmailSuppressionReason(msg)) {
+          outcome.suppressed++;
+          continue;
+        }
         const storedId = await storeRawMessage(account.candidate_id, account.id, msg);
         outcome.fetched++;
         if (storedId) {

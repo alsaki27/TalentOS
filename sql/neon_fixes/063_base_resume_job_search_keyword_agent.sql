@@ -99,14 +99,6 @@ Return JSON only. No markdown, no explanation outside the JSON.$$,
 )
 ON CONFLICT (automation_id) DO UPDATE SET
   display_name = EXCLUDED.display_name,
-  system_prompt = EXCLUDED.system_prompt,
-  prompt_version = EXCLUDED.prompt_version,
-  output_schema_version = EXCLUDED.output_schema_version,
-  temperature = EXCLUDED.temperature,
-  max_output_tokens = EXCLUDED.max_output_tokens,
-  timeout_ms = EXCLUDED.timeout_ms,
-  max_attempts = EXCLUDED.max_attempts,
-  approval_policy = EXCLUDED.approval_policy,
   is_active = true,
   updated_at = NOW();
 

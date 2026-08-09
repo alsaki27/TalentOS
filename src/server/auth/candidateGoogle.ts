@@ -1,4 +1,5 @@
 // src/server/auth/candidateGoogle.ts
+import { candidateGoogleRedirectUri as configuredCandidateGoogleRedirectUri } from "@/server/runtimeConfig";
 // Candidate "Continue with Google" login — basic identity scope only
 // (openid email profile). Deliberately separate from src/lib/integrations/googleGmail.ts,
 // which requests gmail.readonly for the Phase 2 email-reading feature. Login and
@@ -13,8 +14,7 @@ export const CANDIDATE_LOGIN_SCOPES = ["openid", "email", "profile"];
 // registered in Google Cloud Console and what's sent again during the token
 // exchange — a request-derived value can't guarantee that consistency.
 function candidateGoogleRedirectUri() {
-  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
-  return `${baseUrl}/api/portal/auth/google/callback`;
+  return configuredCandidateGoogleRedirectUri();
 }
 
 export function candidateGoogleAuthUrl(state: string) {
@@ -61,7 +61,7 @@ export async function exchangeCandidateGoogleCode(code: string) {
     cache: "no-store",
   });
   const userInfo = await userInfoRes.json().catch(() => ({}));
-  if (!userInfoRes.ok || !userInfo.email || !userInfo.sub) {
+  if (!userInfoRes.ok || !userInfo.email || !userInfo.sub || userInfo.email_verified !== true) {
     throw new Error("Could not load the Google account profile.");
   }
 
@@ -69,5 +69,6 @@ export async function exchangeCandidateGoogleCode(code: string) {
     sub: String(userInfo.sub),
     email: String(userInfo.email).toLowerCase(),
     name: userInfo.name || userInfo.given_name || String(userInfo.email).split("@")[0],
+    email_verified: true,
   };
 }

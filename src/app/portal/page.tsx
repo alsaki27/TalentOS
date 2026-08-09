@@ -19,6 +19,18 @@ interface PortalDashboard {
   applications: PortalApplication[];
 }
 
+interface GmailPrivacyStatus {
+  email_sync_paused: boolean;
+  email_consent_at: string | null;
+  email_retention_days: number;
+  gmail_account_id: string | null;
+  gmail_email: string | null;
+  gmail_status: "active" | "error" | "revoked" | null;
+  gmail_scopes: string[] | null;
+  gmail_last_synced_at: string | null;
+  gmail_sync_error: string | null;
+}
+
 const STAGE_META: Record<string, { color: string; bg: string; icon: string }> = {
   submitted: { color: "#6b7280", bg: "#f1f2f5", icon: "●" },
   waiting: { color: "#122461", bg: "#eef0f8", icon: "↻" },
@@ -80,6 +92,7 @@ export default function PortalDashboardPage() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [emailPaused, setEmailPaused] = useState(false);
   const [retentionDays, setRetentionDays] = useState(365);
+  const [gmailStatus, setGmailStatus] = useState<GmailPrivacyStatus | null>(null);
 
   useEffect(() => {
     fetch("/api/portal/me/dashboard")
@@ -95,7 +108,7 @@ export default function PortalDashboardPage() {
       })
       .catch(() => setError("Could not load your dashboard."));
     fetch("/api/portal/auth/mfa").then((r) => r.ok ? r.json() : null).then((d) => { if (d) setMfaEnrolled(Boolean(d.enrolled)); }).catch(() => undefined);
-    fetch("/api/portal/me/gmail/privacy").then((r) => r.ok ? r.json() : null).then((d) => { if (d) { setEmailPaused(Boolean(d.email_sync_paused)); setRetentionDays(Number(d.email_retention_days || 365)); } }).catch(() => undefined);
+    fetch("/api/portal/me/gmail/privacy").then((r) => r.ok ? r.json() : null).then((d) => { if (d) { setGmailStatus(d); setEmailPaused(Boolean(d.email_sync_paused)); setRetentionDays(Number(d.email_retention_days || 365)); } }).catch(() => undefined);
   }, [router]);
 
   async function logout() {
@@ -128,6 +141,15 @@ export default function PortalDashboardPage() {
     if (!window.confirm("Delete imported recruiting email history and AI drafts? This cannot be undone.")) return;
     await fetch("/api/portal/me/gmail/privacy", { method: "DELETE" });
     setMfaMessage("Imported email history deleted.");
+  }
+
+  async function disconnectGmail() {
+    if (!window.confirm("Disconnect Gmail and stop all future synchronization?")) return;
+    const response = await fetch("/api/portal/integrations/gmail/disconnect", { method: "POST" });
+    if (!response.ok) { setMfaMessage("Gmail could not be disconnected. Please try again."); return; }
+    setEmailPaused(true);
+    setGmailStatus((current) => current ? { ...current, gmail_status: "revoked" } : current);
+    setMfaMessage("Gmail was disconnected.");
   }
 
   if (error) {
@@ -173,12 +195,20 @@ export default function PortalDashboardPage() {
 
       <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
         <strong>Email privacy controls</strong>
-        <p className="portal-greeting-sub">Pause inbox review or delete imported email history at any time.</p>
+        <p className="portal-greeting-sub">
+          {gmailStatus?.gmail_status === "active"
+            ? `Connected to ${gmailStatus.gmail_email || "Gmail"}. You can pause inbox review or delete imported history at any time.`
+            : "Gmail is not connected. Connecting is optional and requires separate Gmail consent."}
+        </p>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <button className="portal-btn portal-btn-primary" onClick={() => updateEmailPrivacy(!emailPaused)}>{emailPaused ? "Resume email review" : "Pause email review"}</button>
+          {gmailStatus?.gmail_status === "active"
+            ? <button className="portal-btn portal-btn-primary" onClick={() => updateEmailPrivacy(!emailPaused)}>{emailPaused ? "Resume email review" : "Pause email review"}</button>
+            : <a className="portal-btn portal-btn-primary" href="/api/portal/me/gmail/start">Connect Gmail</a>}
           <label style={{ fontSize: 12 }}>Retention <select value={retentionDays} onChange={async (e) => { const value = Number(e.target.value); setRetentionDays(value); await fetch("/api/portal/me/gmail/privacy", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ retentionDays: value }) }); }}><option value={90}>90 days</option><option value={365}>1 year</option><option value={730}>2 years</option><option value={3650}>10 years</option></select></label>
           <button className="portal-btn" onClick={deleteEmailHistory}>Delete imported history</button>
+          {gmailStatus?.gmail_account_id && gmailStatus.gmail_status !== "revoked" && <button className="portal-btn" onClick={disconnectGmail}>Disconnect Gmail</button>}
         </div>
+        {gmailStatus?.gmail_status === "error" && <p className="portal-error">Gmail needs to be reconnected before synchronization can continue.</p>}
       </div>
 
       <div className="portal-section-title">Applications</div>

@@ -106,6 +106,20 @@ export function clearCandidateAuthCookie(response: NextResponse) {
     path: "/",
     maxAge: 0,
   });
+  response.cookies.set(CANDIDATE_MFA_PENDING_COOKIE, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    maxAge: 0,
+  });
+  response.cookies.set(CANDIDATE_OAUTH_STATE_COOKIE, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    path: "/",
+    maxAge: 0,
+  });
   return response;
 }
 

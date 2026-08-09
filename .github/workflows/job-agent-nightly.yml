@@ -1,0 +1,301 @@
+name: Job Agent Nightly (Apify to Job CEO)
+
+env:
+  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+
+on:
+  schedule:
+    # 18:00 UTC is 12:00 AM the following day in Asia/Dhaka (UTC+6).
+    - cron: '0 18 * * *'
+  # Manual dispatch is deliberately a dry run. Automatic approval is reserved
+  # for the scheduled midnight batch; an existing scheduled batch still resumes
+  # with its immutable auto-import setting.
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Start a dry test batch or recover an existing scheduled batch'
+        required: true
+        default: 'dry_run'
+        type: choice
+        options:
+          - dry_run
+          - recover
+      business_date:
+        description: 'Dhaka business date (YYYY-MM-DD); blank uses the current date'
+        required: false
+        type: string
+
+# A delayed GitHub cron and a manual recovery invocation must never operate the
+# same nightly batch concurrently. The API is also idempotent by business date.
+concurrency:
+  group: job-agent-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Start or resume the nightly Job Agent batch
+        id: start
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          INVOCATION_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || (inputs.mode == 'recover' && 'recovery' || 'manual') }}
+          BUSINESS_DATE: ${{ inputs.business_date || '' }}
+          REQUEST_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE_URL=$(printf '%s' "$TALENTOS_BASE_URL" | tr -d '[:space:]')
+          BASE_URL=${BASE_URL%/}
+          if [ -z "$BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::error::TALENTOS_BASE_URL and CRON_SECRET must be configured."
+            exit 1
+          fi
+
+          case "$INVOCATION_TYPE" in
+            scheduled|manual|recovery) ;;
+            *)
+              echo "::error::Invalid invocation type: $INVOCATION_TYPE"
+              exit 1
+              ;;
+          esac
+
+          REQUEST_BODY='{}'
+          if [ -n "$BUSINESS_DATE" ]; then
+            REQUEST_BODY=$(jq -nc --arg businessDate "$BUSINESS_DATE" '{businessDate: $businessDate}')
+          fi
+
+          BODY_FILE=$(mktemp)
+          HTTP_CODE=$(curl -sS \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 5 \
+            --connect-timeout 30 \
+            --max-time 300 \
+            -o "$BODY_FILE" \
+            -w '%{http_code}' \
+            -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "X-Job-Agent-Invocation: $INVOCATION_TYPE" \
+            -H "X-Job-Agent-Request-Id: $REQUEST_ID" \
+            -H 'Content-Type: application/json' \
+            --data "$REQUEST_BODY" \
+            "$BASE_URL/api/cron/job-agent")
+
+          echo "Start/resume response (HTTP $HTTP_CODE):"
+          jq . "$BODY_FILE" 2>/dev/null || cat "$BODY_FILE"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Nightly Job Agent start failed with HTTP $HTTP_CODE."
+            exit 1
+          fi
+
+          BATCH_ID=$(jq -er '.batch.id // .batchId // .id' "$BODY_FILE") || {
+            echo "::error::Start response did not contain a batch ID."
+            exit 1
+          }
+          BATCH_STATUS=$(jq -r '.batch.status // .status // "unknown"' "$BODY_FILE")
+
+          echo "batch_id=$BATCH_ID" >> "$GITHUB_OUTPUT"
+          echo "initial_status=$BATCH_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Started or resumed batch $BATCH_ID (status=$BATCH_STATUS)."
+
+      - name: Poll Apify runs and monitor nightly batch
+        id: monitor
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          BATCH_ID: ${{ steps.start.outputs.batch_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE_URL=$(printf '%s' "$TALENTOS_BASE_URL" | tr -d '[:space:]')
+          BASE_URL=${BASE_URL%/}
+          ENCODED_BATCH_ID=$(jq -rn --arg value "$BATCH_ID" '$value | @uri')
+          # Reserve time inside the six-hour job limit for Job CEO draining.
+          WALL_END=$((SECONDS + 17400)) # 4 hours 50 minutes
+          STATUS_FAILURES=0
+          MAX_STATUS_FAILURES=10
+          LAST_STATUS="unknown"
+          JOB_CEO_RUN_ID=""
+
+          while [ "$SECONDS" -lt "$WALL_END" ]; do
+            POLL_BODY=$(mktemp)
+            POLL_CODE=$(curl -sS \
+              --connect-timeout 30 \
+              --max-time 300 \
+              -o "$POLL_BODY" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$BASE_URL/api/cron/job-agent-poll") || POLL_CODE="000"
+
+            if ! [[ "$POLL_CODE" =~ ^[0-9]+$ ]] || [ "$POLL_CODE" -lt 200 ] || [ "$POLL_CODE" -ge 300 ]; then
+              echo "::warning::Job Agent poll endpoint returned HTTP $POLL_CODE: $(head -c 300 "$POLL_BODY")"
+            fi
+            rm -f "$POLL_BODY"
+
+            STATUS_BODY=$(mktemp)
+            STATUS_CODE=$(curl -sS \
+              --connect-timeout 30 \
+              --max-time 300 \
+              -o "$STATUS_BODY" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$BASE_URL/api/cron/job-agent?batchId=$ENCODED_BATCH_ID") || STATUS_CODE="000"
+
+            if ! [[ "$STATUS_CODE" =~ ^[0-9]+$ ]] || [ "$STATUS_CODE" -lt 200 ] || [ "$STATUS_CODE" -ge 300 ]; then
+              STATUS_FAILURES=$((STATUS_FAILURES + 1))
+              echo "::warning::Batch status request returned HTTP $STATUS_CODE ($STATUS_FAILURES/$MAX_STATUS_FAILURES): $(head -c 300 "$STATUS_BODY")"
+              rm -f "$STATUS_BODY"
+              if [ "$STATUS_FAILURES" -ge "$MAX_STATUS_FAILURES" ]; then
+                echo "::error::Unable to read nightly batch status after $STATUS_FAILURES consecutive attempts. The scheduled recovery poller remains active."
+                exit 1
+              fi
+              sleep 60
+              continue
+            fi
+
+            STATUS_FAILURES=0
+            LAST_STATUS=$(jq -r '.batch.status // .status // "unknown"' "$STATUS_BODY")
+            EXPECTED=$(jq -r '.batch.expected_shards // .summary.expected_shards // .summary.total_shards // 28' "$STATUS_BODY")
+            TERMINAL=$(jq -r '.batch.terminal_shards // .summary.terminal_shards // .summary.completed_shards // 0' "$STATUS_BODY")
+            JOB_CEO_RUN_ID=$(jq -r '.batch.job_ceo_run_id // .batch.jobCeoRunId // .job_ceo_run_id // .jobCeoRunId // empty' "$STATUS_BODY")
+            ERROR_TEXT=$(jq -r '.batch.error // .error // empty' "$STATUS_BODY")
+            rm -f "$STATUS_BODY"
+
+            echo "Batch $BATCH_ID: status=$LAST_STATUS terminal_shards=$TERMINAL/$EXPECTED job_ceo_run_id=${JOB_CEO_RUN_ID:-none}"
+            if [ -n "$ERROR_TEXT" ]; then
+              echo "::warning::Batch status reported: $ERROR_TEXT"
+            fi
+
+            case "$LAST_STATUS" in
+              succeeded|partial_success|failed)
+                echo "batch_status=$LAST_STATUS" >> "$GITHUB_OUTPUT"
+                echo "job_ceo_run_id=$JOB_CEO_RUN_ID" >> "$GITHUB_OUTPUT"
+                echo "Nightly batch reached terminal state: $LAST_STATUS."
+                exit 0
+                ;;
+            esac
+
+            sleep 60
+          done
+
+          echo "batch_status=$LAST_STATUS" >> "$GITHUB_OUTPUT"
+          echo "job_ceo_run_id=$JOB_CEO_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "::error::Nightly batch did not reach a terminal state within the monitoring window. The five-minute poller will continue recovery."
+          exit 1
+
+      - name: Drive Job CEO pipeline to completion
+        if: steps.monitor.outputs.job_ceo_run_id != ''
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          JOB_CEO_RUN_ID: ${{ steps.monitor.outputs.job_ceo_run_id }}
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          BASE_URL=$(printf '%s' "$TALENTOS_BASE_URL" | tr -d '[:space:]')
+          BASE_URL=${BASE_URL%/}
+          ENCODED_JOB_CEO_RUN_ID=$(jq -rn --arg value "$JOB_CEO_RUN_ID" '$value | @uri')
+          WALL_END=$((SECONDS + 3000)) # 50 minutes
+          CALLS=0
+          FAILURES=0
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+          COMPLETED=false
+
+          echo "Draining Job CEO run $JOB_CEO_RUN_ID."
+
+          while [ "$SECONDS" -lt "$WALL_END" ]; do
+            CALLS=$((CALLS + 1))
+            BODY_FILE=$(mktemp)
+            HTTP_CODE=$(curl -sS \
+              --connect-timeout 30 \
+              --max-time 300 \
+              -o "$BODY_FILE" \
+              -w '%{http_code}' \
+              -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H 'Content-Type: application/json' \
+              "$BASE_URL/api/job-ceo/dispatch") || HTTP_CODE="000"
+
+            if ! [[ "$HTTP_CODE" =~ ^[0-9]+$ ]] || [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+              FAILURES=$((FAILURES + 1))
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Dispatch call $CALLS returned HTTP $HTTP_CODE: $(head -c 300 "$BODY_FILE")"
+              rm -f "$BODY_FILE"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive Job CEO dispatch failures. The ten-minute recovery dispatcher remains active."
+                exit 1
+              fi
+              sleep 10
+              continue
+            fi
+
+            CONSECUTIVE_FAILURES=0
+            if jq -e 'type == "object"' "$BODY_FILE" >/dev/null 2>&1; then
+              NEEDS_DISPATCH=$(jq -r 'if has("needsDispatch") then (.needsDispatch | tostring) else "true" end' "$BODY_FILE")
+              STAGE=$(jq -r '.stage // .run.stage // "unknown"' "$BODY_FILE")
+              COUNT=$(jq -r '.count // .processed // 0' "$BODY_FILE")
+            else
+              NEEDS_DISPATCH=true
+              STAGE=unknown
+              COUNT=0
+              echo "::warning::Dispatch call $CALLS returned non-JSON content: $(head -c 300 "$BODY_FILE")"
+            fi
+            rm -f "$BODY_FILE"
+
+            echo "Dispatch call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH"
+
+            STATUS_FILE=$(mktemp)
+            STATUS_CODE=$(curl -sS \
+              --connect-timeout 30 \
+              --max-time 120 \
+              -o "$STATUS_FILE" \
+              -w '%{http_code}' \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$BASE_URL/api/job-ceo/runs/$ENCODED_JOB_CEO_RUN_ID") || STATUS_CODE="000"
+
+            if [[ "$STATUS_CODE" =~ ^[0-9]+$ ]] && [ "$STATUS_CODE" -ge 200 ] && [ "$STATUS_CODE" -lt 300 ]; then
+              TARGET_STATUS=$(jq -r '.run.status // "unknown"' "$STATUS_FILE")
+            else
+              TARGET_STATUS="unknown"
+              echo "::warning::Could not verify Job CEO run $JOB_CEO_RUN_ID (HTTP $STATUS_CODE): $(head -c 300 "$STATUS_FILE")"
+            fi
+            rm -f "$STATUS_FILE"
+            echo "Target Job CEO run $JOB_CEO_RUN_ID status=$TARGET_STATUS"
+
+            if [ "$TARGET_STATUS" = "completed" ]; then
+              COMPLETED=true
+              echo "Job CEO run $JOB_CEO_RUN_ID is fully drained after $CALLS calls."
+              break
+            fi
+            if [ "$TARGET_STATUS" = "failed" ] || [ "$TARGET_STATUS" = "cancelled" ]; then
+              echo "::error::Job CEO run $JOB_CEO_RUN_ID ended in $TARGET_STATUS state."
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          if [ "$COMPLETED" != "true" ]; then
+            echo "::error::Job CEO did not finish within the drain window. The ten-minute recovery dispatcher will continue processing it."
+            exit 1
+          fi
+
+          if [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS Job CEO dispatch calls failed."
+            exit 1
+          fi
+
+      - name: Fail workflow when the nightly batch failed
+        if: always() && steps.monitor.outputs.batch_status == 'failed'
+        shell: bash
+        run: |
+          echo "::error::The nightly Job Agent batch ended in failed state."
+          exit 1

@@ -1,4 +1,4 @@
-import { sanitizeInternalPath } from "@/lib/auth";
+import { googleIdentityRedirectUri } from "@/server/runtimeConfig";
 
 export interface GoogleUserInfo {
   sub: string;
@@ -18,11 +18,11 @@ function getGoogleClientSecret() {
   return process.env.GOOGLE_CLIENT_SECRET ?? process.env.GMAIL_CLIENT_SECRET ?? "";
 }
 
-export function getGoogleOAuthRedirectUri(origin: string) {
-  return process.env.GOOGLE_OAUTH_REDIRECT_URI || `${origin}/api/auth/google/callback`;
+export function getGoogleOAuthRedirectUri() {
+  return googleIdentityRedirectUri();
 }
 
-export function getGoogleAuthUrl(origin: string, state: string, nextPath?: string | null) {
+export function getGoogleAuthUrl(state: string, nextPath?: string | null) {
   const clientId = getGoogleClientId();
   if (!clientId) {
     throw new Error("GOOGLE_CLIENT_ID is not configured.");
@@ -30,7 +30,7 @@ export function getGoogleAuthUrl(origin: string, state: string, nextPath?: strin
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("redirect_uri", getGoogleOAuthRedirectUri(origin));
+  url.searchParams.set("redirect_uri", getGoogleOAuthRedirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("state", state);
@@ -38,15 +38,12 @@ export function getGoogleAuthUrl(origin: string, state: string, nextPath?: strin
   url.searchParams.set("include_granted_scopes", "true");
   url.searchParams.set("prompt", "select_account");
 
-  const safeNextPath = sanitizeInternalPath(nextPath);
-  if (safeNextPath) {
-    url.searchParams.set("hd", "");
-  }
+  void nextPath; // The durable server-side state stores the redirect, not Google query parameters.
 
   return url.toString();
 }
 
-export async function exchangeGoogleCodeForUser(origin: string, code: string) {
+export async function exchangeGoogleCodeForUser(code: string) {
   const clientId = getGoogleClientId();
   const clientSecret = getGoogleClientSecret();
   if (!clientId || !clientSecret) {
@@ -61,7 +58,7 @@ export async function exchangeGoogleCodeForUser(origin: string, code: string) {
       client_secret: clientSecret,
       code,
       grant_type: "authorization_code",
-      redirect_uri: getGoogleOAuthRedirectUri(origin),
+      redirect_uri: getGoogleOAuthRedirectUri(),
     }),
     cache: "no-store",
   });
@@ -79,7 +76,7 @@ export async function exchangeGoogleCodeForUser(origin: string, code: string) {
   });
 
   const userInfo = (await userInfoResponse.json().catch(() => ({}))) as Partial<GoogleUserInfo>;
-  if (!userInfoResponse.ok || !userInfo.email || !userInfo.sub) {
+  if (!userInfoResponse.ok || !userInfo.email || !userInfo.sub || userInfo.email_verified !== true) {
     throw new Error("Could not load the Google account profile.");
   }
 

@@ -29,4 +29,5 @@ Return JSON only. No markdown or explanation outside the JSON.$$,
     prompt_version = 'v1.1',
     output_schema_version = 'BaseResumeJobSearchKeywordV1',
     updated_at = NOW()
-WHERE automation_id = 'BaseResume_TO_JobSearchKeyword';
+WHERE automation_id = 'BaseResume_TO_JobSearchKeyword'
+  AND COALESCE(prompt_version, '') IN ('', 'v1.0');

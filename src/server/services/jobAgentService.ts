@@ -1,14 +1,23 @@
 // src/server/services/jobAgentService.ts
 // Multi-actor Apify orchestration service.
-// Supports: Indeed (familiar_universality/indeed), Google Jobs (johnvc/google-jobs-scraper), LinkedIn (harvestapi/linkedin-job-search)
+// Supports: Indeed (familiar_universality/indeed), Google Jobs (johnvc/google-jobs-scraper), LinkedIn (cheap_scraper/linkedin-job-scraper)
 // Token rotation, 4-layer deduplication, and actor-aware field normalization.
 
 import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/jobAgentConfigRepository";
-import { createRun, updateRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
+import { createRun, updateRunStatus, transitionRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
 import { rotateToken, markTokenError, deactivateToken } from "@/server/repositories/jobAgentTokenRepository";
 import { listAllJobsForFuzzyDedupe } from "@/server/repositories/jobsRepository";
-import { getTitlesForGroups, getGroupForSearchQuery, getGroupLabel, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
+import { getTitlesForGroups, getGroupForSearchQuery, getGroupById, getGroupLabel, inferRoleGroupForTitle, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
 import { classifyJob } from "@/lib/ai/jobAgentClassifier";
+import {
+  buildActorInput as buildActorContractInput,
+  normalizeActorItem as normalizeActorContractItem,
+} from "@/lib/jobAgentActorContracts";
+import {
+  filterItemsToDateWindow,
+  type DateExclusionReason,
+  type ExcludedDateWindowItem,
+} from "@/lib/jobAgentDateWindow";
 
 // ─── Actor Registry ────────────────────────────────────────────────────────────
 
@@ -27,89 +36,7 @@ const CLASSIFICATION_DELAY_MS = 300;
 
 // ─── Date Interval Mappers ─────────────────────────────────────────────────────
 
-/**
- * Map UI date interval to Indeed's hoursOld param.
- * Note: hoursOld cannot be combined with jobType or isRemote in Indeed actor.
- */
-function toIndeedHoursOld(interval: string | undefined | null): number | undefined {
-  const map: Record<string, number> = {
-    today:    24,
-    "2 days": 48,
-    "3days":  72,
-    "3 days": 72,
-    "7 days": 168,
-    week:     168,
-    "30 days": 720,
-    month:    720,
-  };
-  const normalized = (interval ?? "today").toLowerCase().trim();
-  return map[normalized] ?? 24;
-}
-
-/**
- * Map UI date interval to LinkedIn's postedLimit param (cheap_scraper).
- * r86400 = Past 24 hours
- * r604800 = Past Week
- * r2592000 = Past Month
- */
-function toLinkedInPostedLimit(interval: string | undefined | null): string {
-  const map: Record<string, string> = {
-    today:    "r86400",
-    "2 days": "r86400",
-    "3days":  "r604800",
-    "3 days": "r604800",
-    "7 days": "r604800",
-    week:     "r604800",
-    "30 days": "r2592000",
-    month:    "r2592000",
-    any:      "r2592000",
-  };
-  const normalized = (interval ?? "today").toLowerCase().trim();
-  return map[normalized] ?? "r86400";
-}
-
 // ─── Actor Input Builders ──────────────────────────────────────────────────────
-
-function buildIndeedInput(queries: string[], dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
-  const hoursOld = toIndeedHoursOld(dateInterval);
-  const maxItems = Math.max(5, Math.min(500, Math.ceil(maxResults / Math.max(1, queries.length))));
-  return {
-    queries,
-    location: "United States",
-    countryIndeed: "USA",
-    resultsPerQuery: maxItems,
-    hoursOld,
-    enforceAnnual: true,
-  };
-}
-
-function buildGoogleInput(query: string, _dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
-  // johnvc/google-jobs-scraper recognises: query, location, gl, hl, maxItems, numJobs.
-  // Sending unknown or conflicting params (pagesToFetch, max_results, maxPages, …) causes
-  // the actor to run indefinitely and never return results.  Cap at 100 — Google Jobs is
-  // significantly slower to scrape than Indeed, and 100 jobs per query is more than enough
-  // to fill the funnel before AI classification filters them down.
-  const numJobs = Math.min(100, Math.max(10, maxResults));
-  return {
-    query,
-    location: "United States",
-    gl: "us",
-    hl: "en",
-    maxItems: numJobs,
-    numJobs:  numJobs,
-  };
-}
-
-function buildLinkedInInput(queries: string[], dateInterval: string | undefined, maxResults: number): Record<string, unknown> {
-  const maxItems = Math.max(5, Math.min(500, Math.ceil(maxResults / Math.max(1, queries.length))));
-  return {
-    keyword: queries,
-    locations: ["United States"],
-    maxRows: maxItems,
-    publishedAt: toLinkedInPostedLimit(dateInterval),
-    saveOnlyUniqueItems: true,
-  };
-}
 
 // ─── Output Normalizer ─────────────────────────────────────────────────────────
 
@@ -254,6 +181,14 @@ export interface ExecuteRunOptions {
   customKeywords?: string[];
   dateInterval?: string;
   actorSource?: ActorSource;
+  /** Per-shard ceiling supplied by the nightly batch matrix. */
+  maxResults?: number;
+  /** Required for precise one-role-group Google shards; otherwise built from queries. */
+  explicitGoogleQuery?: string;
+  /** Immutable title-query snapshot for durable nightly retries. */
+  explicitQueries?: string[];
+  /** Nightly shards reserve token budget up front and must not rotate outside that reservation. */
+  allowTokenRotation?: boolean;
 }
 
 export interface ExecuteRunResult {
@@ -317,27 +252,30 @@ export async function executeRunFromRecord(
     try {
       await updateRunStatus(runId, { status: "running" });
 
-      const searchQueries = getSearchQueries(roleGroups, options.testMode ?? false, options.customKeywords ?? []);
-      const maxResults = 5; // FORCED FOR EXPERIMENT
+      const searchQueries = options.explicitQueries?.length
+        ? [...options.explicitQueries]
+        : getSearchQueries(roleGroups, options.testMode ?? false, options.customKeywords ?? []);
+      const requestedMax = options.maxResults ?? (options.testMode ? 50 : 500);
+      // A durable batch stores its own immutable per-shard allocation. Generic
+      // manual runs still respect the editable dashboard configuration.
+      const maxResults = Math.max(
+        1,
+        options.maxResults === undefined
+          ? Math.min(requestedMax, config.max_results)
+          : requestedMax,
+      );
 
       const actorId = ACTOR_IDS[actorSource];
 
-      // Google actor takes one query at a time; use the full list joined or first query in test mode.
-      // For proper multi-query Google runs, the UI should dispatch multiple runs.
-      // Here we batch them into a single comma-joined query to keep the API simple.
-      let apifyInput: Record<string, unknown>;
-      if (actorSource === "google") {
-        // For Google, passing too many OR clauses severely limits results. 
-        // We use the first (most generic) query to cast a wide net, and let our AI filter them down.
-        const combinedQuery = searchQueries[0] || "Solar Engineer";
-        apifyInput = buildGoogleInput(combinedQuery, options.dateInterval, maxResults);
-      } else if (actorSource === "linkedin") {
-        apifyInput = buildLinkedInInput(searchQueries, options.dateInterval, maxResults);
-      } else {
-        apifyInput = buildIndeedInput(searchQueries, options.dateInterval, maxResults);
-      }
+      const apifyInput = buildActorContractInput({
+        actorSource,
+        queries: searchQueries,
+        dateInterval: options.dateInterval,
+        maxResults,
+        explicitGoogleQuery: options.explicitGoogleQuery,
+      });
 
-      // Google is capped at 100 items so 30 min is ample; Indeed/LinkedIn get 1 hour.
+      // Google shards are small enough for 30 minutes; Indeed/LinkedIn get 1 hour.
       const apifyTimeout = actorSource === "google" ? 1800 : 3600;
       const { runId: apifyRunId, datasetId } = await startApifyRun(actorId, currentToken.token, apifyInput, apifyTimeout);
       await updateRunStatus(runId, { apify_run_id: apifyRunId, apify_dataset_id: datasetId, token_id: currentToken.id });
@@ -355,6 +293,15 @@ export async function executeRunFromRecord(
           await deactivateToken(currentToken.id);
         } else {
           await markTokenError(currentToken.id, message);
+        }
+
+        if (options.allowTokenRotation === false) {
+          await updateRunStatus(runId, {
+            status: "failed",
+            error: message,
+            completed_at: new Date().toISOString(),
+          });
+          throw err;
         }
 
         const next = await rotateToken();
@@ -376,21 +323,83 @@ export async function executeRunFromRecord(
  * Called by a cron job when an Apify run finishes successfully.
  * Downloads the dataset, normalizes by actor source, dedupes, classifies, and inserts into staged jobs.
  */
+export interface ProcessApifyRunOptions {
+  useAi?: boolean;
+  actorSource?: ActorSource;
+  roleGroups?: string[];
+  windowStart?: string;
+  windowEnd?: string;
+  dateReferenceStartTime?: string;
+  dateReferenceTime?: string;
+  /** Preserve candidates from sibling shards until deterministic batch finalization. */
+  batchId?: string;
+}
+
+export interface ProcessApifyRunResult {
+  rawCount: number;
+  dateIncludedCount: number;
+  dateExcludedCount: number;
+  dateExclusionReasons: Record<DateExclusionReason, number>;
+  duplicateCount: number;
+  classifiedCount: number;
+}
+
 export async function processApifyRunData(
   runId: string,
   datasetId: string,
   token: string,
-  options: { useAi?: boolean; actorSource?: ActorSource } = {}
-): Promise<void> {
+  options: ProcessApifyRunOptions = {}
+): Promise<ProcessApifyRunResult> {
   const actorSource = options.actorSource ?? "indeed";
   try {
     const rawItems = await fetchApifyDataset(datasetId, token);
-    const items = rawItems.map((item) => normalizeActorItem(actorSource, item as Record<string, unknown>));
-    const rawCount = items.length;
+    const normalizedItems = rawItems.map((item) =>
+      normalizeActorContractItem(actorSource, item as Record<string, unknown>),
+    );
+    const rawCount = normalizedItems.length;
     await updateRunStatus(runId, { raw_count: rawCount });
 
+    if ((options.windowStart && !options.windowEnd) || (!options.windowStart && options.windowEnd)) {
+      throw new Error("Both windowStart and windowEnd are required for date-window filtering.");
+    }
+
+    let items = normalizedItems;
+    let dateExcludedItems: Array<ExcludedDateWindowItem<ApifyDatasetItem>> = [];
+    let dateExcludedCount = 0;
+    let dateExclusionReasons: Record<DateExclusionReason, number> = {
+      missing_date: 0,
+      unparseable_date: 0,
+      ambiguous_date: 0,
+      before_window: 0,
+      after_window: 0,
+    };
+    if (options.windowStart && options.windowEnd) {
+      const dateFilter = filterItemsToDateWindow(normalizedItems, {
+        windowStart: options.windowStart,
+        windowEnd: options.windowEnd,
+        referenceStartTime: options.dateReferenceStartTime,
+        referenceTime: options.dateReferenceTime ?? options.windowEnd,
+      });
+      items = dateFilter.included;
+      dateExcludedItems = dateFilter.excluded;
+      dateExcludedCount = dateFilter.excluded.length;
+      dateExclusionReasons = dateFilter.reasonCounts;
+      console.info("[jobAgentService] Posting-date window audit", {
+        runId,
+        actorSource,
+        windowStart: options.windowStart,
+        windowEnd: options.windowEnd,
+        included: items.length,
+        excluded: dateExcludedCount,
+        reasons: dateExclusionReasons,
+      });
+    }
+
     const { deduped, duplicateCount: inRunDups } = dedupeInRun(items);
-    const { uniqueJobs, duplicateCount: crossRunDups } = await dedupeAcrossRunsAndJobs(deduped);
+    const { uniqueJobs, duplicateCount: crossRunDups } = await dedupeAcrossRunsAndJobs(
+      deduped,
+      options.batchId,
+    );
     const totalDupes = inRunDups + crossRunDups;
 
     // Vercel serverless functions time out after 10-60s. AI classification takes ~1-2s per batch of 15.
@@ -402,24 +411,66 @@ export async function processApifyRunData(
       console.warn(`[jobAgentService] Dataset too large (${uniqueJobs.length} unique jobs). Falling back to regex classification to prevent serverless timeout.`);
     }
 
-    const classifiedJobs = await classifyJobs(uniqueJobs, safeUseAi);
-    const stagedRows = classifiedJobs.map((j) => toStagedJobRow(runId, j));
-    await insertStagedJobs(runId, stagedRows);
+    const classifiedJobs = await classifyJobs(uniqueJobs, safeUseAi, options.roleGroups);
+    const dateCheckedAt = options.windowStart && options.windowEnd ? new Date().toISOString() : null;
+    const stagedRows = classifiedJobs.map((j) => {
+      const canonicalSignature = canonicalStagedSignature(j);
+      return {
+        ...toStagedJobRow(runId, j),
+        canonical_signature: canonicalSignature,
+        parsed_posted_at: dateCheckedAt ? j.date_posted : null,
+        date_window_status: dateCheckedAt ? "in_window" as const : "not_checked" as const,
+        date_exclusion_reason: null,
+        date_checked_at: dateCheckedAt,
+      };
+    });
+    const excludedAuditRows = dateCheckedAt
+      ? dateExcludedItems
+        .map(({ item, rawDate, reason }) => toDateExcludedStagedJob(
+          runId,
+          normalizeItem(item),
+          rawDate,
+          reason,
+          dateCheckedAt,
+          options.roleGroups,
+        ))
+        .filter((row): row is Omit<JobAgentStagedJobRow, "id" | "created_at"> => Boolean(row))
+      : [];
+    await insertStagedJobs(runId, [...stagedRows, ...excludedAuditRows]);
 
     const classifiedCount = stagedRows.filter((j) => !j.is_duplicate).length;
     const estimatedCostUsd = rawCount * COST_PER_RESULT_USD;
 
-    await updateRunStatus(runId, {
+    const completed = await transitionRunStatus(runId, "processing", {
       status: "succeeded",
+      date_excluded_count: dateExcludedCount,
+      date_exclusion_reasons: dateExclusionReasons,
+      processing_started_at: null,
       deduped_count: deduped.length,
-      skipped_count: totalDupes,
+      skipped_count: totalDupes + dateExcludedCount,
       classified_count: classifiedCount,
       estimated_cost_usd: estimatedCostUsd,
       completed_at: new Date().toISOString(),
     });
+    if (!completed) {
+      throw new Error("Run processing lease was lost before completion");
+    }
+    return {
+      rawCount,
+      dateIncludedCount: items.length,
+      dateExcludedCount,
+      dateExclusionReasons,
+      duplicateCount: totalDupes,
+      classifiedCount,
+    };
   } catch (err: any) {
     const message = err.message ?? "Processing failed";
-    await updateRunStatus(runId, { status: "failed", error: message, completed_at: new Date().toISOString() });
+    await transitionRunStatus(runId, "processing", {
+      status: "failed",
+      error: message,
+      processing_started_at: null,
+      completed_at: new Date().toISOString(),
+    }).catch(() => false);
     throw err;
   }
 }
@@ -600,14 +651,19 @@ function dedupeInRun(items: ApifyDatasetItem[]): { deduped: NormalizedJob[]; dup
   return { deduped, duplicateCount: dc };
 }
 
-async function dedupeAcrossRunsAndJobs(jobs: NormalizedJob[]): Promise<{ uniqueJobs: NormalizedJob[]; duplicateCount: number }> {
+async function dedupeAcrossRunsAndJobs(
+  jobs: NormalizedJob[],
+  excludeBatchId?: string,
+): Promise<{ uniqueJobs: NormalizedJob[]; duplicateCount: number }> {
   const hashes   = jobs.map((j) => j.hash);
   const urlHashes = jobs.map((j) => j.urlHash).filter(Boolean) as string[];
 
   // Check existing staged-job hashes (30-day window)
-  const existingStagedHashes  = await getDedupHashes(hashes);
+  const existingStagedHashes  = await getDedupHashes(hashes, excludeBatchId);
   // Check existing staged-job URL hashes (catches cross-actor duplicates in the same 30-day window)
-  const existingStagedUrlHashes = urlHashes.length > 0 ? await getSourceUrlHashes(urlHashes) : new Set<string>();
+  const existingStagedUrlHashes = urlHashes.length > 0
+    ? await getSourceUrlHashes(urlHashes, excludeBatchId)
+    : new Set<string>();
   // Check final jobs table via fuzzy match
   const existingJobs = await listAllJobsForFuzzyDedupe();
 
@@ -651,7 +707,11 @@ interface ClassifiedJob extends NormalizedJob {
   is_false_positive: boolean;
 }
 
-async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<ClassifiedJob[]> {
+async function classifyJobs(
+  jobs: NormalizedJob[],
+  useAi: boolean,
+  fallbackRoleGroups: string[] = [],
+): Promise<ClassifiedJob[]> {
   if (jobs.length === 0) return [];
 
   const CONCURRENCY = 15;
@@ -661,7 +721,13 @@ async function classifyJobs(jobs: NormalizedJob[], useAi: boolean): Promise<Clas
     const batch = jobs.slice(batchStart, batchStart + CONCURRENCY);
     const batchResults = await Promise.all(
       batch.map(async (job) => {
-        const group = job.search_query_used ? getGroupForSearchQuery(job.search_query_used) : undefined;
+        const group =
+          (job.search_query_used ? getGroupForSearchQuery(job.search_query_used) : undefined) ??
+          getGroupForSearchQuery(job.job_title) ??
+          inferRoleGroupForTitle(job.job_title, fallbackRoleGroups) ??
+          (fallbackRoleGroups.length === 1
+            ? getGroupById(fallbackRoleGroups[0])
+            : undefined);
         const gid = group?.id ?? null;
         const gl = group ? getGroupLabel(group.id) : null;
         const c = await classifyJob(
@@ -725,6 +791,73 @@ function toStagedJobRow(runId: string, job: ClassifiedJob): Omit<JobAgentStagedJ
     source_url_hash: job.urlHash || null,
     is_duplicate: job.raw._duplicate === true,
     import_status: "staged",
+    imported_job_id: null,
+    description_text: job.description_text,
+    company_website: null,
+    external_job_id: null,
+    country: null,
+    industry: null,
+  };
+}
+
+function canonicalStagedSignature(job: Pick<NormalizedJob, "job_title" | "company_name" | "location" | "urlHash" | "hash">): string {
+  const title = job.job_title.trim().toLowerCase().replace(/\s+/g, " ");
+  const company = (job.company_name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  const location = (job.location ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (title && company) return `${title}|${company}|${location || "unknown-location"}`;
+  if (job.urlHash) return `url|${job.urlHash}`;
+  return job.hash;
+}
+
+function toDateExcludedStagedJob(
+  runId: string,
+  job: NormalizedJob,
+  rawDate: string | null,
+  reason: DateExclusionReason,
+  checkedAt: string,
+  roleGroups: string[] | undefined,
+): Omit<JobAgentStagedJobRow, "id" | "created_at"> | null {
+  if (!job.job_title) return null;
+  const queryGroup = job.search_query_used
+    ? getGroupForSearchQuery(job.search_query_used)
+    : undefined;
+  const soleGroup = roleGroups?.length === 1 ? getGroupById(roleGroups[0]) : undefined;
+  const group = queryGroup ?? soleGroup;
+  return {
+    run_id: runId,
+    job_title: job.job_title,
+    company_name: job.company_name,
+    location: job.location,
+    salary_range: job.salary_range,
+    salary_min: job.salary_min,
+    salary_max: job.salary_max,
+    date_posted: rawDate,
+    via_platform: job.via_platform,
+    source_url: job.source_url,
+    apply_link: job.apply_link,
+    is_remote: job.is_remote,
+    employment_type: job.employment_type,
+    search_query_used: job.search_query_used,
+    role_group: group?.id ?? null,
+    role_group_label: group?.label ?? null,
+    seniority_guess: "unknown",
+    tier: "skip",
+    tier_reason: `Posting date excluded: ${reason}`,
+    ai_keywords: [],
+    relevance_score: 0,
+    is_false_positive: false,
+    dedup_hash: job.hash,
+    source_url_hash: job.urlHash || null,
+    canonical_signature: `excluded|${reason}|${canonicalStagedSignature(job)}|${job.hash}`,
+    parsed_posted_at: null,
+    date_window_status: "excluded",
+    date_exclusion_reason: reason,
+    import_exclusion_reason: `date_${reason}`,
+    date_checked_at: checkedAt,
+    batch_dedup_score: null,
+    batch_dedup_winner: false,
+    is_duplicate: false,
+    import_status: "rejected",
     imported_job_id: null,
     description_text: job.description_text,
     company_website: null,

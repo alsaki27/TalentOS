@@ -3,68 +3,60 @@ import { exchangeCandidateGoogleCode } from "@/server/auth/candidateGoogle";
 import {
   CANDIDATE_OAUTH_STATE_COOKIE,
   findCandidateByGoogleSub,
-  findCandidateByPortalToken,
+  findCandidateById,
   createCandidateAuthResponse,
 } from "@/server/auth/candidateAuth";
-import { execute } from "@/server/db/neon";
+import { queryOne } from "@/server/db/neon";
+import { consumeAuthOAuthState } from "@/server/repositories/authOAuthStateRepository";
+import { canonicalUrl } from "@/server/runtimeConfig";
 
-// Never derive redirects from the incoming request's origin — confirmed
-// unreliable inside this Worker runtime (a sibling route's req.url resolved to
-// "http://n" in production). Same TALENTOS_BASE_URL convention used everywhere
-// else in this codebase.
-const BASE_URL = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+function candidateLoginError(code: string) {
+  const url = canonicalUrl("/portal/login");
+  url.searchParams.set("error", code);
+  const response = NextResponse.redirect(url);
+  response.cookies.set(CANDIDATE_OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
+  return response;
+}
 
 export async function GET(req: NextRequest) {
-  const url = new URL(req.url);
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  const error = url.searchParams.get("error");
+  const code = req.nextUrl.searchParams.get("code");
+  const state = req.nextUrl.searchParams.get("state");
+  const error = req.nextUrl.searchParams.get("error");
+  const cookieState = req.cookies.get(CANDIDATE_OAUTH_STATE_COOKIE)?.value;
 
-  const stateCookieRaw = req.cookies.get(CANDIDATE_OAUTH_STATE_COOKIE)?.value;
-  let savedState: { state: string; invite: string } | null = null;
-  try {
-    savedState = stateCookieRaw ? JSON.parse(stateCookieRaw) : null;
-  } catch {
-    savedState = null;
-  }
-
-  if (error) return NextResponse.redirect(new URL("/portal/login?error=google", BASE_URL));
-  if (!code || !state || !savedState || savedState.state !== state) {
-    return NextResponse.redirect(new URL("/portal/login?error=state", BASE_URL));
-  }
+  if (error) return candidateLoginError("google");
+  if (!code || !state || !cookieState || cookieState !== state) return candidateLoginError("state");
 
   try {
+    const savedState = await consumeAuthOAuthState({ state, flow: "candidate_google" });
+    if (!savedState) return candidateLoginError("state");
+
     const googleUser = await exchangeCandidateGoogleCode(code);
-
-    // Case 1: this Google account is already linked to a candidate -> log in.
     let candidate = await findCandidateByGoogleSub(googleUser.sub);
 
-    // Case 2: fresh Google sign-in arriving via an invite link -> link it to that
-    // specific candidate record (never guess by email match alone; the invite
-    // token is the proof of identity here).
-    if (!candidate && savedState.invite) {
-      const invited = await findCandidateByPortalToken(savedState.invite);
-      if (
-        invited &&
-        !invited.portal_token_revoked_at &&
-        (!invited.portal_token_expires_at || new Date(invited.portal_token_expires_at).getTime() > Date.now())
-      ) {
-        await execute(
-          "UPDATE candidates SET google_sub = $1, account_email = $2, account_created_at = COALESCE(account_created_at, NOW()) WHERE id = $3",
-          [googleUser.sub, googleUser.email, invited.id]
-        );
-        candidate = { ...invited, google_sub: googleUser.sub, account_email: googleUser.email };
-      }
+    if (!candidate && savedState.candidate_id) {
+      candidate = await queryOne(
+        `UPDATE candidates
+            SET google_sub = $1,
+                account_email = $2,
+                account_created_at = COALESCE(account_created_at, NOW())
+          WHERE id = $3
+            AND (google_sub IS NULL OR google_sub = $1)
+          RETURNING id, name, email, account_email, google_sub, password_hash, account_created_at`,
+        [googleUser.sub, googleUser.email, savedState.candidate_id],
+      );
     }
 
-    if (!candidate) {
-      return NextResponse.redirect(new URL("/portal/login?error=no_account", BASE_URL));
-    }
+    if (!candidate && savedState.candidate_id) candidate = await findCandidateById(savedState.candidate_id);
+    if (!candidate || candidate.google_sub !== googleUser.sub) return candidateLoginError("no_account");
 
-    const response = await createCandidateAuthResponse(candidate, new URL("/portal", BASE_URL).toString());
+    const response = await createCandidateAuthResponse(candidate, canonicalUrl("/portal").toString());
     response.cookies.set(CANDIDATE_OAUTH_STATE_COOKIE, "", { httpOnly: true, path: "/", maxAge: 0 });
     return response;
-  } catch (err: any) {
-    return NextResponse.redirect(new URL(`/portal/login?error=${encodeURIComponent(err.message || "google")}`, BASE_URL));
+  } catch (error) {
+    console.error("[candidate-google-callback] OAuth callback failed", {
+      code: error instanceof Error ? error.name : "UNKNOWN_ERROR",
+    });
+    return candidateLoginError("google");
   }
 }

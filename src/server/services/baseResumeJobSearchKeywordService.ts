@@ -2,6 +2,8 @@ import { query, queryOne } from "@/server/db/neon";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { sha256Hex } from "@/lib/sha256";
+import { compileAdditionalRules } from "@/lib/candidateJobMatcher";
 
 export const BASE_RESUME_KEYWORD_AGENT_ID = "BaseResume_TO_JobSearchKeyword";
 export const MAX_BASE_RESUME_KEYWORDS = 48;
@@ -290,6 +292,9 @@ function asKeywordStates(value: unknown): KeywordState[] {
 function mergeWithHumanReview(aiStates: KeywordState[], existingStates: KeywordState[]): KeywordState[] {
   const dismissed = new Set(existingStates.filter((item) => item.status === "dismissed").map((item) => keyFor(item.term)));
   const manualActive = existingStates.filter((item) => item.status === "active" && item.source === "manual");
+  if (new Set(manualActive.map((item) => keyFor(item.term))).size > MAX_BASE_RESUME_KEYWORDS) {
+    throw new Error(`This profile has more than ${MAX_BASE_RESUME_KEYWORDS} active manager-authored terms and must be reviewed before regeneration.`);
+  }
   const result: KeywordState[] = [];
   const seen = new Set<string>();
 
@@ -380,6 +385,7 @@ export async function generateBaseResumeJobSearchProfile(options: {
   const systemPrompt = config?.system_prompt && !usesStalePrompt ? config.system_prompt : FALLBACK_SYSTEM_PROMPT;
   const promptVersion = usesStalePrompt || !configuredPromptVersion ? CURRENT_BASE_RESUME_PROMPT_VERSION : configuredPromptVersion;
   const professionalSnapshot = safeProfessionalSnapshot(baseResume.content);
+  const resumeContentHash = await sha256Hex(JSON.stringify(baseResume.content ?? {}));
   const inputSnapshot = {
     candidate_name: baseResume.candidate_name,
     target_industry: baseResume.target_industry,
@@ -396,17 +402,15 @@ export async function generateBaseResumeJobSearchProfile(options: {
   );
   await query(
     `INSERT INTO candidate_resume_search_profiles
-      (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, updated_by)
-     VALUES ($1, $2, $3, $4::jsonb, '', 'running', NULL, $5)
+      (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status,
+       last_generation_error, review_status, resume_content_hash, updated_by)
+     VALUES ($1, $2, $3, $4::jsonb, '', 'running', NULL, 'pending', $5, $6)
      ON CONFLICT (base_resume_id) DO UPDATE SET
-       keywords = EXCLUDED.keywords,
-       keyword_states = EXCLUDED.keyword_states,
-       additional_rules = EXCLUDED.additional_rules,
        generation_status = 'running',
        last_generation_error = NULL,
        updated_by = EXCLUDED.updated_by,
        updated_at = NOW()`,
-    [baseResume.candidate_id, baseResume.id, reviewKeywords, JSON.stringify(reviewStates), options.userId ?? null]
+    [baseResume.candidate_id, baseResume.id, reviewKeywords, JSON.stringify(reviewStates), resumeContentHash, options.userId ?? null]
   );
 
   try {
@@ -467,25 +471,35 @@ export async function generateBaseResumeJobSearchProfile(options: {
     const mergedStates = mergeWithHumanReview(aiStates, existingStates);
     const activeKeywords = mergedStates.filter((item) => item.status === "active").slice(0, MAX_BASE_RESUME_KEYWORDS).map((item) => item.term);
     const rules = normalizeRules(parsed.additional_rules);
+    const rulesJson = compileAdditionalRules(rules.join("\n"));
     const completedAt = new Date().toISOString();
     const profile = await queryOne<any>(
       `INSERT INTO candidate_resume_search_profiles
         (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status,
-         last_generated_at, last_generation_model, last_generation_prompt_version, last_generation_error, updated_by)
-       VALUES ($1, $2, $3, $4::jsonb, $5, 'complete', $6, $7, $8, NULL, $9)
+         last_generated_at, last_generation_model, last_generation_prompt_version, last_generation_error,
+         review_status, approved_by, approved_at, resume_content_hash, profile_version, rules_json, updated_by)
+       VALUES ($1, $2, $3, $4::jsonb, $5, 'complete', $6, $7, $8, NULL,
+               'pending', NULL, NULL, $9, 1, $10::jsonb, $11)
        ON CONFLICT (base_resume_id) DO UPDATE SET
          keywords = EXCLUDED.keywords,
          keyword_states = EXCLUDED.keyword_states,
          additional_rules = EXCLUDED.additional_rules,
+         rules_json = EXCLUDED.rules_json,
          generation_status = 'complete',
          last_generated_at = EXCLUDED.last_generated_at,
          last_generation_model = EXCLUDED.last_generation_model,
          last_generation_prompt_version = EXCLUDED.last_generation_prompt_version,
          last_generation_error = NULL,
+         review_status = 'pending',
+         approved_by = NULL,
+         approved_at = NULL,
+         approved_profile_version = NULL,
+         resume_content_hash = EXCLUDED.resume_content_hash,
+         profile_version = candidate_resume_search_profiles.profile_version + 1,
          updated_by = EXCLUDED.updated_by,
          updated_at = NOW()
        RETURNING *`,
-      [baseResume.candidate_id, baseResume.id, activeKeywords, JSON.stringify(mergedStates), rules.join("\n"), completedAt, call.model || "gemini-2.5-pro", promptVersion, options.userId ?? null]
+      [baseResume.candidate_id, baseResume.id, activeKeywords, JSON.stringify(mergedStates), rules.join("\n"), completedAt, call.model || "gemini-2.5-pro", promptVersion, resumeContentHash, JSON.stringify(rulesJson), options.userId ?? null]
     );
     await query(
       `UPDATE base_resume_keyword_agent_runs
@@ -504,12 +518,9 @@ export async function generateBaseResumeJobSearchProfile(options: {
     );
     await query(
       `INSERT INTO candidate_resume_search_profiles
-        (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, updated_by)
-       VALUES ($1, $2, $3, $4::jsonb, '', 'failed', $5, $6)
+        (candidate_id, base_resume_id, keywords, keyword_states, additional_rules, generation_status, last_generation_error, review_status, updated_by)
+       VALUES ($1, $2, $3, $4::jsonb, '', 'failed', $5, 'pending', $6)
        ON CONFLICT (base_resume_id) DO UPDATE SET
-         keywords = EXCLUDED.keywords,
-         keyword_states = EXCLUDED.keyword_states,
-         additional_rules = EXCLUDED.additional_rules,
          generation_status = 'failed', last_generation_error = EXCLUDED.last_generation_error,
          updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
       [baseResume.candidate_id, baseResume.id, reviewKeywords, JSON.stringify(reviewStates), message, options.userId ?? null]

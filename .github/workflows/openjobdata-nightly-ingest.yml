@@ -57,8 +57,8 @@ jobs:
         env:
           # BASE_URL is what openjobdata_ingest.py reads (os.environ.get("BASE_URL")).
           # TALENTOS_INGEST_URL kept as an alias in case other scripts use it.
-          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
-          TALENTOS_INGEST_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          TALENTOS_INGEST_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           # INGEST_SECRET is what openjobdata_ingest.py reads for the bearer token.
           INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -80,7 +80,7 @@ jobs:
         # cron would otherwise pick up the run.
         if: github.event.inputs.dry_run != 'true'
         env:
-          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           echo "Starting Job CEO dispatch loop — driving pipeline to completion..."
@@ -93,7 +93,7 @@ jobs:
           while [ $SECONDS -lt $WALL_END ]; do
             CALLS=$((CALLS + 1))
 
-            CLEAN_BASE_URL=$(echo "${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}" | tr -d '[:space:]')
+            CLEAN_BASE_URL=$(echo "${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}" | tr -d '[:space:]')
             
             # Use the exact curl invocation format from scheduled-jobs.yml which is known to work
             RESPONSE=$(curl -sS -w "\n%{http_code}" \

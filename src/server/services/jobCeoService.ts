@@ -577,7 +577,7 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
       var totalSec = ((Date.now() - chainStart) / 1000).toFixed(1);
       console.log(`[Job CEO] Dev chain DONE — ${totalSec}s, ${totalProcessed} items, ${iteration} iterations, final stage=${r.stage}`);
     } else {
-      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+      const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
       const cronSecret = process.env.CRON_SECRET;
       await backgroundDispatch(
         fetch(`${baseUrl}/api/job-ceo/dispatch`, {

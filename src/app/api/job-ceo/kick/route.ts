@@ -8,7 +8,7 @@ export async function POST(req: NextRequest) {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
-  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+  const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
   const cronSecret = process.env.CRON_SECRET;
   
   await backgroundDispatch(

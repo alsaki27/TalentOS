@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
         process.env.TALENTOS_BASE_URL ||
         (process.env.NODE_ENV === "development"
           ? "http://localhost:3000"
-          : "https://skarion-talent-os.skarion-talentos.workers.dev");
+          : "https://talent.skarion.com");
       const cronSecret = process.env.CRON_SECRET;
       await backgroundDispatch(
         fetch(`${baseUrl}/api/job-ceo/dispatch`, {

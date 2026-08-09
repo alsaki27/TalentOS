@@ -1,8 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
 import { queryOne, execute } from "@/server/db/neon";
+import { envFlag, googleConfigurationReadiness } from "@/server/runtimeConfig";
+import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
+  if (!envFlag("CANDIDATE_GMAIL_ENABLED")) {
+    return NextResponse.json({ error: "CANDIDATE_GMAIL_DISABLED" }, { status: 503 });
+  }
+  const readiness = googleConfigurationReadiness();
+  if (!readiness.ready || !isEncryptionAvailable()) {
+    return NextResponse.json({ error: "CANDIDATE_GMAIL_NOT_READY" }, { status: 503 });
+  }
   const candidate = await queryOne<{ id: string; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
     "SELECT id, portal_token_expires_at, portal_token_revoked_at FROM candidates WHERE portal_token = $1",
     [params.token]

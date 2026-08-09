@@ -9,10 +9,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const url = process.env.DATABASE_URL;
 if (!url) { console.error("DATABASE_URL not set"); process.exit(1); }
 
-const migrations = [
-  resolve(__dirname, "../sql/06_ai_key_manager_v2.sql"),
-  resolve(__dirname, "../sql/07_application_ai_workflows.sql"),
-];
+const migrations = process.argv.slice(2).map(arg => resolve(process.cwd(), arg));
+if (migrations.length === 0) {
+  console.error("Please provide at least one SQL file to run.");
+  process.exit(1);
+}
 
 // Split SQL into individual statements, respecting string literals and dollar-quotes
 function splitSql(sql) {

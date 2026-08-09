@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // unreliable inside this Worker runtime (confirmed: resolved to "http://n" in
   // production, breaking the emailed link). Same TALENTOS_BASE_URL convention
   // used everywhere else in this codebase (e.g. jobCeoService.ts).
-  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+  const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
   const link = `${baseUrl}/portal/invite/${candidate.portal_token}`;
 
   let emailResult: { success: boolean; error?: string } = { success: false, error: "No email on file for this candidate." };

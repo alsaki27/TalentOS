@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     // past this response instead of racing it - a plain un-awaited fetch
     // here was confirmed (on the resume-agent pipeline this mirrors) to get
     // killed before the dispatch endpoint's invocation ever ran.
-    const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+    const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
     const cronSecret = process.env.CRON_SECRET;
     await backgroundDispatch(
       fetch(`${baseUrl}/api/job-ceo/dispatch`, { 

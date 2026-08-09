@@ -58,11 +58,12 @@ export async function insertStaged(
     placeholdersList.push("(" + rowPh.join(", ") + ")");
   }
 
-  await execute(
-    "INSERT INTO job_ceo_staging (" + cols.join(", ") + ") VALUES " + placeholdersList.join(", "),
+  const inserted = await query<{ id: string }>(
+    "INSERT INTO job_ceo_staging (" + cols.join(", ") + ") VALUES " + placeholdersList.join(", ") +
+      " ON CONFLICT DO NOTHING RETURNING id",
     valuesList
   );
-  return rows.length;
+  return inserted.length;
 }
 
 /**
@@ -76,39 +77,38 @@ export async function checkAndRecordDedup(
 ): Promise<Set<string>> {
   if (signatures.length === 0) return new Set();
 
-  const sigValues = signatures.map((s) => s.signature);
-
-  // Find which signatures already exist
-  const placeholders = sigValues.map((_, i) => `$${i + 1}`).join(", ");
-  const existing = await query<{ signature: string }>(
-    `SELECT signature FROM job_ceo_seen_signatures WHERE signature IN (${placeholders})`,
-    sigValues
-  );
-  const existingSet = new Set(existing.map((r) => r.signature));
-
-  // Filter to new-only
-  const newSigs = signatures.filter((s) => !existingSet.has(s.signature));
-
-  if (newSigs.length === 0) return new Set();
-
-  // Insert new signatures in bulk
-  const insertValues: unknown[] = [];
-  const insertPlaceholders: string[] = [];
-  let idx = 1;
-  for (const s of newSigs) {
-    insertPlaceholders.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3})`);
-    insertValues.push(s.signature, runId, s.title, s.company);
-    idx += 4;
+  // The previous read-then-insert implementation could race: two callers could
+  // both decide a signature was new even though only one INSERT won.  Let
+  // Postgres arbitrate the conflict and return only the signatures this caller
+  // actually reserved.
+  const unique = new Map<string, { title: string; company: string }>();
+  for (const item of signatures) {
+    if (!unique.has(item.signature)) {
+      unique.set(item.signature, { title: item.title, company: item.company });
+    }
   }
 
-  await execute(
-    `INSERT INTO job_ceo_seen_signatures (signature, run_id, title, company)
-     VALUES ${insertPlaceholders.join(", ")}
-     ON CONFLICT (signature) DO NOTHING`,
-    insertValues
+  const entries = Array.from(unique.entries());
+  const inserted = await query<{ signature: string }>(
+    `WITH input AS (
+       SELECT *
+       FROM UNNEST($1::text[], $2::text[], $3::text[])
+         AS value(signature, title, company)
+     )
+     INSERT INTO job_ceo_seen_signatures (signature, run_id, title, company)
+     SELECT signature, $4::uuid, title, company
+     FROM input
+     ON CONFLICT (signature) DO NOTHING
+     RETURNING signature`,
+    [
+      entries.map(([signature]) => signature),
+      entries.map(([, value]) => value.title),
+      entries.map(([, value]) => value.company),
+      runId,
+    ]
   );
 
-  return new Set(newSigs.map((s) => s.signature));
+  return new Set(inserted.map((row) => row.signature));
 }
 
 export async function removeDedupSignature(signature: string): Promise<void> {

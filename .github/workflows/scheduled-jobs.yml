@@ -1,21 +1,21 @@
 name: Scheduled Jobs
 
 env:
-  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # dispatch-workflows + email-queue – every 5 minutes
+    - cron: '*/5 * * * *'  # workflow dispatch + email queue + Job Agent polling
     - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
     - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
-    - cron: '0 0 * * *'    # Job agent scrape – daily at 00:00 UTC
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
     - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
     - cron: '*/20 * * * *' # Gmail sync + AI triage – every 20 minutes
+    - cron: '0 2 * * *'     # Candidate-job matching – 08:00 Asia/Dhaka
   workflow_dispatch:
     inputs:
       job:
@@ -31,7 +31,6 @@ on:
           - backup
           - job-categorization
           - ai-usage-rollup
-          - job-agent
           - email-queue
           - run-all
           - job-ceo-dispatch
@@ -39,9 +38,32 @@ on:
           - retry-failed-since
           - job-agent-poll
           - gmail-sync
+          - active-candidate-job-match
 
 
 jobs:
+  active-candidate-job-match:
+    if: >
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *') ||
+      github.event.inputs.job == 'active-candidate-job-match' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Active candidate job matching
+    steps:
+      - name: Match approved candidate profiles to recent jobs
+        run: |
+          INVOCATION="${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}"
+          HTTP_CODE=$(curl -s -o response.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "X-Candidate-Match-Invocation: $INVOCATION" \
+            -H "Content-Type: application/json" \
+            "${{ env.TALENTOS_BASE_URL }}/api/cron/active-candidate-job-match")
+          cat response.json
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Candidate matcher failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
   dispatch-workflows:
     if: >
       (github.event_name == 'schedule' &&
@@ -166,23 +188,6 @@ jobs:
       - name: Call Job categorization
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
-            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
-            exit 1
-          fi
-
-  job-agent:
-    if: >
-      (github.event_name == 'schedule' &&
-       github.event.schedule == '0 0 * * *') ||
-      github.event.inputs.job == 'job-agent' ||
-      github.event.inputs.job == 'run-all'
-    runs-on: ubuntu-latest
-    name: Job agent scrape
-    steps:
-      - name: Call Job agent scrape
-        run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/job-agent")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

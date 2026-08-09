@@ -10,6 +10,16 @@ compatibility_flags = ["nodejs_compat"]
 # Workers + Assets: host static frontend files
 assets = { directory = ".worker-next/assets", binding = "ASSETS" }
 
+[vars]
+TALENTOS_BASE_URL = "https://talent.skarion.com"
+STAFF_GOOGLE_AUTH_ENABLED = "true"
+CANDIDATE_GOOGLE_AUTH_ENABLED = "true"
+CANDIDATE_MFA_ENABLED = "true"
+CANDIDATE_GMAIL_ENABLED = "true"
+BASE_RESUME_KEYWORD_AGENT_ENABLED = "true"
+CANDIDATE_JOB_MATCHER_ENABLED = "true"
+CANDIDATE_JOB_MATCHER_MODE = "dry_run"
+
 # CPU-time budget for this Worker. This is actual JS compute time only -
 # time spent awaiting a fetch() to an upstream API (Gemini/Vertex, Neon,
 # etc.) does NOT count against it (see Cloudflare's CPU-time docs). On the

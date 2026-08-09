@@ -29,7 +29,16 @@ interface CloudflareEnv {
   TALENT_OS_WEBHOOK_SECRET?: string;
   CRAWLER_API_KEY?: string;
   APP_BASE_URL?: string;
+  TALENTOS_BASE_URL?: string;
   NODE_ENV?: string;
+  STAFF_GOOGLE_AUTH_ENABLED?: string;
+  CANDIDATE_GOOGLE_AUTH_ENABLED?: string;
+  CANDIDATE_MFA_ENABLED?: string;
+  CANDIDATE_GMAIL_ENABLED?: string;
+  BASE_RESUME_KEYWORD_AGENT_ENABLED?: string;
+  CANDIDATE_JOB_MATCHER_ENABLED?: string;
+  CANDIDATE_JOB_MATCHER_MODE?: string;
+  CANDIDATE_MATCH_DEFAULT_AE_USER_ID?: string;
 
   // ── R2 Storage ──
   R2_ACCOUNT_ID?: string;
@@ -43,6 +52,7 @@ interface CloudflareEnv {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_OAUTH_REDIRECT_URI?: string;
+  GMAIL_OAUTH_REDIRECT_URI?: string;
   GMAIL_CLIENT_ID?: string;
   GMAIL_CLIENT_SECRET?: string;
 

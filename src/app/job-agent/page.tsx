@@ -8,6 +8,53 @@ import { LiveFeedBoard } from "./LiveFeedBoard";
 interface Run { id: string; config_id: string; status: string; raw_count: number; deduped_count: number; imported_count: number; skipped_count: number; classified_count: number; estimated_cost_usd: number; error: string | null; role_groups_ran: string[] | null; started_at: string; completed_at: string | null; best_count: number; medium_count: number; worthy_count: number; skip_count: number; staged_count: number; }
 interface RoleGroup { id: string; label: string; resumeFamily: string; titles: string[]; }
 interface KeywordGroup { id: string; label: string; keywords: string[]; }
+interface NightlyActorProgress { total: number; terminal: number; succeeded: number; failed: number; retrying: number; active: number; attempts: number; }
+interface NightlyBatchShard { shard_key: string; actor_source: "indeed" | "linkedin" | "google"; status: string; attempt_count: number; max_attempts: number; }
+interface NightlyBatch {
+  id: string;
+  business_date: string;
+  timezone: string;
+  window_start: string;
+  window_end: string;
+  auto_import: boolean;
+  status: string;
+  expected_shards: number;
+  terminal_shards: number;
+  succeeded_shards: number;
+  failed_shards: number;
+  raw_count: number;
+  accepted_count: number;
+  date_excluded_count: number;
+  date_exclusion_reasons: Record<string, number>;
+  duplicate_count: number;
+  classified_count: number;
+  imported_count: number;
+  last_error: string | null;
+  errors: Array<Record<string, unknown>>;
+  job_ceo_run_id: string | null;
+  tier_counts: { best: number; medium: number; worthy: number; skip: number };
+  actor_progress: Record<"indeed" | "linkedin" | "google", NightlyActorProgress>;
+  shards: NightlyBatchShard[];
+}
+
+const NIGHTLY_ACTORS = [
+  { id: "indeed", label: "Indeed" },
+  { id: "linkedin", label: "LinkedIn" },
+  { id: "google", label: "Google" },
+] as const;
+
+function dateExclusionSummary(reasons: Record<string, number> | null | undefined): string {
+  const entries = Object.entries(reasons ?? {}).filter(([, count]) => Number(count) > 0);
+  if (entries.length === 0) return "None";
+  return entries.map(([reason, count]) => `${reason.replaceAll("_", " ")}: ${count}`).join(" · ");
+}
+
+function nightlyShardTitle(batch: NightlyBatch, actor: string): string {
+  return batch.shards
+    .filter((shard) => shard.actor_source === actor)
+    .map((shard) => `${shard.shard_key}: ${shard.status} (attempt ${shard.attempt_count}/${shard.max_attempts})`)
+    .join("\n");
+}
 
 function groupLabel(raw: string[] | string | null): { short: string; full: string } {
   let ids: string[];
@@ -24,6 +71,8 @@ function groupLabel(raw: string[] | string | null): { short: string; full: strin
 
 export default function JobAgentPage() {
   const [runs, setRuns] = useState<Run[]>([]);
+  const [nightlyBatches, setNightlyBatches] = useState<NightlyBatch[]>([]);
+  const [nightlyBatchError, setNightlyBatchError] = useState("");
   const [roleGroups, setRoleGroups] = useState<RoleGroup[]>([]);
   const [keywordGroups, setKeywordGroups] = useState<KeywordGroup[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,8 +93,8 @@ export default function JobAgentPage() {
   const [showKgForm, setShowKgForm] = useState(false);
 
   async function load() {
-    const [runsRes, libRes, kgRes] = await Promise.allSettled([
-      fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"),
+    const [runsRes, libRes, kgRes, batchesRes] = await Promise.allSettled([
+      fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"), fetch("/api/job-agent/batches?limit=10"),
     ]);
     if (runsRes.status === "fulfilled" && runsRes.value.ok) setRuns((await runsRes.value.json().catch(() => [])) ?? []);
     if (libRes.status === "fulfilled" && libRes.value.ok) {
@@ -53,6 +102,16 @@ export default function JobAgentPage() {
       setRoleGroups(d.groups ?? []);
     }
     if (kgRes.status === "fulfilled" && kgRes.value.ok) setKeywordGroups((await kgRes.value.json().catch(() => [])) ?? []);
+    if (batchesRes.status === "fulfilled" && batchesRes.value.ok) {
+      const data = await batchesRes.value.json().catch(() => ({ batches: [] }));
+      setNightlyBatches(data.batches ?? []);
+      setNightlyBatchError("");
+    } else if (batchesRes.status === "fulfilled") {
+      const data = await batchesRes.value.json().catch(() => ({}));
+      setNightlyBatchError(data.error ?? "Could not load nightly batches");
+    } else {
+      setNightlyBatchError("Could not load nightly batches");
+    }
   }
 
   useEffect(() => { load().then(() => setLoading(false)); }, []);
@@ -257,6 +316,112 @@ export default function JobAgentPage() {
               </div>
             </details>
           ))}
+        </div>
+      )}
+    </div>
+
+    {/* Nightly batch visibility */}
+    <div className="card" style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Nightly Automation</h2>
+        <span className="muted" style={{ fontSize: 12 }}>12:00 AM Asia/Dhaka · 48-hour window</span>
+      </div>
+      {nightlyBatchError ? (
+        <p className="form-error" style={{ fontSize: 12 }}>{nightlyBatchError}</p>
+      ) : loading ? (
+        <TableSkeleton cols={8} />
+      ) : nightlyBatches.length === 0 ? (
+        <p className="muted">No nightly batches yet.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Business Date</th>
+                <th>Status</th>
+                <th>Actor / Shards</th>
+                <th>Raw / Accepted</th>
+                <th>Date Excluded</th>
+                <th>Duplicates</th>
+                <th>Tiers</th>
+                <th>Imported</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nightlyBatches.map((batch) => {
+                const isActive = ["creating", "launching", "running", "finalizing", "finalization_failed"].includes(batch.status);
+                const isFailure = ["failed", "cancelled", "finalization_failed"].includes(batch.status);
+                const windowTitle = `${new Date(batch.window_start).toLocaleString()} → ${new Date(batch.window_end).toLocaleString()}`;
+                return (
+                  <tr key={batch.id}>
+                    <td title={`Immutable window: ${windowTitle}`}>
+                      <div style={{ fontWeight: 600 }}>{String(batch.business_date).slice(0, 10)}</div>
+                      <div className="muted" style={{ fontSize: 10 }}>{batch.timezone}</div>
+                    </td>
+                    <td>
+                      <span
+                        className={`badge ${isFailure ? "badge-danger" : isActive ? "badge-warning" : ""}`}
+                        style={isActive && !isFailure ? { animation: "pulse 1.5s infinite" } : undefined}
+                      >
+                        {batch.status.replaceAll("_", " ")}
+                      </span>
+                      <div className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+                        {batch.terminal_shards}/{batch.expected_shards} terminal · {batch.succeeded_shards} ok · {batch.failed_shards} failed
+                      </div>
+                      {!batch.auto_import && <div className="muted" style={{ fontSize: 10 }}>Dry run · approval required</div>}
+                      {(batch.last_error || batch.errors?.length > 0) && (
+                        <div className="form-error" style={{ fontSize: 10, marginTop: 4 }} title={batch.last_error ?? undefined}>
+                          {batch.last_error ?? `${batch.errors.length} recorded error(s)`}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {NIGHTLY_ACTORS.map((actor) => {
+                        const progress = batch.actor_progress[actor.id];
+                        if (!progress) return null;
+                        return (
+                          <div key={actor.id} style={{ fontSize: 11, whiteSpace: "nowrap" }} title={nightlyShardTitle(batch, actor.id)}>
+                            <strong>{actor.label}</strong> {progress.terminal}/{progress.total}
+                            {progress.failed > 0 && <span style={{ color: "#991b1b" }}> · {progress.failed} failed</span>}
+                            {progress.retrying > 0 && <span style={{ color: "#854d0e" }}> · {progress.retrying} retry</span>}
+                            {progress.active > 0 && <span className="muted"> · {progress.active} active</span>}
+                            {progress.attempts > progress.total && <span className="muted"> · {progress.attempts} attempts</span>}
+                          </div>
+                        );
+                      })}
+                    </td>
+                    <td>
+                      <strong>{batch.raw_count}</strong> / {batch.accepted_count}
+                      <div className="muted" style={{ fontSize: 10 }}>{batch.classified_count} classified</div>
+                    </td>
+                    <td>
+                      <strong>{batch.date_excluded_count}</strong>
+                      <div className="muted" style={{ fontSize: 10, maxWidth: 190 }}>
+                        {dateExclusionSummary(batch.date_exclusion_reasons)}
+                      </div>
+                    </td>
+                    <td>{batch.duplicate_count}</td>
+                    <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+                      <span style={{ color: "#166534" }}>B {batch.tier_counts.best}</span> ·{" "}
+                      <span style={{ color: "#854d0e" }}>M {batch.tier_counts.medium}</span> ·{" "}
+                      <span style={{ color: "#1e40af" }}>W {batch.tier_counts.worthy}</span> ·{" "}
+                      <span style={{ color: "#991b1b" }}>S {batch.tier_counts.skip}</span>
+                    </td>
+                    <td>
+                      <strong>{batch.imported_count}</strong>
+                      {batch.job_ceo_run_id && (
+                        <div style={{ marginTop: 3 }}>
+                          <Link href={`/job-ceo/runs/${batch.job_ceo_run_id}`} style={{ color: "var(--accent)", fontSize: 11 }}>
+                            Job CEO {batch.job_ceo_run_id.slice(0, 8)} →
+                          </Link>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>

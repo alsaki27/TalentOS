@@ -7,6 +7,7 @@
 import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
+import { isTitleRelevantToGroup } from "@/lib/jobAgentRoleLibrary";
 
 const AUTOMATION_ID = "job_categorization";
 
@@ -45,8 +46,8 @@ const DEFAULT_SYSTEM_PROMPT =
 const DEFAULT_USER_PROMPT_PREAMBLE = `You are a strict job-posting classifier for a recruiting agent. The agent searches Google Jobs with specific role titles and must decide whether each result is actually relevant.
 
 CRITICAL RULES:
-- Role group "A" (OSP / Fiber): ALL seniority levels are wanted. Never assign "skip" just because the title sounds senior.
-- Role groups "B" through "L": entry-level candidates are preferred. Assign "skip" to titles containing clear senior signals (senior, sr, lead, principal, staff, director, expert, III, IV, V, head of, chief). Managers are also skipped UNLESS the title is explicitly a hybrid like "project manager-drafter".
+- Role groups "A" through "R" contain an explicitly approved title library, including several senior titles. Never assign "skip" solely because a title sounds senior, managerial, lead, principal, staff, director, expert, III, IV, V, head, or chief when the role is otherwise relevant to its selected group.
+- Seniority is still recorded for matching and review, but relevance and false-positive checks decide whether the job is kept.
 - Relevance / false positives: If the company name or job title clearly does not match the intended domain, set is_false_positive = true. Example: a "Splice Engineer" query returning a role at Splice (the music-tech company) is a false positive.
 - Industry: do NOT reject based on industry. Candidates relocate and industries vary.
 
@@ -211,6 +212,7 @@ export function classifyWithRegex(input: ClassifyInput): ClassificationResult {
   const title = input.title;
   const company = (input.company_name ?? "").toLowerCase();
   const isOspFiber = input.role_group === "A";
+  const isDefaultRoleGroup = /^[A-R]$/.test(input.role_group.toUpperCase());
 
   // False-positive company check
   for (const fp of FALSE_POSITIVE_COMPANIES) {
@@ -240,21 +242,45 @@ export function classifyWithRegex(input: ClassifyInput): ClassificationResult {
     };
   }
 
-  // Groups B–L: prefer entry, skip senior titles
+  // Record seniority while preserving relevant roles explicitly configured in A-R.
   const isSenior =
     SENIOR_SIGNALS.test(title) ||
     (MGR_EXCEPTION.test(title) && !/project manager-drafter/i.test(title));
   const isEntry = ENTRY_SIGNALS.test(title);
 
-  if (isSenior) {
+  if (isSenior && !isDefaultRoleGroup) {
     return {
       seniority: "senior",
       tier: "skip",
-      tier_reason: "Senior/director/principal/manager title — skipped for entry-level groups",
+      tier_reason: "Senior/director/principal/manager title outside a configured A-R role group",
       is_false_positive: false,
       false_positive_reason: null,
       relevance_score: 0.2,
       keywords: [],
+    };
+  }
+
+  if (isDefaultRoleGroup && !isTitleRelevantToGroup(title, input.role_group)) {
+    return {
+      seniority: "unknown",
+      tier: "skip",
+      tier_reason: "Title is unrelated to the configured role group",
+      is_false_positive: true,
+      false_positive_reason: `Title "${title}" does not match role group ${input.role_group}`,
+      relevance_score: 0.05,
+      keywords: [],
+    };
+  }
+
+  if (isSenior) {
+    return {
+      seniority: "senior",
+      tier: "worthy",
+      tier_reason: "Relevant configured role; seniority recorded without automatic rejection",
+      is_false_positive: false,
+      false_positive_reason: null,
+      relevance_score: 0.65,
+      keywords: deriveKeywords(title),
     };
   }
 

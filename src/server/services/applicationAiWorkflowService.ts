@@ -302,7 +302,7 @@ export async function triggerAiWorkflowForApplication(
     matchReason: matchReason ?? undefined,
   });
 
-  const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
+  const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
   console.log(`[Dispatch Chain] Workflow ${workflowId} created with status ${'queued'}, stage 0. Triggering background dispatch to ${baseUrl}/api/application-ai-workflows/dispatch`);
   await backgroundDispatch(
     fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
@@ -643,7 +643,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     // between stages waiting for the 5-minute cron dispatcher.
     // Making an HTTP fetch to ourselves guarantees a fresh Cloudflare invocation
     // with a reset 50-subrequest limit.
-    const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
+    const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
     await backgroundDispatch(
       fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
         method: 'POST'
@@ -666,7 +666,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       await syncWorkflowToApplication(workflowId, "queued");
 
       // Continue retry immediately — don't wait for cron
-      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev';
+      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
       await backgroundDispatch(
         fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
           method: 'POST'

@@ -10,6 +10,8 @@ export interface RoleGroup {
   id: string;
   label: string;
   resumeFamily: string;
+  /** Included in the automated nightly Apify search matrix. */
+  nightlyDefault: boolean;
   titles: string[];
 }
 
@@ -18,6 +20,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "A",
     label: "OSP / Fiber",
     resumeFamily: "osp_fiber",
+    nightlyDefault: true,
     titles: [
       "OSP Design Engineer", "Outside Plant Engineer", "OSP Engineer",
       "Fiber Design Engineer", "FTTH Design Engineer", "Fiber Optic Design Engineer",
@@ -43,6 +46,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "B",
     label: "CAD / Drafting",
     resumeFamily: "autocad_drafting",
+    nightlyDefault: true,
     titles: [
       "AutoCAD Drafter", "CAD Technician", "CAD Designer", "Drafter",
       "Drafter I", "Design Drafter", "Civil CAD Drafter",
@@ -61,6 +65,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "C",
     label: "GIS / Geospatial",
     resumeFamily: "gis_geospatial",
+    nightlyDefault: true,
     titles: [
       "GIS Analyst", "GIS Technician", "GIS Specialist", "GIS Coordinator",
       "GIS Developer", "GIS Mapping Technician", "Geospatial Analyst",
@@ -77,6 +82,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "D",
     label: "Mechanical / Manufacturing / Product CAD",
     resumeFamily: "mechanical_cad",
+    nightlyDefault: true,
     titles: [
       "Mechanical Drafter", "Mechanical Designer", "Mechanical CAD Technician",
       "Product Design Drafter", "Product Development Designer",
@@ -90,6 +96,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "E",
     label: "Electrical / Controls / PCB CAD / Power Engineering",
     resumeFamily: "electrical_cad",
+    nightlyDefault: true,
     titles: [
       "Electrical Drafter", "Electrical Designer", "Electrical Design Technician",
       "Controls Drafter", "Instrumentation Drafter",
@@ -106,6 +113,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "F",
     label: "Civil / Land Development CAD",
     resumeFamily: "civil_cad",
+    nightlyDefault: true,
     titles: [
       "Civil Drafter", "Civil Designer", "Civil 3D Technician",
       "Land Development Drafter", "Site Civil Drafter", "Roadway Drafter",
@@ -117,6 +125,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "G",
     label: "Structural / Steel / Rebar Detailing",
     resumeFamily: "structural_cad",
+    nightlyDefault: true,
     titles: [
       "Structural Steel Detailer", "Steel Detailer",
       "Miscellaneous Steel Detailer", "Rebar Detailer", "Concrete Detailer",
@@ -128,6 +137,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "H",
     label: "Architectural / Building / Interiors",
     resumeFamily: "architectural_cad",
+    nightlyDefault: true,
     titles: [
       "Architectural Drafter", "Architectural Designer",
       "Architectural CAD Technician", "Revit Drafter", "Revit Technician",
@@ -140,6 +150,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "I",
     label: "MEP / HVAC / Plumbing / Fire Protection",
     resumeFamily: "mep_cad",
+    nightlyDefault: true,
     titles: [
       "MEP Drafter", "MEP Designer", "HVAC Drafter", "HVAC Designer",
       "Plumbing Drafter", "Plumbing Designer", "Fire Protection Drafter",
@@ -150,6 +161,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "J",
     label: "Piping / Process / Industrial Plant",
     resumeFamily: "piping_industrial_cad",
+    nightlyDefault: true,
     titles: [
       "Piping Drafter", "Process Piping Drafter", "Plant Design Drafter",
       "Plant Layout Designer", "P&ID Drafter", "Industrial Drafter",
@@ -159,6 +171,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "K",
     label: "Utility / Energy / Renewables",
     resumeFamily: "utility_energy",
+    nightlyDefault: true,
     titles: [
       "Utility Designer", "Utility CAD Designer", "Substation Drafter",
       "Transmission Drafter", "Distribution Designer", "Solar Designer",
@@ -183,6 +196,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "L",
     label: "Cross-industry Entry-level",
     resumeFamily: "cross_industry_entry",
+    nightlyDefault: true,
     titles: [
       "Junior Drafter", "Associate Designer", "Design Technician",
       "Detailing Technician", "Layout Designer", "Drafting Intern",
@@ -196,6 +210,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "M",
     label: "Data Center / Colocation",
     resumeFamily: "data_center",
+    nightlyDefault: true,
     titles: [
       "Data Center Technician",
       "Senior Data Center Technician",
@@ -220,6 +235,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "N",
     label: "ISP / Network Operations",
     resumeFamily: "isp_network",
+    nightlyDefault: true,
     titles: [
       "Network Engineer",
       "Senior Network Engineer",
@@ -245,6 +261,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "O",
     label: "NOC / Network Monitoring",
     resumeFamily: "noc_monitoring",
+    nightlyDefault: true,
     titles: [
       "NOC Engineer",
       "Senior NOC Engineer",
@@ -264,6 +281,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "P",
     label: "Solar PV / Battery Storage Engineering",
     resumeFamily: "solar_pv_storage",
+    nightlyDefault: true,
     titles: [
       "Solar Applications Engineer",
       "Senior Applications Engineer – Solar PV & Battery Storage Systems",
@@ -284,6 +302,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "Q",
     label: "Hardware / Chip / Embedded Design",
     resumeFamily: "hardware_chip_design",
+    nightlyDefault: true,
     titles: [
       "FPGA Engineer",
       "FPGA Design Engineer",
@@ -303,6 +322,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     id: "R",
     label: "Field Service / Maintenance / Estimating",
     resumeFamily: "field_service_estimating",
+    nightlyDefault: true,
     titles: [
       "Field Service Technician",
       "Field Service Technician II",
@@ -328,16 +348,70 @@ for (const group of ROLE_GROUPS) {
 }
 
 export function getAllGroups(): RoleGroup[] {
-  return ROLE_GROUPS.map((g) => ({ ...g }));
+  return ROLE_GROUPS.map((g) => ({ ...g, titles: [...g.titles] }));
 }
 
 export function getGroupById(groupId: string): RoleGroup | undefined {
   const g = GROUP_BY_ID.get(groupId.toUpperCase());
-  return g ? { ...g } : undefined;
+  return g ? { ...g, titles: [...g.titles] } : undefined;
+}
+
+export function getNightlyDefaultGroups(): RoleGroup[] {
+  return ROLE_GROUPS
+    .filter((group) => group.nightlyDefault)
+    .map((group) => ({ ...group, titles: [...group.titles] }));
 }
 
 export function getGroupForSearchQuery(query: string): RoleGroup | undefined {
   return GROUP_BY_TITLE.get(query.trim().toLowerCase());
+}
+
+function normalizeRoleTitle(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/** Conservative fallback relevance check used when AI classification is unavailable. */
+export function isTitleRelevantToGroup(title: string, groupId: string): boolean {
+  const group = getGroupById(groupId);
+  const normalizedTitle = normalizeRoleTitle(title);
+  if (!group || !normalizedTitle) return false;
+  const titleTokens = new Set(normalizedTitle.split(" "));
+
+  return group.titles.some((configured) => {
+    const normalizedConfigured = normalizeRoleTitle(configured);
+    if (!normalizedConfigured) return false;
+    if (
+      normalizedTitle === normalizedConfigured ||
+      normalizedTitle.includes(normalizedConfigured) ||
+      normalizedConfigured.includes(normalizedTitle)
+    ) {
+      return true;
+    }
+    const configuredTokens = normalizedConfigured.split(" ");
+    const overlap = configuredTokens.filter((token) => titleTokens.has(token)).length;
+    return configuredTokens.length >= 2 && overlap >= 2 && overlap / configuredTokens.length >= 0.67;
+  });
+}
+
+/** Infer the best matching group from a restricted shard snapshot. */
+export function inferRoleGroupForTitle(
+  title: string,
+  candidateGroupIds: string[] = getGroupIds(),
+): RoleGroup | undefined {
+  const candidates = candidateGroupIds
+    .map((id) => getGroupById(id))
+    .filter((group): group is RoleGroup => Boolean(group))
+    .filter((group) => isTitleRelevantToGroup(title, group.id));
+  if (candidates.length === 0) return undefined;
+  return candidates.sort((left, right) => {
+    const bestLength = (group: RoleGroup) => Math.max(
+      ...group.titles
+        .filter((configured) => normalizeRoleTitle(title).includes(normalizeRoleTitle(configured)))
+        .map((configured) => normalizeRoleTitle(configured).length),
+      0,
+    );
+    return bestLength(right) - bestLength(left) || left.id.localeCompare(right.id);
+  })[0];
 }
 
 export function getTitlesForGroups(groupIds: string[]): string[] {
@@ -392,8 +466,39 @@ const COMBINED_GROUPS: { id: string; label: string; subGroupIds: string[] }[] = 
 export function getCombinedGroups(): CombinedGroup[] {
   return COMBINED_GROUPS.map((cg) => {
     const titles = getTitlesForGroups(cg.subGroupIds);
-    return { ...cg, titles, totalTitles: titles.length };
+    return { ...cg, subGroupIds: [...cg.subGroupIds], titles, totalTitles: titles.length };
   });
+}
+
+/**
+ * Fail fast when the nightly combined-group configuration stops being a true
+ * partition of the role groups marked `nightlyDefault`.
+ */
+export function assertNightlyCombinedGroupPartition(): void {
+  const expectedIds = getNightlyDefaultGroups().map((group) => group.id);
+  const expected = new Set(expectedIds);
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  const unexpected = new Set<string>();
+
+  for (const combined of COMBINED_GROUPS) {
+    for (const rawId of combined.subGroupIds) {
+      const id = rawId.toUpperCase();
+      if (seen.has(id)) duplicates.add(id);
+      seen.add(id);
+      if (!expected.has(id)) unexpected.add(id);
+    }
+  }
+
+  const missing = expectedIds.filter((id) => !seen.has(id));
+  if (missing.length || duplicates.size || unexpected.size) {
+    const details = [
+      missing.length ? `missing=${missing.join(",")}` : null,
+      duplicates.size ? `duplicated=${Array.from(duplicates).sort().join(",")}` : null,
+      unexpected.size ? `not-nightly=${Array.from(unexpected).sort().join(",")}` : null,
+    ].filter(Boolean).join("; ");
+    throw new Error(`Invalid nightly combined-role partition: ${details}`);
+  }
 }
 
 export function getAllTitlesFromCombinedGroups(): string[] {
@@ -405,3 +510,7 @@ export function getAllTitlesFromCombinedGroups(): string[] {
   }
   return Array.from(all);
 }
+
+// Validate as soon as the role library is loaded, before a scheduler can launch
+// an incomplete or duplicated nightly batch.
+assertNightlyCombinedGroupPartition();

@@ -19,6 +19,10 @@ type Profile = {
   last_generation_model?: string | null;
   last_generation_prompt_version?: string | null;
   last_generation_error?: string | null;
+  review_status?: "pending" | "approved" | "needs_review" | "stale" | "disabled";
+  approved_at?: string | null;
+  profile_version?: number;
+  approved_profile_version?: number | null;
 };
 
 type KeywordState = NonNullable<Profile["keyword_states"]>[number];
@@ -109,7 +113,7 @@ export default function CandidateJobSearchProfilesPage() {
       if (!res.ok) throw new Error(data.error || "Could not save profile");
       setMessage({ kind: "success", text: "Saved " + profile.resume_name + "." });
       setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
-        ? { ...row, id: data.profile.id, keywords, keyword_states: draft.keywordStates, additional_rules: draft.additionalRules, profile_updated_at: data.profile.updated_at, generation_status: "manual" }
+        ? { ...row, ...data.profile, keywords, keyword_states: draft.keywordStates, additional_rules: draft.additionalRules, profile_updated_at: data.profile.updated_at, generation_status: "manual", review_status: "pending" }
         : row));
     } catch (error: any) {
       setMessage({ kind: "error", text: error.message || "Could not save profile" });
@@ -119,15 +123,11 @@ export default function CandidateJobSearchProfilesPage() {
   }
 
   async function regenerate(profile: Profile) {
-    const currentDraft = drafts[profile.base_resume_id] ?? { keywordStates: [], additionalRules: "", newKeyword: "" };
-    const reviewStates = currentDraft.keywordStates.filter((item) => item.status === "dismissed" || item.source === "manual");
-    const reviewKeywords = reviewStates.filter((item) => item.status === "active").map((item) => item.term);
     setSaving(profile.base_resume_id);
     setMessage(null);
     setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
-      ? { ...row, keywords: reviewKeywords, keyword_states: reviewStates, additional_rules: "", generation_status: "running", last_generation_error: null }
+      ? { ...row, generation_status: "running", last_generation_error: null }
       : row));
-    setDrafts((current) => ({ ...current, [profile.base_resume_id]: { ...currentDraft, keywordStates: reviewStates, additionalRules: "" } }));
     try {
       const res = await fetch("/api/admin/base-resume-keywords/run", {
         method: "POST",
@@ -149,9 +149,45 @@ export default function CandidateJobSearchProfilesPage() {
     } catch (error: any) {
       setMessage({ kind: "error", text: error.message || "AI keyword generation failed" });
       setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id
-        ? { ...row, keywords: reviewKeywords, keyword_states: reviewStates, additional_rules: "", generation_status: "failed", last_generation_error: error.message || "AI keyword generation failed" }
+        ? { ...row, generation_status: "failed", last_generation_error: error.message || "AI keyword generation failed" }
         : row));
-      setDrafts((current) => ({ ...current, [profile.base_resume_id]: { ...currentDraft, keywordStates: reviewStates, additionalRules: "" } }));
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function approve(profile: Profile) {
+    if (!profile.id) return;
+    setSaving(profile.base_resume_id);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/candidates/${candidateId}/job-search-profiles/${profile.id}/approve`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not approve profile");
+      setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id ? { ...row, ...data.profile, review_status: "approved" } : row));
+      setMessage({ kind: "success", text: `${profile.resume_name} is approved for candidate matching.` });
+    } catch (error: any) {
+      setMessage({ kind: "error", text: error.message || "Could not approve profile" });
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  async function toggleDisabled(profile: Profile) {
+    if (!profile.id) return;
+    setSaving(profile.base_resume_id);
+    setMessage(null);
+    const disabled = profile.review_status !== "disabled";
+    try {
+      const response = await fetch(`/api/candidates/${candidateId}/job-search-profiles/${profile.id}/disable`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ disabled }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not update matching status");
+      setProfiles((current) => current.map((row) => row.base_resume_id === profile.base_resume_id ? { ...row, ...data.profile } : row));
+      setMessage({ kind: "success", text: disabled ? `${profile.resume_name} is disabled for matching.` : `${profile.resume_name} is enabled and requires approval.` });
+    } catch (error: any) {
+      setMessage({ kind: "error", text: error.message || "Could not update matching status" });
     } finally {
       setSaving(null);
     }
@@ -194,12 +230,14 @@ export default function CandidateJobSearchProfilesPage() {
                   <div>
                     <h2 style={{ margin: 0, fontSize: 18 }}>{profile.resume_name}</h2>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      {profile.resume_status} · resume updated {new Date(profile.resume_updated_at).toLocaleDateString()} · {count}/48 active keywords · {profile.generation_status ?? "not generated"} · last generated {lastGeneratedLabel}
+                      {profile.resume_status} · resume updated {new Date(profile.resume_updated_at).toLocaleDateString()} · {count}/48 active keywords · {profile.generation_status ?? "not generated"} · review {profile.review_status ?? "pending"} · last generated {lastGeneratedLabel}
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                     {canEdit && <button className="btn-secondary" onClick={() => regenerate(profile)} disabled={saving === profile.base_resume_id}>{saving === profile.base_resume_id ? "Generating with Gemini…" : "Generate keywords with AI"}</button>}
                     {canEdit && <button className="btn-primary" onClick={() => save(profile)} disabled={saving === profile.base_resume_id}>{saving === profile.base_resume_id ? "Working…" : "Save review"}</button>}
+                    {canEdit && <button className="btn-primary" onClick={() => approve(profile)} disabled={!profile.id || profile.review_status === "disabled" || count < 30 || count > 48 || saving === profile.base_resume_id}>{profile.review_status === "approved" ? "Approved" : "Approve for matching"}</button>}
+                    {canEdit && profile.id && <button className="btn-secondary" onClick={() => toggleDisabled(profile)} disabled={saving === profile.base_resume_id}>{profile.review_status === "disabled" ? "Enable review" : "Disable matching"}</button>}
                   </div>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 16 }}>

@@ -5,8 +5,22 @@ import { queryOne, execute } from "@/server/db/neon";
 export async function GET() {
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
-  const row = await queryOne<any>("SELECT email_sync_paused, email_consent_at, email_retention_days FROM candidates WHERE id = $1", [context!.candidateId]);
-  return NextResponse.json(row || { email_sync_paused: false, email_consent_at: null, email_retention_days: 365 });
+  const row = await queryOne<any>(
+    `SELECT c.email_sync_paused, c.email_consent_at, c.email_retention_days,
+            ia.id AS gmail_account_id, ia.email AS gmail_email, ia.status AS gmail_status,
+            ia.scopes AS gmail_scopes, ia.last_synced_at AS gmail_last_synced_at,
+            ia.sync_error AS gmail_sync_error
+       FROM candidates c
+       LEFT JOIN LATERAL (
+         SELECT id, email, status, scopes, last_synced_at, sync_error
+           FROM integration_accounts
+          WHERE provider = 'gmail' AND owner_type = 'candidate' AND candidate_id = c.id
+          ORDER BY updated_at DESC LIMIT 1
+       ) ia ON true
+      WHERE c.id = $1`,
+    [context!.candidateId],
+  );
+  return NextResponse.json(row || { email_sync_paused: false, email_consent_at: null, email_retention_days: 365, gmail_status: null });
 }
 
 export async function PATCH(req: NextRequest) {

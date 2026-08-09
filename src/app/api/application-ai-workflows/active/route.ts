@@ -80,7 +80,7 @@ export async function GET(request: NextRequest) {
         (r.status === "running" && r.claim_expires_at && new Date(r.claim_expires_at).getTime() < Date.now())
     );
     if (hasQueuedOrStalledWork) {
-      const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+      const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
       await backgroundDispatch(
         fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST" }).catch((err) => {
           console.error("[active-workflows-poll] Opportunistic dispatch fetch failed:", err);

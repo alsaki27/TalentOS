@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     [since]
   );
 
-  const baseUrl = process.env.TALENTOS_BASE_URL || "https://skarion-talent-os.skarion-talentos.workers.dev";
+  const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
   let scoresRetried = 0;
   const scoreErrors: { job_id: string; candidate_id: string; detail: string }[] = [];
   for (const s of failedScores ?? []) {

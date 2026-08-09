@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getRunById,
-  updateRunStatus,
+  transitionRunStatus,
 } from "@/server/repositories/jobAgentRunRepository";
 import { getTokenById } from "@/server/repositories/jobAgentTokenRepository";
 import {
@@ -15,7 +15,7 @@ import { waitUntil } from "@vercel/functions";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
@@ -27,13 +27,8 @@ export async function GET(
       return NextResponse.json({ error: "Run not found" }, { status: 404 });
     }
 
-    // Still initializing — Apify metadata not available yet
     if (!run.apify_run_id || !run.apify_dataset_id || !run.token_id) {
-      return NextResponse.json({
-        items: [],
-        status: run.status,
-        apify_status: null,
-      });
+      return NextResponse.json({ items: [], status: run.status, apify_status: null });
     }
 
     const token = await getTokenById(run.token_id);
@@ -41,47 +36,49 @@ export async function GET(
       return NextResponse.json({ error: "Token not found" }, { status: 500 });
     }
 
-    // ── Already terminal: return immediately ─────────────────────────────
     if (run.status === "succeeded" || run.status === "failed" || run.status === "partial") {
       return NextResponse.json({ items: [], status: run.status, apify_status: null });
     }
-
-    // ── Currently being classified: report status and exit ────────────────
     if (run.status === "processing") {
       return NextResponse.json({ items: [], status: "processing", apify_status: null });
     }
 
-    // ── Check Apify status ───────────────────────────────────────────────
     let apifyStatus: string | null = null;
     try {
       apifyStatus = await checkApifyRunStatus(run.apify_run_id, token);
-    } catch (err: any) {
-      console.error(`[live] Apify status check for run ${params.id} failed:`, err.message);
-      return NextResponse.json({ items: [], status: run.status, error: `Apify unreachable: ${err.message}` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[live] Apify status check for run ${params.id} failed:`, message);
+      return NextResponse.json({
+        items: [],
+        status: run.status,
+        error: `Apify unreachable: ${message}`,
+      });
     }
 
-    // ── Apify finished: trigger processing with distributed mutex ────────
     if (apifyStatus === "SUCCEEDED") {
-      // Atomic DB transition: only one caller wins the 'running' → 'processing' race.
-      // Both the live route (local dev) and the Vercel cron try this — only the first succeeds.
-      let wonMutex = false;
-      try {
-        await updateRunStatus(params.id, {
-          status: "processing",
-          // Use a WHERE status='running' guard to make this atomic.
-          // If another worker already moved it, this will be a no-op.
-        });
-        wonMutex = true;
-      } catch {
-        // Another worker already grabbed it — just return processing status.
+      // Nightly attempts are owned by the cron poller, which also coordinates
+      // shard state and applies the batch's immutable posting-date window.
+      if (run.batch_id) {
+        return NextResponse.json({ items: [], status: run.status, apify_status: apifyStatus });
       }
 
+      // Manual runs retain live-route processing. The compare-and-set means the
+      // live route and cron poller cannot process the same dataset twice.
+      const wonMutex = await transitionRunStatus(params.id, "running", {
+        status: "processing",
+        processing_started_at: new Date().toISOString(),
+      });
+
       if (wonMutex) {
-        // Fire-and-forget — intentionally NOT awaited so the HTTP response returns fast.
-        // We use waitUntil to prevent the Next.js runtime from killing the promise prematurely.
         waitUntil(
-          processApifyRunData(params.id, run.apify_dataset_id, token, { useAi: true, actorSource: run.actor_source as any })
-            .catch((err) => console.error(`[live] processApifyRunData error for ${params.id}:`, err.message))
+          processApifyRunData(params.id, run.apify_dataset_id, token, {
+            useAi: true,
+            actorSource: run.actor_source as any,
+          }).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[live] processApifyRunData error for ${params.id}:`, message);
+          })
         );
       }
 
@@ -89,23 +86,27 @@ export async function GET(
     }
 
     if (apifyStatus && ["FAILED", "ABORTED", "TIMED-OUT"].includes(apifyStatus)) {
-      await updateRunStatus(params.id, {
+      // Batch failure/retry state is likewise coordinated only by the poller.
+      if (run.batch_id) {
+        return NextResponse.json({ items: [], status: run.status, apify_status: apifyStatus });
+      }
+      await transitionRunStatus(params.id, "running", {
         status: "failed",
         error: `Apify run ended with status ${apifyStatus}`,
-      }).catch(() => {});
+        completed_at: new Date().toISOString(),
+      }).catch(() => false);
       return NextResponse.json({ items: [], status: "failed", apify_status: apifyStatus });
     }
 
-    // ── Apify still running: fetch live dataset items for the UI card grid ─
     let items: any[] = [];
     try {
       items = await fetchLiveApifyDatasetItems(run.apify_dataset_id, token, 100);
-    } catch (err: any) {
-      console.error(`[live] dataset fetch for ${params.id} failed:`, err.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[live] dataset fetch for ${params.id} failed:`, message);
     }
 
     const updatedRun = await getRunById(params.id);
-
     return NextResponse.json({
       status: updatedRun?.status ?? run.status,
       items: items.map((item) => ({
@@ -117,8 +118,9 @@ export async function GET(
       })),
       apify_status: apifyStatus,
     });
-  } catch (err: any) {
-    console.error("[live feed error]", err);
-    return NextResponse.json({ error: err.message ?? "Unknown error" }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[live feed error]", error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
