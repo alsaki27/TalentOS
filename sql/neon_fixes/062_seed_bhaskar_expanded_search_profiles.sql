@@ -146,7 +146,4 @@ SELECT c.id, br.id, p.keywords, p.additional_rules
 FROM candidate_row c
 JOIN base_resumes br ON br.candidate_id = c.id
 JOIN profile_data p ON p.resume_name = br.name
-ON CONFLICT (base_resume_id) DO UPDATE SET
-  keywords = EXCLUDED.keywords,
-  additional_rules = EXCLUDED.additional_rules,
-  updated_at = NOW();
+ON CONFLICT (base_resume_id) DO NOTHING;
