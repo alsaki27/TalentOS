@@ -164,12 +164,12 @@ export const TEMPLATE_CONFIGS: TemplateConfig[] = [
   {
     id: 'business-professional-3',
     name: 'Business Professional 3',
-    description: 'Confident corporate design with a strong banner',
+    description: 'Crisp black-and-white corporate design',
     category: 'business',
     layout: 'single-column',
     fontFamily: 'Georgia',
-    colorScheme: ['#1f2937', '#4b5563', '#d1d5db'],
-    features: ['Banner header', 'Strong hierarchy', 'Boardroom style']
+    colorScheme: ['#111111', '#3f3f46', '#ffffff'],
+    features: ['Monochrome layout', 'Strong hierarchy', 'Boardroom style']
   },
   {
     id: 'business-professional-4',

@@ -34,38 +34,41 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
   const isExecutive = variant === 2;
   const isBanner = variant === 3;
   const isEditorial = variant === 4;
+  const displayColors = isBanner
+    ? { primary: '#111111', secondary: '#3f3f46', accent: '#111111', text: '#111111', background: '#ffffff' }
+    : colors;
   const sectionHeadingStyle: React.CSSProperties = isBanner
-    ? { color: colors.background, backgroundColor: colors.primary, borderColor: colors.primary, padding: '4px 8px' }
+    ? { color: displayColors.primary, borderColor: displayColors.primary, borderTopWidth: 2, borderBottomWidth: 1, padding: '5px 0 3px', letterSpacing: '0.14em' }
     : isEditorial
-      ? { color: colors.primary, borderColor: colors.accent, borderBottomWidth: 2, letterSpacing: '0.12em' }
+      ? { color: displayColors.primary, borderColor: displayColors.accent, borderBottomWidth: 2, letterSpacing: '0.12em' }
       : isExecutive
-        ? { color: colors.primary, borderColor: colors.secondary, borderTopWidth: 1, borderBottomWidth: 1, paddingTop: 4 }
-        : { color: colors.primary, borderColor: colors.primary };
+        ? { color: displayColors.primary, borderColor: displayColors.secondary, borderTopWidth: 1, borderBottomWidth: 1, paddingTop: 4 }
+        : { color: displayColors.primary, borderColor: displayColors.primary };
 
   return (
     <div
       className={`w-full h-full leading-relaxed ${isEditorial ? 'pl-4 border-l-4' : ''}`}
-      style={{ fontSize: getFontSizePx(), color: colors.text,
+      style={{ fontSize: getFontSizePx(), color: displayColors.text,
         fontFamily: fontFamily || 'Georgia, serif',
         pageBreakInside: 'avoid',
-        ...(isEditorial ? { borderColor: colors.primary } : {})
+        ...(isEditorial ? { borderColor: displayColors.primary } : {})
       }}
     >
       {/* Header */}
       <div
-        className={`${isExecutive || isEditorial ? 'text-left' : 'text-center'} mb-4 pb-4 ${isBanner ? 'px-5 pt-4' : ''}`}
-        style={isBanner ? { backgroundColor: colors.primary, color: colors.background } : { borderColor: colors.primary }}
+        className={`${isExecutive || isEditorial ? 'text-left' : 'text-center'} mb-4 pb-4 ${isBanner ? 'border-y-2 py-4' : ''}`}
+        style={{ borderColor: displayColors.primary }}
       >
         <h1
           className={`${isBanner ? 'text-2xl tracking-wide' : isExecutive ? 'text-2xl border-b-2 pb-2' : 'text-xl'} font-bold mb-2`}
-          style={{ color: isBanner ? colors.background : colors.primary, borderColor: colors.primary }}
+          style={{ color: displayColors.primary, borderColor: displayColors.primary }}
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
         {personalInfo.jobTitle && (
           <h2
             className="text-lg mb-3 mt-2"
-            style={{ color: isBanner ? colors.background : colors.secondary, opacity: isBanner ? 0.9 : 1 }}
+            style={{ color: displayColors.secondary }}
           >
             {personalInfo.jobTitle}
           </h2>
@@ -158,14 +161,14 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                           <h4 className="text-xs font-bold">{exp.jobTitle}</h4>
                           <div
                             className="text-xs font-semibold"
-                            style={{ color: colors.secondary }}
+                            style={{ color: displayColors.secondary }}
                           >
                             {exp.company} {exp.location && `• ${exp.location}`}
                           </div>
                         </div>
                         <span
                           className="text-xs font-medium"
-                          style={{ color: colors.secondary }}
+                          style={{ color: displayColors.secondary }}
                         >
                           {formatDate(exp.startDate)} - {exp.current ? 'Present' : formatDate(exp.endDate)}
                         </span>
@@ -204,7 +207,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                           <h4 className="text-xs font-bold">{edu.degree}</h4>
                           <div
                             className="text-xs font-semibold"
-                            style={{ color: colors.secondary }}
+                            style={{ color: displayColors.secondary }}
                           >
                             {edu.institution} {edu.location && `• ${edu.location}`}
                           </div>
@@ -215,7 +218,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                         <div className="text-right">
                           <div
                             className="text-xs font-medium"
-                            style={{ color: colors.secondary }}
+                            style={{ color: displayColors.secondary }}
                           >
                             {edu.graduationYear}
                           </div>
@@ -246,7 +249,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                         {(project.startDate || project.endDate) && (
                           <span
                             className="text-xs font-medium"
-                            style={{ color: colors.secondary }}
+                            style={{ color: displayColors.secondary }}
                           >
                             {formatDate(project.startDate)} {project.endDate && `- ${formatDate(project.endDate)}`}
                           </span>
@@ -287,7 +290,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                     {skills.categorized.map((category) => (
                       <div key={category.id} className="text-xs">
                         <strong
-                          style={{ color: colors.primary }}
+                          style={{ color: displayColors.primary }}
                         >
                           {category.name}:
                         </strong> {category.skills.join(', ')}
