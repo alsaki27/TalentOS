@@ -93,6 +93,7 @@ export interface CreateApplicationInput {
 
 export interface UpdateApplicationInput {
   status?: string;
+  applied_at?: string | null;
   notes?: string | null;
   resume_url?: string | null;
   resume_filename?: string | null;

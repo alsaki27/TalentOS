@@ -19,6 +19,7 @@ var DISPLAY_GROUPS: Record<string, string> = {
 interface DashboardRow {
   application_id: string;
   status: string;
+  ae_stage: string;
   priority: string | null;
   applied_at: string | null;
   follow_up_at: string | null;
@@ -67,9 +68,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     var allRows = await query<DashboardRow>(
       `SELECT
         a.id AS application_id,
-        a.status,
+        CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS status,
+        a.ae_stage,
         a.priority,
-        a.applied_at,
+        COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,
         a.follow_up_at,
         a.next_action,
         a.tailored_resume_version_id,

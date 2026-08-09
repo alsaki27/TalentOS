@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 
@@ -18,6 +18,8 @@ interface QueueItem {
   review_status: "not_required" | "pending" | "approved" | "changes_requested";
   review_note: string | null;
   reviewed_at: string | null;
+  applied_at: string | null;
+  completed_at: string | null;
   next_action: string | null;
   proof_url: string | null;
   proof_filename: string | null;
@@ -85,6 +87,13 @@ const AE_STAGE_LABELS: Record<string, string> = {
   ready_for_review: "🔍 Ready for AE Review",
   ready_for_application: "📤 Ready for AE Application",
   applied: "✅ AE Applied",
+};
+
+const AE_STAGE_STYLES: Record<string, { background: string; border: string; color: string }> = {
+  in_ai_pipeline: { background: "rgba(139,92,246,0.16)", border: "rgba(139,92,246,0.55)", color: "#c4b5fd" },
+  ready_for_review: { background: "rgba(245,158,11,0.16)", border: "rgba(245,158,11,0.55)", color: "#fbbf24" },
+  ready_for_application: { background: "rgba(14,165,233,0.16)", border: "rgba(14,165,233,0.55)", color: "#7dd3fc" },
+  applied: { background: "rgba(16,185,129,0.16)", border: "rgba(16,185,129,0.55)", color: "#6ee7b7" },
 };
 
 // Drag-to-resize column widths (persisted to localStorage) — order here
@@ -173,6 +182,7 @@ function IdCell({ value }: { value: string | null | undefined }) {
 }
 
 export default function ApplicationQueuePage() {
+  const loadRequestRef = useRef(0);
   const [items, setItems] = useState<QueueItem[]>([]);
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [me, setMe] = useState<{ profile: { user_id: string; role: string } } | null>(null);
@@ -243,6 +253,7 @@ export default function ApplicationQueuePage() {
   // clobber whatever the user currently has open (selections, expanded
   // workflow row, Falood panel), or every poll tick collapses their UI.
   async function load(pn: number = page, clearFeedback = true, isBackgroundPoll = false) {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     if (clearFeedback) setFeedback(null);
     try {
@@ -253,6 +264,7 @@ export default function ApplicationQueuePage() {
       ]);
       if (!queueRes.ok) throw new Error("Could not load queue.");
       const data = await queueRes.json();
+      if (requestId !== loadRequestRef.current) return;
       const newTotal = data.total ?? 0;
       const tp = Math.max(1, Math.ceil(newTotal / pageSize));
       if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
@@ -270,8 +282,10 @@ export default function ApplicationQueuePage() {
       }
       setPage(pn);
     } catch (err: any) {
-      setFeedback({ kind: "error", text: err.message || "Load failed." });
-    } finally { setLoading(false); }
+      if (requestId === loadRequestRef.current) setFeedback({ kind: "error", text: err.message || "Load failed." });
+    } finally {
+      if (requestId === loadRequestRef.current) setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -473,8 +487,20 @@ export default function ApplicationQueuePage() {
     setFeedback(null);
     try {
       const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ae_stage: stage }) });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setActionLoading(null); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      const updated = await res.json().catch(() => null);
+      setItems((prev) => prev.map((item) => item.id === id ? {
+        ...item,
+        ae_stage: updated?.ae_stage ?? stage,
+        status: updated?.status ?? item.status,
+        applied_at: updated && Object.prototype.hasOwnProperty.call(updated, "applied_at") ? updated.applied_at : item.applied_at,
+        completed_at: updated && Object.prototype.hasOwnProperty.call(updated, "completed_at") ? updated.completed_at : item.completed_at,
+        ae_stage_updated_at: updated?.ae_stage_updated_at ?? item.ae_stage_updated_at,
+        ae_stage_updated_by_name: updated?.ae_stage_updated_by_name ?? item.ae_stage_updated_by_name,
+        ae_applied_at: updated?.ae_applied_at ?? item.ae_applied_at,
+        ae_applied_by_name: updated?.ae_applied_by_name ?? item.ae_applied_by_name,
+      } : item));
       setActionLoading(null);
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
       setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".` });
       load(page, false);
     } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
@@ -885,10 +911,16 @@ export default function ApplicationQueuePage() {
                       disabled={actionLoading === `${item.id}:ae_stage`}
                       onChange={(e) => changeAeStage(item.id, e.target.value)}
                       title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
-                      style={{ width: "100%", minWidth: 230, fontSize: 14, fontWeight: 600, padding: "8px 10px" }}
+                      style={{
+                        width: "100%", minWidth: 230, fontSize: 14, fontWeight: 700, padding: "8px 10px",
+                        background: AE_STAGE_STYLES[item.ae_stage]?.background,
+                        border: `1px solid ${AE_STAGE_STYLES[item.ae_stage]?.border}`,
+                        color: AE_STAGE_STYLES[item.ae_stage]?.color,
+                        borderRadius: 8,
+                      }}
                     >
                       {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
+                        <option key={value} value={value} style={{ background: AE_STAGE_STYLES[value]?.background, color: AE_STAGE_STYLES[value]?.color }}>{label}</option>
                       ))}
                     </select>
                     {item.ae_reviewed_by_name && (

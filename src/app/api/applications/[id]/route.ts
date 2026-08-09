@@ -14,6 +14,8 @@ import {
   deleteApplication,
 } from "@/server/repositories/applicationsRepository";
 
+const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
+
 // Had no GET handler at all (only PATCH/DELETE) - same missing-method pattern
 // already found and fixed on the workflow status route. Confirmed live via
 // the E2E test's status-poll: "SyntaxError: Unexpected end of JSON input" on
@@ -56,6 +58,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (f in body) updates[f] = body[f];
   }
 
+  if ("ae_stage" in updates && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
+    return NextResponse.json({ error: "Invalid AE stage." }, { status: 400 });
+  }
+
   if ("follow_up_at" in updates) {
     if (updates.follow_up_at) {
       updates.follow_up_source = body.follow_up_source ?? "manual";
@@ -90,11 +96,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
   let previousAeStage: string | null = null;
+  let currentApplication: { applied_at: string | null; completed_at: string | null; status: string; review_status: string | null; ae_stage: string } | null = null;
   if ("status" in updates || "ae_stage" in updates) {
-    const current = await findApplicationById(params.id);
-    previousStatus = current?.status ?? null;
-    previousReviewStatus = current?.review_status ?? null;
-    previousAeStage = current?.ae_stage ?? null;
+    currentApplication = await findApplicationById(params.id);
+    previousStatus = currentApplication?.status ?? null;
+    previousReviewStatus = currentApplication?.review_status ?? null;
+    previousAeStage = currentApplication?.ae_stage ?? null;
   }
 
   // AE hand-off stage: In AI Pipeline -> Ready for AE Review -> Ready for AE
@@ -116,23 +123,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // Same pattern as the reviewer capture above, for the final hand-off:
     // whoever moves it to "applied" is attributed here, and (like the
     // reviewer field) this is never overwritten by any later transition.
-    if (previousAeStage === "ready_for_application" && updates.ae_stage === "applied") {
+    if (updates.ae_stage === "applied") {
       updates.ae_applied_by_user_id = currentUser.profile.user_id;
       updates.ae_applied_by_name = currentUser.profile.display_name || currentUser.profile.email;
       updates.ae_applied_at = new Date().toISOString();
     }
 
-    // Keep the underlying lifecycle status in sync so everything else that
-    // reads applications.status (queue filtering, candidate-dashboard counts,
-    // follow-up automation) doesn't silently drift from what the AE stage
-    // shows. Only when the caller didn't already set status explicitly.
-    if (!("status" in updates)) {
-      if (updates.ae_stage === "applied") {
-        updates.status = "applied";
-      } else if (previousStatus === "applied") {
-        updates.status = "in_progress";
-      }
+    // AE Applied is a real lifecycle transition, not only a display label.
+    // Keep the legacy status fields synchronized so candidate dashboards,
+    // follow-up views, exports, and analytics all see the same truth.
+    if (updates.ae_stage === "applied") {
+      const appliedAt = currentApplication?.applied_at ?? new Date().toISOString();
+      updates.status = "applied";
+      updates.applied_at = appliedAt;
+      updates.completed_at = currentApplication?.completed_at ?? appliedAt;
+    } else if (previousAeStage === "applied") {
+      updates.status = "in_progress";
+      updates.applied_at = null;
+      updates.completed_at = null;
     }
+
   }
 
   if (updates.status === "applied") {
@@ -170,7 +180,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if ("status" in updates && updates.status !== previousStatus) {
       await execute(
         'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
-        [params.id, previousStatus, updates.status, body.event_note ?? null]
+        [params.id, previousStatus, updates.status, body.event_note ?? ("ae_stage" in updates ? `AE stage moved to ${updates.ae_stage}.` : null)]
       );
     }
 

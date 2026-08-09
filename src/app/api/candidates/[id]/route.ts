@@ -18,14 +18,21 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     // Never send the candidate's password hash to the browser, even to staff.
     delete candidate.password_hash;
 
-    const applications = await query<Record<string, any>>(`
+    const rawApplications = await query<Record<string, any>>(`
       SELECT a.*,
         jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'role_tier', j.role_tier) as jobs
       FROM applications a
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.candidate_id = $1
-      ORDER BY a.applied_at DESC
+      ORDER BY COALESCE(a.applied_at, a.ae_applied_at) DESC NULLS LAST
     `, [params.id]);
+    const applications = rawApplications.map((application) => application.ae_stage === "applied"
+      ? {
+          ...application,
+          status: "applied",
+          applied_at: application.applied_at ?? application.ae_applied_at,
+        }
+      : application);
 
     const resumes = await query<Record<string, any>>('SELECT * FROM resumes WHERE candidate_id = $1 ORDER BY created_at DESC', [params.id]);
 
