@@ -545,36 +545,56 @@ export default function ApplicationQueuePage() {
 
   async function bulkStatus(s: string) {
     setFeedback(null);
-    await fetch("/api/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "PATCH",
-        table: "applications",
-        ids: Array.from(selectedItems).map(i => i.id),
-        updateData: { status: s, completed_at: s === "applied" ? new Date().toISOString() : null }
-      })
-    });
-    setFeedback({ kind: "success", text: "Bulk update done." });
-    load(page, false);
+    try {
+      const res = await fetch("/api/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "PATCH",
+          table: "applications",
+          ids: Array.from(selectedItems).map(i => i.id),
+          updateData: { status: s, completed_at: s === "applied" ? new Date().toISOString() : null }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        setFeedback({ kind: "error", text: data.error || "Bulk update failed." });
+        return;
+      }
+      setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} updated; ${data.failed} failed.` : `${data.updated} applications updated.` });
+      setSelected(new Set());
+      load(page, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    }
   }
 
   async function bulkReassign() {
     if (!bulkOwnerId) return;
     const owner = users.find(u => u.user_id === bulkOwnerId);
-    await fetch("/api/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "PATCH",
-        table: "applications",
-        ids: Array.from(selectedItems).map(i => i.id),
-        updateData: { assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }
-      })
-    });
-    setBulkOwnerId("");
-    setFeedback({ kind: "success", text: "Reassigned." });
-    load(page, false);
+    try {
+      const res = await fetch("/api/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "PATCH",
+          table: "applications",
+          ids: Array.from(selectedItems).map(i => i.id),
+          updateData: { assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        setFeedback({ kind: "error", text: data.error || "Reassignment failed." });
+        return;
+      }
+      setBulkOwnerId("");
+      setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} reassigned; ${data.failed} failed.` : `${data.updated} applications reassigned to ${owner?.display_name || owner?.email || "the selected owner"}.` });
+      setSelected(new Set());
+      load(page, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    }
   }
 
   async function removeTicket(item: QueueItem) {
