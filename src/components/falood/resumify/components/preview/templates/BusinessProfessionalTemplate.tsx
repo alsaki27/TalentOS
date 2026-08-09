@@ -32,13 +32,13 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
   };
 
   const isExecutive = variant === 2;
-  const isBanner = variant === 3;
+  const isModernExecutive = variant === 3;
   const isEditorial = variant === 4;
-  const displayColors = isBanner
+  const displayColors = isModernExecutive
     ? { primary: '#111111', secondary: '#3f3f46', accent: '#111111', text: '#111111', background: '#ffffff' }
     : colors;
-  const sectionHeadingStyle: React.CSSProperties = isBanner
-    ? { color: displayColors.primary, borderColor: displayColors.primary, borderTopWidth: 2, borderBottomWidth: 1, padding: '5px 0 3px', letterSpacing: '0.14em' }
+  const sectionHeadingStyle: React.CSSProperties = isModernExecutive
+    ? { color: displayColors.primary, borderColor: displayColors.primary, borderLeftWidth: 4, borderBottomWidth: 0, padding: '2px 0 2px 9px', letterSpacing: '0.08em' }
     : isEditorial
       ? { color: displayColors.primary, borderColor: displayColors.accent, borderBottomWidth: 2, letterSpacing: '0.12em' }
       : isExecutive
@@ -56,25 +56,25 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
     >
       {/* Header */}
       <div
-        className={`${isExecutive || isEditorial ? 'text-left' : 'text-center'} mb-4 pb-4 ${isBanner ? 'border-y-2 py-4' : ''}`}
+        className={`${isExecutive || isEditorial || isModernExecutive ? 'text-left' : 'text-center'} mb-4 pb-4 ${isModernExecutive ? 'border-b-[3px]' : ''}`}
         style={{ borderColor: displayColors.primary }}
       >
         <h1
-          className={`${isBanner ? 'text-2xl tracking-wide' : isExecutive ? 'text-2xl border-b-2 pb-2' : 'text-xl'} font-bold mb-2`}
+          className={`${isModernExecutive ? 'text-3xl tracking-tight uppercase' : isExecutive ? 'text-2xl border-b-2 pb-2' : 'text-xl'} font-bold mb-2`}
           style={{ color: displayColors.primary, borderColor: displayColors.primary }}
         >
           {personalInfo.fullName || 'Your Name'}
         </h1>
         {personalInfo.jobTitle && (
           <h2
-            className="text-lg mb-3 mt-2"
+            className={`${isModernExecutive ? 'text-sm uppercase tracking-[0.2em] font-semibold' : 'text-lg'} mb-3 mt-2`}
             style={{ color: displayColors.secondary }}
           >
             {personalInfo.jobTitle}
           </h2>
         )}
         {/* Contact Info */}
-        <div className={`flex ${isExecutive || isEditorial ? 'justify-start' : 'justify-center'} flex-wrap gap-x-4 gap-y-1 text-xs`}>
+        <div className={`flex ${isExecutive || isEditorial || isModernExecutive ? 'justify-start' : 'justify-center'} flex-wrap gap-x-4 gap-y-1 text-xs`}>
           {personalInfo.email && (
             <div className="flex items-center gap-1">
               {/* <Mail className="w-3 h-3" style={{ color: colors.accent }} /> */}
