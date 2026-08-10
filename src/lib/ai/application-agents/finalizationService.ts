@@ -113,6 +113,10 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   let versionId: string | null = null;
   try {
     const [versionRows] = await dbSql.transaction([
+      dbSql`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
+        SELECT id, ae_stage, 'ready_for_review', 'AI Pipeline (auto)', 'AI resume finalization completed', 'ai_pipeline'
+        FROM applications
+        WHERE id = ${wf.application_id} AND ae_stage = 'in_ai_pipeline'`,
       dbSql`WITH inserted AS (
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
@@ -130,8 +134,11 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
          resume_generation_status = 'ready',
          resume_generation_completed_at = NOW(),
          ae_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE applications.ae_stage END,
+         application_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE COALESCE(applications.application_stage, applications.ae_stage) END,
          ae_stage_updated_at = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE applications.ae_stage_updated_at END,
-         ae_stage_updated_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.ae_stage_updated_by_name END
+         ae_stage_updated_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.ae_stage_updated_by_name END,
+         application_stage_changed_at = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN NOW() ELSE applications.application_stage_changed_at END,
+         application_stage_changed_by_name = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'AI Pipeline (auto)' ELSE applications.application_stage_changed_by_name END
        FROM inserted
        WHERE applications.id = ${wf.application_id}
        RETURNING inserted.id`,
