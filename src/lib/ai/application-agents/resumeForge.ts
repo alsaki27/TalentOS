@@ -74,17 +74,8 @@ export async function runResumeForge(
   const baseEducation = baseContent.education ?? [];
   const basePersonalInfo = baseContent.personalInfo ?? {};
   
-  if (basePersonalInfo && (validated as any).personalInfo) {
-    (validated as any).personalInfo = {
-      ...(validated as any).personalInfo,
-      fullName: basePersonalInfo.fullName ?? (validated as any).personalInfo.fullName,
-      email: basePersonalInfo.email ?? (validated as any).personalInfo.email,
-      phone: basePersonalInfo.phone ?? (validated as any).personalInfo.phone,
-      location: basePersonalInfo.location ?? (validated as any).personalInfo.location,
-      linkedin: basePersonalInfo.linkedin ?? (validated as any).personalInfo.linkedin,
-      github: basePersonalInfo.github ?? (validated as any).personalInfo.github,
-      website: basePersonalInfo.website ?? (validated as any).personalInfo.website,
-    };
+  if (basePersonalInfo && Object.keys(basePersonalInfo).length > 0) {
+    (validated as any).personalInfo = JSON.parse(JSON.stringify(basePersonalInfo));
   }
 
   if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
@@ -114,6 +105,23 @@ export async function runResumeForge(
         }
       }
     });
+  }
+
+  // ── ROLE SAFETY NET ───────────────────────────────────────────────────────
+  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
+    if (validated.experience.length < baseExperience.length) {
+      console.warn(`[Agent:ResumeForge] ROLE GUARD: Restoring dropped roles. Expected ${baseExperience.length}, got ${validated.experience.length}`);
+      baseExperience.forEach((baseRole: any, idx: number) => {
+        const found = validated.experience.find((exp: any) => 
+          exp.company && baseRole.company && exp.company.toLowerCase().trim() === baseRole.company.toLowerCase().trim()
+        ) ?? validated.experience.find((exp: any) => 
+          exp.company && baseRole.company && (exp.company.toLowerCase().includes(baseRole.company.toLowerCase()) || baseRole.company.toLowerCase().includes(exp.company.toLowerCase()))
+        );
+        if (!found) {
+          validated.experience.splice(idx, 0, JSON.parse(JSON.stringify(baseRole)));
+        }
+      });
+    }
   }
 
   // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
