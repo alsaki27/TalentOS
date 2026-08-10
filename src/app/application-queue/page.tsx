@@ -56,6 +56,7 @@ interface QueueStats {
   mine: number;
   pendingAeReview: number;
   pendingAeApplication: number;
+  aiPipeline: number;
 }
 
 type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow";
@@ -190,7 +191,7 @@ export default function ApplicationQueuePage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0 });
+  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
   const [statusFilter, setStatusFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
@@ -274,7 +275,7 @@ export default function ApplicationQueuePage() {
       if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
       setItems(data.items ?? []);
       setTotal(newTotal);
-      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0 });
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
       if (!isBackgroundPoll) {
@@ -698,7 +699,7 @@ export default function ApplicationQueuePage() {
     { key: "mine", label: "Mine", count: stats.mine },
     { key: "ae_review", label: "AE Review pending", count: stats.pendingAeReview },
     { key: "ae_application", label: "AE Application pending", count: stats.pendingAeApplication },
-    { key: "workflow", label: "AI Pipeline", count: items.filter(i => i.workflow_status && ["queued", "running", "waiting"].includes(i.workflow_status)).length },
+    { key: "workflow", label: "AI Pipeline", count: stats.aiPipeline },
   ];
 
   return (

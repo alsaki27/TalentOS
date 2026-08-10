@@ -164,6 +164,7 @@ export interface ApplicationQueueStats {
   mine: number;
   pendingAeReview: number;
   pendingAeApplication: number;
+  aiPipeline: number;
 }
 
 export interface ApplicationQueueResult extends PaginatedApplicationsResult {
@@ -550,7 +551,7 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
 
   const baseParams = [statuses];
 
-  const [allRow, mineRow, reviewRow, applicationRow] = await Promise.all([
+  const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow] = await Promise.all([
     queryOne<{ total: number }>(
       `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere}`,
       baseParams
@@ -567,6 +568,10 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
       `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'ready_for_application'`,
       baseParams
     ),
+    queryOne<{ total: number }>(
+      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'in_ai_pipeline'`,
+      baseParams
+    ),
   ]);
 
   return {
@@ -574,6 +579,7 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
     mine: mineRow?.total ?? 0,
     pendingAeReview: reviewRow?.total ?? 0,
     pendingAeApplication: applicationRow?.total ?? 0,
+    aiPipeline: aiPipelineRow?.total ?? 0,
   };
 }
 
