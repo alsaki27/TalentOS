@@ -336,12 +336,12 @@ export async function approveCandidateJobMatch(options: {
        INSERT INTO applications
          (candidate_id, job_id, status, source_type, base_resume_id,
           assigned_by_user_id, assigned_to_user_id, assignment_note, priority,
-          review_status, ae_stage, ae_stage_updated_at, ae_stage_updated_by_user_id,
+          review_status, ae_stage, application_stage, ae_stage_updated_at, ae_stage_updated_by_user_id,
           ae_stage_updated_by_name, resume_generation_status, next_action, notes,
           created_by, automation_idempotency_key, applied_at)
        SELECT candidate_id, job_id, 'assigned', 'base_resume', base_resume_id,
               $2, $3, 'Approved candidate-job match', 'normal', 'not_required',
-              'in_ai_pipeline', NOW(), $2, $4, 'queued',
+              'in_ai_pipeline', 'in_ai_pipeline', NOW(), $2, $4, 'queued',
               'AI tailoring in progress',
               CONCAT('Matcher score ', score, '/100. ', reason), $2, $5, NULL
          FROM locked

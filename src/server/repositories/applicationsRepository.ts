@@ -207,6 +207,7 @@ export async function createApplications(
     job_id: input.job_id ?? null,
     app_number: input.app_number ?? appNumbers[i] ?? null,
     status: input.status ?? "applied",
+    application_stage: input.status === "applied" ? "applied" : input.status === "rejected" ? "rejected" : input.status === "withdrawn" ? "withdrawn" : input.status === "in_progress" || input.status === "assigned" || input.status === "stacked" ? "ready_for_review" : "in_ai_pipeline",
     resume_url: input.resume_url ?? null,
     resume_filename: input.resume_filename ?? null,
     resume_id: input.resume_id ?? null,
@@ -286,10 +287,20 @@ export async function advanceAeStageAfterAiCompletion(
   await execute(
     `UPDATE applications
      SET ae_stage = 'ready_for_review',
+         application_stage = 'ready_for_review',
          ae_stage_updated_at = NOW(),
          ae_stage_updated_by_user_id = NULL,
-         ae_stage_updated_by_name = $2
+         ae_stage_updated_by_name = $2,
+         application_stage_changed_at = NOW(),
+         application_stage_changed_by_user_id = NULL,
+         application_stage_changed_by_name = $2
      WHERE id = $1 AND ae_stage = 'in_ai_pipeline'`,
+    [applicationId, actorName]
+  );
+  await execute(
+    `INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
+     VALUES ($1, 'in_ai_pipeline', 'ready_for_review', $2, 'AI workflow completed', 'ai_pipeline')
+     ON CONFLICT DO NOTHING`,
     [applicationId, actorName]
   );
 }
