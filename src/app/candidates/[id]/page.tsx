@@ -336,6 +336,8 @@ export default function CandidateProfilePage() {
   const [inviteSending, setInviteSending] = useState(false);
   const [inviteMessage, setInviteMessage] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
+  const [passwordResetting, setPasswordResetting] = useState(false);
+  const [passwordResetMessage, setPasswordResetMessage] = useState("");
   const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
@@ -368,6 +370,15 @@ export default function CandidateProfilePage() {
   const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
   const [me, setMe] = useState<{ profile?: { role?: string } } | null>(null);
   const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
+
+  async function resetCandidatePassword() {
+    if (!confirm("Reset this candidate's portal password and issue a temporary password?")) return;
+    setPasswordResetting(true); setPasswordResetMessage("");
+    const res = await fetch(`/api/candidates/${id}/password-reset`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    setPasswordResetting(false);
+    setPasswordResetMessage(res.ok ? (data.emailSent ? "Temporary password emailed." : `Temporary password: ${data.temporaryPassword}`) : (data.error || "Reset failed."));
+  }
 
   async function load() {
     if (!id) return;
@@ -999,8 +1010,10 @@ export default function CandidateProfilePage() {
               </Link>
             )}
             <button onClick={() => setShowEdit(true)}>Edit profile</button>
+            {isManager && candidate.account_created_at && <button onClick={resetCandidatePassword} disabled={passwordResetting}>{passwordResetting ? "Resetting..." : "Reset portal password"}</button>}
           </div>
           {inviteMessage && <span className="muted" style={{ fontSize: 12 }}>{inviteMessage}</span>}
+          {passwordResetMessage && <span className="muted" style={{ fontSize: 12 }}>{passwordResetMessage}</span>}
         </div>
       </div>
 
