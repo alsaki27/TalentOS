@@ -84,6 +84,7 @@ function CandidateDashboardInner() {
   var searchParams = useSearchParams();
   var [data, setData] = useState<DashboardData | null>(null);
   var [loading, setLoading] = useState(true);
+  var [syncingEmails, setSyncingEmails] = useState(false);
   var [error, setError] = useState<string | null>(null);
   var [notesAppId, setNotesAppId] = useState<string | null>(null);
 
@@ -142,6 +143,20 @@ function CandidateDashboardInner() {
     } catch (err) { console.error("Status change failed:", err); }
   }
 
+  async function forceSyncEmails() {
+    setSyncingEmails(true);
+    try {
+      var res = await fetch("/api/candidate-dashboard/force-sync", { method: "POST" });
+      if (!res.ok) throw new Error("Sync failed");
+      fetchData();
+    } catch (err) {
+      console.error("Force sync failed:", err);
+      alert("Failed to force sync emails. Check console for details.");
+    } finally {
+      setSyncingEmails(false);
+    }
+  }
+
   async function updateEmailTask(taskId: string, status: string, note?: string) {
     var res = await fetch("/api/action-items/" + taskId, {
       method: "PATCH",
@@ -173,13 +188,22 @@ function CandidateDashboardInner() {
             Track, manage, and visualize multi-candidate job applications and screening pipelines
           </p>
         </div>
-        <button onClick={fetchData} disabled={loading} style={{
-          padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
-          background: "var(--accent-soft)", border: "1px solid var(--accent)", color: "var(--accent)",
-          cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, transition: "all 0.15s",
-        }}>
-          {loading ? "Refreshing..." : "↻ Refresh"}
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button onClick={forceSyncEmails} disabled={syncingEmails || loading} style={{
+            padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+            background: "var(--surface)", border: "1px solid var(--border)", color: "var(--ink)",
+            cursor: (syncingEmails || loading) ? "not-allowed" : "pointer", opacity: (syncingEmails || loading) ? 0.6 : 1, transition: "all 0.15s",
+          }}>
+            {syncingEmails ? "Syncing..." : "📥 Force Sync Emails"}
+          </button>
+          <button onClick={fetchData} disabled={loading} style={{
+            padding: "8px 16px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+            background: "var(--accent-soft)", border: "1px solid var(--accent)", color: "var(--accent)",
+            cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.6 : 1, transition: "all 0.15s",
+          }}>
+            {loading ? "Refreshing..." : "↻ Refresh"}
+          </button>
+        </div>
       </div>
 
       {/* Candidate Selector */}
