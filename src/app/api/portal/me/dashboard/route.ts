@@ -6,14 +6,43 @@
 
 import { NextResponse } from "next/server";
 import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
-import { buildCandidatePortalDashboard } from "@/lib/portalDashboard";
+import {
+  buildCandidatePortalDashboardPage,
+  type CandidatePortalDateRange,
+  type CandidatePortalInterviewFilter,
+  type CandidatePortalResumeFilter,
+  type CandidatePortalSort,
+} from "@/lib/candidatePortalDashboardService";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(req: Request) {
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
 
-  const dashboard = await buildCandidatePortalDashboard(context.candidateId, context.candidate.name);
+  const url = new URL(req.url);
+  const page = Number(url.searchParams.get("page") ?? "1");
+  const pageSize = Number(url.searchParams.get("pageSize") ?? "10");
+  const dateRange = url.searchParams.get("dateRange") as CandidatePortalDateRange | null;
+  const interviewStatus = url.searchParams.get("interviewStatus") as CandidatePortalInterviewFilter | null;
+  const resumeStatus = url.searchParams.get("resumeStatus") as CandidatePortalResumeFilter | null;
+  const sort = url.searchParams.get("sort") as CandidatePortalSort | null;
+  const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
+
+  const dashboard = await buildCandidatePortalDashboardPage(context.candidateId, context.candidate.name, {
+    page,
+    pageSize,
+    search: url.searchParams.get("search") ?? "",
+    status: url.searchParams.get("status") ?? "",
+    source: url.searchParams.get("source") ?? "",
+    dateRange: dateRange ?? "all",
+    dateFrom: url.searchParams.get("dateFrom") ?? "",
+    dateTo: url.searchParams.get("dateTo") ?? "",
+    resumeStatus: resumeStatus ?? "all",
+    interviewStatus: interviewStatus ?? "all",
+    needsAttention: url.searchParams.get("needsAttention") === "true",
+    sort: sort ?? "submitted_at",
+    order,
+  });
   return NextResponse.json(dashboard);
 }
