@@ -54,11 +54,11 @@ interface TeamUser {
 interface QueueStats {
   all: number;
   mine: number;
-  overdue: number;
-  pendingReview: number;
+  pendingAeReview: number;
+  pendingAeApplication: number;
 }
 
-type TabView = "all" | "mine" | "overdue" | "review" | "workflow";
+type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow";
 
 const STATUS_ICONS: Record<string, string> = {
   assigned: "📋",
@@ -190,7 +190,7 @@ export default function ApplicationQueuePage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, overdue: 0, pendingReview: 0 });
+  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0 });
   const [statusFilter, setStatusFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
@@ -274,7 +274,7 @@ export default function ApplicationQueuePage() {
       if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
       setItems(data.items ?? []);
       setTotal(newTotal);
-      setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
       if (!isBackgroundPoll) {
@@ -696,8 +696,8 @@ export default function ApplicationQueuePage() {
   const statTabs: { key: TabView; label: string; count: number }[] = [
     { key: "all", label: "All tickets", count: stats.all },
     { key: "mine", label: "Mine", count: stats.mine },
-    { key: "overdue", label: "Overdue", count: stats.overdue },
-    { key: "review", label: "Review", count: stats.pendingReview },
+    { key: "ae_review", label: "AE Review pending", count: stats.pendingAeReview },
+    { key: "ae_application", label: "AE Application pending", count: stats.pendingAeApplication },
     { key: "workflow", label: "AI Pipeline", count: items.filter(i => i.workflow_status && ["queued", "running", "waiting"].includes(i.workflow_status)).length },
   ];
 

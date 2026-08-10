@@ -143,7 +143,7 @@ export interface ListApplicationsQuery {
   owner?: string;
   priority?: string;
   review?: string;
-  view?: "all" | "mine" | "overdue" | "review";
+  view?: "all" | "mine" | "ae_review" | "ae_application";
   userId?: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
@@ -162,8 +162,8 @@ export interface PaginatedApplicationsResult {
 export interface ApplicationQueueStats {
   all: number;
   mine: number;
-  overdue: number;
-  pendingReview: number;
+  pendingAeReview: number;
+  pendingAeApplication: number;
 }
 
 export interface ApplicationQueueResult extends PaginatedApplicationsResult {
@@ -467,6 +467,8 @@ export async function listApplicationQueue(
       AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
       AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
       AND ($8 <> 'review' OR a.review_status = 'pending')
+      AND ($8 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
+      AND ($8 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
       AND ($13 = '' OR a.candidate_id::text = $13)
       AND ($14 = '' OR a.ae_stage = $14)
       AND ($15::int IS NULL OR a.created_at >= NOW() - ($15::int * INTERVAL '1 hour'))
@@ -505,6 +507,8 @@ export async function listApplicationQueue(
       AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
       AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
       AND ($8 <> 'review' OR a.review_status = 'pending')
+      AND ($8 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
+      AND ($8 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
       AND ($11 = '' OR a.candidate_id::text = $11)
       AND ($12 = '' OR a.ae_stage = $12)
       AND ($13::int IS NULL OR a.created_at >= NOW() - ($13::int * INTERVAL '1 hour'))
@@ -538,8 +542,6 @@ export async function listApplicationQueue(
 
 async function buildQueueStats(params: ListApplicationsQuery): Promise<ApplicationQueueStats> {
   const statuses = params.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
-  const today = new Date().toISOString().slice(0, 10);
-
   // Stats mirror listApplicationQueue's visibility: every role sees the whole
   // queue, "mine" below stays a voluntary breakdown, not an access boundary.
   const baseWhere = `
@@ -548,7 +550,7 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
 
   const baseParams = [statuses];
 
-  const [allRow, mineRow, overdueRow, reviewRow] = await Promise.all([
+  const [allRow, mineRow, reviewRow, applicationRow] = await Promise.all([
     queryOne<{ total: number }>(
       `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere}`,
       baseParams
@@ -558,11 +560,11 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
       [...baseParams, params.userId ?? ""]
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assignment_due_at IS NOT NULL AND assignment_due_at <= $2::date`,
-      [...baseParams, today]
+      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'ready_for_review'`,
+      baseParams
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND review_status = 'pending'`,
+      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'ready_for_application'`,
       baseParams
     ),
   ]);
@@ -570,8 +572,8 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
   return {
     all: allRow?.total ?? 0,
     mine: mineRow?.total ?? 0,
-    overdue: overdueRow?.total ?? 0,
-    pendingReview: reviewRow?.total ?? 0,
+    pendingAeReview: reviewRow?.total ?? 0,
+    pendingAeApplication: applicationRow?.total ?? 0,
   };
 }
 
