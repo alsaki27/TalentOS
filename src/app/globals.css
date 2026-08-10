@@ -808,6 +808,19 @@ label {
   min-width: 140px;
 }
 
+/* Application Queue stage metadata must remain readable against the dark
+   table surface; the generic muted token is too low-contrast here. */
+.queue-stage-meta {
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.queue-stage-meta-changed { color: #bfdbfe; }
+.queue-stage-meta-reviewed { color: #fde68a; }
+.queue-stage-meta-applied { color: #86efac; margin-top: 2px; }
+
 /* Jobs masterlist: keep the control surface readable and make the wide data
    table intentionally scrollable instead of silently clipping actions. */
 .jobs-page { min-width: 0; }

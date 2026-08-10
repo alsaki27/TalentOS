@@ -936,17 +936,17 @@ export default function ApplicationQueuePage() {
                       ))}
                     </select>
                     {item.ae_stage_updated_at && (
-                      <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                      <div className="queue-stage-meta queue-stage-meta-changed">
                         Last changed {item.ae_stage_updated_by_name ? `by ${item.ae_stage_updated_by_name} ` : ""}on {new Date(item.ae_stage_updated_at).toLocaleString()}
                       </div>
                     )}
                     {item.ae_reviewed_by_name && (
-                      <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
+                      <div className="queue-stage-meta queue-stage-meta-reviewed" title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
                         Reviewed by {item.ae_reviewed_by_name}
                       </div>
                     )}
                     {item.ae_applied_by_name && (
-                      <div className="text-muted" style={{ fontSize: 11, marginTop: 2 }} title={item.ae_applied_at ? new Date(item.ae_applied_at).toLocaleString() : undefined}>
+                      <div className="queue-stage-meta queue-stage-meta-applied" title={item.ae_applied_at ? new Date(item.ae_applied_at).toLocaleString() : undefined}>
                         Applied by {item.ae_applied_by_name}
                       </div>
                     )}
