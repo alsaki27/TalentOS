@@ -5,7 +5,7 @@ vi.mock("@/server/db/neon", () => ({
   queryOne: vi.fn(),
 }));
 
-import { buildCandidatePortalDashboardPage, getCandidatePortalApplicationDetail } from "@/lib/candidatePortalDashboardService";
+import { buildCandidatePortalDashboardPage, getCandidatePortalApplicationDetail, getCandidatePortalInterviews } from "@/lib/candidatePortalDashboardService";
 import { query, queryOne } from "@/server/db/neon";
 
 describe("candidate portal read model", () => {
@@ -57,5 +57,17 @@ describe("candidate portal read model", () => {
     expect(sql).toContain("packet.packet_status IN ('approved', 'sent')");
     expect(params).toEqual(["application-a", "candidate-b"]);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  it("scopes the interview center and only includes candidate-visible updates", async () => {
+    (query as any).mockResolvedValueOnce([{ id: "interview-a", application_id: "application-a", scheduled_at: "2026-08-12T15:00:00.000Z", status: "scheduled", panel: ["Recruiter"], visible_updates: [] }]);
+    const result = await getCandidatePortalInterviews("candidate-a");
+
+    expect(result[0].status).toBe("upcoming");
+    const [sql, params] = (query as any).mock.calls[0];
+    expect(sql).toContain("a.candidate_id = $1");
+    expect(sql).toContain("c.visible_to_candidate = true");
+    expect(sql).toContain("NOT IN ('assigned', 'stacked', 'in_progress')");
+    expect(params).toEqual(["candidate-a"]);
   });
 });

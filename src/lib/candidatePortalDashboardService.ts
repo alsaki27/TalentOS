@@ -114,6 +114,96 @@ export interface CandidatePortalActionItem {
   href: string;
 }
 
+export interface CandidatePortalInterview {
+  id: string | null;
+  application_id: string;
+  job_title: string;
+  company_name: string | null;
+  location: string | null;
+  round_name: string;
+  round_number: number;
+  scheduled_at: string | null;
+  duration_minutes: number | null;
+  status: "upcoming" | "completed" | "cancelled" | "not_scheduled";
+  interview_status: string | null;
+  meeting_link: string | null;
+  panel: string[];
+  visible_updates: { id: string; body: string; author: string; created_at: string | null }[];
+}
+
+export async function getCandidatePortalInterviews(candidateId: string): Promise<CandidatePortalInterview[]> {
+  const rows = await query<any>(
+    `SELECT
+       s.id,
+       a.id AS application_id,
+       COALESCE(j.title, 'Application interview') AS job_title,
+       j.company AS company_name,
+       j.location,
+       COALESCE(s.round_name, 'Interview') AS round_name,
+       COALESCE(s.round_number, 1) AS round_number,
+       s.scheduled_at,
+       s.duration_minutes,
+       s.status AS interview_status,
+       s.meeting_link,
+       COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel,
+       COALESCE((
+         SELECT jsonb_agg(jsonb_build_object(
+           'id', update_row.id,
+           'body', update_row.body,
+           'author', update_row.author,
+           'created_at', update_row.created_at
+         ) ORDER BY update_row.created_at DESC)
+         FROM (
+           SELECT c.id, c.body, COALESCE(c.commenter_name, 'Skarion team') AS author, c.created_at
+           FROM application_comments c
+           WHERE c.application_id = a.id AND c.visible_to_candidate = true
+           ORDER BY c.created_at DESC
+           LIMIT 3
+         ) update_row
+       ), '[]'::jsonb) AS visible_updates
+     FROM applications a
+     LEFT JOIN jobs j ON j.id = a.job_id
+     LEFT JOIN interview_schedules s ON s.application_id = a.id
+     LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
+     LEFT JOIN profiles p ON p.user_id::text = pm.interviewer_id::text
+     WHERE a.candidate_id = $1
+       AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress')
+       AND (s.id IS NOT NULL OR CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END = 'interview')
+     GROUP BY s.id, a.id, j.title, j.company, j.location, s.round_name, s.round_number,
+              s.scheduled_at, s.duration_minutes, s.status, s.meeting_link
+     ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC, a.updated_at DESC
+     LIMIT 100`,
+    [candidateId],
+  );
+
+  return (rows ?? []).map((row: any) => {
+    const rawStatus = String(row.interview_status || "scheduled").toLowerCase();
+    const status = !row.id
+      ? "not_scheduled"
+      : rawStatus === "cancelled"
+        ? "cancelled"
+        : rawStatus === "completed" || (row.scheduled_at && new Date(row.scheduled_at).getTime() < Date.now())
+          ? "completed"
+          : "upcoming";
+    return {
+      id: row.id ?? null,
+      application_id: row.application_id,
+      job_title: row.job_title,
+      company_name: row.company_name,
+      location: row.location,
+      round_name: row.round_name,
+      round_number: Number(row.round_number ?? 1),
+      scheduled_at: row.scheduled_at,
+      duration_minutes: row.duration_minutes == null ? null : Number(row.duration_minutes),
+      status,
+      interview_status: row.interview_status,
+      meeting_link: row.meeting_link,
+      panel: Array.isArray(row.panel) ? row.panel : [],
+      visible_updates: Array.isArray(row.visible_updates) ? row.visible_updates : [],
+    };
+  });
+}
+
 export async function getCandidatePortalApplicationDetail(candidateId: string, applicationId: string): Promise<CandidatePortalApplicationDetail | null> {
   const application = await queryOne<any>(
     `SELECT

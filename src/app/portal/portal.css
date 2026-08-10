@@ -825,6 +825,25 @@
 .portal-interview-card strong { color: var(--p-ink); font-size: 13px; }
 .portal-interview-card span { margin-top: 4px; color: var(--p-ink-soft); font-size: 11px; }
 
+.portal-tab-list { display: flex; gap: 6px; margin: 14px 0 12px; border-bottom: 1px solid var(--p-border); }
+.portal-tab { border: 0; border-bottom: 2px solid transparent; color: var(--p-ink-soft); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 10px; }
+.portal-tab:hover, .portal-tab-active { border-bottom-color: var(--p-coral); color: var(--p-ink); }
+.portal-interview-center-list { display: flex; flex-direction: column; gap: 10px; }
+.portal-interview-center-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--p-border); border-radius: var(--p-radius-md); background: var(--p-surface); padding: 14px; }
+.portal-interview-center-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.portal-interview-center-title strong { color: var(--p-ink); font-size: 13px; }
+.portal-interview-center-main h3 { margin: 5px 0 2px; color: var(--p-navy); font-size: 15px; }
+.portal-interview-center-main p { margin: 3px 0 0; color: var(--p-ink-soft); font-size: 11px; }
+.portal-interview-center-main .portal-interview-time { color: var(--p-ink); font-size: 12px; font-weight: 700; }
+.portal-interview-updates { margin-top: 10px; border-left: 3px solid var(--p-coral); background: var(--p-bg); padding: 8px 10px; }
+.portal-interview-updates strong, .portal-interview-updates span { display: block; color: var(--p-ink-soft); font-size: 10px; }
+.portal-interview-updates p { margin: 4px 0; color: var(--p-ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.portal-interview-status { border-radius: 999px; font-size: 10px; font-weight: 700; padding: 4px 7px; }
+.portal-interview-status-upcoming { color: #075985; background: #e0f2fe; }
+.portal-interview-status-completed { color: #166534; background: #dcfce7; }
+.portal-interview-status-cancelled { color: #991b1b; background: #fee2e2; }
+.portal-interview-status-not_scheduled { color: #92400e; background: #fef3c7; }
+
 .portal-notes-heading {
   display: flex;
   align-items: flex-start;

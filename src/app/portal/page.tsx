@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import CandidatePortalApplications, { type PortalApplication, type PortalDashboardFilters } from "@/components/portal/CandidatePortalApplications";
 import CandidatePortalInsights from "@/components/portal/CandidatePortalInsights";
+import CandidatePortalInterviewCenter from "@/components/portal/CandidatePortalInterviewCenter";
 import PortalLogo from "./PortalLogo";
 
 interface PortalDashboard {
@@ -269,6 +270,7 @@ export default function PortalDashboardPage() {
       </div>
 
       <CandidatePortalInsights trend={data.trend} actionItems={data.actionItems} />
+      <CandidatePortalInterviewCenter />
 
       <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
         <strong>Account security</strong>
