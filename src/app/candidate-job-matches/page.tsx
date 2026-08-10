@@ -46,12 +46,9 @@ export default function CandidateJobMatchesPage() {
     setRunningMatcher(true);
     setError("");
     try {
-      const response = await fetch("/api/cron/active-candidate-job-match", {
+      const response = await fetch("/api/admin/candidate-job-matches/force-run", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-candidate-match-invocation": "manual"
-        }
+        headers: { "Content-Type": "application/json" }
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Failed to run matcher");
