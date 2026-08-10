@@ -60,6 +60,17 @@ function AuthForm() {
 
     setLoadingMode("");
     if (!res.ok) {
+      // Candidate accounts use their isolated portal session. Trying this only
+      // after staff auth fails preserves staff auth and keeps the two cookies
+      // completely separate.
+      if (mode === "signin") {
+        const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+        if (candidateRes.ok) {
+          router.push("/portal");
+          router.refresh();
+          return;
+        }
+      }
       const data = await res.json().catch(() => ({}));
       setError(data.error || (mode === "signin" ? "Could not sign in." : "Could not sign up."));
       return;

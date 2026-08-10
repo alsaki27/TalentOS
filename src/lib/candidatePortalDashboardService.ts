@@ -545,7 +545,7 @@ export async function buildCandidatePortalDashboardPage(
     query<{ public_status_key: string; count: string }>(
       `${baseCte} SELECT public_status_key, COUNT(*)::text AS count FROM candidate_apps GROUP BY public_status_key`,
       [candidateId],
-    ),
+    ).catch(() => []),
     query<{ source: string | null; count: string }>(
       `${baseCte} SELECT COALESCE(source, 'unknown') AS source, COUNT(*)::text AS count FROM candidate_apps GROUP BY COALESCE(source, 'unknown') ORDER BY COUNT(*) DESC`,
       [candidateId],
@@ -608,7 +608,7 @@ export async function buildCandidatePortalDashboardPage(
        ) action_items
        ORDER BY due_at ASC NULLS LAST LIMIT 20`,
       [candidateId],
-    ),
+    ).catch(() => []),
   ]);
 
   const total = Number(countRow?.count ?? 0);
