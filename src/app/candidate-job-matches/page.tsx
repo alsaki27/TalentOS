@@ -16,6 +16,7 @@ export default function CandidateJobMatchesPage() {
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
+  const [runningMatcher, setRunningMatcher] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -41,16 +42,48 @@ export default function CandidateJobMatchesPage() {
     setBusy(null);
   }
 
+  async function forceRunMatcher() {
+    setRunningMatcher(true);
+    setError("");
+    try {
+      const response = await fetch("/api/cron/active-candidate-job-match", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-candidate-match-invocation": "manual"
+        }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to run matcher");
+      await load();
+      alert("Matcher finished running!");
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || "Failed to trigger matcher");
+    }
+    setRunningMatcher(false);
+  }
+
   return <main className="page-shell">
     <div className="page-header"><div>
       <h1>Candidate Match Review</h1>
       <p className="muted">Approved resume profiles matched to jobs posted in the last seven days. Nothing is submitted externally.</p>
     </div></div>
-    <div className="card" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-      {(["pending", "approved", "rejected", "all"] as const).map((value) =>
-        <button key={value} className={status === value ? "btn-primary" : "btn-secondary"} onClick={() => setStatus(value)}>
-          {value[0].toUpperCase() + value.slice(1)}{value !== "all" ? ` (${counts[value]})` : ""}
-        </button>)}
+    <div className="card" style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {(["pending", "approved", "rejected", "all"] as const).map((value) =>
+          <button key={value} className={status === value ? "btn-primary" : "btn-secondary"} onClick={() => setStatus(value)}>
+            {value[0].toUpperCase() + value.slice(1)}{value !== "all" ? ` (${counts[value]})` : ""}
+          </button>)}
+      </div>
+      <button 
+        onClick={forceRunMatcher} 
+        disabled={runningMatcher} 
+        className="btn-primary" 
+        style={{ background: "var(--ink)", color: "white" }}
+      >
+        {runningMatcher ? "Running Matcher..." : "⚙️ Force Run Matcher"}
+      </button>
     </div>
     {error && <div className="card" style={{ borderColor: "#ef4444", marginBottom: 16 }}>{error}</div>}
     {loading ? <div className="card">Loading recommendations…</div> : items.length === 0 ? <div className="card">No recommendations in this view.</div> :
