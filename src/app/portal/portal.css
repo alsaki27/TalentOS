@@ -784,6 +784,85 @@
 .portal-detail-updates p { margin: 0 0 5px; color: var(--p-ink); font-size: 13px; line-height: 1.5; }
 .portal-detail-updates span { color: var(--p-ink-soft); font-size: 11px; }
 
+.portal-interview-list,
+.portal-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-interview-card,
+.portal-notes-list article {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  padding: 12px;
+}
+
+.portal-interview-card strong,
+.portal-interview-card span,
+.portal-notes-list span {
+  display: block;
+}
+
+.portal-interview-card strong { color: var(--p-ink); font-size: 13px; }
+.portal-interview-card span { margin-top: 4px; color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-notes-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.portal-note-composer {
+  margin: 14px 0;
+}
+
+.portal-note-composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  padding: 10px 12px;
+}
+
+.portal-note-composer textarea:focus {
+  border-color: var(--p-navy);
+  box-shadow: 0 0 0 3px rgba(18, 36, 97, 0.1);
+}
+
+.portal-note-composer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+}
+
+.portal-note-composer > div > span,
+.portal-notes-list span { color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-notes-list article {
+  display: block;
+}
+
+.portal-notes-list p { margin: 0 0 8px; color: var(--p-ink); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.portal-notes-list article > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.portal-note-delete { border: 0; color: #b91c1c; background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+
 .portal-timeline {
   display: flex;
   flex-direction: column;
@@ -980,4 +1059,6 @@
   .portal-detail-hero { flex-direction: column; }
   .portal-detail-grid { grid-template-columns: 1fr; }
   .portal-resume-preview { padding: 18px; }
+  .portal-interview-card { flex-direction: column; }
+  .portal-interview-card .portal-btn-small { width: auto; }
 }

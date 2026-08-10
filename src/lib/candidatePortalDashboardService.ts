@@ -84,6 +84,7 @@ export interface CandidatePortalApplicationDetail {
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
   timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null }[];
+  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; duration_minutes: number | null; status: string; location: string | null; meeting_link: string | null; panel: string[] }[];
 }
 
 export async function getCandidatePortalApplicationDetail(candidateId: string, applicationId: string): Promise<CandidatePortalApplicationDetail | null> {
@@ -122,12 +123,23 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
 
   if (!application) return null;
 
-  const [comments, events] = await Promise.all([
+  const [comments, events, interviews] = await Promise.all([
     query<any>(
       `SELECT id, body, commenter_name, created_at
        FROM application_comments
        WHERE application_id = $1 AND visible_to_candidate = true
        ORDER BY created_at DESC LIMIT 100`,
+      [applicationId],
+    ),
+    query<any>(
+      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.duration_minutes, s.status, s.location, s.meeting_link,
+              COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel
+       FROM interview_schedules s
+       LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
+       LEFT JOIN profiles p ON p.user_id::text = pm.interviewer_id::text
+       WHERE s.application_id = $1
+       GROUP BY s.id
+       ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC`,
       [applicationId],
     ),
     query<any>(
@@ -160,6 +172,17 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       from_label: event.from_status ? publicStatus(event.from_status).label : null,
       to_label: publicStatus(event.to_status).label,
       created_at: event.created_at,
+    })),
+    interviews: (interviews ?? []).map((interview) => ({
+      id: interview.id,
+      round_name: interview.round_name,
+      round_number: Number(interview.round_number ?? 1),
+      scheduled_at: interview.scheduled_at,
+      duration_minutes: interview.duration_minutes == null ? null : Number(interview.duration_minutes),
+      status: interview.status || "scheduled",
+      location: interview.location,
+      meeting_link: interview.meeting_link,
+      panel: Array.isArray(interview.panel) ? interview.panel : [],
     })),
   };
 }
