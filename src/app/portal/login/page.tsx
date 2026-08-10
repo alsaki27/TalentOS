@@ -33,6 +33,14 @@ function PortalLoginForm() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaMode, setMfaMode] = useState<"totp" | "recovery">("totp");
+  const [forgot, setForgot] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState("");
+
+  async function requestReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setLoading(true); setForgotMessage("");
+    await fetch("/api/portal/auth/forgot-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) });
+    setLoading(false); setForgotMessage("If an account exists, a reset link has been sent.");
+  }
 
   useEffect(() => {
     const err = searchParams?.get("error");
@@ -86,14 +94,14 @@ function PortalLoginForm() {
 
   return (
     <div className="portal-auth-shell">
-      <form className="portal-auth-card" onSubmit={mfaRequired ? verifyMfa : submit}>
+      <form className="portal-auth-card" onSubmit={forgot ? requestReset : (mfaRequired ? verifyMfa : submit)}>
         <div className="portal-logo">
           <PortalLogo />
           <span className="portal-logo-text">Skarion</span>
         </div>
 
         <div>
-          <h1 className="portal-h1">{mfaRequired ? "Verify your identity" : "Welcome back"}</h1>
+          <h1 className="portal-h1">{forgot ? "Reset your password" : (mfaRequired ? "Verify your identity" : "Welcome back")}</h1>
           <p className="portal-sub">{mfaRequired
             ? mfaMode === "totp"
               ? "Enter the 6-digit code from Google Authenticator."
@@ -106,7 +114,7 @@ function PortalLoginForm() {
           <input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
         </div>}
 
-        {!mfaRequired ? <div className="portal-field">
+        {!mfaRequired && !forgot ? <div className="portal-field">
           <label>Password</label>
           <input
             type="password"
@@ -147,7 +155,10 @@ function PortalLoginForm() {
 
         {!mfaRequired && <div className="portal-divider"><span>or</span></div>}
 
-        {!mfaRequired && <a href="/api/portal/auth/google/start" className="portal-btn portal-btn-google">
+        {!mfaRequired && !forgot && <button type="button" className="portal-btn portal-btn-google" onClick={() => setForgot(true)}>Forgot password?</button>}
+        {forgotMessage && <p className="portal-sub">{forgotMessage}</p>}
+        {forgot && <button type="button" className="portal-btn portal-btn-google" onClick={() => setForgot(false)}>Back to sign in</button>}
+        {!mfaRequired && !forgot && <a href="/api/portal/auth/google/start" className="portal-btn portal-btn-google">
           <GoogleIcon />
           Continue with Google
         </a>}
