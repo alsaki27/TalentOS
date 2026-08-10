@@ -137,16 +137,32 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
        j.salary_period,
        j.salary_range,
        COALESCE(j.apply_url, j.source_url) AS source_url,
-       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.id ELSE NULL END AS resume_id,
-       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN 'ready'
+       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+                  AND rv.application_id = a.id
+                  AND rv.candidate_id = a.candidate_id
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN rv.id ELSE NULL END AS resume_id,
+       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+                  AND rv.application_id = a.id
+                  AND rv.candidate_id = a.candidate_id
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN 'ready'
             WHEN a.resume_generation_status IN ('queued', 'running', 'processing') THEN 'generating'
             ELSE 'unavailable' END AS resume_status,
-       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN COALESCE(rv.title, 'Tailored resume') ELSE NULL END AS resume_title,
-       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.version_label ELSE NULL END AS resume_version_label,
-       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN COALESCE(rv.updated_at, rv.created_at) ELSE NULL END AS resume_generated_at
+       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+                  AND rv.application_id = a.id
+                  AND rv.candidate_id = a.candidate_id
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.title, 'Tailored resume') ELSE NULL END AS resume_title,
+       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+                  AND rv.application_id = a.id
+                  AND rv.candidate_id = a.candidate_id
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN rv.version_label ELSE NULL END AS resume_version_label,
+       CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+                  AND rv.application_id = a.id
+                  AND rv.candidate_id = a.candidate_id
+                  AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.updated_at, rv.created_at) ELSE NULL END AS resume_generated_at
      FROM applications a
      LEFT JOIN jobs j ON j.id = a.job_id
      LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
+     LEFT JOIN application_packets packet ON packet.application_id = a.id AND packet.final_resume_version_id = rv.id
      WHERE a.id = $1
        AND a.candidate_id = $2
        AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress')`,
@@ -185,6 +201,42 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     ),
   ]);
 
+  const timeline: CandidatePortalApplicationDetail["timeline"] = (events ?? []).map((event) => ({
+    id: event.id,
+    label: event.to_status === "applied" ? "Application submitted" : publicStatus(event.to_status).label,
+    from_label: event.from_status ? publicStatus(event.from_status).label : null,
+    to_label: publicStatus(event.to_status).label,
+    created_at: event.created_at,
+  }));
+
+  if (application.resume_status === "ready" && application.resume_id) {
+    timeline.push({
+      id: `resume:${application.resume_id}`,
+      label: "Tailored resume approved",
+      from_label: null,
+      to_label: "Resume ready",
+      created_at: application.resume_generated_at,
+    });
+  }
+
+  for (const interview of interviews ?? []) {
+    const status = String(interview.status || "scheduled").toLowerCase();
+    const label = status === "cancelled" ? "Interview cancelled" : status === "completed" ? "Interview completed" : "Interview scheduled";
+    timeline.push({
+      id: `interview:${interview.id}`,
+      label: `${label}${interview.round_name ? ` · ${interview.round_name}` : ""}`,
+      from_label: null,
+      to_label: status,
+      created_at: interview.scheduled_at,
+    });
+  }
+
+  timeline.sort((left, right) => {
+    const leftTime = left.created_at ? new Date(left.created_at).getTime() : 0;
+    const rightTime = right.created_at ? new Date(right.created_at).getTime() : 0;
+    return rightTime - leftTime;
+  });
+
   return {
     id: application.id,
     status: application.status,
@@ -198,13 +250,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     next_action: application.next_action,
     follow_up_at: application.follow_up_at,
     updates: (comments ?? []).map((comment) => ({ id: comment.id, body: comment.body, author: comment.commenter_name || "Skarion team", created_at: comment.created_at })),
-    timeline: (events ?? []).map((event) => ({
-      id: event.id,
-      label: event.to_status === "applied" ? "Application submitted" : publicStatus(event.to_status).label,
-      from_label: event.from_status ? publicStatus(event.from_status).label : null,
-      to_label: publicStatus(event.to_status).label,
-      created_at: event.created_at,
-    })),
+    timeline,
     interviews: (interviews ?? []).map((interview) => ({
       id: interview.id,
       round_name: interview.round_name,
@@ -273,30 +319,46 @@ function buildBaseCte() {
           ) THEN TRUE ELSE FALSE
         END AS needs_attention,
         CASE
-          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.id
+          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+               AND rv.application_id = a.id
+               AND rv.candidate_id = a.candidate_id
+               AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN rv.id
           ELSE NULL
         END AS resume_id,
         CASE
-          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN 'ready'
+          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+               AND rv.application_id = a.id
+               AND rv.candidate_id = a.candidate_id
+               AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN 'ready'
           WHEN a.resume_generation_status IN ('queued', 'running', 'processing') THEN 'generating'
           ELSE 'unavailable'
         END AS resume_status,
         CASE
-          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN COALESCE(rv.title, 'Tailored resume')
+          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+               AND rv.application_id = a.id
+               AND rv.candidate_id = a.candidate_id
+               AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.title, 'Tailored resume')
           ELSE NULL
         END AS resume_title,
         CASE
-          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.version_label
+          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+               AND rv.application_id = a.id
+               AND rv.candidate_id = a.candidate_id
+               AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN rv.version_label
           ELSE NULL
         END AS resume_version_label,
         CASE
-          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN COALESCE(rv.updated_at, rv.created_at)
+          WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL
+               AND rv.application_id = a.id
+               AND rv.candidate_id = a.candidate_id
+               AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.updated_at, rv.created_at)
           ELSE NULL
         END AS resume_generated_at,
         CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS public_status_key
       FROM applications a
       LEFT JOIN jobs j ON j.id = a.job_id
       LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
+      LEFT JOIN application_packets packet ON packet.application_id = a.id AND packet.final_resume_version_id = rv.id
       LEFT JOIN LATERAL (
         SELECT s.id, s.scheduled_at, s.status
         FROM interview_schedules s

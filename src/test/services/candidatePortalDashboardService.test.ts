@@ -52,6 +52,9 @@ describe("candidate portal read model", () => {
     expect(sql).toContain("a.id = $1");
     expect(sql).toContain("a.candidate_id = $2");
     expect(sql).toContain("NOT IN ('assigned', 'stacked', 'in_progress')");
+    expect(sql).toContain("rv.application_id = a.id");
+    expect(sql).toContain("rv.candidate_id = a.candidate_id");
+    expect(sql).toContain("packet.packet_status IN ('approved', 'sent')");
     expect(params).toEqual(["application-a", "candidate-b"]);
     expect(query).not.toHaveBeenCalled();
   });
