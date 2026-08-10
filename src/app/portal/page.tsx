@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import QRCode from "react-qr-code";
 import PortalLogo from "./PortalLogo";
 
 interface PortalApplication {
@@ -188,7 +189,7 @@ export default function PortalDashboardPage() {
 
       <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
         <strong>Account security</strong>
-        {mfaEnrolled ? <p className="portal-greeting-sub">Google Authenticator is enabled for your next sign-in.</p> : !mfaSetup ? <><p className="portal-greeting-sub">Protect your candidate dashboard with Google Authenticator.</p><button className="portal-btn portal-btn-primary" onClick={setupMfa}>Set up Google Authenticator</button></> : <div style={{ marginTop: 10 }}><p className="portal-greeting-sub">Scan this URI in Google Authenticator, then enter the six-digit code.</p><code style={{ display: "block", wordBreak: "break-all", fontSize: 11 }}>{mfaSetup.otpauthUri}</code><p style={{ fontSize: 12 }}>Manual key: <strong>{mfaSetup.secret}</strong></p><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" /><button className="portal-btn portal-btn-primary" onClick={confirmMfa} style={{ marginLeft: 8 }}>Enable MFA</button></div>}
+        {mfaEnrolled ? <p className="portal-greeting-sub">Google Authenticator is enabled for your next sign-in.</p> : !mfaSetup ? <><p className="portal-greeting-sub">Protect your candidate dashboard with Google Authenticator.</p><button className="portal-btn portal-btn-primary" onClick={setupMfa}>Set up Google Authenticator</button></> : <div style={{ marginTop: 10 }}><p className="portal-greeting-sub">Scan this QR code in Google Authenticator, then enter the six-digit code.</p><div style={{ background: "white", padding: 16, display: "inline-block", borderRadius: 8, marginBottom: 12 }}><QRCode value={mfaSetup.otpauthUri} size={150} /></div><p style={{ fontSize: 12 }}>Manual key: <strong>{mfaSetup.secret}</strong></p><div style={{ display: "flex", gap: 8, marginTop: 8 }}><input inputMode="numeric" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))} placeholder="123456" /><button className="portal-btn portal-btn-primary" onClick={confirmMfa}>Enable MFA</button></div></div>}
         {recoveryCodes.length > 0 && <code style={{ display: "block", marginTop: 8, wordBreak: "break-word" }}>{recoveryCodes.join(" · ")}</code>}
         {mfaMessage && <p className="portal-greeting-sub">{mfaMessage}</p>}
       </div>
