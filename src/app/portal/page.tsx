@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import CandidatePortalApplications, { type PortalApplication, type PortalDashboardFilters } from "@/components/portal/CandidatePortalApplications";
+import CandidatePortalInsights from "@/components/portal/CandidatePortalInsights";
 import PortalLogo from "./PortalLogo";
 
 interface PortalDashboard {
@@ -20,6 +21,8 @@ interface PortalDashboard {
   pageSize: number;
   totalPages: number;
   sourceCounts: Record<string, number>;
+  trend: { hourly24h: { bucket: string; count: number }[]; daily7d: { bucket: string; count: number }[]; monthly6m: { bucket: string; count: number }[] };
+  actionItems: { id: string; type: "interview" | "follow_up"; title: string; description: string; due_at: string | null; href: string }[];
 }
 
 interface GmailPrivacyStatus {
@@ -68,6 +71,7 @@ function DashboardSkeleton() {
       <div className="portal-stats">
         {[0, 1, 2, 3, 4].map((item) => <div key={item} className="portal-skeleton" style={{ height: 84 }} />)}
       </div>
+
       <div className="portal-skeleton" style={{ height: 90 }} />
       <div className="portal-skeleton" style={{ height: 90 }} />
     </div>
@@ -225,6 +229,8 @@ export default function PortalDashboardPage() {
         <StatCard icon="O" value={data.summary.offers} label="Offers" index={4} />
         <StatCard icon="R" value={data.summary.resumesReady} label="Resumes ready" index={5} />
       </div>
+
+      <CandidatePortalInsights trend={data.trend} actionItems={data.actionItems} />
 
       <div className="portal-card" style={{ marginBottom: 24, padding: 16 }}>
         <strong>Account security</strong>

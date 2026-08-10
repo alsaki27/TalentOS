@@ -87,6 +87,20 @@ export interface CandidatePortalApplicationDetail {
   interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; duration_minutes: number | null; status: string; location: string | null; meeting_link: string | null; panel: string[] }[];
 }
 
+export interface CandidatePortalTrendPoint {
+  bucket: string;
+  count: number;
+}
+
+export interface CandidatePortalActionItem {
+  id: string;
+  type: "interview" | "follow_up";
+  title: string;
+  description: string;
+  due_at: string | null;
+  href: string;
+}
+
 export async function getCandidatePortalApplicationDetail(candidateId: string, applicationId: string): Promise<CandidatePortalApplicationDetail | null> {
   const application = await queryOne<any>(
     `SELECT
@@ -301,7 +315,7 @@ export async function buildCandidatePortalDashboardPage(
   const filterSql = filter.sql;
   const sortColumn = SORT_COLUMNS[sort];
 
-  const [countRow, rows, statusRows, sourceRows, totalRow, readyResumeRow] = await Promise.all([
+  const [countRow, rows, statusRows, sourceRows, totalRow, readyResumeRow, hourlyRows, dailyRows, monthlyRows, actionRows] = await Promise.all([
     queryOne<{ count: string }>(`${baseCte} SELECT COUNT(*)::text AS count FROM candidate_apps ${filterSql}`, filterParams),
     query<any>(
       `${baseCte}
@@ -320,6 +334,63 @@ export async function buildCandidatePortalDashboardPage(
     ),
     queryOne<{ count: string }>(`${baseCte} SELECT COUNT(*)::text AS count FROM candidate_apps`, [candidateId]),
     queryOne<{ count: string }>(`${baseCte} SELECT COUNT(*)::text AS count FROM candidate_apps WHERE resume_status = 'ready'`, [candidateId]),
+    query<{ bucket: string; count: string }>(
+      `${baseCte}, buckets AS (
+         SELECT generate_series(date_trunc('hour', NOW() - INTERVAL '23 hours'), date_trunc('hour', NOW()), INTERVAL '1 hour') AS bucket
+       )
+       SELECT to_char(b.bucket, 'YYYY-MM-DD"T"HH24:MI:SSOF') AS bucket, COUNT(a.id)::text AS count
+       FROM buckets b
+       LEFT JOIN candidate_apps a ON a.submitted_at >= b.bucket AND a.submitted_at < b.bucket + INTERVAL '1 hour'
+       GROUP BY b.bucket ORDER BY b.bucket`,
+      [candidateId],
+    ),
+    query<{ bucket: string; count: string }>(
+      `${baseCte}, buckets AS (
+         SELECT generate_series(date_trunc('day', NOW() - INTERVAL '6 days'), date_trunc('day', NOW()), INTERVAL '1 day') AS bucket
+       )
+       SELECT to_char(b.bucket, 'YYYY-MM-DD') AS bucket, COUNT(a.id)::text AS count
+       FROM buckets b
+       LEFT JOIN candidate_apps a ON a.submitted_at >= b.bucket AND a.submitted_at < b.bucket + INTERVAL '1 day'
+       GROUP BY b.bucket ORDER BY b.bucket`,
+      [candidateId],
+    ),
+    query<{ bucket: string; count: string }>(
+      `${baseCte}, buckets AS (
+         SELECT generate_series(date_trunc('month', NOW()) - INTERVAL '5 months', date_trunc('month', NOW()), INTERVAL '1 month') AS bucket
+       )
+       SELECT to_char(b.bucket, 'YYYY-MM') AS bucket, COUNT(a.id)::text AS count
+       FROM buckets b
+       LEFT JOIN candidate_apps a ON a.submitted_at >= b.bucket AND a.submitted_at < b.bucket + INTERVAL '1 month'
+       GROUP BY b.bucket ORDER BY b.bucket`,
+      [candidateId],
+    ),
+    query<any>(
+      `SELECT * FROM (
+         SELECT a.id, 'follow_up' AS type, 'Check in on your application' AS title,
+                COALESCE(j.company, 'the employer') || ' · ' || COALESCE(j.title, 'your application') AS description,
+                a.follow_up_at::timestamptz AS due_at
+         FROM applications a
+         LEFT JOIN jobs j ON j.id = a.job_id
+         WHERE a.candidate_id = $1
+           AND a.follow_up_at IS NOT NULL
+           AND a.follow_up_at <= CURRENT_DATE + INTERVAL '7 days'
+           AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress', 'rejected', 'withdrawn')
+         UNION ALL
+         SELECT a.id::text || ':' || s.id::text AS id, 'interview' AS type,
+                'Prepare for ' || COALESCE(s.round_name, 'your interview') AS title,
+                COALESCE(j.company, 'the employer') || ' · ' || COALESCE(j.title, 'your application') AS description,
+                s.scheduled_at AS due_at
+         FROM applications a
+         JOIN interview_schedules s ON s.application_id = a.id
+         LEFT JOIN jobs j ON j.id = a.job_id
+         WHERE a.candidate_id = $1
+           AND s.scheduled_at >= NOW()
+           AND s.scheduled_at <= NOW() + INTERVAL '14 days'
+           AND COALESCE(s.status, 'scheduled') NOT IN ('cancelled', 'completed')
+       ) action_items
+       ORDER BY due_at ASC NULLS LAST LIMIT 20`,
+      [candidateId],
+    ),
   ]);
 
   const total = Number(countRow?.count ?? 0);
@@ -343,6 +414,18 @@ export async function buildCandidatePortalDashboardPage(
 
   const sourceCounts: Record<string, number> = {};
   for (const row of sourceRows ?? []) sourceCounts[row.source ?? "unknown"] = Number(row.count ?? 0);
+
+  const trend = (rows: { bucket: string; count: string }[] | null | undefined): CandidatePortalTrendPoint[] =>
+    (rows ?? []).map((row) => ({ bucket: row.bucket, count: Number(row.count ?? 0) }));
+
+  const actionItems: CandidatePortalActionItem[] = (actionRows ?? []).map((row: any) => ({
+    id: row.id,
+    type: row.type === "interview" ? "interview" : "follow_up",
+    title: row.title,
+    description: row.description,
+    due_at: row.due_at,
+    href: `/portal/applications/${String(row.id).split(":")[0]}`,
+  }));
 
   const applications: CandidatePortalApplication[] = rawRows.map((row: any) => ({
     id: row.id,
@@ -380,5 +463,7 @@ export async function buildCandidatePortalDashboardPage(
     totalPages,
     statusCounts,
     sourceCounts,
+    trend: { hourly24h: trend(hourlyRows), daily7d: trend(dailyRows), monthly6m: trend(monthlyRows) },
+    actionItems,
   };
 }
