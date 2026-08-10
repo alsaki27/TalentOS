@@ -112,7 +112,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   const dbSql = getSql();
   let versionId: string | null = null;
   try {
-    const [versionRows] = await dbSql.transaction([
+    const [, versionRows] = await dbSql.transaction([
       dbSql`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
         SELECT id, ae_stage, 'ready_for_review', 'AI Pipeline (auto)', 'AI resume finalization completed', 'ai_pipeline'
         FROM applications
