@@ -29,13 +29,20 @@ export async function POST(req: NextRequest) {
   const current = await queryOne<{ secret_encrypted: string; enabled_at: string | null }>("SELECT secret_encrypted, enabled_at FROM candidate_mfa_settings WHERE candidate_id = $1", [context!.candidateId]);
   if (current?.enabled_at) return NextResponse.json({ enrolled: true });
   const pending = current;
-  if (!pending) {
-    const secret = createTotpSecret();
-    const encryptedSecret = await encryptSecret(secret);
-    if (!encryptedSecret.startsWith("enc:")) return NextResponse.json({ error: "MFA_ENCRYPTION_FAILED" }, { status: 503 });
-    await execute("INSERT INTO candidate_mfa_settings (candidate_id, secret_encrypted) VALUES ($1, $2) ON CONFLICT (candidate_id) DO UPDATE SET secret_encrypted = EXCLUDED.secret_encrypted, enabled_at = NULL, updated_at = now()", [context!.candidateId, encryptedSecret]);
-    return NextResponse.json({ setupRequired: true, secret, otpauthUri: buildTotpUri(secret, context!.candidate.account_email) });
+  if (!code) {
+    if (!pending) {
+      const secret = createTotpSecret();
+      const encryptedSecret = await encryptSecret(secret);
+      if (!encryptedSecret.startsWith("enc:")) return NextResponse.json({ error: "MFA_ENCRYPTION_FAILED" }, { status: 503 });
+      await execute("INSERT INTO candidate_mfa_settings (candidate_id, secret_encrypted) VALUES ($1, $2) ON CONFLICT (candidate_id) DO UPDATE SET secret_encrypted = EXCLUDED.secret_encrypted, enabled_at = NULL, updated_at = now()", [context!.candidateId, encryptedSecret]);
+      return NextResponse.json({ setupRequired: true, secret, otpauthUri: buildTotpUri(secret, context!.candidate.account_email) });
+    } else {
+      const secret = await decryptSecret(pending.secret_encrypted);
+      return NextResponse.json({ setupRequired: true, secret, otpauthUri: buildTotpUri(secret, context!.candidate.account_email) });
+    }
   }
+
+  if (!pending) return NextResponse.json({ error: "MFA setup has not been started." }, { status: 400 });
   if (!(await verifyTotp(await decryptSecret(pending.secret_encrypted), code))) return NextResponse.json({ error: "Enter the current 6-digit authenticator code." }, { status: 400 });
   const recoveryCodes = Array.from({ length: 8 }, recoveryCode);
   const recoveryHashes = await Promise.all(recoveryCodes.map(hashPassword));
