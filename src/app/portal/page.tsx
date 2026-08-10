@@ -37,6 +37,24 @@ interface GmailPrivacyStatus {
   gmail_sync_error: string | null;
 }
 
+function initialPortalFilters(): PortalDashboardFilters {
+  const params = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
+  return {
+    search: params.get("search") ?? "",
+    status: params.get("status") ?? "",
+    source: params.get("source") ?? "",
+    dateRange: params.get("dateRange") ?? "all",
+    dateFrom: params.get("dateFrom") ?? "",
+    dateTo: params.get("dateTo") ?? "",
+    resumeStatus: params.get("resumeStatus") ?? "all",
+    interviewStatus: params.get("interviewStatus") ?? "all",
+    needsAttention: params.get("needsAttention") === "true",
+    sort: params.get("sort") ?? "submitted_at",
+    order: params.get("order") ?? "desc",
+    page: Math.max(1, Number(params.get("page") ?? "1") || 1),
+  };
+}
+
 function initials(name: string) {
   return name
     .split(" ")
@@ -83,16 +101,7 @@ export default function PortalDashboardPage() {
   const [data, setData] = useState<PortalDashboard | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<PortalDashboardFilters>({
-    search: "",
-    status: "",
-    source: "",
-    dateRange: "all",
-    resumeStatus: "all",
-    sort: "submitted_at",
-    order: "desc",
-    page: 1,
-  });
+  const [filters, setFilters] = useState<PortalDashboardFilters>(initialPortalFilters);
   const [mfaEnrolled, setMfaEnrolled] = useState(false);
   const [mfaSetup, setMfaSetup] = useState<{ secret: string; otpauthUri: string } | null>(null);
   const [mfaCode, setMfaCode] = useState("");
@@ -109,7 +118,11 @@ export default function PortalDashboardPage() {
     if (filters.status) params.set("status", filters.status);
     if (filters.source) params.set("source", filters.source);
     if (filters.dateRange !== "all") params.set("dateRange", filters.dateRange);
+    if (filters.dateRange === "custom" && filters.dateFrom) params.set("dateFrom", filters.dateFrom);
+    if (filters.dateRange === "custom" && filters.dateTo) params.set("dateTo", filters.dateTo);
     if (filters.resumeStatus !== "all") params.set("resumeStatus", filters.resumeStatus);
+    if (filters.interviewStatus !== "all") params.set("interviewStatus", filters.interviewStatus);
+    if (filters.needsAttention) params.set("needsAttention", "true");
     if (filters.sort !== "submitted_at") params.set("sort", filters.sort);
     if (filters.order !== "desc") params.set("order", filters.order);
 
@@ -138,6 +151,29 @@ export default function PortalDashboardPage() {
 
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [filters, router]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    const values: Record<string, string> = {
+      search: filters.search,
+      status: filters.status,
+      source: filters.source,
+      dateRange: filters.dateRange === "all" ? "" : filters.dateRange,
+      dateFrom: filters.dateRange === "custom" ? filters.dateFrom : "",
+      dateTo: filters.dateRange === "custom" ? filters.dateTo : "",
+      resumeStatus: filters.resumeStatus === "all" ? "" : filters.resumeStatus,
+      interviewStatus: filters.interviewStatus === "all" ? "" : filters.interviewStatus,
+      needsAttention: filters.needsAttention ? "true" : "",
+      sort: filters.sort === "submitted_at" ? "" : filters.sort,
+      order: filters.order === "desc" ? "" : filters.order,
+      page: filters.page === 1 ? "" : String(filters.page),
+    };
+    Object.entries(values).forEach(([key, value]) => { if (value) params.set(key, value); });
+    const nextUrl = params.toString() ? `/portal?${params.toString()}` : "/portal";
+    if (typeof window !== "undefined" && `${window.location.pathname}${window.location.search}` !== nextUrl) {
+      window.history.replaceState(null, "", nextUrl);
+    }
+  }, [filters]);
 
   useEffect(() => {
     fetch("/api/portal/auth/mfa")

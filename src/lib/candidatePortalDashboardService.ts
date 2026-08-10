@@ -1,9 +1,10 @@
 import { query, queryOne } from "@/server/db/neon";
 
 export type CandidatePortalStatus = "Applied" | "Screening" | "Interview" | "Offer" | "Rejected";
-export type CandidatePortalDateRange = "all" | "24h" | "7d" | "30d" | "90d";
+export type CandidatePortalDateRange = "all" | "24h" | "7d" | "30d" | "90d" | "custom";
 export type CandidatePortalResumeFilter = "all" | "ready" | "generating" | "unavailable";
-export type CandidatePortalSort = "submitted_at" | "updated_at" | "job_title" | "company_name" | "status";
+export type CandidatePortalInterviewFilter = "all" | "upcoming" | "completed" | "cancelled" | "not_scheduled";
+export type CandidatePortalSort = "submitted_at" | "updated_at" | "job_title" | "company_name" | "status" | "interview_at";
 
 export interface CandidatePortalDashboardOptions {
   page?: number;
@@ -12,7 +13,11 @@ export interface CandidatePortalDashboardOptions {
   status?: string;
   source?: string;
   dateRange?: CandidatePortalDateRange;
+  dateFrom?: string;
+  dateTo?: string;
   resumeStatus?: CandidatePortalResumeFilter;
+  interviewStatus?: CandidatePortalInterviewFilter;
+  needsAttention?: boolean;
   sort?: CandidatePortalSort;
   order?: "asc" | "desc";
 }
@@ -30,6 +35,11 @@ export interface CandidatePortalApplication {
     location: string | null;
     source: string | null;
     source_url: string | null;
+    salary_min: number | null;
+    salary_max: number | null;
+    salary_currency: string | null;
+    salary_period: string | null;
+    salary_range: string | null;
   } | null;
   resume: {
     id: string | null;
@@ -40,6 +50,8 @@ export interface CandidatePortalApplication {
   };
   next_action: string | null;
   follow_up_at: string | null;
+  interview: { status: CandidatePortalInterviewFilter; scheduled_at: string | null };
+  needs_attention: boolean;
 }
 
 const INTERNAL_PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
@@ -66,6 +78,7 @@ const SORT_COLUMNS: Record<CandidatePortalSort, string> = {
   job_title: "job_title",
   company_name: "company_name",
   status: "public_status_key",
+  interview_at: "interview_at",
 };
 
 export function publicStatus(status: string) {
@@ -118,6 +131,11 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
        j.company AS company_name,
        j.location,
        j.source,
+       j.salary_min,
+       j.salary_max,
+       j.salary_currency,
+       j.salary_period,
+       j.salary_range,
        COALESCE(j.apply_url, j.source_url) AS source_url,
        CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.id ELSE NULL END AS resume_id,
        CASE WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN 'ready'
@@ -174,7 +192,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     submitted_at: application.submitted_at,
     updated_at: application.updated_at,
     job: application.job_id
-      ? { id: application.job_id, title: application.job_title ?? "Unknown role", company: application.company_name, location: application.location, source: application.source, source_url: application.source_url }
+      ? { id: application.job_id, title: application.job_title ?? "Unknown role", company: application.company_name, location: application.location, source: application.source, source_url: application.source_url, salary_min: application.salary_min == null ? null : Number(application.salary_min), salary_max: application.salary_max == null ? null : Number(application.salary_max), salary_currency: application.salary_currency, salary_period: application.salary_period, salary_range: application.salary_range }
       : null,
     resume: { id: application.resume_id, status: application.resume_status, title: application.resume_title, version_label: application.resume_version_label, generated_at: application.resume_generated_at },
     next_action: application.next_action,
@@ -223,12 +241,37 @@ function buildBaseCte() {
         a.next_action,
         a.follow_up_at,
         a.resume_generation_status,
+        j.salary_min,
+        j.salary_max,
+        j.salary_currency,
+        j.salary_period,
+        j.salary_range,
         j.id AS job_id,
         j.title AS job_title,
         j.company AS company_name,
         j.location,
         j.source,
         COALESCE(j.apply_url, j.source_url) AS source_url,
+        interview.id AS interview_id,
+        interview.scheduled_at AS interview_at,
+        CASE
+          WHEN interview.id IS NULL THEN 'not_scheduled'
+          WHEN LOWER(COALESCE(interview.status, 'scheduled')) = 'cancelled' THEN 'cancelled'
+          WHEN LOWER(COALESCE(interview.status, 'scheduled')) = 'completed' OR interview.scheduled_at < NOW() THEN 'completed'
+          ELSE 'upcoming'
+        END AS interview_status,
+        CASE
+          WHEN (
+            a.follow_up_at IS NOT NULL
+            AND a.follow_up_at <= CURRENT_DATE + INTERVAL '7 days'
+            AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('rejected', 'withdrawn')
+          ) OR (
+            interview.id IS NOT NULL
+            AND LOWER(COALESCE(interview.status, 'scheduled')) NOT IN ('cancelled', 'completed')
+            AND interview.scheduled_at >= NOW()
+            AND interview.scheduled_at <= NOW() + INTERVAL '14 days'
+          ) THEN TRUE ELSE FALSE
+        END AS needs_attention,
         CASE
           WHEN a.resume_generation_status = 'ready' AND rv.id IS NOT NULL THEN rv.id
           ELSE NULL
@@ -254,6 +297,13 @@ function buildBaseCte() {
       FROM applications a
       LEFT JOIN jobs j ON j.id = a.job_id
       LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
+      LEFT JOIN LATERAL (
+        SELECT s.id, s.scheduled_at, s.status
+        FROM interview_schedules s
+        WHERE s.application_id = a.id
+        ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC
+        LIMIT 1
+      ) interview ON TRUE
       WHERE a.candidate_id = $1
         AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress')
     )
@@ -286,10 +336,26 @@ function buildFilters(options: CandidatePortalDashboardOptions) {
     conditions.push(`resume_status = $${params.length + 2}`);
   }
 
-  const range = ["all", "24h", "7d", "30d", "90d"].includes(options.dateRange ?? "all")
+  if (options.interviewStatus && options.interviewStatus !== "all") {
+    params.push(options.interviewStatus);
+    conditions.push(`interview_status = $${params.length + 2}`);
+  }
+
+  if (options.needsAttention) conditions.push("needs_attention = TRUE");
+
+  const range = ["all", "24h", "7d", "30d", "90d", "custom"].includes(options.dateRange ?? "all")
     ? options.dateRange ?? "all"
     : "all";
-  if (range !== "all") {
+  if (range === "custom") {
+    if (options.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(options.dateFrom)) {
+      params.push(`${options.dateFrom}T00:00:00.000Z`);
+      conditions.push(`submitted_at >= $${params.length + 2}::timestamptz`);
+    }
+    if (options.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(options.dateTo)) {
+      params.push(`${options.dateTo}T23:59:59.999Z`);
+      conditions.push(`submitted_at <= $${params.length + 2}::timestamptz`);
+    }
+  } else if (range !== "all") {
     const interval = range === "24h" ? "24 hours" : range === "7d" ? "7 days" : range === "30d" ? "30 days" : "90 days";
     conditions.push(`submitted_at >= NOW() - INTERVAL '${interval}'`);
   }
@@ -434,7 +500,7 @@ export async function buildCandidatePortalDashboardPage(
     submitted_at: row.submitted_at,
     updated_at: row.updated_at,
     job: row.job_id
-      ? { id: row.job_id, title: row.job_title ?? "Unknown role", company: row.company_name, location: row.location, source: row.source, source_url: row.source_url }
+      ? { id: row.job_id, title: row.job_title ?? "Unknown role", company: row.company_name, location: row.location, source: row.source, source_url: row.source_url, salary_min: row.salary_min == null ? null : Number(row.salary_min), salary_max: row.salary_max == null ? null : Number(row.salary_max), salary_currency: row.salary_currency, salary_period: row.salary_period, salary_range: row.salary_range }
       : null,
     resume: {
       id: row.resume_id,
@@ -445,6 +511,8 @@ export async function buildCandidatePortalDashboardPage(
     },
     next_action: row.next_action,
     follow_up_at: row.follow_up_at,
+    interview: { status: row.interview_status, scheduled_at: row.interview_at },
+    needs_attention: Boolean(row.needs_attention),
   }));
 
   return {

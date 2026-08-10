@@ -15,6 +15,11 @@ export interface PortalApplication {
     location: string | null;
     source: string | null;
     source_url: string | null;
+    salary_min: number | null;
+    salary_max: number | null;
+    salary_currency: string | null;
+    salary_period: string | null;
+    salary_range: string | null;
   } | null;
   resume: {
     id: string | null;
@@ -25,6 +30,8 @@ export interface PortalApplication {
   };
   next_action: string | null;
   follow_up_at: string | null;
+  interview: { status: "all" | "upcoming" | "completed" | "cancelled" | "not_scheduled"; scheduled_at: string | null };
+  needs_attention: boolean;
 }
 
 export interface PortalDashboardFilters {
@@ -32,7 +39,11 @@ export interface PortalDashboardFilters {
   status: string;
   source: string;
   dateRange: string;
+  dateFrom: string;
+  dateTo: string;
   resumeStatus: string;
+  interviewStatus: string;
+  needsAttention: boolean;
   sort: string;
   order: string;
   page: number;
@@ -73,6 +84,14 @@ function resumeLabel(status: PortalApplication["resume"]["status"]) {
   if (status === "ready") return { text: "Resume ready", color: "#166534", bg: "#dcfce7" };
   if (status === "generating") return { text: "Resume generating", color: "#92400e", bg: "#fef3c7" };
   return { text: "Resume pending", color: "#6b7280", bg: "#f1f2f5" };
+}
+
+function salaryLabel(job: PortalApplication["job"]) {
+  if (!job) return null;
+  if (job.salary_min == null && job.salary_max == null) return job.salary_range || null;
+  const currency = job.salary_currency || "";
+  const range = `${job.salary_min ?? "?"}${job.salary_max != null ? `-${job.salary_max}` : ""}`;
+  return `${currency} ${range}${job.salary_period ? `/${job.salary_period}` : ""}`.trim();
 }
 
 function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: ReactNode }) {
@@ -121,7 +140,12 @@ export default function CandidatePortalApplications({ applications, total, page,
           <option value="7d">Last 7 days</option>
           <option value="30d">Last 30 days</option>
           <option value="90d">Last 90 days</option>
+          <option value="custom">Custom range</option>
         </FilterSelect>
+        {filters.dateRange === "custom" && <>
+          <label className="portal-filter-field"><span>From</span><input type="date" value={filters.dateFrom} onChange={(event) => onFiltersChange({ dateFrom: event.target.value, page: 1 })} /></label>
+          <label className="portal-filter-field"><span>To</span><input type="date" value={filters.dateTo} onChange={(event) => onFiltersChange({ dateTo: event.target.value, page: 1 })} /></label>
+        </>}
         <FilterSelect label="Source" value={filters.source} onChange={(value) => onFiltersChange({ source: value, page: 1 })}>
           <option value="">All sources</option>
           {Object.entries(sourceCounts).map(([source, count]) => <option key={source} value={source}>{sourceLabel(source)} ({count})</option>)}
@@ -131,6 +155,17 @@ export default function CandidatePortalApplications({ applications, total, page,
           <option value="ready">Resume ready</option>
           <option value="generating">Generating</option>
           <option value="unavailable">Not generated</option>
+        </FilterSelect>
+        <FilterSelect label="Interview" value={filters.interviewStatus} onChange={(value) => onFiltersChange({ interviewStatus: value, page: 1 })}>
+          <option value="all">Any interview status</option>
+          <option value="upcoming">Upcoming</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+          <option value="not_scheduled">Not scheduled</option>
+        </FilterSelect>
+        <FilterSelect label="Attention" value={filters.needsAttention ? "true" : "false"} onChange={(value) => onFiltersChange({ needsAttention: value === "true", page: 1 })}>
+          <option value="false">All applications</option>
+          <option value="true">Needs attention</option>
         </FilterSelect>
         <FilterSelect label="Sort" value={`${filters.sort}:${filters.order}`} onChange={(value) => {
           const [sort, order] = value.split(":");
@@ -154,7 +189,7 @@ export default function CandidatePortalApplications({ applications, total, page,
           <div className="portal-empty-icon">▱</div>
           <strong>No applications match these filters.</strong>
           <span>Try clearing a filter or search term.</span>
-          <button className="portal-btn portal-btn-secondary" onClick={() => onFiltersChange({ search: "", status: "", source: "", dateRange: "all", resumeStatus: "all", sort: "submitted_at", order: "desc", page: 1 })}>Clear filters</button>
+          <button className="portal-btn portal-btn-secondary" onClick={() => onFiltersChange({ search: "", status: "", source: "", dateRange: "all", dateFrom: "", dateTo: "", resumeStatus: "all", interviewStatus: "all", needsAttention: false, sort: "submitted_at", order: "desc", page: 1 })}>Clear filters</button>
         </div>
       ) : (
         <div className={`portal-list ${loading ? "portal-list-loading" : ""}`}>
@@ -171,6 +206,8 @@ export default function CandidatePortalApplications({ applications, total, page,
                       {application.job?.location && <span>{application.job.location}</span>}
                       <span>{sourceLabel(application.job?.source ?? null)}</span>
                       <span>Submitted {formatDate(application.submitted_at)}</span>
+                      {salaryLabel(application.job) && <span>{salaryLabel(application.job)}</span>}
+                      <span>Updated {formatDate(application.updated_at)}</span>
                     </div>
                   </div>
                   <span className="portal-pill" style={{ color: meta.color, background: meta.bg }}>
@@ -179,6 +216,8 @@ export default function CandidatePortalApplications({ applications, total, page,
                 </div>
                 <div className="portal-app-footer">
                   <span className="portal-resume-pill" style={{ color: resume.color, background: resume.bg }}>{resume.text}</span>
+                  {application.interview.status !== "not_scheduled" && <span className="portal-next-action">Interview: {application.interview.status}</span>}
+                  {application.needs_attention && <span className="portal-attention-pill">Needs attention</span>}
                   {application.next_action && <span className="portal-next-action">Next: {application.next_action}</span>}
                   {application.follow_up_at && <span className="portal-next-action">Follow up {formatDate(application.follow_up_at)}</span>}
                   <a className="portal-btn portal-btn-small portal-btn-secondary" href={`/portal/applications/${application.id}`}>View details</a>

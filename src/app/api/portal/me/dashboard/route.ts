@@ -9,6 +9,7 @@ import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import {
   buildCandidatePortalDashboardPage,
   type CandidatePortalDateRange,
+  type CandidatePortalInterviewFilter,
   type CandidatePortalResumeFilter,
   type CandidatePortalSort,
 } from "@/lib/candidatePortalDashboardService";
@@ -23,6 +24,7 @@ export async function GET(req: Request) {
   const page = Number(url.searchParams.get("page") ?? "1");
   const pageSize = Number(url.searchParams.get("pageSize") ?? "10");
   const dateRange = url.searchParams.get("dateRange") as CandidatePortalDateRange | null;
+  const interviewStatus = url.searchParams.get("interviewStatus") as CandidatePortalInterviewFilter | null;
   const resumeStatus = url.searchParams.get("resumeStatus") as CandidatePortalResumeFilter | null;
   const sort = url.searchParams.get("sort") as CandidatePortalSort | null;
   const order = url.searchParams.get("order") === "asc" ? "asc" : "desc";
@@ -34,7 +36,11 @@ export async function GET(req: Request) {
     status: url.searchParams.get("status") ?? "",
     source: url.searchParams.get("source") ?? "",
     dateRange: dateRange ?? "all",
+    dateFrom: url.searchParams.get("dateFrom") ?? "",
+    dateTo: url.searchParams.get("dateTo") ?? "",
     resumeStatus: resumeStatus ?? "all",
+    interviewStatus: interviewStatus ?? "all",
+    needsAttention: url.searchParams.get("needsAttention") === "true",
     sort: sort ?? "submitted_at",
     order,
   });
