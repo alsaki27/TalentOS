@@ -6,6 +6,7 @@ import CandidatePortalApplicationDetail from "@/components/portal/CandidatePorta
 
 export default function CandidatePortalApplicationPage() {
   const params = useParams<{ id: string }>();
+  const applicationId = params?.id;
   const router = useRouter();
   const [application, setApplication] = useState<any>(null);
   const [resume, setResume] = useState<any>(null);
@@ -13,7 +14,7 @@ export default function CandidatePortalApplicationPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const id = params?.id;
+    const id = applicationId;
     if (!id) return;
     const controller = new AbortController();
     Promise.all([
@@ -32,7 +33,7 @@ export default function CandidatePortalApplicationPage() {
       })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [params, router]);
+  }, [applicationId, router]);
 
   if (loading) return <div className="portal-shell"><div className="portal-skeleton" style={{ height: 360 }} /></div>;
   if (error || !application) return <div className="portal-shell"><p className="portal-error">{error || "Application not found."}</p><button className="portal-btn portal-btn-secondary" onClick={() => router.push("/portal")}>Back to dashboard</button></div>;

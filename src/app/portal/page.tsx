@@ -113,28 +113,30 @@ export default function PortalDashboardPage() {
     if (filters.sort !== "submitted_at") params.set("sort", filters.sort);
     if (filters.order !== "desc") params.set("order", filters.order);
 
-    setLoading(true);
-    setError("");
-    fetch(`/api/portal/me/dashboard?${params.toString()}`, { signal: controller.signal, cache: "no-store" })
-      .then((response) => {
-        if (response.status === 401) {
-          router.push("/portal/login");
-          return null;
-        }
-        if (!response.ok) throw new Error("dashboard request failed");
-        return response.json();
-      })
-      .then((dashboard) => {
-        if (dashboard && !controller.signal.aborted) setData(dashboard);
-      })
-      .catch((requestError) => {
-        if (!controller.signal.aborted && requestError?.name !== "AbortError") setError("Could not load your dashboard.");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
+    const timer = window.setTimeout(() => {
+      setLoading(true);
+      setError("");
+      fetch(`/api/portal/me/dashboard?${params.toString()}`, { signal: controller.signal, cache: "no-store" })
+        .then((response) => {
+          if (response.status === 401) {
+            router.push("/portal/login");
+            return null;
+          }
+          if (!response.ok) throw new Error("dashboard request failed");
+          return response.json();
+        })
+        .then((dashboard) => {
+          if (dashboard && !controller.signal.aborted) setData(dashboard);
+        })
+        .catch((requestError) => {
+          if (!controller.signal.aborted && requestError?.name !== "AbortError") setError("Could not load your dashboard.");
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setLoading(false);
+        });
+    }, 250);
 
-    return () => controller.abort();
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [filters, router]);
 
   useEffect(() => {
