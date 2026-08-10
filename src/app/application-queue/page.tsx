@@ -198,6 +198,8 @@ export default function ApplicationQueuePage() {
   const [reviewFilter, setReviewFilter] = useState("");
   const [viewFilter, setViewFilter] = useState<TabView>("all");
   const [candidateFilter, setCandidateFilter] = useState("");
+  const [timeWindow, setTimeWindow] = useState("");
+  const [appliedOnly, setAppliedOnly] = useState(false);
   const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -245,6 +247,8 @@ export default function ApplicationQueuePage() {
     if (priorityFilter) p.set("priority", priorityFilter);
     if (reviewFilter) p.set("review", reviewFilter);
     if (viewFilter !== "all") p.set("view", viewFilter);
+    if (timeWindow) p.set("time_window", timeWindow);
+    if (appliedOnly) p.set("applied_only", "1");
     return p;
   }
 
@@ -300,7 +304,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, appliedOnly, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -764,6 +768,17 @@ export default function ApplicationQueuePage() {
             <option value="approved">Approved</option>
             <option value="changes_requested">Changes requested</option>
           </select>
+          <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by recent application log time">
+            <option value="">Any time</option>
+            <option value="12h">Past 12 hours</option>
+            <option value="24h">Past 24 hours</option>
+            <option value="3d">Past 3 days</option>
+            <option value="7d">Past 7 days</option>
+          </select>
+          <label className="queue-applied-toggle">
+            <input type="checkbox" checked={appliedOnly} onChange={e => setAppliedOnly(e.target.checked)} />
+            <span>AE Applied only</span>
+          </label>
         </div>
         <span className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} / {total}</span>
       </div>

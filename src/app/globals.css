@@ -820,6 +820,21 @@ label {
 .queue-stage-meta-changed { color: #bfdbfe; }
 .queue-stage-meta-reviewed { color: #fde68a; }
 .queue-stage-meta-applied { color: #86efac; margin-top: 2px; }
+.queue-applied-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(110, 231, 183, 0.45);
+  border-radius: 8px;
+  color: #bbf7d0;
+  background: rgba(16, 185, 129, 0.12);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.queue-applied-toggle input { accent-color: #10b981; }
 
 /* Jobs masterlist: keep the control surface readable and make the wide data
    table intentionally scrollable instead of silently clipping actions. */

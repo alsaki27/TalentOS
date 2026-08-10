@@ -149,6 +149,7 @@ export interface ListApplicationsQuery {
   userDisplayName?: string | null;
   userRole?: string;
   pipelineStatuses?: string[];
+  timeWindowHours?: number | null;
 }
 
 export interface PaginatedApplicationsResult {
@@ -421,6 +422,7 @@ export async function listApplicationQueue(
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
   const statuses = queryParams.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
+  const timeWindowHours = queryParams.timeWindowHours ?? null;
   const today = new Date().toISOString().slice(0, 10);
 
   const dataSql = `
@@ -467,6 +469,7 @@ export async function listApplicationQueue(
       AND ($8 <> 'review' OR a.review_status = 'pending')
       AND ($13 = '' OR a.candidate_id::text = $13)
       AND ($14 = '' OR a.ae_stage = $14)
+      AND ($15::int IS NULL OR a.created_at >= NOW() - ($15::int * INTERVAL '1 hour'))
     ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
     OFFSET $11 LIMIT $12
   `;
@@ -485,6 +488,7 @@ export async function listApplicationQueue(
     pageSize,
     queryParams.candidateId ?? "",
     stage,
+    timeWindowHours,
   ]);
 
   const countSql = `
@@ -503,6 +507,7 @@ export async function listApplicationQueue(
       AND ($8 <> 'review' OR a.review_status = 'pending')
       AND ($11 = '' OR a.candidate_id::text = $11)
       AND ($12 = '' OR a.ae_stage = $12)
+      AND ($13::int IS NULL OR a.created_at >= NOW() - ($13::int * INTERVAL '1 hour'))
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     statuses,
@@ -517,6 +522,7 @@ export async function listApplicationQueue(
     today,
     queryParams.candidateId ?? "",
     stage,
+    timeWindowHours,
   ]);
 
   const stats = await buildQueueStats(queryParams);

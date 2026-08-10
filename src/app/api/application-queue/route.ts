@@ -22,6 +22,9 @@ export async function GET(req: NextRequest) {
   const review = url.searchParams.get("review") || "";
   const view = url.searchParams.get("view") || "all";
   const candidateId = url.searchParams.get("candidate_id") || "";
+  const appliedOnly = url.searchParams.get("applied_only") === "1";
+  const timeWindow = url.searchParams.get("time_window") || "";
+  const timeWindowHours = ({ "12h": 12, "24h": 24, "3d": 72, "7d": 168 } as Record<string, number>)[timeWindow] ?? null;
 
   try {
     const result = await listApplicationQueue({
@@ -39,7 +42,8 @@ export async function GET(req: NextRequest) {
       userEmail: context!.profile.email ?? null,
       userDisplayName: context!.profile.display_name ?? null,
       userRole: context!.profile.role,
-      pipelineStatuses: ["assigned", "stacked", "in_progress"],
+      pipelineStatuses: appliedOnly ? ["applied"] : ["assigned", "stacked", "in_progress"],
+      timeWindowHours,
     });
 
     return NextResponse.json({ items: result.items, total: result.total, page, pageSize, stats: result.stats });
