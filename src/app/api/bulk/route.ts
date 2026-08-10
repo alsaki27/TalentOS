@@ -9,6 +9,7 @@ import {
 
 const BULK_APPLICATION_FIELDS = new Set([
   "status",
+  "ae_stage",
   "completed_at",
   "assigned_to_user_id",
   "assigned_to",
@@ -50,8 +51,8 @@ export async function POST(req: NextRequest) {
     return errorResponse("Invalid JSON body", 400);
   }
 
-  if (body.action !== "PATCH" || body.table !== "applications") {
-    return errorResponse("Only PATCH bulk updates for applications are supported.", 400);
+  if ((body.action !== "PATCH" && body.action !== "DELETE") || body.table !== "applications") {
+    return errorResponse("Only PATCH or DELETE bulk operations for applications are supported.", 400);
   }
 
   const ids = Array.isArray(body.ids)
@@ -59,6 +60,22 @@ export async function POST(req: NextRequest) {
     : [];
   if (ids.length === 0) return errorResponse("At least one application id is required.", 400);
   if (ids.length > 500) return errorResponse("Bulk updates are limited to 500 applications.", 400);
+
+  if (body.action === "DELETE") {
+    const deleted: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+    for (const id of ids) {
+      try {
+        const current = await findApplicationById(id);
+        if (!current) { failed.push({ id, error: "Application not found" }); continue; }
+        await execute("DELETE FROM application_events WHERE application_id = $1", [id]);
+        await execute("DELETE FROM applications WHERE id = $1", [id]);
+        await execute("INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)", [currentUser.profile.user_id, currentUser.profile.email, "application.bulk_deleted", "application", id, JSON.stringify({ bulk: true })]);
+        deleted.push(id);
+      } catch (error: any) { failed.push({ id, error: error?.message || "Delete failed" }); }
+    }
+    return NextResponse.json({ ok: failed.length === 0, updated: deleted.length, failed: failed.length, updatedIds: deleted, failures: failed }, { status: failed.length ? (deleted.length ? 207 : 500) : 200 });
+  }
 
   const input = body.updateData && typeof body.updateData === "object" ? body.updateData : null;
   if (!input) return errorResponse("updateData is required.", 400);
@@ -108,6 +125,13 @@ export async function POST(req: NextRequest) {
       }
 
       const rowUpdates: Record<string, unknown> = { ...updates };
+      if (rowUpdates.ae_stage === "applied") {
+        rowUpdates.application_stage = "applied";
+        rowUpdates.status = "applied";
+        rowUpdates.applied_at = current.applied_at ?? new Date().toISOString();
+        rowUpdates.completed_at = current.completed_at ?? rowUpdates.applied_at;
+      }
+
       if ("status" in rowUpdates) {
         const automation = applicationAutomation({
           status: String(rowUpdates.status),

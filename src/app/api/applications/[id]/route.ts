@@ -110,6 +110,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // The reviewer identity is captured separately and persists even after the
   // ticket moves on to "applied", so whoever applies can see who reviewed it.
   if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+    updates.application_stage = updates.ae_stage;
     updates.ae_stage_updated_at = new Date().toISOString();
     updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
     updates.ae_stage_updated_by_name = currentUser.profile.display_name || currentUser.profile.email;
@@ -176,6 +177,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   try {
     const data = await updateApplication(params.id, updates);
+
+    if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+      await execute(
+        'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [params.id, previousAeStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
+      );
+    }
 
     if ("status" in updates && updates.status !== previousStatus) {
       await execute(

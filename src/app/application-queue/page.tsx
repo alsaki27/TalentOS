@@ -474,7 +474,7 @@ export default function ApplicationQueuePage() {
     setActionLoading(`${id}:${s}`);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
       setActionLoading(null);
       if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
       setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
@@ -579,7 +579,7 @@ export default function ApplicationQueuePage() {
           action: "PATCH",
           table: "applications",
           ids: Array.from(selectedItems).map(i => i.id),
-          updateData: { status: s, completed_at: s === "applied" ? new Date().toISOString() : null }
+          updateData: { status: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null }
         })
       });
       const data = await res.json().catch(() => ({}));
@@ -621,6 +621,17 @@ export default function ApplicationQueuePage() {
     } catch (err: any) {
       setFeedback({ kind: "error", text: err.message || "Network error." });
     }
+  }
+
+  async function bulkDelete() {
+    if (!isManager || selected.size === 0) return;
+    if (!confirm(`Permanently delete ${selected.size} selected application logs?`)) return;
+    const res = await fetch("/api/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "DELETE", table: "applications", ids: Array.from(selected) }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 207) { setFeedback({ kind: "error", text: data.error || "Bulk delete failed." }); return; }
+    setSelected(new Set());
+    setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} deleted; ${data.failed} failed.` : `${data.updated} applications deleted.` });
+    load(Math.min(page, Math.max(1, Math.ceil((total - data.updated) / pageSize))), false);
   }
 
   async function removeTicket(item: QueueItem) {
@@ -770,6 +781,7 @@ export default function ApplicationQueuePage() {
               ))}
             </select>
             <button className="btn-compact" onClick={bulkReassign} disabled={!bulkOwnerId}>Go</button>
+            {isManager && <button className="btn-compact" onClick={bulkDelete} style={{ borderColor: "#ef4444", color: "#fca5a5" }}>Delete selected</button>}
           </div>
         </div>
       )}
@@ -923,6 +935,11 @@ export default function ApplicationQueuePage() {
                         <option key={value} value={value} style={{ background: AE_STAGE_STYLES[value]?.background, color: AE_STAGE_STYLES[value]?.color }}>{label}</option>
                       ))}
                     </select>
+                    {item.ae_stage_updated_at && (
+                      <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                        Last changed {item.ae_stage_updated_by_name ? `by ${item.ae_stage_updated_by_name} ` : ""}on {new Date(item.ae_stage_updated_at).toLocaleString()}
+                      </div>
+                    )}
                     {item.ae_reviewed_by_name && (
                       <div className="text-muted" style={{ fontSize: 11, marginTop: 4 }} title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
                         Reviewed by {item.ae_reviewed_by_name}
