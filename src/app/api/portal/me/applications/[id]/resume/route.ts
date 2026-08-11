@@ -19,14 +19,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
        AND a.resume_generation_status = 'ready'
        AND rv.application_id = a.id
        AND rv.candidate_id = a.candidate_id
-       -- Candidate visibility is governed by the finalized application/workflow
-       -- state. Older finalized rows can lack a packet or retain draft even
-       -- though the application already points at the completed version.
-       AND (
-         rv.status IN ('approved', 'final')
-         OR packet.packet_status IN ('approved', 'sent')
-         OR (a.resume_generation_status = 'ready' AND rv.content IS NOT NULL)
-       )`,
+       AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent'))`,
     [params.id, context.candidateId],
   );
 
