@@ -24,7 +24,7 @@ The current constraint is not a lack of AE accounts. It is routing and pipeline 
 
 “Reviewed” below means a real queue transition from `ready_for_review` to `ready_for_application`. “Applied” means a real queue transition to `applied`. The counts use `application_stage_history.source = 'queue'` and exclude migration-generated history so old bulk data is not mistaken for current work. The numbers are unchanged from the prior report because no additional qualifying queue transitions occurred between the prior 72-hour cutoff and Friday’s start.
 
-| Active AE account | Current open owned | In review | In application | AI pipeline | Reviewed in 72h | Applied in 72h | Total queue actions | Bandwidth signal |
+| Active AE account | Current open owned | In review | In application | AI pipeline | Reviewed since Friday | Applied since Friday | Total queue actions | Bandwidth signal |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
 | Avimanyue Bepari (`avimanyue@skarion.com`) | 23 | 21 | 0 | 2 | 0 | 25 | 25 | High applied throughput; 21 review tickets remain |
 | Golam Muin-U-Ddin Chishti (`chishti055@gmail.com`) | 10 | 1 | 9 | 0 | 0 | 0 | 0 | Holding 10 tickets; no recent queue transition |
