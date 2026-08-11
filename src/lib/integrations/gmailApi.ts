@@ -35,9 +35,9 @@ export interface GmailTokenRefreshResult {
 }
 
 export async function refreshGmailAccessToken(refreshToken: string): Promise<GmailTokenRefreshResult> {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) throw new Error("GOOGLE_CLIENT_ID/SECRET not configured.");
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+  if (!clientId || !clientSecret) throw new Error("GMAIL_CLIENT_ID/SECRET not configured.");
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",

@@ -71,6 +71,9 @@ export async function GET(req: NextRequest) {
              token_expires_at = EXCLUDED.token_expires_at,
              status = 'active',
              sync_error = NULL,
+             gmail_history_id = NULL,
+             gmail_backfill_page_token = NULL,
+             gmail_backfill_complete = false,
              metadata = EXCLUDED.metadata,
              updated_at = NOW()
            RETURNING id

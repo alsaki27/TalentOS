@@ -19,11 +19,14 @@ export interface GmailAccountRow {
   token_expires_at: string | null;
   status: "active" | "revoked" | "error";
   gmail_history_id: string | null;
+  gmail_backfill_page_token: string | null;
+  gmail_backfill_complete: boolean;
 }
 
 export async function listActiveCandidateGmailAccounts(includeErrors = false): Promise<GmailAccountRow[]> {
   return query<GmailAccountRow>(
-    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
      FROM integration_accounts
      WHERE provider = 'gmail' AND owner_type = 'candidate' AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"} AND candidate_id IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM candidates c WHERE c.id = integration_accounts.candidate_id AND c.email_sync_paused = true)`
@@ -32,7 +35,8 @@ export async function listActiveCandidateGmailAccounts(includeErrors = false): P
 
 export async function getDecryptedGmailAccount(id: string) {
   const row = await queryOne<GmailAccountRow>(
-    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
      FROM integration_accounts WHERE id = $1`,
     [id]
   );
@@ -74,7 +78,20 @@ export async function markGmailAccountError(id: string, error: string) {
 
 export async function updateGmailHistoryId(id: string, historyId: string) {
   await execute(
-    `UPDATE integration_accounts SET gmail_history_id = $1, last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now() WHERE id = $2`,
+    `UPDATE integration_accounts
+        SET gmail_history_id = $1, gmail_backfill_page_token = NULL, gmail_backfill_complete = true,
+            last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now()
+      WHERE id = $2`,
     [historyId, id]
+  );
+}
+
+export async function updateGmailBackfillState(id: string, nextPageToken: string | null, complete: boolean) {
+  await execute(
+    `UPDATE integration_accounts
+        SET gmail_backfill_page_token = $1, gmail_backfill_complete = $2,
+            status = 'active', sync_error = NULL, updated_at = now()
+      WHERE id = $3`,
+    [nextPageToken, complete, id]
   );
 }

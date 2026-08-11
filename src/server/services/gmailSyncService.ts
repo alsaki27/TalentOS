@@ -12,6 +12,7 @@ import {
   saveEncryptedGmailTokens,
   markGmailAccountError,
   updateGmailHistoryId,
+  updateGmailBackfillState,
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
 import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
@@ -45,7 +46,13 @@ async function ensureFreshAccessToken(account: NonNullable<Awaited<ReturnType<ty
   return refreshed.access_token;
 }
 
-async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow, enrolledAt: string | null): Promise<string[]> {
+type MessageFetchResult = {
+  ids: string[];
+  nextBackfillPageToken: string | null;
+  backfillComplete: boolean;
+};
+
+async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow): Promise<MessageFetchResult> {
   if (account.gmail_history_id) {
     try {
       const ids = new Set<string>();
@@ -60,26 +67,25 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow,
         pageToken = page.nextPageToken;
       } while (pageToken);
       await updateGmailHistoryId(account.id, latestHistoryId);
-      return Array.from(ids);
+      return { ids: Array.from(ids), nextBackfillPageToken: null, backfillComplete: true };
     } catch {
       // historyId likely expired (Gmail retains ~1 week) — fall through to backfill.
     }
   }
 
-  const ids = new Set<string>();
-  const enrolledEpoch = enrolledAt ? Math.floor(new Date(enrolledAt).getTime() / 1000) : 0;
-  const afterClause = enrolledEpoch > 0 ? `after:${enrolledEpoch}` : "newer_than:90d";
-  const backfillQuery = `${afterClause} -category:promotions -category:social -category:forums`;
-  let pageToken: string | undefined;
-  let pages = 0;
-  do {
-    const page = await listMessageIds(accessToken, backfillQuery, pageToken);
-    for (const m of page.messages ?? []) ids.add(m.id);
-    pageToken = page.nextPageToken;
-    pages++;
-  } while (pageToken && pages < 5); // cap: 90-day backfill, ~250 messages max per account per run
-
-  return Array.from(ids);
+  // Initial import is not date-limited: candidates asked for historical mail.
+  // Spam/trash are excluded, while gmailSuppressionReason still prevents
+  // personal/promotional messages from being stored or sent to AI triage.
+  const page = await listMessageIds(
+    accessToken,
+    "in:anywhere -in:spam -in:trash",
+    account.gmail_backfill_page_token ?? undefined,
+  );
+  return {
+    ids: Array.from(new Set((page.messages ?? []).map((message) => message.id))),
+    nextBackfillPageToken: page.nextPageToken ?? null,
+    backfillComplete: !page.nextPageToken,
+  };
 }
 
 async function getCandidateApplicationContext(candidateId: string): Promise<TriageCandidateContext[]> {
@@ -494,13 +500,9 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       if (!account) continue;
 
       const accessToken = await ensureFreshAccessToken(account);
-      const candidate = await queryOne<{ email_consent_at: string | null }>(
-        "SELECT email_consent_at FROM candidates WHERE id = $1",
-        [account.candidate_id]
-      );
-      const messageIds = await fetchNewMessageIds(accessToken, account, candidate?.email_consent_at ?? null);
+      const fetchResult = await fetchNewMessageIds(accessToken, account);
 
-      for (const messageId of messageIds) {
+      for (const messageId of fetchResult.ids) {
         const msg = await getMessage(accessToken, messageId, account.email);
         if (!msg) continue;
         if (gmailSuppressionReason(msg)) {
@@ -514,8 +516,12 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
           outcome.triaged++;
         }
       }
-      const profile = await getProfile(accessToken);
-      if (profile.historyId) await updateGmailHistoryId(accountRow.id, profile.historyId);
+      if (account.gmail_history_id || fetchResult.backfillComplete) {
+        const profile = await getProfile(accessToken);
+        if (profile.historyId) await updateGmailHistoryId(accountRow.id, profile.historyId);
+      } else {
+        await updateGmailBackfillState(accountRow.id, fetchResult.nextBackfillPageToken, false);
+      }
     } catch (err: any) {
       const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
         ? "Gmail access was revoked or expired — candidate needs to reconnect."
