@@ -23,7 +23,7 @@ describe("candidate matcher durable state machine contract", () => {
   test("AE approval cannot mark an application externally applied", () => {
     expect(migration).toContain("applications_automation_idempotency_idx");
     expect(service).toMatch(/automation_idempotency_key, applied_at\)/);
-    expect(service).toMatch(/\$2, \$5, NULL/);
+    expect(service).toMatch(/\$2::text, \$5, NULL/);
     expect(service).toContain("Created from an AE-approved candidate-job match");
     expect(service).toContain("triggerAiWorkflowForApplication(created.application_id, options.actorUserId, decision.base_resume_id)");
   });
