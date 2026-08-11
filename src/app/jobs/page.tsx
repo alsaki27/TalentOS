@@ -701,7 +701,7 @@ export default function JobsPage() {
     <div className="jobs-page">
       <div className="page-header">
         <h1>Job masterlist</h1>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
           {pendingCategorization > 0 && (
             <span className="badge" title="AI categorization, salary cleanup, and work-authorization tagging running in the background">
               Categorizing {pendingCategorization} pending…
@@ -788,20 +788,32 @@ export default function JobsPage() {
         </div>
       </div>
 
-      <div className="jobs-search-row" style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
-        <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "600", minWidth: "max-content" }}>Search Jobs</h3>
+      <div className="jobs-search-row">
+        <h3 className="jobs-search-title">Search Jobs</h3>
         <input
-          style={{ flex: 1, padding: "8px 12px" }}
+          className="jobs-search-input"
           placeholder="Search title, company, location…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
+        {/* Result count lives with the search control it describes, instead of
+            being an unlabeled cell wedged into the filter grid. */}
+        <span className="jobs-result-count">
+          <strong>{jobs.length}</strong> of <strong>{total.toLocaleString()}</strong>
+          <span className="jobs-result-count-label">jobs</span>
+        </span>
       </div>
 
-      <div className="filter-bar jobs-filters" style={{ alignItems: "flex-end" }}>
+      <style>{`
+        .jobs-filters select,
+        .jobs-filters input {
+          width: 100% !important;
+        }
+      `}</style>
+      <div className="filter-bar jobs-filters" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "12px", alignItems: "end", marginBottom: "16px" }}>
         {savedSearches.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Saved Searches</span>
+            <span>Saved Searches</span>
             <select
               value={savedSearchId}
               onChange={(e) => {
@@ -815,14 +827,14 @@ export default function JobsPage() {
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Source</span>
+          <span>Source</span>
           <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
             <option value="">All sources</option>
             {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Tier</span>
+          <span>Tier</span>
           <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
             <option value="">All tiers</option>
             <option value="osp">OSP</option>
@@ -831,7 +843,7 @@ export default function JobsPage() {
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Status</span>
+          <span>Status</span>
           <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
             <option value="">All</option>
             <option value="active">Active only</option>
@@ -840,7 +852,7 @@ export default function JobsPage() {
         </div>
         {facets.employmentTypes.length > 0 && (
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Employment Type</span>
+            <span>Employment Type</span>
             <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
               <option value="">All employment types</option>
               {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -848,7 +860,7 @@ export default function JobsPage() {
           </div>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Category/Tag</span>
+          <span>Category/Tag</span>
           <input
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
@@ -857,11 +869,11 @@ export default function JobsPage() {
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Relevance Score</span>
+          <span>Relevance Score</span>
           <DualRangeSlider min={0} max={100} value={scoreFilter} onChange={(val) => setScoreFilter(val)} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Work Authorization</span>
+          <span>Work Authorization</span>
           <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
             <option value="">All</option>
             <option value="no_sponsorship">No sponsorship</option>
@@ -870,7 +882,7 @@ export default function JobsPage() {
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Created date</span>
+          <span>Created date</span>
           <DateRangePicker
             dateStart={dateStart}
             dateEnd={dateEnd}
@@ -878,32 +890,31 @@ export default function JobsPage() {
           />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Candidates</span>
+          <span>Candidates</span>
           <select value={candidateFilter} onChange={(e) => setCandidateFilter(e.target.value)}>
             <option value="">All</option>
             {filterCandidates.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>Assigned by</span>
+          <span>Assigned by</span>
           <select value={assignedByFilter} onChange={(e) => setAssignedByFilter(e.target.value)}>
             <option value="">All</option>
             {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "600", color: "var(--ink-soft)" }}>App owner</span>
+          <span>App owner</span>
           <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
             <option value="">All</option>
             {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
           </select>
         </div>
         {filtersActive && (
-          <button onClick={clearFilters} style={{ marginBottom: "2px" }}>
-            Clear filters
-          </button>
+          <div className="jobs-filters-clear">
+            <button onClick={clearFilters}>Clear filters</button>
+          </div>
         )}
-        <span className="muted" style={{ fontSize: 12, marginLeft: "auto", marginBottom: "8px" }}>{jobs.length} of {total}</span>
       </div>
 
       <div className="filter-bar jobs-savebar">
@@ -941,20 +952,26 @@ export default function JobsPage() {
         <div className="table-shell jobs-table-shell">
           <table className="table jobs-table" style={{ tableLayout: "fixed", width: "100%", wordWrap: "break-word" }}>
             <thead>
+              {/* Widths are absolute, not percentages, and deliberately sized
+                  to sum to ~1054px total - comfortably inside any normal
+                  browser viewport so the table never needs horizontal
+                  scroll. .jobs-table caps at that same total (see CSS) so
+                  table-layout:fixed doesn't stretch columns to fill leftover
+                  container space. */}
               <tr>
-                <th style={{ width: 40 }}>
+                <th style={{ width: 36 }}>
                   <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
                 </th>
-                <th style={{ width: "22%" }}>Job</th>
+                <th style={{ width: "30%" }}>Job</th>
                 <th style={{ width: "15%" }}>Company</th>
                 <th style={{ width: "20%" }}>Category</th>
-                <th style={{ width: "10%" }}>Tier</th>
-                <th style={{ width: "10%", cursor: "pointer" }} onClick={togglePostedSort}>
+                <th style={{ width: 80 }}>Tier</th>
+                <th style={{ width: 84, cursor: "pointer" }} onClick={togglePostedSort}>
                   Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
                 </th>
-                <th style={{ width: "12%" }}>Match Scores</th>
-                <th style={{ width: "11%" }}>Applicants</th>
-                <th style={{ width: 40, position: "sticky", right: 0, background: "var(--surface)", zIndex: 2 }}></th>
+                <th style={{ width: 100 }}>Match Scores</th>
+                <th style={{ width: 104 }}>Applicants</th>
+                <th className="jobs-actions-head" style={{ width: 130 }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1075,7 +1092,7 @@ export default function JobsPage() {
                       <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
                     </div>
                     {job.applicants.length > 0 && (
-                      <div>
+                      <div className="jobs-applicant-stack">
                         {job.applicants.map((a) => (
                           <button
                             key={a.application_id}
@@ -1093,9 +1110,16 @@ export default function JobsPage() {
                       </div>
                     )}
                   </td>
-                  <td className="jobs-actions" style={{ display: "flex", gap: 6, position: "sticky", right: 0, background: "var(--surface)", zIndex: 1 }}>
-                    <button onClick={() => setShowApplyFor(job)}>Log application</button>
-                    <button onClick={() => deleteOne(job.id)}>Delete</button>
+                  {/* The cell itself must stay display:table-cell - making the
+                      <td> a flex container takes it out of the table's column
+                      model, so its width is ignored and the buttons render on
+                      top of the Applicants column. The flex row lives in an
+                      inner wrapper instead. */}
+                  <td className="jobs-actions">
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <button className="btn-secondary" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => setShowApplyFor(job)}>Log application</button>
+                      <button className="btn-danger" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => deleteOne(job.id)}>Delete</button>
+                    </div>
                   </td>
                 </tr>
               ))}

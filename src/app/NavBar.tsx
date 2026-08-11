@@ -87,6 +87,7 @@ export default function NavBar() {
     { href: "/candidate-job-matches", label: "Candidate Match Review", show: canViewJobs },
     { href: "/admin/ai", label: "AI Control Center", show: isAdmin },
     { href: "/admin/extension-keys", label: "Extension API Keys", show: isAdmin },
+    { href: "/ats-score", label: "ATS Score Analysis", show: true },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team", label: "Team", show: isAdmin },
     { href: "/settings/webhooks", label: "Webhooks", show: isAdmin || me?.profile.role === "manager" },
@@ -118,7 +119,6 @@ export default function NavBar() {
         <Link href="/candidates" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Candidates</Link>
         <Link href="/candidate-dashboard" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Dashboard</Link>
         {canViewJobs && <Link href="/jobs" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Jobs</Link>}
-        <Link href="/ats-score" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">ATS Score Analysis</Link>
         <Link href="/falood" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Falood AI</Link>
         <Link href="/application-queue" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
           Application Queue

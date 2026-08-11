@@ -103,7 +103,8 @@ export function DateRangePicker({ dateStart, dateEnd, onChange }: DateRangePicke
           background: "var(--surface)",
           color: "var(--ink)",
           fontSize: 13,
-          width: 260,
+          width: "100%",
+          whiteSpace: "nowrap",
           justifyContent: "space-between",
           fontFamily: "inherit",
         }}

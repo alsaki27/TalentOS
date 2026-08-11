@@ -849,42 +849,155 @@ label {
 /* Jobs masterlist: keep the control surface readable and make the wide data
    table intentionally scrollable instead of silently clipping actions. */
 .jobs-page { min-width: 0; }
-.jobs-search-row input { min-width: 0; }
-.jobs-filters {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
-  align-items: end;
-  padding: 14px;
+
+/* The masterlist table is intrinsically wide (9 columns incl. a pinned action
+   column). The default 1100px .page cap is narrower than the table's own
+   min-width, which guaranteed a horizontal scrollbar and left the pinned
+   column permanently overlapping content. Give this page the room it needs. */
+.page:has(.jobs-page) {
+  max-width: min(1720px, calc(100vw - 48px));
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+/* ---- Search row ------------------------------------------------------- */
+.jobs-search-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface-sunken);
-  gap: 12px;
 }
-.jobs-filters > div { min-width: 0; }
+.jobs-search-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.jobs-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 13px;
+}
+.jobs-result-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.jobs-result-count strong { color: var(--ink); font-weight: 700; }
+.jobs-result-count-label { color: var(--ink-soft); }
+
+/* ---- Filter grid ------------------------------------------------------ */
+.jobs-filters {
+  display: grid;
+  /* auto-fit rather than a hard 4-up: filters keep a comfortable minimum
+     width and reflow to fill the now-wider page instead of being crushed. */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  align-items: end;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  gap: 18px 20px;
+}
+.jobs-filters > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.jobs-filters > div > span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .jobs-filters > div > select,
 .jobs-filters > div > input { width: 100%; min-width: 0; }
 .jobs-filters > .dual-range-slider { min-width: 0; }
-.jobs-filters .muted { align-self: center; justify-self: end; white-space: nowrap; }
-.jobs-savebar { align-items: center; padding: 0 2px 4px; }
-.jobs-savebar input { min-width: 220px; }
-.jobs-table-shell { overflow-x: auto; scrollbar-color: var(--accent) var(--surface-sunken); }
-.jobs-table { min-width: 1120px; }
-.jobs-table th:last-child,
-.jobs-table td.jobs-actions {
-  min-width: 150px;
-  width: 150px;
-  box-shadow: -10px 0 16px -14px rgba(0,0,0,.8);
-}
-.jobs-actions button { white-space: nowrap; }
+.jobs-filters-clear { justify-content: flex-end; }
+.jobs-filters-clear button { width: 100%; white-space: nowrap; }
 
-@media (max-width: 900px) {
-  .jobs-filters { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+.jobs-savebar { align-items: center; padding: 10px 2px 4px; gap: 10px; }
+.jobs-savebar input { min-width: 220px; }
+
+/* ---- Data table ------------------------------------------------------- */
+.jobs-table-shell {
+  overflow-x: auto;
+  scrollbar-color: var(--accent) var(--surface-sunken);
+}
+/* Columns sum to ~1054px (see the width attributes in the header row). This
+   caps the table at that natural content width instead of stretching it to
+   fill 100% of a wider container - the exact thing that previously forced
+   the table past typical viewport width and required scrolling to reach the
+   Actions column. overflow-x on the shell stays as a fallback for genuinely
+   narrow viewports/zoom levels only. */
+.jobs-table { width: 100%; }
+.jobs-table th,
+.jobs-table td { vertical-align: top; }
+.jobs-table th { padding-left: 10px; padding-right: 10px; }
+.jobs-table td { padding: 10px; }
+
+/* Pinned action column. Both header and cell need the same width, offset and
+   background or the sticky edge tears as the table scrolls under it. */
+.jobs-table th.jobs-actions-head,
+.jobs-table td.jobs-actions {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  width: 110px;
+  min-width: 110px;
+  background: var(--surface);
+  box-shadow: -12px 0 18px -14px rgba(0, 0, 0, 0.85);
+}
+.jobs-table th.jobs-actions-head { z-index: 4; background: var(--surface-raised); }
+.jobs-table tr:hover td.jobs-actions { background: var(--surface-raised); }
+.jobs-actions-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+}
+/* white-space stays normal (not nowrap) so "Log application" wraps onto a
+   second line inside the narrower column instead of overflowing it. */
+.jobs-actions-inner button {
+  white-space: normal;
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+/* Applicant avatars wrap inside their own column instead of pushing the row
+   wider and colliding with the pinned actions. */
+.jobs-applicant-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+@media (max-width: 1100px) {
+  .page:has(.jobs-page) { padding-left: 16px; padding-right: 16px; }
 }
 
 @media (max-width: 560px) {
-  .jobs-search-row { align-items: stretch !important; flex-direction: column; }
-  .jobs-filters { grid-template-columns: 1fr; padding: 12px; }
-  .jobs-filters .muted { justify-self: start; }
+  .jobs-search-row { align-items: stretch; flex-direction: column; }
+  .jobs-result-count { align-self: flex-start; }
+  .jobs-filters { grid-template-columns: 1fr; padding: 14px; gap: 14px; }
   .jobs-savebar { align-items: stretch; flex-direction: column; }
   .jobs-savebar input, .jobs-savebar button { width: 100%; }
 }
