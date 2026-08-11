@@ -18,11 +18,13 @@ export async function GET(req: NextRequest) {
   let error: any;
 
   const rows = await query(
-    `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
+    `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at,
+            EXISTS(SELECT 1 FROM application_resume_exports e WHERE e.application_id = arv.application_id AND e.resume_version_id = arv.id AND e.export_type = 'pdf' AND e.status = 'created') AS pdf_available
+     FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
     [candidateId]
   );
   data = (rows ?? []).map((row: any) => {
-    const { target_job_job_id, job_title, job_company, application_status, application_proof_url, application_proof_filename, application_applied_at, ...rest } = row;
+    const { target_job_job_id, job_title, job_company, application_status, application_proof_url, application_proof_filename, application_applied_at, pdf_available, ...rest } = row;
     return {
       ...rest,
       target_jobs: {
@@ -38,6 +40,7 @@ export async function GET(req: NextRequest) {
         proof_filename: application_proof_filename,
         applied_at: application_applied_at,
       } : null,
+      pdf_available: Boolean(pdf_available),
     };
   });
   error = null;

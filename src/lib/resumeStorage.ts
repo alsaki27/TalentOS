@@ -3,8 +3,8 @@
 // Set RESUME_STORAGE_PROVIDER=sharepoint to use SharePoint (requires MS_* env vars).
 // If the selected provider is not configured, a clear error is thrown on upload.
 
-import { uploadToSharePoint, deleteFromSharePoint } from "@/lib/integrations/sharepoint";
-import { uploadFile, deleteStorageFile } from "@/server/storage/storageApi";
+import { uploadToSharePoint, deleteFromSharePoint, downloadFromSharePoint } from "@/lib/integrations/sharepoint";
+import { uploadFile, deleteStorageFile, downloadFile } from "@/server/storage/storageApi";
 
 export type ResumeStorageProvider = "r2" | "sharepoint";
 
@@ -54,16 +54,26 @@ export async function uploadResumeFile(
   path: string,
   buffer: Uint8Array,
   contentType: string
-): Promise<{ url: string }> {
+): Promise<{ url: string; provider: ResumeStorageProvider; itemId?: string }> {
   const provider = activeResumeStorageProvider();
   assertProviderConfigured(provider);
 
   if (provider === "sharepoint") {
-    return uploadToSharePoint(path, buffer, contentType);
+    const result = await uploadToSharePoint(path, buffer, contentType);
+    return { url: result.url, provider, itemId: result.itemId };
   }
 
   const { url } = await uploadFile(path, buffer, contentType);
-  return { url };
+  return { url, provider };
+}
+
+export async function downloadResumeFile(provider: string | null, filePath: string, storageUrl?: string | null): Promise<{ buffer: Uint8Array; contentType: string }> {
+  if (provider === "sharepoint") {
+    const result = await downloadFromSharePoint(storageUrl || filePath);
+    return { buffer: result.buffer, contentType: result.contentType };
+  }
+  const blob = await downloadFile(filePath);
+  return { buffer: new Uint8Array(await blob.arrayBuffer()), contentType: blob.type || "application/octet-stream" };
 }
 
 export async function deleteResumeFile(url: string | null | undefined): Promise<void> {

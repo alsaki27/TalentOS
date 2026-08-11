@@ -100,7 +100,8 @@ export interface UploadExportResult {
 }
 
 /**
- * Uploads a generated blob to R2 and records it in application_resume_exports.
+ * Uploads the exact generated blob to the configured resume archive (SharePoint
+ * in production) and records it in application_resume_exports.
  * Best-effort: callers should not block the user's download on this succeeding -
  * generate + downloadBlob() first, then call this to persist a re-downloadable copy.
  */
@@ -129,22 +130,20 @@ export async function exportAndDownloadResume(
   rawContent: any,
   format: "pdf" | "docx",
   uploadContext?: { applicationId: string; resumeVersionId: string }
-): Promise<void> {
+): Promise<UploadExportResult | null> {
   const content = normalizeResumeContentForExport(rawContent);
   const blob = format === "pdf" ? await generateResumePdfBlob(content) : await generateResumeDocxBlob(content);
   const fileName = fileNameFor(content, format);
   downloadBlob(blob, fileName);
 
   if (uploadContext) {
-    uploadResumeExport({
+    return uploadResumeExport({
       applicationId: uploadContext.applicationId,
       resumeVersionId: uploadContext.resumeVersionId,
       exportType: format,
       blob,
       fileName,
-    }).catch((err) => {
-      // Best-effort - the user already has their download, don't surface this as a failure.
-      console.error("Failed to save export to history:", err);
     });
   }
+  return null;
 }

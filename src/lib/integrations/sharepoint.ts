@@ -88,7 +88,7 @@ async function ensureFolderPath(token: string, siteId: string, folderPath: strin
   }
 }
 
-export async function uploadToSharePoint(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
+export async function uploadToSharePoint(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string; itemId: string; name: string }> {
   const token = await getGraphToken();
   const siteId = requireEnv("SHAREPOINT_SITE_ID");
   const folder = process.env.SHAREPOINT_DRIVE_FOLDER || "resumes";
@@ -120,7 +120,7 @@ export async function uploadToSharePoint(path: string, buffer: Uint8Array, conte
     throw new Error(`SharePoint upload failed (${res.status}) ${text}`.trim());
   }
   const item = await res.json();
-  return { url: item.webUrl as string };
+  return { url: item.webUrl as string, itemId: item.id as string, name: item.name as string };
 }
 
 export async function deleteFromSharePoint(webUrl: string): Promise<void> {

@@ -131,6 +131,7 @@ interface TailoredResumeEntry {
   proofUrl?: string | null;
   proofFilename?: string | null;
   appliedAt?: string | null;
+  pdfAvailable?: boolean;
 }
 
 function initials(name: string): string {
@@ -559,6 +560,7 @@ export default function CandidateProfilePage() {
           proofUrl: v.applications?.proof_url ?? null,
           proofFilename: v.applications?.proof_filename ?? null,
           appliedAt: v.applications?.applied_at ?? null,
+          pdfAvailable: Boolean(v.pdf_available),
         }));
 
       const merged = [...faloodTailored, ...aiTailored]
@@ -1468,6 +1470,7 @@ export default function CandidateProfilePage() {
                           </button>
                           {t.applicationId && (
                             <>
+                              {t.pdfAvailable && <a className="btn-compact btn-sm" href={`/api/applications/${t.applicationId}/resume-pdf`} target="_blank" rel="noreferrer">View PDF</a>}
                               <button
                                 className="btn-compact btn-sm"
                                 onClick={() => uploadProofForResume(t)}

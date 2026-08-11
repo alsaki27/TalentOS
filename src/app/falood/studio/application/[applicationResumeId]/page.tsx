@@ -756,10 +756,8 @@ export default function ApplicationResumeStudioPage() {
     if (!applicationResumeId || !content) return;
     setExporting(format);
     try {
-      // Generated entirely client-side (see clientExport.tsx) - this never hits the
-      // Cloudflare Worker. Download happens immediately; saving a re-downloadable
-      // copy to R2 happens best-effort in the background, so a slow/failed upload
-      // never blocks the user from getting their file.
+      // Render once in the browser. The exact same blob is downloaded and then
+      // archived; archive failures are surfaced so the AE can retry.
       await exportAndDownloadResume(
         content,
         format,

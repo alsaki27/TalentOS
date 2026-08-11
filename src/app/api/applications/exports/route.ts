@@ -7,9 +7,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
-import { uploadFile } from "@/server/storage/storageApi";
+import { uploadToSharePoint } from "@/lib/integrations/sharepoint";
 
 const EXPORT_TYPES = new Set(["pdf", "docx"]);
+
+function safeSegment(value: string, fallback: string) {
+  const cleaned = value.normalize("NFKD").replace(/[^a-zA-Z0-9._ -]+/g, "").replace(/\s+/g, " ").trim();
+  return (cleaned || fallback).slice(0, 90);
+}
+
+async function sha256Hex(buffer: Uint8Array) {
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(buffer));
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -20,7 +30,6 @@ export async function POST(req: NextRequest) {
   const applicationId = formData.get("applicationId") as string | null;
   const resumeVersionId = formData.get("resumeVersionId") as string | null;
   const exportType = formData.get("exportType") as string | null;
-  const fileName = (formData.get("fileName") as string | null) ?? file?.name ?? "resume";
 
   if (!file || !applicationId || !resumeVersionId || !exportType) {
     return NextResponse.json(
@@ -35,9 +44,13 @@ export async function POST(req: NextRequest) {
   // Confirm the application exists and is actually linked to this resume version -
   // prevents recording an export under an application the caller doesn't own/manage
   // the data for, even though they're already role-gated above.
-  const linked = await queryOne<{ id: string }>(
-    `SELECT a.id FROM applications a
+  const linked = await queryOne<{ id: string; candidate_name: string; company_name: string; job_title: string }>(
+    `SELECT a.id, c.name AS candidate_name, COALESCE(j.company, 'Unknown Company') AS company_name,
+            COALESCE(j.title, 'Job Application') AS job_title
+     FROM applications a
      JOIN application_resume_versions arv ON arv.application_id = a.id
+     JOIN candidates c ON c.id = a.candidate_id
+     LEFT JOIN jobs j ON j.id = a.job_id
      WHERE a.id = $1 AND arv.id = $2`,
     [applicationId, resumeVersionId]
   );
@@ -53,34 +66,65 @@ export async function POST(req: NextRequest) {
     exportType === "pdf"
       ? "application/pdf"
       : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const contentHash = await sha256Hex(buffer);
+  const extension = exportType === "pdf" ? "pdf" : "docx";
+  const candidateName = safeSegment(linked.candidate_name, "Candidate");
+  const companyName = safeSegment(linked.company_name, "Company");
+  const jobTitle = safeSegment(linked.job_title, "Application");
+  const fileName = `${candidateName} - ${companyName} - ${jobTitle} - app-${applicationId} - resume-${resumeVersionId}.${extension}`;
+  const path = `${candidateName}/${applicationId}/${fileName}`;
 
-  const path = `exports/${applicationId}/${Date.now()}-${fileName}`;
+  const existing = await queryOne<{ id: string; status: string; storage_url: string | null }>(
+    `SELECT id, status, storage_url FROM application_resume_exports
+     WHERE application_id = $1 AND resume_version_id = $2 AND export_type = $3 AND content_sha256 = $4
+       AND status <> 'deleted' ORDER BY created_at DESC LIMIT 1`,
+    [applicationId, resumeVersionId, exportType, contentHash]
+  );
+  if (existing?.status === "created" && existing.storage_url) {
+    return NextResponse.json({ id: existing.id, url: existing.storage_url, archived: true, duplicate: true });
+  }
 
   let publicUrl: string;
   try {
-    const result = await uploadFile(path, buffer, contentType);
+    const sharePoint = await uploadToSharePoint(path, buffer, contentType);
+    const result = { url: sharePoint.url, provider: "sharepoint" as const, itemId: sharePoint.itemId };
     publicUrl = result.url;
+    const rows = existing
+      ? await query<{ id: string }>(
+          `UPDATE application_resume_exports SET file_name = $1, file_path = $2, storage_provider = $3,
+             storage_url = $4, storage_item_id = $5, file_size_bytes = $6, status = 'created', error = NULL,
+             candidate_name_snapshot = $7, company_name_snapshot = $8, job_title_snapshot = $9,
+             created_by = $10, updated_at = NOW() WHERE id = $11 RETURNING id`,
+          [fileName, path, result.provider, result.url, result.itemId ?? null, buffer.byteLength, linked.candidate_name,
+           linked.company_name, linked.job_title, context?.profile.user_id, existing.id]
+        )
+      : await query<{ id: string }>(
+          `INSERT INTO application_resume_exports
+             (application_id, resume_version_id, export_type, file_name, file_path, storage_provider, storage_url,
+              storage_item_id, file_size_bytes, status, created_by, content_sha256,
+              candidate_name_snapshot, company_name_snapshot, job_title_snapshot, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'created',$10,$11,$12,$13,$14,NOW()) RETURNING id`,
+          [applicationId, resumeVersionId, exportType, fileName, path, result.provider, result.url,
+           result.itemId ?? null, buffer.byteLength, context?.profile.user_id, contentHash,
+           linked.candidate_name, linked.company_name, linked.job_title]
+        );
+    return NextResponse.json({ id: rows[0]?.id, url: publicUrl, archived: true, provider: result.provider });
   } catch (err: any) {
     // Record the failure too, matching the table's own status enum - lets the
     // export history page show *why* a download is missing instead of nothing.
     await query(
       `INSERT INTO application_resume_exports
-         (application_id, resume_version_id, export_type, file_name, status, error, created_by)
-       VALUES ($1, $2, $3, $4, 'failed', $5, $6)`,
-      [applicationId, resumeVersionId, exportType, fileName, err.message ?? String(err), context?.profile.user_id]
+         (application_id, resume_version_id, export_type, file_name, file_path, status, error, created_by,
+          content_sha256, candidate_name_snapshot, company_name_snapshot, job_title_snapshot, updated_at)
+       VALUES ($1,$2,$3,$4,$5,'failed',$6,$7,$8,$9,$10,$11,NOW())
+       ON CONFLICT (application_id, resume_version_id, export_type, content_sha256)
+         WHERE content_sha256 IS NOT NULL AND status <> 'deleted'
+       DO UPDATE SET status='failed', error=EXCLUDED.error, updated_at=NOW(), created_by=EXCLUDED.created_by`,
+      [applicationId, resumeVersionId, exportType, fileName, path, err.message ?? String(err), context?.profile.user_id,
+       contentHash, linked.candidate_name, linked.company_name, linked.job_title]
     );
     return NextResponse.json({ error: `Upload failed: ${err.message ?? err}` }, { status: 500 });
   }
-
-  const rows = await query<{ id: string }>(
-    `INSERT INTO application_resume_exports
-       (application_id, resume_version_id, export_type, file_name, file_path, storage_provider, file_size_bytes, status, created_by)
-     VALUES ($1, $2, $3, $4, $5, 'r2', $6, 'created', $7)
-     RETURNING id`,
-    [applicationId, resumeVersionId, exportType, fileName, path, buffer.byteLength, context?.profile.user_id]
-  );
-
-  return NextResponse.json({ id: rows[0]?.id, url: publicUrl });
 }
 
 export async function GET(req: NextRequest) {
@@ -93,7 +137,7 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = await query(
-    `SELECT id, export_type, file_name, status, file_size_bytes, created_at
+    `SELECT id, export_type, file_name, status, file_size_bytes, storage_provider, storage_url, error, created_at, updated_at
      FROM application_resume_exports
      WHERE application_id = $1
      ORDER BY created_at DESC

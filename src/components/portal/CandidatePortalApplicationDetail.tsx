@@ -33,7 +33,10 @@ function ResumePreview({ resume }: { resume: any }) {
     <div className="portal-resume-preview">
       <div className="portal-resume-heading">
         <div><div className="portal-eyebrow">Tailored resume</div><h2>{resume.title}</h2><p>{resume.version_label || "Application version"} · Updated {formatDate(resume.updated_at)}</p></div>
-        <div className="portal-resume-actions"><span className="portal-resume-pill portal-resume-ready">Approved · View only</span></div>
+        <div className="portal-resume-actions">
+          <span className="portal-resume-pill portal-resume-ready">Approved · View only</span>
+          {resume.pdf_available && <a className="portal-btn portal-btn-primary portal-btn-small" href={`/api/portal/me/applications/${resume.application_id}/resume-pdf`} target="_blank" rel="noreferrer">View PDF</a>}
+        </div>
       </div>
       <p className="portal-greeting-sub">This tailored resume is available for review in TalentOS and cannot be downloaded.</p>
       {content.header?.fullName && <h3 className="portal-resume-name">{content.header.fullName}</h3>}
