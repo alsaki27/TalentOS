@@ -2196,6 +2196,14 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState<{ job: Job; ok: boolean; message?: string }[] | null>(null);
+  // The chosen candidate's own base resumes, plus a per-job pick keyed by job
+  // id. Per-job (not one shared pick) because this modal logs many different
+  // jobs at once - a candidate with a "GIS" and a "Networking" base resume
+  // should be able to send the right one to each job in the same batch.
+  const [baseResumes, setBaseResumes] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [baseResumesLoading, setBaseResumesLoading] = useState(false);
+  const [jobBaseResumeIds, setJobBaseResumeIds] = useState<Record<string, string>>({});
+  const jobIdsKey = jobs.map((j) => j.id).join(",");
 
   useEffect(() => {
     fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
@@ -2211,6 +2219,31 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
       .then((r) => (r.ok ? r.json() : null))
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);
+
+  // Load the selected candidate's base resumes and default every job to their
+  // most recent one (the API already returns created_at DESC). Keyed on the
+  // candidate so switching people can never carry the previous candidate's
+  // resume ids onto the new person's tickets.
+  useEffect(() => {
+    setJobBaseResumeIds({});
+    if (!candidateId) { setBaseResumes([]); return; }
+    let cancelled = false;
+    setBaseResumesLoading(true);
+    fetch(`/api/base-resumes?candidateId=${candidateId}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (cancelled) return;
+        const list: { id: string; name: string; status: string }[] = Array.isArray(data) ? data : [];
+        setBaseResumes(list);
+        if (list.length > 0) {
+          setJobBaseResumeIds(Object.fromEntries(jobs.map((j) => [j.id, list[0].id])));
+        }
+      })
+      .catch(() => { if (!cancelled) setBaseResumes([]); })
+      .finally(() => { if (!cancelled) setBaseResumesLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidateId, jobIdsKey]);
 
   async function submit() {
     if (!candidateId) { setError("Select a candidate."); return; }
@@ -2239,8 +2272,17 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
             candidate_ids: [candidateId],
             job_id: job.id,
             status,
-            resume_url: candidate?.resume_url ?? null,
-            resume_filename: candidate?.resume_filename ?? null,
+            // Per-job resume pick, sent in the same per-candidate shape the
+            // single-job modal uses so the API stores it on the ticket and
+            // hands it to the AI tailoring workflow as the preferred resume.
+            candidate_resumes: {
+              [candidateId]: {
+                base_resume_id: jobBaseResumeIds[job.id] ?? baseResumes[0]?.id ?? null,
+                resume_url: candidate?.resume_url ?? null,
+                resume_filename: candidate?.resume_filename ?? null,
+              },
+            },
+            source_type: "base_resume",
             assigned_by: currentUser?.display_name || currentUser?.email || null,
             assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
             assigned_by_user_id: currentUser?.user_id ?? null,
@@ -2273,11 +2315,13 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer" }}>✕</button>
         </div>
 
-        <div style={{ maxHeight: "20vh", overflowY: "auto", marginBottom: "16px", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
-          {jobs.map((j) => (
-            <div key={j.id} style={{ fontSize: "13px", padding: "2px 0", color: "var(--ink-soft)" }}>{j.title} — {j.company || "—"}</div>
-          ))}
-        </div>
+        {!candidateId && (
+          <div style={{ maxHeight: "20vh", overflowY: "auto", marginBottom: "16px", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
+            {jobs.map((j) => (
+              <div key={j.id} style={{ fontSize: "13px", padding: "2px 0", color: "var(--ink-soft)" }}>{j.title} — {j.company || "—"}</div>
+            ))}
+          </div>
+        )}
 
         <div className="field-group">
           <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Candidate</label>
@@ -2288,6 +2332,67 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
             ))}
           </select>
         </div>
+
+        {candidateId && (
+          <div className="field-group" style={{ marginTop: "16px" }}>
+            <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>
+              Base resume per job
+            </label>
+
+            {baseResumesLoading ? (
+              <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
+            ) : baseResumes.length === 0 ? (
+              <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warn)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                No base resumes found for this candidate. The AI workflow will create one automatically.
+              </div>
+            ) : (
+              <>
+                {baseResumes.length > 1 && jobs.length > 1 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const pick = e.target.value;
+                      if (!pick) return;
+                      setJobBaseResumeIds(Object.fromEntries(jobs.map((j) => [j.id, pick])));
+                    }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)", marginBottom: "10px" }}
+                  >
+                    <option value="">Set all {jobs.length} jobs to one resume…</option>
+                    {baseResumes.map((br) => (
+                      <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                    ))}
+                  </select>
+                )}
+
+                <div style={{ maxHeight: "26vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: "8px", padding: "10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
+                  {jobs.map((j) => (
+                    <div key={j.id} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--ink)" }}>
+                        {j.title} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>— {j.company || "—"}</span>
+                      </div>
+                      {baseResumes.length === 1 ? (
+                        <div style={{ fontSize: "12px", color: "var(--ink-soft)" }}>
+                          Using: {baseResumes[0].name} ({baseResumes[0].status})
+                        </div>
+                      ) : (
+                        <select
+                          value={jobBaseResumeIds[j.id] ?? ""}
+                          onChange={(e) => setJobBaseResumeIds((prev) => ({ ...prev, [j.id]: e.target.value }))}
+                          style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}
+                        >
+                          {baseResumes.map((br) => (
+                            <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="field-group" style={{ marginTop: "16px" }}>
           <label>Status</label>

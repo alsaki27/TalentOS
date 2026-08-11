@@ -1,0 +1,10 @@
+feat: TalentOS Production Stabilization and Candidate Matching
+
+- Implemented production Google authentication with proper OAuth state handling
+- Added Google Authenticator MFA with recovery codes and lockout rules
+- Added candidate Gmail integration with personal-email suppression
+- Hardened base-resume keyword agent (prompt v1.2, profile lifecycles)
+- Built deterministic candidate-to-job matcher (Tier A/B scoring, hard exclusions)
+- Added AE review workflow for AI job recommendations
+- Preserved and continued nightly Job Agent implementation
+- Resolved merge conflicts and aligned configuration for production deployment

@@ -340,21 +340,21 @@ export async function approveCandidateJobMatch(options: {
           ae_stage_updated_by_name, resume_generation_status, next_action, notes,
           created_by, automation_idempotency_key, applied_at)
        SELECT candidate_id, job_id, 'assigned', 'base_resume', base_resume_id,
-              $2, $3, 'Approved candidate-job match', 'normal', 'not_required',
-              'in_ai_pipeline', 'in_ai_pipeline', NOW(), $2, $4, 'queued',
+              $2::uuid, $3, 'Approved candidate-job match', 'normal', 'not_required',
+              'in_ai_pipeline', 'in_ai_pipeline', NOW(), $2::uuid, $4, 'queued',
               'AI tailoring in progress',
-              CONCAT('Matcher score ', score, '/100. ', reason), $2, $5, NULL
+              CONCAT('Matcher score ', score, '/100. ', reason), $2::text, $5, NULL
          FROM locked
        ON CONFLICT DO NOTHING
        RETURNING id
      ), event AS (
-       INSERT INTO application_events (application_id, from_status, to_status, note, created_by)
-       SELECT id, NULL, 'assigned', 'Created from an AE-approved candidate-job match', $2
+       INSERT INTO application_events (application_id, from_status, to_status, note)
+       SELECT id, NULL, 'assigned', 'Created from an AE-approved candidate-job match'
          FROM inserted
        RETURNING id
      ), updated AS (
        UPDATE candidate_job_match_decisions d
-          SET review_status = 'approved', reviewed_by_user_id = $2, reviewed_at = NOW(),
+          SET review_status = 'approved', reviewed_by_user_id = $2::uuid, reviewed_at = NOW(),
               review_note = $6, application_id = inserted.id, updated_at = NOW()
          FROM inserted
         WHERE d.id = $1

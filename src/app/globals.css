@@ -719,6 +719,16 @@ label {
   color: #cbd5e1;
 }
 
+.badge-tier-a {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent);
+}
+
+.badge-tier-b {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
 .muted {
   color: var(--ink-soft);
 }

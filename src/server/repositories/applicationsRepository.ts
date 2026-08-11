@@ -72,6 +72,7 @@ export interface CreateApplicationInput {
   resume_url?: string | null;
   resume_filename?: string | null;
   resume_id?: string | null;
+  base_resume_id?: string | null;
   source_type?: ApplicationSourceType;
   follow_up_at?: string | null;
   next_action?: string | null;
@@ -213,6 +214,11 @@ export async function createApplications(
     resume_url: input.resume_url ?? null,
     resume_filename: input.resume_filename ?? null,
     resume_id: input.resume_id ?? null,
+    // The chosen base resume is recorded on the application itself, not just
+    // handed to the AI workflow trigger - otherwise the AE's resume pick is
+    // lost the moment the request ends and nothing downstream can show which
+    // resume the ticket was actually logged against.
+    base_resume_id: input.base_resume_id ?? null,
     source_type: input.source_type ?? "base_resume",
     follow_up_at: input.follow_up_at ?? null,
     next_action: input.next_action ?? null,
