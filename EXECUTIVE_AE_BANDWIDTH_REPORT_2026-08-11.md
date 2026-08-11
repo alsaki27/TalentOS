@@ -1,6 +1,6 @@
 # Executive AE bandwidth report
 
-Snapshot: 2026-08-11 23:12 UTC / 19:12 EDT  
+Snapshot: 2026-08-11 23:21 UTC / 19:21 EDT / 2026-08-12 05:21 Bangladesh time  
 Measurement window: Friday 2026-08-07 00:00 EDT through the snapshot time  
 Source of truth: live Neon `applications` and `application_stage_history` tables  
 Scope: active profiles with `role = 'application_engineer'`
@@ -46,6 +46,34 @@ The current constraint is not a lack of AE accounts. It is routing and pipeline 
 - **Applied work:** Amimul 42, Mehedee 29, Avimanyue 25, and Golam (`golam@skarion.com`) 23 account for all 119 applied transitions.
 - **No recent transitions:** the second Golam account (`chishti055@gmail.com`), Rianul, Abdur, Sad, Saki Test AE, Wafia, and nuzhat had no qualifying queue-stage transition during the window.
 - The two Golam accounts have the same display name but different logins. Keep them separate in operational reporting until the duplicate identity is intentionally merged or disabled.
+
+## Bangladesh local-day breakdown
+
+All dates and times below use Bangladesh Standard Time (`Asia/Dhaka`, UTC+6). “Reviewed” is a queue handoff to `ready_for_application`; “Applied” is a queue transition to `applied`. These are calendar-day totals, not a strict 9:00 AM–6:00 PM shift filter.
+
+| Bangladesh date | Day | Reviewed | Applied | Unique tickets touched | Activity window |
+|---|---|---:|---:|---:|---|
+| 2026-08-07 | Friday | 0 | 0 | 0 | No qualifying queue activity |
+| 2026-08-08 | Saturday | 0 | 0 | 0 | No qualifying queue activity |
+| 2026-08-09 | Sunday | 0 | 0 | 0 | No qualifying queue activity |
+| 2026-08-10 | Monday | 0 | 1 | 1 | 11:08 PM |
+| 2026-08-11 | Tuesday | 91 | 107 | 117 | 8:14 AM–6:48 PM |
+| 2026-08-12 | Wednesday, partial | 0 | 11 | 11 | 12:00–12:30 AM; snapshot at 5:21 AM |
+
+### Per-AE daily activity
+
+| Bangladesh date | AE account | Reviewed | Applied | Unique tickets |
+|---|---|---:|---:|---:|
+| Aug 10, Monday | Avimanyue (`avimanyue@skarion.com`) | 0 | 1 | 1 |
+| Aug 11, Tuesday | Akter (`akter@skarion.com`) | 39 | 0 | 39 |
+| Aug 11, Tuesday | Amimul (`amimul@skarion.com`) | 0 | 42 | 42 |
+| Aug 11, Tuesday | Avimanyue (`avimanyue@skarion.com`) | 0 | 13 | 13 |
+| Aug 11, Tuesday | Golam (`golam@skarion.com`) | 0 | 23 | 23 |
+| Aug 11, Tuesday | Mehedee (`mehedee@skarion.com`) | 0 | 29 | 29 |
+| Aug 11, Tuesday | Sareta (`sareta@skarion.com`) | 51 | 0 | 51 |
+| Aug 12, Wednesday | Avimanyue (`avimanyue@skarion.com`) | 0 | 11 | 11 |
+
+Tuesday was the main Bangladesh workday: Sareta and Akter performed all review handoffs, while Amimul, Mehedee, Avimanyue, and Golam performed the applied transitions. Avimanyue’s 11 early-Wednesday applications are a continuation of the overnight queue session, not a full Wednesday workday.
 
 ## Current queue load
 
