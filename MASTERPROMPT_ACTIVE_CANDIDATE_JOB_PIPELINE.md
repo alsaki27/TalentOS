@@ -1,11 +1,38 @@
 # Master Prompt: Active Candidate Job Matching and AI Application Pipeline
 
-Version: 1.1  
+Version: 1.2  
 Purpose: give a scheduled AI worker enough context to select and log high-quality jobs for every active candidate, then start the existing tailored-resume pipeline safely.
+
+Repository: https://github.com/alsaki27/TalentOS  
+Production: https://talent.skarion.com  
+Branch: `neon-cloudflare-migration`
 
 This document is the operating contract for the future scheduled job-matching agent. It describes the live TalentOS data model, the existing application workflow, the matching policy, and the required safety checks. It does not authorize submitting applications to external job boards.
 
-## 1. The master prompt
+## 1. Paste-ready operator input
+
+Paste the master prompt below together with the Neon `DATABASE_URL`. The operator may override only these run parameters; if omitted, use the defaults:
+
+```text
+LOOKBACK_HOURS=18                 # ingestion window; example: jobs created since now() - 18 hours
+POSTED_WITHIN_DAYS=7              # advertised posting freshness gate
+PRIORITIZE_POSTED_WITHIN_HOURS=72 # rank newest postings first
+MIN_NEW_PER_CANDIDATE=20          # target, never a padding requirement
+MAX_NEW_PER_CANDIDATE=50          # hard cap
+JOB_SOURCES=apify_job_agent       # comma-separated; use ALL for every active source
+ASSIGN_TO_AE_EMAIL=akash@skarion.com
+DRY_RUN=false                     # set true when reviewing before any INSERT
+ALLOW_APPLICATION_INSERTS=true    # only after the operator explicitly says “log”
+```
+
+Interpret the timeline precisely:
+
+- `LOOKBACK_HOURS` filters `jobs.created_at` and answers “what entered TalentOS recently.”
+- `POSTED_WITHIN_DAYS` filters `jobs.posted_at` and answers “is the public posting recent.”
+- A job with a recent ingestion timestamp but missing/old `posted_at` may appear in the report, but must not be auto-logged unless a human explicitly approves it.
+- If the operator says “last 18 hours,” use `created_at >= now() - interval '18 hours'`; do not convert that into an 18-day or `last_seen_at` filter.
+
+## 2. The master prompt
 
 Use the following prompt as the system instruction for the scheduled worker. The worker may call the repository/service functions named below, or an equivalent internal implementation that preserves the same behavior.
 
@@ -32,12 +59,12 @@ For each candidate:
 12. For each selected job, create exactly one applications row, assigned to the configured AE, with source_type = 'base_resume', the exact selected base_resume_id, ae_stage = 'in_ai_pipeline', and resume_generation_status = 'queued'. Record the match score and concise reason in internal notes/metadata.
 13. Immediately call triggerAiWorkflowForApplication(applicationId, actorUserId, preferredBaseResumeId) or the equivalent existing service. The preferred base resume is mandatory; do not let the service silently choose the candidate's newest resume when the matcher selected a different domain resume.
 14. The workflow must materialize a base-resume version, upsert target_jobs, create/update the application packet, create one application_ai_workflows row, and dispatch the first stage. Do not create a second workflow if an active workflow already exists.
-15. Never set ae_stage to applied, never set applications.applied_at, never upload proof, and never submit externally. The only automatic AE-stage transition allowed after generation is the existing pipeline transition from in_ai_pipeline to ready_for_review.
+15. Never set ae_stage to applied, never set applications.applied_at, never upload proof, and never submit externally. The only automatic AE-stage transition allowed after generation is the existing pipeline transition from in_ai_pipeline to ready_for_review. When inserting an assigned/AI-pipeline ticket, explicitly write applied_at = NULL; never rely on a database default. The legacy production schema previously defaulted applied_at to NOW() and made unsubmitted tickets look applied. Migration sql/neon_fixes/072_remove_implicit_applied_at_default.sql removes that default.
 16. Verify every created application before finishing the run. A record is not successful unless it has the correct candidate, job, base resume, Akash/AE assignment, AI workflow, target job, resume version, application packet, queued/running workflow state, and an application event.
 17. Return a machine-readable run report containing: run ID, candidate ID, base resume ID, selected job numbers, created application IDs, skipped duplicate jobs, rejected jobs with reasons, workflow IDs, failures, and counts by stage/status. Never include database credentials or full private email content in the report.
 ```
 
-## 2. Existing code and trigger map
+## 3. Existing code and trigger map
 
 Use the existing services instead of reproducing their logic in a second implementation.
 
@@ -59,7 +86,7 @@ Use the existing services instead of reproducing their logic in a second impleme
 
 The scheduled matcher itself is not the same thing as the workflow dispatcher. The matcher creates/starts work; the dispatcher drains the AI workflow queue.
 
-## 3. Live schemas and relationships
+## 4. Live schemas and relationships
 
 The following are the important live tables. Use the database's actual column definitions as the final authority if a migration adds a field.
 
@@ -148,6 +175,8 @@ Important columns:
 - `resume_generation_started_at`, `resume_generation_completed_at`, `resume_generation_error`
 - `applied_at`, `proof_url`, `submission_url` — must remain untouched by the scheduled worker
 - `created_at`, `updated_at`, `created_by`
+
+For a newly logged pipeline ticket, verify `status = 'assigned'`, `ae_stage = 'in_ai_pipeline'`, `application_stage = 'in_ai_pipeline'`, and `applied_at IS NULL`. Only the authenticated AE stage-transition path may set `applied_at`.
 
 The valid AE stages are:
 
@@ -257,7 +286,7 @@ The current default concurrency cap is `MAX_CONCURRENT_AI_WORKFLOWS = 8`. Other 
 
 Artifacts are immutable evidence of each AI stage. Do not overwrite them to hide a bad result.
 
-## 4. How to read a candidate correctly
+## 5. How to read a candidate correctly
 
 For each active candidate, create an in-memory candidate packet containing:
 
@@ -298,7 +327,7 @@ Rules for interpreting the packet:
 - Preserve exact tools and technologies when they appear in the source resume. Do not merge materially different technologies into a generic term.
 - Never infer sponsorship, citizenship, relocation, remote eligibility, salary acceptance, or commute willingness unless explicitly recorded.
 
-## 5. Matching and interview-likelihood policy
+## 6. Matching and interview-likelihood policy
 
 Score each `(candidate, base_resume, job)` pair from 0 to 100. The score is a ranking tool, not an automated promise.
 
@@ -363,7 +392,7 @@ Candidate-specific rules come from `additional_rules` and human review. They are
 - “Prefer Metro Detroit; remain open to remote” is a ranking preference, not a rejection rule.
 - “Do not select security roles” excludes security-focused work even if a generic network keyword matches.
 
-## 6. Safe creation sequence
+## 7. Safe creation sequence
 
 For each selected job, perform these steps in order:
 
@@ -390,7 +419,7 @@ Do not manually set `application_ai_workflows.base_resume_id` to a resume-versio
 
 Do not set `applications.resume_id` to a `base_resumes.id`; that legacy field points to the separate `resumes` table. Use `applications.base_resume_id` and the workflow service for base-resume selection.
 
-## 7. Workflow stages that must run
+## 8. Workflow stages that must run
 
 The existing application AI workflow executes these four stages in order:
 
@@ -403,7 +432,7 @@ The finalization service persists a new `application_resume_versions` row with `
 
 The workflow agent IDs are configured in `src/lib/ai/application-agents/types.ts` and runtime settings are read from `ai_agent_configs`. Do not hard-code an AI provider or API key in the matcher. Read the model/provider/prompt version from the AI Control Center configuration. Any new matcher agent must be registered there before scheduling it.
 
-## 8. Schedule and queue design
+## 9. Schedule and queue design
 
 Recommended production schedule:
 
@@ -449,7 +478,7 @@ Use a run-level lock so two scheduler invocations cannot select the same jobs si
 
 These audit tables are recommended additions; they are not substitutes for the existing application/workflow tables. They make scheduled behavior explainable and let managers see why a role was skipped.
 
-## 9. Idempotency and failure handling
+## 10. Idempotency and failure handling
 
 Use all of these guards:
 
@@ -473,7 +502,7 @@ Failure outcomes:
 - Workflow creation failure: keep the application visible with `resume_generation_status = 'failed'`, record the error, and retry through the workflow recovery path.
 - Partial writes: use a transaction where possible. If the current service boundary cannot be transactional across application creation and workflow start, run a repair pass that finds applications with `in_ai_pipeline` but no workflow and either starts the workflow or marks the row with a visible error.
 
-## 10. Verification queries
+## 11. Verification queries
 
 After each candidate batch, verify every selected application with a query equivalent to:
 
@@ -533,7 +562,7 @@ WHERE candidate_id = $candidate_id
   AND created_at >= $run_started_at;
 ```
 
-## 11. Candidate-specific quality examples
+## 12. Candidate-specific quality examples
 
 The matcher must generalize from the resume, not from the candidate's name. Examples of correct behavior:
 
@@ -545,7 +574,7 @@ The matcher must generalize from the resume, not from the candidate's name. Exam
 - For Avirup, choose the best single base resume for each canonical job. A GIS job should not create duplicate GIS, OSP, and CAD applications; OSP/fiber jobs should use OSP unless the job is explicitly drafting-heavy, in which case CAD may win. All three profiles share the same hard freshness gate: only jobs posted within the last 7 days are eligible for automatic logging.
 - A GIS/OSP/CAD base resume should use its own keyword profile and rules. Never reuse Mahi's Solar or FPGA keywords for another candidate.
 
-## 12. Human review boundary
+## 13. Human review boundary
 
 The scheduled system is successful when it gives the AE a clean, explainable, tailored-resume-ready queue. It is not successful when it maximizes the raw number of applications.
 
@@ -562,7 +591,7 @@ Managers and admins must be able to:
 
 Never hide uncertainty. Label missing work authorization, relocation, seniority, or experience evidence for AE review instead of inventing a favorable assumption.
 
-## 13. Acceptance criteria for the implementation
+## 14. Acceptance criteria for the implementation
 
 The scheduled matcher is ready only when all of the following are true:
 
@@ -585,7 +614,7 @@ The scheduled matcher is ready only when all of the following are true:
 - Tests cover inactive candidates, missing resumes, stale profiles, duplicate jobs, duplicate applications, dismissed keywords, seniority exclusions, clearance exclusions, packet/workflow mismatch, dispatcher capacity, and workflow retries.
 - Tests cover missing/malformed `posted_at`, 8-day-old jobs, source-relative timestamps, future timestamps, recent reposts, syndicated copies, and the one-base-resume-per-canonical-job rule.
 
-## 14. Immediate implementation recommendation
+## 15. Immediate implementation recommendation
 
 Build one service and one protected cron route around this contract:
 
