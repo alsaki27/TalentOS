@@ -74,6 +74,7 @@ export default function NavBar() {
   }
 
   const moreLinks = [
+    { href: "/communications/gmail", label: "Gmail Inbox", show: true },
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },

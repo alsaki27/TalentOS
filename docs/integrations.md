@@ -111,8 +111,14 @@ Scopes requested:
 openid
 email
 profile
-https://www.googleapis.com/auth/gmail.readonly
+https://www.googleapis.com/auth/gmail.modify
 ```
+
+The Gmail API must be enabled in the same Google Cloud project as
+`GOOGLE_CLIENT_ID`. The OAuth grant can succeed while Gmail API calls still
+return HTTP 403 if the API is disabled. Public use of `gmail.modify` also
+requires the Google consent-screen verification process; during testing, add
+pilot candidate accounts as test users.
 
 Google references:
 
@@ -142,6 +148,28 @@ GET /api/portal/:token/gmail/start
 GET /api/portal/:token/gmail/status
 ```
 
+Authenticated candidate portal aliases:
+
+```http
+GET /api/portal/me/gmail/start
+GET /api/portal/me/gmail/privacy
+POST /api/portal/integrations/gmail/disconnect
+```
+
+Internal Gmail activity log:
+
+```http
+GET /api/gmail-communications?direction=inbox|sent|all
+GET /api/gmail-communications/:messageId
+```
+
+The staff UI is `/communications/gmail`. It groups messages by Gmail thread,
+supports inbox/sent/all-retained-mail views, search, candidate/category/reply
+filters, full thread detail, AI metadata, workflow action items, and an Open
+Gmail link. It is an internal activity log, not a candidate-facing mailbox
+viewer. Personal transactions, job-alert digests, and bulk marketing are
+suppressed before storage so “all mail” means all retained recruiting mail.
+
 OAuth callback:
 
 ```http
@@ -161,5 +189,21 @@ Connected Gmail accounts are stored in `integration_accounts` with:
 - access token
 - refresh token
 - status
+
+Imported messages are stored in `email_communications`. The sync stores message
+metadata and body text for internal workflow processing, deduplicates by Gmail
+message ID, keeps a Gmail history cursor for incremental sync, and records
+unread/important/label metadata. `action_items`, `application_comments`,
+`interview_schedules`, and `application_stage_history` hold the derived
+workflow results. High-volume classification and interview extraction use
+`gemini-2.5-flash-lite`; the existing `email_reply_draft` agent is also
+flash-lite and remains human-approval-only.
+
+Recommended next low-cost agents, to add only after measuring the current
+workflow: `EmailThreadSummarizer` (flash-lite, cache summaries for long
+threads), `EmailDeadlineExtractor` (flash-lite, extract reply/application
+deadlines), and `EmailWorkflowReconciler` (flash-lite, review conflicting
+signals before any stage change). None should send mail or downgrade an offer
+without a human gate.
 
 For production hardening, keep Google credentials out of source control, rotate webhook secrets, and use encrypted storage or a secrets vault for OAuth tokens if the deployment environment requires stricter token handling.

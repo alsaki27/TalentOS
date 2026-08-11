@@ -85,6 +85,17 @@ interface GmailHistoryResponse {
   nextPageToken?: string;
 }
 
+export async function getProfile(accessToken: string): Promise<{ emailAddress: string; historyId: string }> {
+  const res = await fetch(`${GMAIL_BASE}/profile`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Gmail profile failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
 export async function listHistory(accessToken: string, startHistoryId: string, pageToken?: string): Promise<GmailHistoryResponse> {
   const url = new URL(`${GMAIL_BASE}/history`);
   url.searchParams.set("startHistoryId", startHistoryId);
@@ -104,6 +115,7 @@ export async function listHistory(accessToken: string, startHistoryId: string, p
 export interface GmailMessage {
   id: string;
   threadId: string;
+  labelIds: string[];
   from: string | null;
   to: string[];
   subject: string | null;
@@ -169,6 +181,7 @@ export async function getMessage(accessToken: string, messageId: string, ownerEm
   return {
     id: data.id,
     threadId: data.threadId,
+    labelIds: Array.isArray(data.labelIds) ? data.labelIds : [],
     from,
     to,
     subject: headerValue(headers, "Subject"),

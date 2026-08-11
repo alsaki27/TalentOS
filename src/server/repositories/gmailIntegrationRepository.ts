@@ -21,11 +21,11 @@ export interface GmailAccountRow {
   gmail_history_id: string | null;
 }
 
-export async function listActiveCandidateGmailAccounts(): Promise<GmailAccountRow[]> {
+export async function listActiveCandidateGmailAccounts(includeErrors = false): Promise<GmailAccountRow[]> {
   return query<GmailAccountRow>(
     `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id
      FROM integration_accounts
-     WHERE provider = 'gmail' AND owner_type = 'candidate' AND status = 'active' AND candidate_id IS NOT NULL
+     WHERE provider = 'gmail' AND owner_type = 'candidate' AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"} AND candidate_id IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM candidates c WHERE c.id = integration_accounts.candidate_id AND c.email_sync_paused = true)`
   );
 }
@@ -74,7 +74,7 @@ export async function markGmailAccountError(id: string, error: string) {
 
 export async function updateGmailHistoryId(id: string, historyId: string) {
   await execute(
-    `UPDATE integration_accounts SET gmail_history_id = $1, last_synced_at = now(), updated_at = now() WHERE id = $2`,
+    `UPDATE integration_accounts SET gmail_history_id = $1, last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now() WHERE id = $2`,
     [historyId, id]
   );
 }

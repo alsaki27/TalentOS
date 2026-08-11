@@ -14,7 +14,7 @@ import {
   updateGmailHistoryId,
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
-import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
+import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
 import { triageEmail, AUTO_WRITE_CATEGORIES, AUTO_WRITE_CONFIDENCE_THRESHOLD, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { logActivity } from "@/lib/activity";
@@ -103,11 +103,12 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   const row = await queryOne<{ id: string }>(
     `INSERT INTO email_communications
        (candidate_id, integration_account_id, gmail_message_id, gmail_thread_id, direction,
-        from_email, to_emails, subject, snippet, body_text, sent_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        from_email, to_emails, subject, snippet, body_text, sent_at,
+        gmail_label_ids, gmail_is_unread, gmail_is_important)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      ON CONFLICT (gmail_message_id) DO NOTHING
      RETURNING id`,
-    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt]
+    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT")]
   );
 
   if (row && msg.direction === "outbound") {
@@ -142,6 +143,80 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   return row?.id ?? null;
 }
 
+type EmailStageTarget = "applied" | "interview" | "offer" | "rejected";
+
+function emailStageTarget(category: string): EmailStageTarget | null {
+  if (category === "application_confirmation") return "applied";
+  if (category === "interview_invite" || category === "scheduling") return "interview";
+  if (category === "offer") return "offer";
+  if (category === "rejection") return "rejected";
+  return null;
+}
+
+function shouldAcceptEmailStage(currentStatus: string, target: EmailStageTarget) {
+  if (currentStatus === target) return false;
+  if (currentStatus === "withdrawn") return false;
+  if (currentStatus === "offer" && target !== "offer") return false;
+  if (currentStatus === "rejected" && target !== "rejected") return false;
+  if (target === "rejected") return currentStatus !== "offer";
+  if (target === "interview") return !["offer", "rejected", "withdrawn"].includes(currentStatus);
+  if (target === "applied") return !["interview", "offer", "rejected", "withdrawn"].includes(currentStatus);
+  return true;
+}
+
+async function applyEmailStageDecision(applicationId: string, category: string, confidence: number, summary: string) {
+  const target = emailStageTarget(category);
+  if (!target) return false;
+
+  const current = await queryOne<{
+    status: string;
+    ae_stage: string | null;
+    application_stage: string | null;
+    applied_at: string | null;
+  }>(
+    "SELECT status, ae_stage, application_stage, applied_at FROM applications WHERE id = $1",
+    [applicationId],
+  );
+  if (!current || !shouldAcceptEmailStage(current.status, target)) return false;
+
+  const now = new Date().toISOString();
+  const updated = await queryOne<{ status: string }>(
+    `UPDATE applications
+        SET status = $2,
+            application_stage = $2,
+            application_stage_changed_at = $3,
+            application_stage_changed_by_name = 'Email Triage (AI)',
+            applied_at = CASE WHEN $2 = 'applied' THEN COALESCE(applied_at, $3) ELSE applied_at END,
+            updated_at = $3
+      WHERE id = $1
+      RETURNING status`,
+    [applicationId, target, now],
+  );
+  if (!updated) return false;
+
+  const fromStage = current.application_stage || current.ae_stage || current.status;
+  await execute(
+    `INSERT INTO application_stage_history
+       (application_id, from_stage, to_stage, changed_at, changed_by_name, reason, source)
+     VALUES ($1, $2, $3, $4, 'Email Triage (AI)', $5, 'email_ai')`,
+    [applicationId, fromStage, target, now, summary || `Email classified as ${category}.`],
+  );
+  await execute(
+    `INSERT INTO application_events (application_id, from_status, to_status, note)
+     VALUES ($1, $2, $3, $4)`,
+    [applicationId, current.status, target, `Email Triage (AI): ${summary || category} (${Math.round(confidence * 100)}% confidence).`],
+  );
+  await logActivity({
+    actorName: "Email Triage (AI)",
+    actorType: "ai",
+    type: "email_triage_status_change",
+    description: `Email triage moved application from "${current.status}" to "${target}" (${Math.round(confidence * 100)}% confidence)`,
+    entityType: "application",
+    entityId: applicationId,
+  });
+  return true;
+}
+
 async function triageStoredMessage(id: string, accessToken: string) {
   const row = await queryOne<{
     id: string; candidate_id: string; subject: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
@@ -174,6 +249,17 @@ async function triageStoredMessage(id: string, accessToken: string) {
     return;
   }
 
+  const applicationConfirmationSignal = /(application (was )?(received|submitted)|thank you for applying|we received your application|application confirmation|successfully applied)/i.test(subject + "\n" + bodyText);
+  if (applicationConfirmationSignal && (!triage.relevant || !triage.matchedApplicationId)) {
+    triage.relevant = true;
+    triage.category = "application_confirmation";
+    triage.needsReply = false;
+    triage.summary = triage.matchedApplicationId
+      ? "Application confirmation detected."
+      : "Application confirmation detected, but no matching TalentOS application was found.";
+    triage.confidence = Math.max(triage.confidence, 0.9);
+  }
+
   await execute(
     `UPDATE email_communications SET
        ai_relevant = $1, ai_category = $2, ai_confidence = $3, ai_summary = $4,
@@ -191,18 +277,17 @@ async function triageStoredMessage(id: string, accessToken: string) {
     const addLabels = [labelId];
     if (["interview_invite", "scheduling", "offer", "recruiter_reply"].includes(triage.category)) addLabels.push("STARRED");
     await modifyMessage(accessToken, row.gmail_message_id, addLabels);
-    await execute("UPDATE email_communications SET gmail_label_ids = $1, gmail_is_starred = $2 WHERE id = $3", [addLabels, addLabels.includes("STARRED"), id]);
+    await execute(
+      `UPDATE email_communications
+          SET gmail_label_ids = ARRAY(
+                SELECT DISTINCT unnest(COALESCE(gmail_label_ids, '{}') || $1::text[])
+              ),
+              gmail_is_starred = $2
+        WHERE id = $3`,
+      [addLabels, addLabels.includes("STARRED"), id],
+    );
   } catch (labelError) {
     console.warn("[Gmail sync] Could not apply Gmail label/star:", labelError);
-  }
-
-  const applicationConfirmationSignal = /(application (was )?(received|submitted)|thank you for applying|we received your application|application confirmation|successfully applied)/i.test(subject + "\n" + bodyText);
-  if (applicationConfirmationSignal && !triage.matchedApplicationId) {
-    triage.relevant = true;
-    triage.category = "application_confirmation";
-    triage.needsReply = false;
-    triage.summary = "Application confirmation detected, but no matching TalentOS application was found.";
-    triage.confidence = Math.max(triage.confidence, 0.9);
   }
 
   // Every relevant message becomes an application timeline note. It is kept
@@ -271,37 +356,24 @@ async function triageStoredMessage(id: string, accessToken: string) {
 
   const canAutoWrite =
     triage.matchedApplicationId &&
-    triage.suggestedStatus &&
-    AUTO_WRITE_CATEGORIES.has(triage.category) &&
-    triage.confidence >= AUTO_WRITE_CONFIDENCE_THRESHOLD;
+    (AUTO_WRITE_CATEGORIES.has(triage.category) || triage.category === "application_confirmation") &&
+    triage.confidence >= (triage.category === "application_confirmation" ? 0.9 : AUTO_WRITE_CONFIDENCE_THRESHOLD);
 
   if (canAutoWrite) {
-    await execute("UPDATE applications SET status = $1 WHERE id = $2", [triage.suggestedStatus, triage.matchedApplicationId]);
-    await logActivity({
-      actorName: "Email Triage (AI)",
-      actorType: "ai",
-      type: "email_triage_status_change",
-      description: `Gmail triage set application status to "${triage.suggestedStatus}" from a ${triage.category} email (confidence ${(triage.confidence * 100).toFixed(0)}%)`,
-      entityType: "application",
-      entityId: triage.matchedApplicationId!,
-    });
-    await execute(
-      `INSERT INTO action_items
-         (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
-          resolution_rule, resolution_kind, dedupe_key)
-       VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'done',
-               'informational', 'informational', $6)
-       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-      [
-        row.candidate_id,
-        triage.matchedApplicationId,
-        id,
-        `Auto-updated status to "${triage.suggestedStatus}" (FYI)`,
-        triage.summary,
-        `email:${id}:status-update`,
-      ]
-    );
-    return;
+    const changed = await applyEmailStageDecision(triage.matchedApplicationId!, triage.category, triage.confidence, triage.summary);
+    if (changed) {
+      const stage = emailStageTarget(triage.category);
+      await execute(
+        `INSERT INTO action_items
+           (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
+            resolution_rule, resolution_kind, dedupe_key)
+         VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'done',
+                 'informational', 'informational', $6)
+         ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+        [row.candidate_id, triage.matchedApplicationId, id, `Email moved application to "${stage}" (FYI)`, triage.summary, `email:${id}:status-update`],
+      );
+      return;
+    }
   }
 
   const type = triage.needsReply ? "needs_reply" : "status_change_review";
@@ -411,8 +483,8 @@ async function enqueueOverdueFollowUps() {
   return enqueued;
 }
 
-export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followUpsEnqueued: number }> {
-  const accounts = await listActiveCandidateGmailAccounts();
+export async function runGmailSync(options: { retryErrored?: boolean } = {}): Promise<{ accounts: SyncOutcome[]; followUpsEnqueued: number }> {
+  const accounts = await listActiveCandidateGmailAccounts(Boolean(options.retryErrored));
   const outcomes: SyncOutcome[] = [];
 
   for (const accountRow of accounts) {
@@ -442,6 +514,8 @@ export async function runGmailSync(): Promise<{ accounts: SyncOutcome[]; followU
           outcome.triaged++;
         }
       }
+      const profile = await getProfile(accessToken);
+      if (profile.historyId) await updateGmailHistoryId(accountRow.id, profile.historyId);
     } catch (err: any) {
       const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
         ? "Gmail access was revoked or expired — candidate needs to reconnect."
