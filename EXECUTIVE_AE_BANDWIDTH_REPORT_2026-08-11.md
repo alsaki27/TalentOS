@@ -1,7 +1,7 @@
 # Executive AE bandwidth report
 
-Snapshot: 2026-08-11 23:06 UTC / 19:06 EDT  
-Measurement window: rolling 72 hours, 2026-08-08 23:06 UTC through the snapshot time  
+Snapshot: 2026-08-11 23:12 UTC / 19:12 EDT  
+Measurement window: Friday 2026-08-07 00:00 EDT through the snapshot time  
 Source of truth: live Neon `applications` and `application_stage_history` tables  
 Scope: active profiles with `role = 'application_engineer'`
 
@@ -9,8 +9,8 @@ Scope: active profiles with `role = 'application_engineer'`
 
 - **14 active AE accounts** exist in TalentOS.
 - **8 active AE accounts currently own open queue work.**
-- **6 active AE accounts recorded real queue-stage activity in the last 3 days.**
-- **8 active AE accounts recorded no queue-stage transition in the window.**
+- **6 active AE accounts recorded real queue-stage activity since Friday.**
+- **8 active AE accounts recorded no queue-stage transition since Friday.**
 - The team made **90 review handoffs** (`ready_for_review → ready_for_application`) and **119 AE-applied transitions** (`ready_for_review/ready_for_application → applied`) across **129 unique tickets**.
 - The current queue has **344 open tickets**: 45 ready for AE review, 10 ready for AE application, and 289 in the AI pipeline.
 - **279 of the 289 AI-pipeline tickets are unassigned.** Only 10 AI-pipeline tickets are assigned to active AEs.
@@ -22,7 +22,7 @@ The current constraint is not a lack of AE accounts. It is routing and pipeline 
 
 ## Activity by active AE
 
-“Reviewed” below means a real queue transition from `ready_for_review` to `ready_for_application`. “Applied” means a real queue transition to `applied`. The counts use `application_stage_history.source = 'queue'` and exclude migration-generated history so old bulk data is not mistaken for current work.
+“Reviewed” below means a real queue transition from `ready_for_review` to `ready_for_application`. “Applied” means a real queue transition to `applied`. The counts use `application_stage_history.source = 'queue'` and exclude migration-generated history so old bulk data is not mistaken for current work. The numbers are unchanged from the prior report because no additional qualifying queue transitions occurred between the prior 72-hour cutoff and Friday’s start.
 
 | Active AE account | Current open owned | In review | In application | AI pipeline | Reviewed in 72h | Applied in 72h | Total queue actions | Bandwidth signal |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
@@ -69,7 +69,7 @@ The queue therefore understates individual AE workload if someone is looking onl
 
 ## Data-quality warning
 
-The application columns `ae_reviewed_at` and `ae_applied_at` currently produce larger counts than the queue-stage history. For example, those columns show legacy-stamped activity for Sareta and Akter that does not correspond to current `source = 'queue'` transitions. Migration records were written inside the 72-hour timestamp window, so counting those columns alone would inflate current team throughput.
+The application columns `ae_reviewed_at` and `ae_applied_at` currently produce larger counts than the queue-stage history. For example, those columns show legacy-stamped activity for Sareta and Akter that does not correspond to current `source = 'queue'` transitions. Migration records were written inside the Friday-to-now timestamp window, so counting those columns alone would inflate current team throughput.
 
 For executive throughput, use:
 
@@ -102,7 +102,7 @@ FROM profiles
 WHERE is_active = true
   AND role = 'application_engineer';
 
--- Human queue throughput in a rolling 72-hour window
+-- Human queue throughput from Friday 00:00 Eastern through now
 SELECT changed_by_user_id,
        changed_by_name,
        count(DISTINCT application_id) FILTER (
@@ -114,7 +114,7 @@ SELECT changed_by_user_id,
        count(DISTINCT application_id) AS unique_tickets_touched
 FROM application_stage_history
 WHERE source = 'queue'
-  AND changed_at >= now() - interval '3 days'
+  AND changed_at >= TIMESTAMPTZ '2026-08-07 00:00:00 America/New_York'
 GROUP BY changed_by_user_id, changed_by_name;
 
 -- Current open queue
