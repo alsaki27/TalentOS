@@ -11,9 +11,9 @@ export const GMAIL_SCOPES = [
 
 // Never derive this from the incoming request's origin — confirmed unreliable
 // inside this Worker runtime (a sibling route's req.url resolved to "http://n"
-// in production). GMAIL_OAUTH_REDIRECT_URI is a separate override from
-// GOOGLE_OAUTH_REDIRECT_URI (staff login's own override in server/auth/google.ts)
-// so the two callback flows can never collide if someone sets one but not the other.
+// in production). GMAIL_OAUTH_REDIRECT_URI is intentionally separate from
+// the Google identity login configuration so mailbox consent can rotate
+// without changing staff/candidate Google sign-in.
 export function googleRedirectUri() {
   return gmailOAuthRedirectUri();
 }
@@ -28,8 +28,8 @@ export function newOAuthState(): string {
 }
 
 export function gmailAuthUrl(params: { state: string }) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) throw new Error("GOOGLE_CLIENT_ID is required.");
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  if (!clientId) throw new Error("GMAIL_CLIENT_ID is required for Gmail mailbox access.");
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
@@ -44,10 +44,10 @@ export function gmailAuthUrl(params: { state: string }) {
 }
 
 export async function exchangeGmailCode(code: string) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required.");
+    throw new Error("GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET are required for Gmail mailbox access.");
   }
 
   const res = await fetch("https://oauth2.googleapis.com/token", {

@@ -3,13 +3,13 @@ import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
 import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import { execute } from "@/server/db/neon";
 import { isEncryptionAvailable } from "@/server/security/secretCrypto";
-import { envFlag, googleConfigurationReadiness } from "@/server/runtimeConfig";
+import { envFlag, gmailConfigurationReadiness } from "@/server/runtimeConfig";
 
 export async function GET() {
   if (!envFlag("CANDIDATE_GMAIL_ENABLED")) return NextResponse.json({ error: "CANDIDATE_GMAIL_DISABLED" }, { status: 503 });
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
-  const readiness = googleConfigurationReadiness();
+  const readiness = gmailConfigurationReadiness();
   if (!readiness.ready || !isEncryptionAvailable()) {
     return NextResponse.json({ error: "CANDIDATE_GMAIL_NOT_READY", readiness: { ...readiness, tokenEncryptionReady: isEncryptionAvailable() } }, { status: 503 });
   }

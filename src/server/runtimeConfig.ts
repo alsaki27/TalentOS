@@ -105,3 +105,25 @@ export function googleConfigurationReadiness() {
     configurationError,
   };
 }
+
+export function gmailConfigurationReadiness() {
+  const clientIdPresent = Boolean(process.env.GMAIL_CLIENT_ID?.trim());
+  const clientSecretPresent = Boolean(process.env.GMAIL_CLIENT_SECRET?.trim());
+  let baseUrl: string | null = null;
+  let gmailCallback: string | null = null;
+  let configurationError: string | null = null;
+  try {
+    baseUrl = getCanonicalBaseUrl();
+    gmailCallback = gmailOAuthRedirectUri();
+  } catch (error) {
+    configurationError = error instanceof RuntimeConfigurationError ? error.code : "INVALID_GMAIL_CONFIGURATION";
+  }
+  return {
+    ready: clientIdPresent && clientSecretPresent && !configurationError,
+    clientIdPresent,
+    clientSecretPresent,
+    baseUrl,
+    callbacks: { gmail: gmailCallback },
+    configurationError,
+  };
+}

@@ -14,12 +14,16 @@ Add these to the deployed environment and to `.env.local` for local testing:
 TALENT_OS_WEBHOOK_SECRET=replace-with-a-long-random-secret
 TEAMS_TALENT_OS_WEBHOOK_URL=https://...
 
-GOOGLE_CLIENT_ID=your-google-oauth-client-id
-GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret
+GOOGLE_CLIENT_ID=your-google-identity-oauth-client-id
+GOOGLE_CLIENT_SECRET=your-google-identity-oauth-client-secret
 GOOGLE_OAUTH_REDIRECT_URI=https://your-domain.com/api/integrations/gmail/callback
+
+GMAIL_CLIENT_ID=your-gmail-mailbox-oauth-client-id
+GMAIL_CLIENT_SECRET=your-gmail-mailbox-oauth-client-secret
+GMAIL_OAUTH_REDIRECT_URI=https://your-domain.com/api/integrations/gmail/callback
 ```
 
-`GOOGLE_OAUTH_REDIRECT_URI` is optional locally. If it is omitted, the app uses the current origin plus `/api/integrations/gmail/callback`.
+`GOOGLE_OAUTH_REDIRECT_URI` is used only by Google identity login. Gmail mailbox OAuth uses `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and optional `GMAIL_OAUTH_REDIRECT_URI`. If the Gmail redirect override is omitted, the app uses the current origin plus `/api/integrations/gmail/callback`.
 
 ## Talent OS Webhook
 

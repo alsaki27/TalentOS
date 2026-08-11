@@ -11,11 +11,11 @@ export interface GoogleUserInfo {
 }
 
 function getGoogleClientId() {
-  return process.env.GOOGLE_CLIENT_ID ?? process.env.GMAIL_CLIENT_ID ?? "";
+  return process.env.GOOGLE_CLIENT_ID ?? "";
 }
 
 function getGoogleClientSecret() {
-  return process.env.GOOGLE_CLIENT_SECRET ?? process.env.GMAIL_CLIENT_SECRET ?? "";
+  return process.env.GOOGLE_CLIENT_SECRET ?? "";
 }
 
 export function getGoogleOAuthRedirectUri() {

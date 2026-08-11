@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
 import { queryOne, execute } from "@/server/db/neon";
-import { envFlag, googleConfigurationReadiness } from "@/server/runtimeConfig";
+import { envFlag, gmailConfigurationReadiness } from "@/server/runtimeConfig";
 import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
   if (!envFlag("CANDIDATE_GMAIL_ENABLED")) {
     return NextResponse.json({ error: "CANDIDATE_GMAIL_DISABLED" }, { status: 503 });
   }
-  const readiness = googleConfigurationReadiness();
+  const readiness = gmailConfigurationReadiness();
   if (!readiness.ready || !isEncryptionAvailable()) {
     return NextResponse.json({ error: "CANDIDATE_GMAIL_NOT_READY" }, { status: 503 });
   }
