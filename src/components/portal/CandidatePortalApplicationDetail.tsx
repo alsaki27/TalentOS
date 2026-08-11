@@ -47,11 +47,40 @@ function ResumePreview({ resume }: { resume: any }) {
   );
 }
 
+function ResumePdfPreview({ resume, onClose }: { resume: any; onClose: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const { generateResumePdfBlob, normalizeResumeContentForExport } = await import("@/lib/falood/clientExport");
+        const blob = await generateResumePdfBlob(normalizeResumeContentForExport(resume.content || {}));
+        if (active) setUrl(URL.createObjectURL(blob));
+      } catch (err: any) {
+        if (active) setError(err?.message || "PDF preview could not be generated.");
+      }
+    })();
+    return () => { active = false; };
+  }, [resume]);
+
+  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+
+  return <div className="portal-pdf-overlay" role="dialog" aria-modal="true" aria-label="Tailored resume PDF preview">
+    <div className="portal-pdf-modal">
+      <div className="portal-pdf-toolbar"><strong>Tailored resume preview</strong><button className="portal-btn portal-btn-secondary portal-btn-small" onClick={onClose}>Close</button></div>
+      {error ? <p className="portal-error">{error}</p> : url ? <iframe className="portal-pdf-frame" title="Tailored resume preview" src={`${url}#toolbar=0&navpanes=0`} sandbox="allow-scripts" /> : <div className="portal-list-loading">Preparing preview…</div>}
+    </div>
+  </div>;
+}
+
 export default function CandidatePortalApplicationDetail({ application, resume, onBack }: Props) {
   const [notes, setNotes] = useState<any[]>([]);
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
 
   useEffect(() => {
     fetch(`/api/portal/me/applications/${application.id}/notes`, { cache: "no-store" })
@@ -91,7 +120,8 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
       <section className="portal-card portal-detail-card"><h2>Progress</h2>{application.timeline?.length ? <div className="portal-timeline">{application.timeline.map((event: any) => <div className="portal-timeline-item" key={event.id}><span className="portal-timeline-dot" /><div><strong>{event.label}</strong><span>{formatDate(event.created_at)}</span></div></div>)}</div> : <p className="portal-greeting-sub">Your application timeline will appear as the team records updates.</p>}</section>
       <section className="portal-card portal-detail-card"><h2>Interviews</h2>{application.interviews?.length ? <div className="portal-interview-list">{application.interviews.map((interview: any) => <article className="portal-interview-card" key={interview.id}><div><strong>{interview.round_name}</strong><span>{formatTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span><span>Status: {interview.status}</span>{interview.location && <span>Location: {interview.location}</span>}{interview.panel?.length > 0 && <span>Interviewers: {interview.panel.join(", ")}</span>}</div>{interview.meeting_link && <a className="portal-btn portal-btn-secondary portal-btn-small" href={interview.meeting_link} target="_blank" rel="noreferrer">Open meeting</a>}</article>)}</div> : <p className="portal-greeting-sub">No interviews are scheduled for this application yet.</p>}</section>
       <section className="portal-card portal-detail-card"><div className="portal-notes-heading"><div><h2>My preparation notes</h2><p className="portal-greeting-sub">Private notes to help you prepare. These are not shared with the Skarion team.</p></div><span className="portal-count-badge">{notes.length}</span></div><div className="portal-note-composer"><textarea value={noteBody} onChange={(event) => setNoteBody(event.target.value)} maxLength={5000} placeholder="Add interview prep, questions, or follow-up reminders..." /><div><span>{noteBody.length}/5000</span><button className="portal-btn portal-btn-primary" disabled={!noteBody.trim() || savingNote} onClick={addNote}>{savingNote ? "Saving..." : "Add note"}</button></div></div>{noteError && <p className="portal-error">{noteError}</p>}{notes.length > 0 && <div className="portal-notes-list">{notes.map((note) => <article key={note.id}><p>{note.body}</p><div><span>Updated {formatDate(note.updated_at || note.created_at)}</span><button className="portal-note-delete" onClick={() => deleteNote(note.id)}>Delete</button></div></article>)}</div>}</section>
-      <ResumePreview resume={resume} />
+      {resume && <section className="portal-card portal-detail-card"><div className="portal-notes-heading"><div><h2>Tailored resume</h2><p className="portal-greeting-sub">Review the finalized resume in a protected, view-only PDF preview.</p></div><button className="portal-btn portal-btn-primary" onClick={() => setShowPdfPreview(true)}>Open PDF preview</button></div><ResumePreview resume={resume} /></section>}
+      {showPdfPreview && resume && <ResumePdfPreview resume={resume} onClose={() => setShowPdfPreview(false)} />}
     </div>
   );
 }
