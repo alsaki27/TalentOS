@@ -3,6 +3,7 @@
 // Uses GOOGLE_VERTEX_PROXY_URL + GOOGLE_VERTEX_PROXY_SECRET to call the proxy.
 
 import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib/ai/provider";
+import { fromOpenAiChoice, toOpenAiMessages, toOpenAiTools } from "@/lib/ai/openAiCompatibleProvider";
 
 const DEFAULT_MODEL = "gemini-2.5-flash-lite";
 
@@ -113,8 +114,6 @@ export async function callVertexProxy(opts: {
   responseSchema?: Record<string, unknown>;
   responseMimeType?: string | null;
 }): Promise<AiResponse> {
-  const geminiTools = toGeminiTools(opts.tools);
-
   var controller = new AbortController();
   var timer: ReturnType<typeof setTimeout> | undefined;
   if (opts.timeoutMs && opts.timeoutMs > 0) {
@@ -126,27 +125,40 @@ export async function callVertexProxy(opts: {
     let lastErrorBody = "";
     let lastStatus = 0;
 
+    // LiteLLM exposes the OpenAI-compatible endpoint. Keep the configured
+    // secret as the gateway root and normalize callers that still provide a
+    // `/v1` suffix so both forms remain safe during rotation.
+    const baseUrl = opts.proxyUrl.replace(/\/$/, "").replace(/\/v1$/, "");
+    const endpoint = `${baseUrl}/v1/chat/completions`;
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        res = await fetch(`${opts.proxyUrl}/generate`, {
+        const responseFormat = opts.responseSchema
+          ? {
+              response_format: {
+                type: "json_schema",
+                json_schema: { name: "talentos_output", schema: opts.responseSchema, strict: true },
+              },
+            }
+          : opts.responseMimeType === "application/json"
+            ? { response_format: { type: "json_object" } }
+            : {};
+
+        res = await fetch(endpoint, {
           method: "POST",
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
-            "x-proxy-secret": opts.proxySecret,
+            Authorization: `Bearer ${opts.proxySecret}`,
           },
           body: JSON.stringify({
-            system: opts.system,
-            contents: toGeminiContents(opts.messages),
-            tools: geminiTools,
             model: opts.model,
+            messages: [{ role: "system", content: opts.system }, ...toOpenAiMessages(opts.messages)],
             temperature: opts.temperature ?? 0.2,
-            maxOutputTokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-            // Only meaningful (and only sent by the proxy) when no tools are active
-            // this turn - see index.js's buildVertexBody for why the two are
-            // mutually exclusive in Vertex's API.
-            responseMimeType: opts.responseMimeType === undefined ? "application/json" : opts.responseMimeType,
-            responseSchema: opts.responseSchema,
+            max_tokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+            stream: false,
+            ...(opts.tools?.length ? { tools: toOpenAiTools(opts.tools) } : {}),
+            ...responseFormat,
           }),
         });
 
@@ -189,20 +201,9 @@ export async function callVertexProxy(opts: {
     }
 
     const data = await res.json();
-  const parts: GeminiPart[] = data.parts ?? [];
-  const content = fromGeminiParts(parts);
-  const hasToolUse = content.some((b) => b.type === "tool_use");
-
-  const usageMeta = data.usage ?? data.usageMetadata;
-  const usage = usageMeta
-    ? { input_tokens: usageMeta.promptTokenCount ?? usageMeta.input_tokens ?? 0, output_tokens: usageMeta.candidatesTokenCount ?? usageMeta.output_tokens ?? 0 }
-    : undefined;
-
-  return {
-    content: content.length > 0 ? content : [{ type: "text", text: "" }],
-    stopReason: hasToolUse ? "tool_use" : data.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn",
-    usage,
-  };
+    const choice = data.choices?.[0];
+    if (!choice) throw new Error("Google Vertex Proxy returned no choices.");
+    return fromOpenAiChoice(choice, data.usage);
   } finally {
     if (timer) clearTimeout(timer);
   }
