@@ -2,7 +2,7 @@
 -- previous ad-hoc mix of gemini-2.5-pro / gemini-2.5-flash-lite.
 --
 -- Two tiers only (per product decision - no middle tier):
---   cheap:     gemini-3.5-flash-lite  ($0.3/M in, $2.5/M out)  - simple
+--   cheap:     gemini-2.5-flash-lite  - simple/low-cost work
 --              extraction/classification/single-shot agents, including
 --              several that are high-volume (cron-driven QA, categorization).
 --   reasoning: gemini-2.5-pro         ($1.25/M in, $10/M out) - judgment-
@@ -37,30 +37,30 @@ VALUES
   ('chat_assistant',            'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
   ('application_tailoring',     'google_vertex_proxy', 1, true, 'gemini-2.5-pro'),
 
-  -- Cheap tier (gemini-3.5-flash-lite)
-  ('job_ceo_scout',             'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_ceo_qa',                'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_ceo_deep_fetch',        'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_ceo_enricher',          'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('application_job_lens',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('copilot_fill_planner',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('copilot_question_answerer', 'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('falood_ai',                 'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('resume_suggestions',        'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('jd_analysis',               'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('resume_parsing',            'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('candidate_markitdown',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_categorization',        'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('keyword_extraction',        'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('evidence_mapping',          'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('target_jobs_matching',      'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_match_score',           'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('job_autofill',              'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('ats_extraction',            'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('ats_narrative',             'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('cover_letter_gen',          'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('recruiter_message_gen',     'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite'),
-  ('ai_digest',                 'google_vertex_proxy', 1, true, 'gemini-3.5-flash-lite')
+  -- Cheap tier (gemini-2.5-flash-lite)
+  ('job_ceo_scout',             'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_ceo_qa',                'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_ceo_deep_fetch',        'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_ceo_enricher',          'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('application_job_lens',      'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('copilot_fill_planner',      'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('copilot_question_answerer', 'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('falood_ai',                 'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('resume_suggestions',        'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('jd_analysis',               'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('resume_parsing',            'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('candidate_markitdown',      'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_categorization',        'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('keyword_extraction',        'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('evidence_mapping',          'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('target_jobs_matching',      'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_match_score',           'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('job_autofill',              'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('ats_extraction',            'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('ats_narrative',             'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('cover_letter_gen',          'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('recruiter_message_gen',     'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite'),
+  ('ai_digest',                 'google_vertex_proxy', 1, true, 'gemini-2.5-flash-lite')
 ON CONFLICT (automation_id, rank) DO UPDATE
   SET provider = EXCLUDED.provider,
       is_enabled = true,
