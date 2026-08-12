@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
+import { formatScoreOutOfTen } from "@/lib/scoreScale";
 
 interface QueueItem {
   id: string;
@@ -1128,14 +1129,15 @@ function PipelineActions({
 }) {
   const genStatus = item.resume_generation_status;
   const wfStatus = item.workflow_status;
+  const formattedWorkflowScore = formatScoreOutOfTen(item.workflow_score);
 
   // Ready — show the tailored resume link
   if (genStatus === "ready" && item.workflow_resume_version_id) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-success">✅ Generated</span>
-        {item.workflow_score !== null && item.workflow_score !== undefined && (
-          <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
+        {formattedWorkflowScore !== null && (
+          <span style={{ fontSize: 11 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
         <button className="btn-primary btn-sm"
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
@@ -1171,8 +1173,8 @@ function PipelineActions({
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-warning">Human Review</span>
-        {item.workflow_score !== null && item.workflow_score !== undefined && (
-          <span style={{ fontSize: 11 }}>Score: <strong>{item.workflow_score}/10</strong></span>
+        {formattedWorkflowScore !== null && (
+          <span style={{ fontSize: 11 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
         {item.workflow_id && (
           <>

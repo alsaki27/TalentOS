@@ -5,6 +5,11 @@ import type { AgentContext, AgentOptions } from "./types";
 import { ResumeDraftSchema, type ResumeDraftV1 } from "./schemas";
 import { buildResumeForgePrompt } from "./prompts/resumeForge";
 import { textOf } from "@/lib/ai/provider";
+import {
+  enforceEducationIntegrity,
+  enforceExperienceIntegrity,
+  normalizeResumeBullet,
+} from "./resumeIntegrity";
 
 export async function runResumeForge(
   options: AgentOptions,
@@ -14,8 +19,16 @@ export async function runResumeForge(
   const jobAnalysis = ctx.previousOutputs["application_job_lens"]?.data ?? {};
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
-  const baseContent = (ctx.baseResume as any)?.content ?? {};
-  const baseExperience = baseContent?.experience ?? [];
+  const rawBaseContent = (ctx.baseResume as any)?.content;
+  const baseContent = rawBaseContent && typeof rawBaseContent === "object" && !Array.isArray(rawBaseContent)
+    ? rawBaseContent
+    : {};
+  const contentExperience: unknown[] = Array.isArray((baseContent as any).experience)
+    ? (baseContent as any).experience
+    : [];
+  const baseExperience: unknown[] = contentExperience.length > 0
+    ? contentExperience
+    : Array.isArray(ctx.baseResume.experience) ? ctx.baseResume.experience : [];
   const promptText = buildResumeForgePrompt(
     ctx.job, 
     ctx.baseResume, 
@@ -70,59 +83,19 @@ export async function runResumeForge(
   const validated = ResumeDraftSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Resume Forge output validation failed: ${validated.error}`);
 
-  // -- Structural Protection: Forcefully restore dates, location, and personal info from base resume --
-  const baseEducation = baseContent.education ?? [];
-  const basePersonalInfo = baseContent.personalInfo ?? {};
-  
-  if (basePersonalInfo && Object.keys(basePersonalInfo).length > 0) {
+  // Base-resume identity is immutable. The AI may tailor bullets, but may not
+  // add, drop, reorder, rename, relocate, or redate employment entries.
+  const contentEducation: unknown[] = Array.isArray((baseContent as any).education)
+    ? (baseContent as any).education
+    : [];
+  const baseEducation: unknown[] = contentEducation.length > 0
+    ? contentEducation
+    : Array.isArray(ctx.baseResume.education) ? ctx.baseResume.education : [];
+  const basePersonalInfo = (baseContent as any).personalInfo;
+  if (basePersonalInfo && typeof basePersonalInfo === "object" && !Array.isArray(basePersonalInfo)) {
     (validated as any).personalInfo = JSON.parse(JSON.stringify(basePersonalInfo));
   }
-
-  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    validated.experience.forEach((exp: any, i: number) => {
-      // Try exact company match first
-      let baseMatch = baseExperience.find((b: any) => 
-        b.company && exp.company && b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
-      );
-      
-      // If exact match fails, try fuzzy match (e.g. includes)
-      if (!baseMatch) {
-         baseMatch = baseExperience.find((b: any) => 
-           b.company && exp.company && (b.company.toLowerCase().includes(exp.company.toLowerCase()) || exp.company.toLowerCase().includes(b.company.toLowerCase()))
-         );
-      }
-      
-      // If still no match, fallback to index matching if lengths are identical
-      if (!baseMatch && validated.experience.length === baseExperience.length) {
-         baseMatch = baseExperience[i];
-      }
-
-      if (baseMatch) {
-        exp.startDate = baseMatch.startDate ?? null;
-        exp.endDate = baseMatch.endDate ?? null;
-        if (baseMatch.location !== undefined) {
-          exp.location = baseMatch.location;
-        }
-      }
-    });
-  }
-
-  // ── ROLE SAFETY NET ───────────────────────────────────────────────────────
-  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    if (validated.experience.length < baseExperience.length) {
-      console.warn(`[Agent:ResumeForge] ROLE GUARD: Restoring dropped roles. Expected ${baseExperience.length}, got ${validated.experience.length}`);
-      baseExperience.forEach((baseRole: any, idx: number) => {
-        const found = validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && exp.company.toLowerCase().trim() === baseRole.company.toLowerCase().trim()
-        ) ?? validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && (exp.company.toLowerCase().includes(baseRole.company.toLowerCase()) || baseRole.company.toLowerCase().includes(exp.company.toLowerCase()))
-        );
-        if (!found) {
-          validated.experience.splice(idx, 0, JSON.parse(JSON.stringify(baseRole)));
-        }
-      });
-    }
-  }
+  validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
 
   // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
   // Defense in depth: if the AI returned fewer than the required minimum bullets
@@ -139,18 +112,9 @@ export async function runResumeForge(
       const currentBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
       if (currentBullets.length >= requiredMin) return; // already meets requirement
 
-      // Find the matching base entry (exact → fuzzy → index fallback)
-      let baseMatch: any =
-        baseExperience.find((b: any) =>
-          b.company && exp.company &&
-          b.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
-        ) ??
-        baseExperience.find((b: any) =>
-          b.company && exp.company &&
-          (b.company.toLowerCase().includes(exp.company.toLowerCase()) ||
-           exp.company.toLowerCase().includes(b.company.toLowerCase()))
-        ) ??
-        (validated.experience.length === baseExperience.length ? baseExperience[i] : undefined);
+      // Experience integrity reconciliation keeps base and output in the same
+      // order, so index matching is now deterministic and cannot hit a fake role.
+      const baseMatch: any = baseExperience[i];
 
       if (baseMatch) {
         // Normalise base bullets from { text } objects or plain strings
@@ -160,15 +124,7 @@ export async function runResumeForge(
           ? baseMatch.bulletPoints
           : [];
         const baseBullets: string[] = rawBase
-          .map((b) => {
-            if (typeof b === "string" && b.trim()) return b.trim();
-            if (b && typeof b === "object" && !Array.isArray(b)) {
-              const o = b as Record<string, unknown>;
-              const t = o.text ?? o.content ?? o.description ?? "";
-              if (typeof t === "string" && t.trim()) return t.trim();
-            }
-            return null;
-          })
+          .map(normalizeResumeBullet)
           .filter((b): b is string => b !== null);
 
         if (baseBullets.length > 0) {
@@ -177,7 +133,7 @@ export async function runResumeForge(
           for (const bb of baseBullets) {
             if (merged.length >= requiredMin) break;
             const isDupe = merged.some(
-              (m) => m.toLowerCase().slice(0, 40) === bb.toLowerCase().slice(0, 40)
+              (m) => normalizeResumeBullet(m)?.toLocaleLowerCase("en-US").slice(0, 40) === bb.toLocaleLowerCase("en-US").slice(0, 40)
             );
             if (!isDupe) merged.push(bb);
           }
@@ -189,41 +145,9 @@ export async function runResumeForge(
       }
     });
   }
-  // Education entries (both the base resume's EducationBlock in
-  // src/lib/falood/types.ts and this schema's output) key on `school` and
-  // `graduationDate` - there is no startDate/endDate on education at all.
-  // The previous version matched on `institution` (undefined on both sides,
-  // so it never matched) and then restored startDate/endDate (fields that
-  // don't exist on education), so this block was a complete no-op.
-  if (Array.isArray(validated.education) && Array.isArray(baseEducation)) {
-    validated.education.forEach((edu: any) => {
-      const baseMatch = baseEducation.find((b: any) =>
-        b.school && edu.school && b.school.toLowerCase().trim() === edu.school.toLowerCase().trim()
-      );
-      if (baseMatch) {
-        edu.graduationDate = baseMatch.graduationDate ?? edu.graduationDate ?? null;
-      }
-    });
-  }
-
-  // ── EDUCATION SAFETY NET ────────────────────────────────────────────────
-  // Mirrors the ROLE SAFETY NET above: the schema accepts an empty education
-  // array as valid, so nothing previously stopped the AI from silently
-  // dropping education entirely. Restore any base entries the draft is
-  // missing, matched by school name.
-  if (Array.isArray(validated.education) && Array.isArray(baseEducation)) {
-    if (validated.education.length < baseEducation.length) {
-      console.warn(`[Agent:ResumeForge] EDUCATION GUARD: Restoring dropped education. Expected ${baseEducation.length}, got ${validated.education.length}`);
-      baseEducation.forEach((baseEdu: any, idx: number) => {
-        const found = validated.education.find((edu: any) =>
-          edu.school && baseEdu.school && edu.school.toLowerCase().trim() === baseEdu.school.toLowerCase().trim()
-        );
-        if (!found) {
-          validated.education.splice(idx, 0, JSON.parse(JSON.stringify(baseEdu)));
-        }
-      });
-    }
-  }
+  // Education identity and the complete graduation date (including month) are
+  // also immutable and always come from the base resume.
+  validated.education = enforceEducationIntegrity(validated.education, baseEducation);
   // ──────────────────────────────────────────────────────────────────────────
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────

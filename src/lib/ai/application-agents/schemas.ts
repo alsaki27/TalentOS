@@ -2,6 +2,8 @@
 // Uses plain validation to avoid Zod dependency. Each schema exposes:
 //   parse(input: unknown): T | { error: string }
 
+import { normalizeScoreOutOfTen } from "@/lib/scoreScale";
+
 export interface Schema<T> {
   parse(input: unknown): T | { error: string };
 }
@@ -272,6 +274,10 @@ export interface FinalResumeV1 {
 export const FinalResumeSchema: Schema<FinalResumeV1> = {
   parse(input: unknown): FinalResumeV1 | { error: string } {
     if (!isRecord(input)) return { error: "FinalResumeV1 must be an object" };
+    const finalQaScore = normalizeScoreOutOfTen(input.finalQaScore);
+    if (finalQaScore === null) {
+      return { error: `finalQaScore must be a number from 0-10 (or an unambiguous 0-100 percentage), got ${String(input.finalQaScore)}` };
+    }
     return {
       summary: expectString(input.summary, "summary"),
       skills: parseSkillGroups(input.skills),
@@ -291,7 +297,7 @@ export const FinalResumeSchema: Schema<FinalResumeV1> = {
         return typeof r.issueId === "string" && typeof r.reason === "string";
       }) : [],
       unresolvedWarnings: expectStringArray(input.unresolvedWarnings, "unresolvedWarnings") ?? [],
-      finalQaScore: expectNumber(input.finalQaScore, "finalQaScore") ?? 0,
+      finalQaScore,
       exportReady: input.exportReady === true,
     };
   },

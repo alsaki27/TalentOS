@@ -5,6 +5,11 @@ import type { AgentContext, AgentOptions } from "./types";
 import { FinalResumeSchema, type FinalResumeV1 } from "./schemas";
 import { buildFinalPolishPrompt } from "./prompts/finalPolish";
 import { textOf } from "@/lib/ai/provider";
+import {
+  enforceEducationIntegrity,
+  enforceExperienceIntegrity,
+  normalizeResumeBullet,
+} from "./resumeIntegrity";
 
 /**
  * Per-role minimum bullet count.
@@ -17,48 +22,6 @@ function getMinBullets(roleIndex: number): number {
   if (roleIndex === 0) return 6;
   if (roleIndex === 1) return 4;
   return 3;
-}
-
-/**
- * Normalise a raw bullet value that may be a plain string or a { text/content/description }
- * object (both formats appear in older base resumes and draft outputs).
- */
-function normaliseBullet(b: unknown): string | null {
-  if (typeof b === "string" && b.trim()) return b.trim();
-  if (b && typeof b === "object" && !Array.isArray(b)) {
-    const o = b as Record<string, unknown>;
-    const t = o.text ?? o.content ?? o.description ?? "";
-    if (typeof t === "string" && t.trim()) return t.trim();
-  }
-  return null;
-}
-
-/**
- * Find the base/draft experience entry that corresponds to the output experience
- * entry at position `idx`. Cascade: exact company match → fuzzy → index fallback.
- */
-function findMatchingEntry(
-  exp: any,
-  idx: number,
-  outputLen: number,
-  sourceEntries: any[]
-): any | undefined {
-  return (
-    sourceEntries.find(
-      (s) =>
-        s.company &&
-        exp.company &&
-        s.company.toLowerCase().trim() === exp.company.toLowerCase().trim()
-    ) ??
-    sourceEntries.find(
-      (s) =>
-        s.company &&
-        exp.company &&
-        (s.company.toLowerCase().includes(exp.company.toLowerCase()) ||
-          exp.company.toLowerCase().includes(s.company.toLowerCase()))
-    ) ??
-    (outputLen === sourceEntries.length ? sourceEntries[idx] : undefined)
-  );
 }
 
 export async function runFinalPolish(
@@ -129,91 +92,34 @@ export async function runFinalPolish(
   console.log("[Agent:FinalPolish] ───────────────────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
 
-  const baseContent = (ctx.baseResume as any)?.content ?? {};
+  const rawBaseContent = (ctx.baseResume as any)?.content;
+  const baseContent = rawBaseContent && typeof rawBaseContent === "object" && !Array.isArray(rawBaseContent)
+    ? rawBaseContent
+    : {};
 
   // ── PERSONAL INFO RESTORE ───────────────────────────────────────
-  if (baseContent.personalInfo && Object.keys(baseContent.personalInfo).length > 0) {
-    (validated as any).personalInfo = JSON.parse(JSON.stringify(baseContent.personalInfo));
+  if ((baseContent as any).personalInfo && typeof (baseContent as any).personalInfo === "object" && !Array.isArray((baseContent as any).personalInfo)) {
+    (validated as any).personalInfo = JSON.parse(JSON.stringify((baseContent as any).personalInfo));
   }
 
-  const baseExperience: any[] = Array.isArray(baseContent.experience)
-    ? baseContent.experience
+  const contentExperience: unknown[] = Array.isArray((baseContent as any).experience)
+    ? (baseContent as any).experience
     : [];
+  const baseExperience: unknown[] = contentExperience.length > 0
+    ? contentExperience
+    : Array.isArray(ctx.baseResume.experience) ? ctx.baseResume.experience : [];
+  const contentEducation: unknown[] = Array.isArray((baseContent as any).education)
+    ? (baseContent as any).education
+    : [];
+  const baseEducation: unknown[] = contentEducation.length > 0
+    ? contentEducation
+    : Array.isArray(ctx.baseResume.education) ? ctx.baseResume.education : [];
 
-  // ── DATE / LOCATION RESTORE ─────────────────────────────────────
-  if (Array.isArray(validated.experience) && baseExperience.length > 0) {
-    validated.experience.forEach((exp: any, i: number) => {
-      const baseMatch = findMatchingEntry(
-        exp,
-        i,
-        validated.experience.length,
-        baseExperience
-      );
-      if (baseMatch) {
-        exp.startDate = baseMatch.startDate ?? null;
-        exp.endDate = baseMatch.endDate ?? null;
-        if (baseMatch.location !== undefined) {
-          exp.location = baseMatch.location;
-        }
-      }
-    });
-  }
-
-  // Education entries key on `school` and `graduationDate` - there is no
-  // startDate/endDate on education at all (see EducationBlock in
-  // src/lib/falood/types.ts and ResumeDraftV1/FinalResumeV1 in schemas.ts).
-  // The previous version matched on `institution` (undefined on both sides,
-  // so it never matched) and then restored startDate/endDate (fields that
-  // don't exist on education), so this block was a complete no-op.
-  if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
-    validated.education.forEach((edu: any) => {
-      const baseMatch = baseContent.education.find(
-        (b: any) =>
-          b.school &&
-          edu.school &&
-          b.school.toLowerCase().trim() === edu.school.toLowerCase().trim()
-      );
-      if (baseMatch) {
-        edu.graduationDate = baseMatch.graduationDate ?? edu.graduationDate ?? null;
-      }
-    });
-  }
-
-  // ── EDUCATION SAFETY NET ────────────────────────────────────────────────
-  // Mirrors the ROLE SAFETY NET below: the schema accepts an empty education
-  // array as valid, so nothing previously stopped FinalPolish from silently
-  // dropping education entirely. Restore any base entries missing from the
-  // final draft, matched by school name.
-  if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
-    if (validated.education.length < baseContent.education.length) {
-      console.warn(`[Agent:FinalPolish] EDUCATION GUARD: Restoring dropped education. Expected ${baseContent.education.length}, got ${validated.education.length}`);
-      baseContent.education.forEach((baseEdu: any, idx: number) => {
-        const found = validated.education.find((edu: any) =>
-          edu.school && baseEdu.school && edu.school.toLowerCase().trim() === baseEdu.school.toLowerCase().trim()
-        );
-        if (!found) {
-          validated.education.splice(idx, 0, JSON.parse(JSON.stringify(baseEdu)));
-        }
-      });
-    }
-  }
-
-  // ── ROLE SAFETY NET ───────────────────────────────────────────────────────
-  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    if (validated.experience.length < baseExperience.length) {
-      console.warn(`[Agent:FinalPolish] ROLE GUARD: Restoring dropped roles. Expected ${baseExperience.length}, got ${validated.experience.length}`);
-      baseExperience.forEach((baseRole: any, idx: number) => {
-        const found = validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && exp.company.toLowerCase().trim() === baseRole.company.toLowerCase().trim()
-        ) ?? validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && (exp.company.toLowerCase().includes(baseRole.company.toLowerCase()) || baseRole.company.toLowerCase().includes(exp.company.toLowerCase()))
-        );
-        if (!found) {
-          validated.experience.splice(idx, 0, JSON.parse(JSON.stringify(baseRole)));
-        }
-      });
-    }
-  }
+  // Reconcile against the base resume regardless of generated array length.
+  // This removes fabricated replacement roles and restores the exact base
+  // title, company, location, dates, education identity, and graduation month.
+  validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
+  validated.education = enforceEducationIntegrity(validated.education, baseEducation);
 
   // ── BULLET SAFETY NET ───────────────────────────────────────────
   // Defense in depth: if FinalPolish strips bullets from any role,
@@ -223,9 +129,10 @@ export async function runFinalPolish(
   // Per-role minimum matches buildBulletRequirements (prompts/resumeForge.ts):
   //   idx 0 → 6   idx 1 → 4   idx ≥2 → 3
   if (Array.isArray(validated.experience)) {
-    const draftExperience: any[] = Array.isArray((draft as any)?.experience)
+    const rawDraftExperience: unknown[] = Array.isArray((draft as any)?.experience)
       ? (draft as any).experience
       : [];
+    const draftExperience = enforceExperienceIntegrity(rawDraftExperience, baseExperience);
 
     validated.experience.forEach((exp: any, i: number) => {
       const requiredMin = getMinBullets(i);
@@ -235,27 +142,17 @@ export async function runFinalPolish(
       let sourceBullets: string[] = [];
 
       // Step 1 — restore from the draft (ResumeForge output already has bullets)
-      const draftMatch = findMatchingEntry(
-        exp,
-        i,
-        validated.experience.length,
-        draftExperience
-      );
+      const draftMatch = draftExperience[i];
       if (draftMatch && Array.isArray(draftMatch.bullets) && draftMatch.bullets.length > 0) {
         sourceBullets = draftMatch.bullets
-          .map(normaliseBullet)
+          .map(normalizeResumeBullet)
           .filter((b: string | null): b is string => b !== null);
 
       }
 
       // Step 2 — fall back to base resume bullets if draft also had none
       if (sourceBullets.length === 0 && baseExperience.length > 0) {
-        const baseMatch = findMatchingEntry(
-          exp,
-          i,
-          validated.experience.length,
-          baseExperience
-        );
+        const baseMatch: any = baseExperience[i];
         if (baseMatch) {
           const rawBase: unknown[] = Array.isArray(baseMatch.bullets)
             ? baseMatch.bullets
@@ -263,7 +160,7 @@ export async function runFinalPolish(
             ? baseMatch.bulletPoints
             : [];
           sourceBullets = rawBase
-            .map(normaliseBullet)
+            .map(normalizeResumeBullet)
             .filter((b): b is string => b !== null);
         }
       }
@@ -273,7 +170,7 @@ export async function runFinalPolish(
         for (const sb of sourceBullets) {
           if (merged.length >= requiredMin) break;
           const isDupe = merged.some(
-            (m) => m.toLowerCase().slice(0, 40) === sb.toLowerCase().slice(0, 40)
+            (m) => normalizeResumeBullet(m)?.toLocaleLowerCase("en-US").slice(0, 40) === sb.toLocaleLowerCase("en-US").slice(0, 40)
           );
           if (!isDupe) merged.push(sb);
         }

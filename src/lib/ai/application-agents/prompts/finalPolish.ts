@@ -78,7 +78,8 @@ Return a JSON object with:
 - appliedIssueIds: array of issue IDs from the reviewer that were applied
 - rejectedIssueIds: array of { issueId, reason } for edits that were rejected
 - unresolvedWarnings: array of warnings that couldn't be resolved
-- finalQaScore: overall QA score 0-10
+- finalQaScore: overall QA score as a decimal from 0.0 through 10.0. Example: 9.3.
+  NEVER return a percentage-style number such as 93 and never return a value above 10.
 - exportReady: boolean — true if ready for export
 
 JOB ANALYSIS:

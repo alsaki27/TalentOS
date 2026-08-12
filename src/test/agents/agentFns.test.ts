@@ -107,6 +107,47 @@ describe("runResumeForge", () => {
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
+
+  it("removes fabricated replacement roles and preserves legacy base identity and education month", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null,
+      skills: [],
+      experience: [
+        { title: "AutoCAD Drafter", company: "ALTERED COMPANY", startDate: "Wrong", endDate: "Wrong", bullets: ["Tailored first role"], evidenceIds: [] },
+        { title: "Invented Engineer", company: "Invented Employer", startDate: "2025", endDate: "Present", bullets: ["Fabricated role"], evidenceIds: [] },
+      ],
+      education: [{ degree: "Master of Engineering Management", school: "WUST", field: null, graduationDate: "2019" }],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: {
+          personalInfo: { fullName: "Najiur Rahman" },
+          experience: [
+            { title: "AutoCAD Drafter", company: { text: "SWOT Technologies" }, location: "Charlotte, NC", startDate: "May 2024", endDate: "Dec 2025", bullets: [{ text: "Base CAD bullet" }] },
+            { title: { text: "Architectural Drafter" }, company: "Fiber-Grounded Ltd.", location: "Dhaka, Bangladesh", startDate: "Feb 2018", endDate: "Jan 2022", bullets: [{ text: "Base architecture bullet" }] },
+          ],
+          education: [{ degree: "Master of Engineering Management", school: "Washington University of Science and Technology (WUST)", graduationDate: "May 2024" }],
+        },
+      } as any,
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
+      },
+    });
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, ctx);
+
+    expect(result.experience.map((entry) => [entry.title, entry.company])).toEqual([
+      ["AutoCAD Drafter", "SWOT Technologies"],
+      ["Architectural Drafter", "Fiber-Grounded Ltd."],
+    ]);
+    expect(result.experience[0]?.startDate).toBe("May 2024");
+    expect(result.experience[1]?.bullets).toContain("Base architecture bullet");
+    expect(result.education[0]?.school).toBe("Washington University of Science and Technology (WUST)");
+    expect(result.education[0]?.graduationDate).toBe("May 2024");
+  });
 });
 
 describe("runHiringPanel", () => {
@@ -164,5 +205,51 @@ describe("runFinalPolish", () => {
     const result = await runFinalPolish({}, provider, ctx);
     expect(result.exportReady).toBe(true);
     expect(result.finalQaScore).toBe(9);
+  });
+
+  it("normalizes percentage-style QA and reasserts base employment and education facts", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [],
+      experience: [{ title: "Fake Role", company: "Fake Company", bullets: ["Fake bullet"], evidenceIds: [] }],
+      education: [{ degree: "MEM", school: "WUST", graduationDate: "2019" }],
+      certifications: [], projects: [], appliedIssueIds: [], rejectedIssueIds: [], unresolvedWarnings: [],
+      finalQaScore: 93, exportReady: true,
+    }));
+    const baseExperience = [{ title: { text: "OSP Design Engineer" }, company: { value: "Bayshore Communication" }, location: "Tampa, FL", startDate: "Jan 2026", endDate: "Present", bullets: [{ text: "Designed OSP systems" }] }];
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: {
+          experience: baseExperience,
+          education: [{ degree: "Master of Engineering Management (MEM)", school: { text: "Washington University of Science and Technology (WUST)" }, graduationDate: "May 2024" }],
+        },
+      } as any,
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "a", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "b", data: { experience: baseExperience }, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "c", data: {}, createdAt: "" },
+      },
+    });
+
+    const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
+    const result = await runFinalPolish({}, provider, ctx);
+
+    expect(result.finalQaScore).toBe(9.3);
+    expect(result.experience).toHaveLength(1);
+    expect(result.experience[0]).toMatchObject({
+      title: "OSP Design Engineer",
+      company: "Bayshore Communication",
+      startDate: "Jan 2026",
+      endDate: "Present",
+    });
+    expect(result.education[0]?.graduationDate).toBe("May 2024");
+  });
+
+  it("rejects ambiguous out-of-range QA scores", () => {
+    const result = FinalResumeSchema.parse({
+      summary: null, skills: [], experience: [], education: [], certifications: [], projects: [],
+      appliedIssueIds: [], rejectedIssueIds: [], unresolvedWarnings: [], finalQaScore: 15, exportReady: false,
+    });
+    expect(result).toEqual(expect.objectContaining({ error: expect.stringContaining("finalQaScore") }));
   });
 });
