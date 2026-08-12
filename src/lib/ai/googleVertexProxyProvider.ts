@@ -162,7 +162,9 @@ export async function callVertexProxy(opts: {
             // proxy builds ignored them, and retaining them makes the wire
             // contract compatible for a rolling deploy while the canonical
             // OpenAI response_format fields above are used by the new proxy.
-            ...(opts.responseMimeType !== undefined ? { responseMimeType: opts.responseMimeType } : {}),
+            ...(opts.responseMimeType !== undefined || opts.responseSchema
+              ? { responseMimeType: opts.responseMimeType ?? "application/json" }
+              : {}),
             ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
             ...responseFormat,
           }),
