@@ -158,6 +158,12 @@ export async function callVertexProxy(opts: {
             max_tokens: opts.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
             stream: false,
             ...(opts.tools?.length ? { tools: toOpenAiTools(opts.tools) } : {}),
+            // Keep these legacy fields during the proxy migration. Older
+            // proxy builds ignored them, and retaining them makes the wire
+            // contract compatible for a rolling deploy while the canonical
+            // OpenAI response_format fields above are used by the new proxy.
+            ...(opts.responseMimeType !== undefined ? { responseMimeType: opts.responseMimeType } : {}),
+            ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
             ...responseFormat,
           }),
         });
@@ -202,8 +208,22 @@ export async function callVertexProxy(opts: {
 
     const data = await res.json();
     const choice = data.choices?.[0];
-    if (!choice) throw new Error("Google Vertex Proxy returned no choices.");
-    return fromOpenAiChoice(choice, data.usage);
+    if (choice) return fromOpenAiChoice(choice, data.usage);
+
+    // Rolling deployments can briefly return the pre-OpenAI Gemini shape.
+    // Accept it so a proxy rollout never turns a healthy request into a hard
+    // failure, while all new requests continue to use /v1/chat/completions.
+    if (Array.isArray(data.parts)) {
+      return {
+        content: fromGeminiParts(data.parts as GeminiPart[]),
+        stopReason: "end_turn",
+        usage: data.usage
+          ? { input_tokens: data.usage.prompt_tokens ?? 0, output_tokens: data.usage.completion_tokens ?? 0 }
+          : undefined,
+      };
+    }
+
+    throw new Error("Google Vertex Proxy returned no choices.");
   } finally {
     if (timer) clearTimeout(timer);
   }
