@@ -159,19 +159,43 @@ export async function runFinalPolish(
     });
   }
 
+  // Education entries key on `school` and `graduationDate` - there is no
+  // startDate/endDate on education at all (see EducationBlock in
+  // src/lib/falood/types.ts and ResumeDraftV1/FinalResumeV1 in schemas.ts).
+  // The previous version matched on `institution` (undefined on both sides,
+  // so it never matched) and then restored startDate/endDate (fields that
+  // don't exist on education), so this block was a complete no-op.
   if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
     validated.education.forEach((edu: any) => {
       const baseMatch = baseContent.education.find(
         (b: any) =>
-          b.institution &&
-          edu.institution &&
-          b.institution.toLowerCase().trim() === edu.institution.toLowerCase().trim()
+          b.school &&
+          edu.school &&
+          b.school.toLowerCase().trim() === edu.school.toLowerCase().trim()
       );
       if (baseMatch) {
-        edu.startDate = baseMatch.startDate ?? null;
-        edu.endDate = baseMatch.endDate ?? null;
+        edu.graduationDate = baseMatch.graduationDate ?? edu.graduationDate ?? null;
       }
     });
+  }
+
+  // ── EDUCATION SAFETY NET ────────────────────────────────────────────────
+  // Mirrors the ROLE SAFETY NET below: the schema accepts an empty education
+  // array as valid, so nothing previously stopped FinalPolish from silently
+  // dropping education entirely. Restore any base entries missing from the
+  // final draft, matched by school name.
+  if (Array.isArray(validated.education) && Array.isArray(baseContent.education)) {
+    if (validated.education.length < baseContent.education.length) {
+      console.warn(`[Agent:FinalPolish] EDUCATION GUARD: Restoring dropped education. Expected ${baseContent.education.length}, got ${validated.education.length}`);
+      baseContent.education.forEach((baseEdu: any, idx: number) => {
+        const found = validated.education.find((edu: any) =>
+          edu.school && baseEdu.school && edu.school.toLowerCase().trim() === baseEdu.school.toLowerCase().trim()
+        );
+        if (!found) {
+          validated.education.splice(idx, 0, JSON.parse(JSON.stringify(baseEdu)));
+        }
+      });
+    }
   }
 
   // ── ROLE SAFETY NET ───────────────────────────────────────────────────────

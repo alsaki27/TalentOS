@@ -1441,7 +1441,11 @@ export default function CandidateProfilePage() {
                             <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent)", color: "var(--surface)" }}>AI</span>
                           )}
                           {t.atsScore != null && (
-                            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}/10</span>
+                            // ats_score is a 0-100 composite (see computeDeterministicScore in
+                            // src/lib/atsScoring.ts, and the unlabeled 0-100 display convention
+                            // already used on the ATS Score Analysis page) - "/10" here was wrong
+                            // from the day this line was added (be7bb7d), not a regression.
+                            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}%</span>
                           )}
                         </td>
                         <td className="muted">{company}</td>

@@ -189,18 +189,42 @@ export async function runResumeForge(
       }
     });
   }
-  // ──────────────────────────────────────────────────────────────────────────
-  if (Array.isArray(validated.education) && Array.isArray(baseContent?.education)) {
+  // Education entries (both the base resume's EducationBlock in
+  // src/lib/falood/types.ts and this schema's output) key on `school` and
+  // `graduationDate` - there is no startDate/endDate on education at all.
+  // The previous version matched on `institution` (undefined on both sides,
+  // so it never matched) and then restored startDate/endDate (fields that
+  // don't exist on education), so this block was a complete no-op.
+  if (Array.isArray(validated.education) && Array.isArray(baseEducation)) {
     validated.education.forEach((edu: any) => {
-      const baseMatch = baseContent.education.find((b: any) => 
-        b.institution && edu.institution && b.institution.toLowerCase().trim() === edu.institution.toLowerCase().trim()
+      const baseMatch = baseEducation.find((b: any) =>
+        b.school && edu.school && b.school.toLowerCase().trim() === edu.school.toLowerCase().trim()
       );
       if (baseMatch) {
-        edu.startDate = baseMatch.startDate ?? null;
-        edu.endDate = baseMatch.endDate ?? null;
+        edu.graduationDate = baseMatch.graduationDate ?? edu.graduationDate ?? null;
       }
     });
   }
+
+  // ── EDUCATION SAFETY NET ────────────────────────────────────────────────
+  // Mirrors the ROLE SAFETY NET above: the schema accepts an empty education
+  // array as valid, so nothing previously stopped the AI from silently
+  // dropping education entirely. Restore any base entries the draft is
+  // missing, matched by school name.
+  if (Array.isArray(validated.education) && Array.isArray(baseEducation)) {
+    if (validated.education.length < baseEducation.length) {
+      console.warn(`[Agent:ResumeForge] EDUCATION GUARD: Restoring dropped education. Expected ${baseEducation.length}, got ${validated.education.length}`);
+      baseEducation.forEach((baseEdu: any, idx: number) => {
+        const found = validated.education.find((edu: any) =>
+          edu.school && baseEdu.school && edu.school.toLowerCase().trim() === baseEdu.school.toLowerCase().trim()
+        );
+        if (!found) {
+          validated.education.splice(idx, 0, JSON.parse(JSON.stringify(baseEdu)));
+        }
+      });
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   console.log("[Agent:ResumeForge] ── OUTPUT ───────────────────────────────────");
