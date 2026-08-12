@@ -132,8 +132,21 @@ export async function runFinalPolish(
   const baseContent = (ctx.baseResume as any)?.content ?? {};
 
   // ── PERSONAL INFO RESTORE ───────────────────────────────────────
-  if (baseContent.personalInfo && Object.keys(baseContent.personalInfo).length > 0) {
-    (validated as any).personalInfo = JSON.parse(JSON.stringify(baseContent.personalInfo));
+  if (baseContent.personalInfo && (validated as any).personalInfo) {
+    (validated as any).personalInfo = {
+      ...(validated as any).personalInfo,
+      fullName:
+        baseContent.personalInfo.fullName ?? (validated as any).personalInfo.fullName,
+      email: baseContent.personalInfo.email ?? (validated as any).personalInfo.email,
+      phone: baseContent.personalInfo.phone ?? (validated as any).personalInfo.phone,
+      location:
+        baseContent.personalInfo.location ?? (validated as any).personalInfo.location,
+      linkedin:
+        baseContent.personalInfo.linkedin ?? (validated as any).personalInfo.linkedin,
+      github: baseContent.personalInfo.github ?? (validated as any).personalInfo.github,
+      website:
+        baseContent.personalInfo.website ?? (validated as any).personalInfo.website,
+    };
   }
 
   const baseExperience: any[] = Array.isArray(baseContent.experience)
@@ -180,7 +193,7 @@ export async function runFinalPolish(
   }
 
   // ── EDUCATION SAFETY NET ────────────────────────────────────────────────
-  // Mirrors the ROLE SAFETY NET below: the schema accepts an empty education
+  // The schema accepts an empty education
   // array as valid, so nothing previously stopped FinalPolish from silently
   // dropping education entirely. Restore any base entries missing from the
   // final draft, matched by school name.
@@ -193,23 +206,6 @@ export async function runFinalPolish(
         );
         if (!found) {
           validated.education.splice(idx, 0, JSON.parse(JSON.stringify(baseEdu)));
-        }
-      });
-    }
-  }
-
-  // ── ROLE SAFETY NET ───────────────────────────────────────────────────────
-  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    if (validated.experience.length < baseExperience.length) {
-      console.warn(`[Agent:FinalPolish] ROLE GUARD: Restoring dropped roles. Expected ${baseExperience.length}, got ${validated.experience.length}`);
-      baseExperience.forEach((baseRole: any, idx: number) => {
-        const found = validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && exp.company.toLowerCase().trim() === baseRole.company.toLowerCase().trim()
-        ) ?? validated.experience.find((exp: any) => 
-          exp.company && baseRole.company && (exp.company.toLowerCase().includes(baseRole.company.toLowerCase()) || baseRole.company.toLowerCase().includes(exp.company.toLowerCase()))
-        );
-        if (!found) {
-          validated.experience.splice(idx, 0, JSON.parse(JSON.stringify(baseRole)));
         }
       });
     }
