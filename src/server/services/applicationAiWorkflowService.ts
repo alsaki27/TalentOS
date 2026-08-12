@@ -302,6 +302,18 @@ export async function triggerAiWorkflowForApplication(
     matchReason: matchReason ?? undefined,
   });
 
+  await dispatchWorkflowStart(workflowId);
+  return { started: true, workflowId };
+}
+
+/**
+ * Kicks the freshly-created 'queued' workflow immediately via a self-fetch to
+ * the dispatch endpoint, instead of leaving it for the periodic cron
+ * dispatcher to eventually pick up. Also guarantees a fresh Cloudflare
+ * invocation with a reset 50-subrequest limit. Shared by every code path that
+ * creates a new workflow (trigger and regenerate).
+ */
+async function dispatchWorkflowStart(workflowId: string): Promise<void> {
   const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
   console.log(`[Dispatch Chain] Workflow ${workflowId} created with status ${'queued'}, stage 0. Triggering background dispatch to ${baseUrl}/api/application-ai-workflows/dispatch`);
   await backgroundDispatch(
@@ -316,8 +328,106 @@ export async function triggerAiWorkflowForApplication(
       console.error(`[Workflow ${workflowId}] Initial dispatch fetch failed:`, err);
     })
   );
-
   console.log(`[Dispatch Chain] Workflow ${workflowId} backgroundDispatch registration complete. Returning from trigger.`);
+}
+
+/**
+ * Restarts the full pipeline for an application that already has a tailored
+ * resume, from stage 1 (JobLens) through Final Polish, exactly like a first
+ * generation - not a continuation of the existing one.
+ *
+ * Unlike triggerAiWorkflowForApplication, this does not reuse the candidate's
+ * existing active application_resume_versions row as the pipeline's starting
+ * "base resume": that row is already-tailored output from a prior run, so
+ * feeding it back in would tailor an already-tailored draft instead of
+ * running the full process fresh. Instead this re-materializes a clean copy
+ * directly from the same base_resumes row the previous run used (base_resumes
+ * content may have changed since then, e.g. a manager edit), then starts a
+ * new workflow the same way Generate does.
+ */
+export async function regenerateAiWorkflowForApplication(
+  applicationId: string,
+  startedBy?: string,
+): Promise<TriggerWorkflowResult> {
+  const existing = await findActiveWorkflowByApplicationId(applicationId);
+  if (existing) {
+    return { started: false, reason: "An active workflow already exists for this application" };
+  }
+
+  const appRow = await queryOne<{ candidate_id: string; job_id: string | null }>(
+    "SELECT candidate_id, job_id FROM applications WHERE id = $1",
+    [applicationId]
+  );
+  if (!appRow) {
+    return { started: false, reason: "Application not found" };
+  }
+  if (!appRow.job_id) {
+    return { started: false, reason: "No job attached to this application" };
+  }
+
+  const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
+  const job: any = jobRow ?? {};
+
+  // The most recent workflow (any status) for this application recorded which
+  // base_resumes row it was tailored from - the authoritative source, more
+  // direct than re-deriving it from application_resume_versions.
+  const previousWorkflow = await queryOne<{ base_resume_id: string | null }>(
+    `SELECT base_resume_id FROM application_ai_workflows
+      WHERE application_id = $1
+      ORDER BY created_at DESC LIMIT 1`,
+    [applicationId]
+  );
+
+  const resumeRow = await materializeFromBaseResume(
+    appRow.candidate_id,
+    appRow.job_id,
+    applicationId,
+    job,
+    startedBy,
+    previousWorkflow?.base_resume_id ?? undefined,
+  );
+  if (!resumeRow) {
+    return { started: false, reason: "No base resume found for this candidate yet" };
+  }
+
+  const evidence = await query(
+    "SELECT * FROM candidate_evidence WHERE candidate_id = $1 ORDER BY created_at DESC LIMIT 50",
+    [appRow.candidate_id]
+  );
+  const candidateRow = await queryOne<{ verified_skills: string[] | null }>(
+    "SELECT verified_skills FROM candidates WHERE id = $1",
+    [appRow.candidate_id]
+  );
+
+  const sot = await getSourceOfTruth(appRow.candidate_id);
+  const sourceOfTruth: SourceOfTruthData | null = sot
+    ? {
+        confirmedSkills: sot.confirmedSkills,
+        notesContext: sot.notes ?? null,
+      }
+    : null;
+
+  const { workflowId } = await startWorkflow({
+    applicationId,
+    candidateId: appRow.candidate_id,
+    job,
+    baseResume: resumeRow,
+    evidence: evidence ?? [],
+    verifiedSkills: candidateRow?.verified_skills ?? [],
+    sourceOfTruth,
+    startedBy,
+  });
+
+  // Mirrors the "reject and restart" review action's own convention: reset
+  // the application's displayed generation status immediately so the queue
+  // page reflects the new run in progress instead of continuing to show the
+  // previous "Generated" result until this workflow eventually finishes.
+  await execute(
+    "UPDATE applications SET resume_generation_status = 'queued', resume_generation_error = NULL WHERE id = $1",
+    [applicationId]
+  );
+
+  await dispatchWorkflowStart(workflowId);
   return { started: true, workflowId };
 }
 

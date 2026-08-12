@@ -50,7 +50,7 @@ export default async function FaloodPage() {
     SELECT 
       (SELECT COUNT(*) FROM candidates) as candidates,
       (SELECT COUNT(*) FROM base_resumes) as base_resumes,
-      (SELECT COUNT(*) FROM jobs) as target_jobs,
+      (SELECT COUNT(*) FROM target_jobs) as target_jobs,
       (SELECT COUNT(*) FROM applications WHERE review_status = 'pending') as pending_review
   `);
 

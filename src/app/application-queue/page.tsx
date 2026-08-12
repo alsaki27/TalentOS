@@ -540,6 +540,28 @@ export default function ApplicationQueuePage() {
     finally { setActionLoading(null); }
   }
 
+  // Restarts the full pipeline from stage 1 for an application that already
+  // has a generated resume - a fresh run, not a continuation. See
+  // regenerateAiWorkflowForApplication for why this hits a separate endpoint
+  // instead of reusing startWorkflow's.
+  async function regenerateWorkflow(item: QueueItem) {
+    if (!confirm("Regenerate this resume? This restarts the full AI pipeline from scratch and replaces the current tailored resume.")) return;
+    setActionLoading(`${item.id}:regenerate`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${item.id}/ai-workflow/regenerate`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: d.error || "Regeneration failed." });
+        return;
+      }
+      const data = await res.json();
+      setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
+      load(page, false);
+    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
+    finally { setActionLoading(null); }
+  }
+
   async function fetchWorkflowDetails(item: QueueItem) {
     if (!item.workflow_id) return;
     if (workflowDetails[item.workflow_id]) {
@@ -900,6 +922,7 @@ export default function ApplicationQueuePage() {
                   <td>
                     <PipelineActions item={item} actionLoading={actionLoading}
                       onStartWorkflow={startWorkflow}
+                      onRegenerate={regenerateWorkflow}
                       onFetchDetails={fetchWorkflowDetails}
                       onReview={async (wfId: string, action: string) => {
                         setActionLoading(`${item.id}:${action}`);
@@ -1115,12 +1138,13 @@ function FindingsButton({ item }: { item: QueueItem }) {
 
 /** Renders the AI Pipeline cell with state-based actions. */
 function PipelineActions({
-  item, actionLoading, onStartWorkflow, onFetchDetails, onReview,
+  item, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
   expandedWorkflow, workflowDetails, workflowStageLabel
 }: {
   item: QueueItem;
   actionLoading: string | null;
   onStartWorkflow: (item: QueueItem) => void;
+  onRegenerate: (item: QueueItem) => void;
   onFetchDetails: (item: QueueItem) => void;
   onReview: (wfId: string, action: string) => void;
   expandedWorkflow: string | null;
@@ -1142,6 +1166,12 @@ function PipelineActions({
         <button className="btn-primary btn-sm"
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
           ✏️ Open in Studio
+        </button>
+        <button className="btn-compact btn-sm"
+          onClick={() => onRegenerate(item)}
+          disabled={actionLoading === `${item.id}:regenerate`}
+          title="Restart the full AI pipeline from scratch and replace this tailored resume">
+          {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
         </button>
         <FindingsButton item={item} />
       </div>

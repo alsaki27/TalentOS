@@ -101,9 +101,10 @@ export interface UploadExportResult {
 
 /**
  * Uploads the exact generated blob to the configured resume archive (SharePoint
- * in production) and records it in application_resume_exports.
- * Best-effort: callers should not block the user's download on this succeeding -
- * generate + downloadBlob() first, then call this to persist a re-downloadable copy.
+ * in production) and records it in application_resume_exports. Called after the
+ * user's own download has already happened (see exportAndDownloadResume) - a
+ * rejection here means the re-downloadable archive copy failed, not the export
+ * itself.
  */
 export async function uploadResumeExport(params: UploadExportParams): Promise<UploadExportResult> {
   const form = new FormData();
@@ -125,7 +126,15 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
   return res.json();
 }
 
-/** Convenience wrapper: generate, download immediately, then upload in the background for history. */
+/**
+ * Generates the file, downloads it immediately, then archives the same blob so
+ * it can be re-downloaded later (this is also what makes the "View PDF" link
+ * and pdf_available flag in the candidate profile work). The user's download
+ * always happens first and unconditionally - an archive failure is reported
+ * via a distinctly-worded error (caught and re-thrown here) so a caller's
+ * catch block never tells the user their export failed when it actually
+ * succeeded and only the background archive copy did not.
+ */
 export async function exportAndDownloadResume(
   rawContent: any,
   format: "pdf" | "docx",
@@ -137,13 +146,19 @@ export async function exportAndDownloadResume(
   downloadBlob(blob, fileName);
 
   if (uploadContext) {
-    return uploadResumeExport({
-      applicationId: uploadContext.applicationId,
-      resumeVersionId: uploadContext.resumeVersionId,
-      exportType: format,
-      blob,
-      fileName,
-    });
+    try {
+      return await uploadResumeExport({
+        applicationId: uploadContext.applicationId,
+        resumeVersionId: uploadContext.resumeVersionId,
+        exportType: format,
+        blob,
+        fileName,
+      });
+    } catch (err: any) {
+      throw new Error(
+        `${format.toUpperCase()} downloaded, but saving a re-downloadable copy failed: ${err?.message || "unknown error"}`
+      );
+    }
   }
   return null;
 }
