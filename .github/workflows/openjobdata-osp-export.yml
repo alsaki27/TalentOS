@@ -17,9 +17,11 @@ name: OSP Jobs Daily Export (openjobdata.com)
 # see src/lib/integrations/jobCrawler.ts) as a separate follow-up, not this job.
 
 on:
-  schedule:
-    # 09:00 UTC daily — after openjobdata.com's own daily refresh has landed.
-    - cron: "0 9 * * *"
+  # Daily schedule disabled 2026-08-12 — exports weren't being used.
+  # Trigger manually via workflow_dispatch if a one-off export is ever needed.
+  # schedule:
+  #   # 09:00 UTC daily — after openjobdata.com's own daily refresh has landed.
+  #   - cron: "0 9 * * *"
   workflow_dispatch:
     inputs:
       date:

@@ -50,95 +50,17 @@ WITH candidate_row AS (
       'procurement planning', 'drawing QA/QC', 'spatial accuracy', 'CAD standards',
       'layer management', 'Xrefs', 'DWG control', 'drafting standards'
     ],
-    $$Reject roles requiring more than 5 years of experience unless the posting clearly accepts a junior or early-career candidate. Reject senior, lead, principal, manager, director, and construction-management roles when they require more than 5 years. Reject roles requiring a PE license, telecom construction-superintendent responsibility, or direct field crew management. Prioritize OSP design, fiber design, route planning, AutoCAD, permitting, ROW, joint use, pole attachments, HLD/LLD, QA/QC, as-builts, GIS/CAD, BOM/BOQ, and construction-ready documentation. Treat GIS, Civil 3D, MicroStation, and field verification as adjacent matches; do not require them when the posting is primarily OSP design. Candidate is open to U.S. relocation.$$ 
-  ),
-  (
-    'Resume_Bhaskar(CAD)',
-    ARRAY[
-      'CAD Designer', 'CAD Drafter', 'AutoCAD Designer', 'AutoCAD Drafter',
-      'CAD Technician', 'AutoCAD Technician', 'CAD Operator', 'Drafting Technician',
-      'Design Drafter', 'Junior CAD Designer', 'CAD Production Technician', 'CAD Detailer',
-      'Engineering CAD Technician', 'Engineering Technician CAD', 'Technical Drawing Specialist',
-      'Civil CAD Drafter', 'Civil CAD Technician', 'Civil Design Technician', 'Civil Designer',
-      'Utility CAD Designer', 'Utility CAD Technician', 'Telecom CAD Technician',
-      'OSP CAD Technician', 'OSP CAD Designer', 'Fiber CAD Drafter', 'Fiber Design Technician',
-      'GIS/CAD Technician', 'GIS Mapping Technician', 'Infrastructure CAD Technician',
-      'Infrastructure Drafter', 'Municipal CAD Technician', 'Construction Drafter',
-      'Plan Production Drafter', 'Plan Set Drafter', 'Plan and Profile Drafter',
-      'Construction Documents Drafter', 'Permit Plan Drafter', 'Permit Drafter',
-      'As-Built Drafter', 'As-Built CAD Technician', 'Redline Drafter', 'Drawing Checker',
-      'CAD QA/QC Technician', 'CAD Standards Technician', 'Drafting Coordinator',
-      'Design Documentation Specialist', 'Document Control Coordinator', 'CAD Data Technician',
-      'CAD Conversion Technician', 'DWG Technician', 'Survey CAD Technician',
-      'Utility Mapping Technician', 'Quantity Takeoff Technician', 'Material Takeoff Technician',
-      'Mechanical CAD Technician', 'Mechanical Drafter', 'Mechanical Designer',
-      'Mechanical Design Technician', 'Manufacturing CAD Technician', 'BIM/CAD Technician',
-      'AutoCAD', 'AutoCAD 2D', 'AutoCAD 3D', '2D drafting', '3D drafting',
-      'Spatial Manager', 'GIS/CAD integration', 'CAD template standardization',
-      'CAD standards', 'drafting standards', 'technical drawings', 'engineering drawings',
-      'plan-view drawings', 'detail drawings', 'construction drawings', 'plan production',
-      'drawing set', 'plan set', 'sheet set', 'permit drawings', 'permit package',
-      'ROW plans', 'alignment plans', 'as-built drawings', 'redline updates',
-      'field sketches', 'GPS to CAD', 'georeferenced CAD', 'GIS basemap',
-      'DWG file control', 'Xref management', 'external references', 'layer management',
-      'layer standards', 'annotation standards', 'scale review', 'CAD block library',
-      'OSP blocks', 'utility relocation drawings', 'utility layouts', 'telecom layouts',
-      'fiber layouts', 'FTTx', 'FTTH', 'XGS-PON', 'aerial layouts', 'underground layouts',
-      'duct bank drawings', 'conduit drawings', 'handhole layouts', 'bore path drawings',
-      'pole attachment drawings', 'HLD', 'LLD', 'splice matrix', 'splitter layout',
-      'NESC', 'DOT compliance', 'jurisdictional standards', 'BOM', 'BOQ',
-      'bill of materials', 'bill of quantities', 'quantity estimating', 'material takeoff',
-      'fiber footage', 'conduit footage', 'waste factor', 'procurement planning',
-      'drawing QA/QC', 'spatial accuracy', 'redline integration', 'as-built conversion',
-      'MicroStation', 'Bentley MicroStation', 'Civil 3D', 'Bluebeam', 'Revit'
-    ],
-    $$Reject roles requiring more than 5 years of experience unless the posting clearly accepts a junior or early-career candidate. Reject senior, lead, principal, manager, director, and drafting-management roles when they require more than 5 years. Prioritize AutoCAD, CAD production, technical drawings, utility/telecom/infrastructure, OSP, permitting, plan sets, as-builts, redlines, QA/QC, GIS/CAD, BOM/BOQ, and document control. Treat Civil 3D, MicroStation, Bluebeam, Revit, and survey tools as secondary/adjacent keywords unless they are the primary requirement. Do not reject a role merely because it lists one secondary tool alongside AutoCAD. Candidate is open to U.S. relocation.$$ 
-  ),
-  (
-    'Resume_Bhaskar(Mechanical Engineering)',
-    ARRAY[
-      'Mechanical Engineer', 'Entry-Level Mechanical Engineer', 'Junior Mechanical Engineer',
-      'Mechanical Design Engineer', 'Mechanical Project Engineer', 'Project Engineer',
-      'Junior Project Engineer', 'Engineering Project Coordinator', 'Engineering Coordinator',
-      'Design Engineer', 'Junior Design Engineer', 'Manufacturing Engineer',
-      'Entry-Level Manufacturing Engineer', 'Product Development Engineer',
-      'Mechanical Applications Engineer', 'Applications Engineer', 'Engineering Technician',
-      'Mechanical Engineering Technician', 'Mechanical Drafter', 'Mechanical Designer',
-      'Mechanical CAD Technician', 'Technical Project Coordinator', 'Technical Documentation Engineer',
-      'Engineering Documentation Specialist', 'Project Controls Coordinator',
-      'Project Engineering Coordinator', 'Project Design Coordinator', 'Production Engineering Technician',
-      'Process Documentation Engineer', 'Engineering Change Coordinator',
-      'Configuration Management Coordinator', 'Document Control Engineer',
-      'Quality Engineering Technician', 'Quality Documentation Specialist',
-      'Infrastructure Project Engineer', 'Utility Project Engineer', 'Telecom Project Engineer',
-      'Construction Project Engineer', 'Engineering Associate', 'Mechanical Engineering Associate',
-      'CAD Design Engineer', 'CAD Engineer', 'Technical Designer', 'Design Documentation Specialist',
-      'AutoCAD', 'AutoCAD 2D', 'AutoCAD 3D', 'mechanical CAD', 'technical drawing',
-      'engineering drawing', 'design documentation', 'drawing production', 'plan production',
-      'design lifecycle', 'engineering project support', 'project coordination',
-      'requirements tracking', 'technical documentation', 'document control',
-      'drawing review', 'design review', 'QA/QC', 'quality review', 'standards compliance',
-      'redline review', 'as-built documentation', 'configuration documentation',
-      'BOM', 'BOQ', 'bill of materials', 'bill of quantities', 'material estimating',
-      'quantity estimating', 'material takeoff', 'cost estimating', 'cost awareness',
-      'procurement planning', 'vendor coordination', 'material planning', 'project planning',
-      'schedule tracking', 'project deliverables', 'cross-functional coordination',
-      'engineering management', 'continuous improvement', 'technical communication',
-      'CAD standards', 'CAD templates', 'DWG', 'Xrefs', 'layer management',
-      'Spatial Manager', 'GIS/CAD', 'georeferenced drawings', 'field data integration',
-      'construction-ready documentation', 'permit documentation', 'ROW documentation',
-      'utility infrastructure', 'telecom infrastructure', 'FTTx', 'FTTH', 'fiber design',
-      'OSP design', 'aerial and underground layouts', 'conduit design', 'duct bank design',
-      'AutoCAD drafting', 'technical file management', 'engineering records',
-      'manufacturing documentation', 'production drawings', 'work instructions',
-      'engineering specifications', 'technical submittals', 'submittal review',
-      'project controls', 'project reporting', 'risk tracking', 'issue tracking',
-      'change tracking', 'stakeholder communication', 'engineering mentorship',
-      'SolidWorks', 'Creo', 'Inventor', 'Revit', 'Civil 3D', 'MicroStation',
-      'PLC', 'controls project engineer', 'automation project engineer'
-    ],
-    $$Prioritize entry-level and early-career mechanical design, project engineering, manufacturing support, engineering coordination, technical documentation, CAD, and infrastructure project roles. Reject roles requiring more than 5 years unless the posting clearly accepts a junior candidate. Reject senior, lead, principal, manager, director, and licensed-PE roles when the experience requirement exceeds 5 years. Reject roles where PLC programming, ladder logic, SCADA, robotics programming, machine controls commissioning, HVAC system design, FEA, CFD, or SolidWorks/Creo modeling is the primary day-one requirement; those keywords are only for adjacent roles where AutoCAD, documentation, project coordination, BOM/BOQ, or engineering management are substantial parts of the job. Prefer employers willing to train on industry-specific software. Candidate has a Mechanical Engineering bachelor's degree, an Engineering Management master's degree, and professional CAD/infrastructure design experience; do not represent telecom/OSP work as factory mechanical design. Candidate is open to U.S. relocation.$$ 
+    $$Reject roles requiring more than 5 years of experience unless the posting clearly accepts a junior or early-career candidate. Reject senior, lead, principal, manager, director, and construction-management roles when they require more than 5 years. Reject roles requiring a PE license, telecom construction-superintendent responsibility, or direct field crew management. Prioritize OSP design, fiber design, route planning, AutoCAD, permitting, ROW, joint use, pole attachments, HLD/LLD, QA/QC, as-builts, GIS/CAD, BOM/BOQ, and construction-ready documentation. Treat GIS, Civil 3D, MicroStation, and field verification as adjacent matches; do not require them when the posting is primarily OSP design. Candidate is open to U.S. relocation.$$
   )
+  -- The "Resume_Bhaskar(CAD)" and "Resume_Bhaskar(Mechanical Engineering)"
+  -- entries that used to follow here were removed 2026-08-12. Their base
+  -- resumes (seeded by 061_seed_bhaskar_cad_mechanical_base_resumes.sql,
+  -- now neutralized) were intentionally deleted and superseded by
+  -- "Resume_Bhaskar_Roy (CAD Drafting)" / "Resume_Bhaskar_Roy (Mech
+  -- Engineering)". The JOIN below already matches by base_resumes.name, so
+  -- these entries could only ever create a search profile if a base resume
+  -- with one of those exact retired names were ever created again - removed
+  -- outright instead of leaving that latent possibility in place.
 )
 INSERT INTO candidate_resume_search_profiles
   (candidate_id, base_resume_id, keywords, additional_rules)
