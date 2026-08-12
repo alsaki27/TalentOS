@@ -33,13 +33,13 @@ export async function POST(req: NextRequest) {
     const state = created[0];
     if (sourceId) {
       await execute(`INSERT INTO ai_routing_state_routes
-        (state_id, automation_id, rank, ai_key_id, provider, model_override, is_enabled)
-        SELECT $1, automation_id, rank, ai_key_id, provider, model_override, is_enabled
+        (state_id, automation_id, rank, ai_key_id, provider, model_override, reasoning_effort, is_enabled)
+        SELECT $1, automation_id, rank, ai_key_id, provider, model_override, reasoning_effort, is_enabled
         FROM ai_routing_state_routes WHERE state_id = $2`, [state.id, sourceId]);
     } else {
       await execute(`INSERT INTO ai_routing_state_routes
-        (state_id, automation_id, rank, ai_key_id, provider, model_override, is_enabled)
-        SELECT $1, automation_id, rank, ai_key_id, provider, model_override, is_enabled
+        (state_id, automation_id, rank, ai_key_id, provider, model_override, reasoning_effort, is_enabled)
+        SELECT $1, automation_id, rank, ai_key_id, provider, model_override, NULL, is_enabled
         FROM ai_automation_routes`, [state.id]);
     }
     return NextResponse.json({ state }, { status: 201 });

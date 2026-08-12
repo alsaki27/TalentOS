@@ -134,6 +134,7 @@ export const PROVIDER_MODEL_PRESETS: Record<string, { id: string; label: string 
     { id: "kimi-k2.6", label: "Kimi K2.6" },
   ],
   opencode: [
+    { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
     { id: "glm-5.2", label: "GLM 5.2" },
     { id: "kimi-k2.6", label: "Kimi K2.6" },
     { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
