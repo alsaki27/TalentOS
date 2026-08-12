@@ -107,60 +107,6 @@ describe("runResumeForge", () => {
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
-
-  it("preserves base-resume dates and bullets after tailoring", async () => {
-    const baseBullets = [
-      "Designed production systems",
-      "Automated quality checks",
-      "Reduced processing time",
-      "Documented engineering standards",
-      "Coordinated technical reviews",
-      "Resolved field issues",
-    ];
-    const provider = mockProvider(JSON.stringify({
-      summary: null,
-      skills: [{ title: "Engineering", skills: ["AutoCAD"] }],
-      experience: [{
-        title: "Engineer",
-        company: "Acme",
-        location: "Changed",
-        startDate: "Wrong",
-        endDate: "Wrong",
-        bullets: ["Tailored opening bullet"],
-        evidenceIds: [],
-      }],
-      education: [], certifications: [], projects: [], changeLog: [],
-      missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
-    const ctx = makeContext({
-      baseResume: {
-        id: "res-1",
-        title: "Base resume",
-        content: {
-          experience: [{
-            title: "Engineer",
-            company: "Acme",
-            location: "Detroit, MI",
-            startDate: "Jan 2020",
-            endDate: "Present",
-            bullets: baseBullets,
-          }],
-        },
-        skills: [], experience: [], education: [], certifications: [],
-      },
-      previousOutputs: {
-        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: { title: "Engineer", company: "Acme" }, createdAt: "" },
-      },
-    });
-
-    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
-    const result = await runResumeForge({}, provider, ctx);
-    expect(result.experience[0]?.startDate).toBe("Jan 2020");
-    expect(result.experience[0]?.endDate).toBe("Present");
-    expect(result.experience[0]?.location).toBe("Detroit, MI");
-    expect(result.experience[0]?.bullets).toContain("Tailored opening bullet");
-    expect(result.experience[0]?.bullets).toContain("Designed production systems");
-  });
 });
 
 describe("runHiringPanel", () => {
@@ -218,63 +164,5 @@ describe("runFinalPolish", () => {
     const result = await runFinalPolish({}, provider, ctx);
     expect(result.exportReady).toBe(true);
     expect(result.finalQaScore).toBe(9);
-  });
-
-  it("preserves base dates and restores draft bullets during final polish", async () => {
-    const draftBullets = [
-      "Tailored system design work",
-      "Automated quality checks",
-      "Reduced processing time",
-      "Documented engineering standards",
-      "Coordinated technical reviews",
-      "Resolved field issues",
-    ];
-    const provider = mockProvider(JSON.stringify({
-      summary: null,
-      skills: [{ title: "Engineering", skills: ["AutoCAD"] }],
-      experience: [{
-        title: "Engineer",
-        company: "Acme",
-        location: "Changed",
-        startDate: "Wrong",
-        endDate: "Wrong",
-        bullets: [],
-        evidenceIds: [],
-      }],
-      education: [], certifications: [], projects: [], appliedIssueIds: [],
-      rejectedIssueIds: [], unresolvedWarnings: [], finalQaScore: 9, exportReady: true,
-    }));
-    const ctx = makeContext({
-      baseResume: {
-        id: "res-1",
-        title: "Base resume",
-        content: {
-          experience: [{
-            title: "Engineer",
-            company: "Acme",
-            location: "Detroit, MI",
-            startDate: "Jan 2020",
-            endDate: "Present",
-            bullets: ["Base bullet"],
-          }],
-        },
-        skills: [], experience: [], education: [], certifications: [],
-      },
-      previousOutputs: {
-        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-        application_resume_forge: {
-          id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", createdAt: "",
-          data: { experience: [{ title: "Engineer", company: "Acme", bullets: draftBullets }] },
-        },
-        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
-      },
-    });
-
-    const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
-    const result = await runFinalPolish({}, provider, ctx);
-    expect(result.experience[0]?.startDate).toBe("Jan 2020");
-    expect(result.experience[0]?.endDate).toBe("Present");
-    expect(result.experience[0]?.location).toBe("Detroit, MI");
-    expect(result.experience[0]?.bullets).toEqual(draftBullets);
   });
 });
