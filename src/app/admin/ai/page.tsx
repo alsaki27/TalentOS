@@ -93,6 +93,17 @@ interface AgentConfig {
   is_active: boolean;
 }
 
+interface RoutingState {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "draft" | "published" | "archived";
+  route_count: number;
+  created_at: string;
+  updated_at: string;
+  published_at: string | null;
+}
+
 interface OverviewData {
   summary: {
     totalKeys: number; activeKeys: number; healthyKeys: number; keysWithErrors: number;
@@ -1018,6 +1029,7 @@ function RouteModelCombobox({ keyId, discovered, presets, value, isCustom, onCha
 function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [agents, setAgents] = useState<AgentItem[]>([]);
   const [keys, setKeys] = useState<KeyItem[]>([]);
+  const [states, setStates] = useState<RoutingState[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
   const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; rank: number }[]>([]);
@@ -1029,6 +1041,10 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [runningBaseResumeKeywords, setRunningBaseResumeKeywords] = useState(false);
   const [keyModelsMap, setKeyModelsMap] = useState<Record<string, { models: any[]; default_model: string | null }>>({});
+  const [newStateName, setNewStateName] = useState("");
+  const [newStateDescription, setNewStateDescription] = useState("");
+  const [stateSourceId, setStateSourceId] = useState("");
+  const [stateSaving, setStateSaving] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -1041,6 +1057,8 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
       ]);
       if (agentsRes.ok) setAgents((await agentsRes.json()).agents ?? []);
       if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
+      const statesRes = await fetch("/api/admin/ai/states");
+      if (statesRes.ok) setStates((await statesRes.json()).states ?? []);
     } catch (e: any) { onError(e.message); }
     finally { setLoading(false); }
   }
@@ -1138,6 +1156,35 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     finally { setRunningBaseResumeKeywords(false); }
   }
 
+  async function createRoutingState() {
+    if (!newStateName.trim()) return;
+    setStateSaving(true);
+    try {
+      const res = await fetch("/api/admin/ai/states", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newStateName, description: newStateDescription, sourceStateId: stateSourceId || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to create routing state");
+      setNewStateName(""); setNewStateDescription("");
+      setMessage({ type: "success", text: `Created draft state “${data.state.name}”. Current routing was not changed.` });
+      loadAll();
+    } catch (e: any) { setMessage({ type: "error", text: e.message }); }
+    finally { setStateSaving(false); }
+  }
+
+  async function updateRoutingState(id: string, status: RoutingState["status"]) {
+    setStateSaving(true);
+    try {
+      const res = await fetch(`/api/admin/ai/states/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to update routing state");
+      setMessage({ type: "success", text: `State marked ${status}. Live agent routing is unchanged.` });
+      loadAll();
+    } catch (e: any) { setMessage({ type: "error", text: e.message }); }
+    finally { setStateSaving(false); }
+  }
+
   function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", rank: p.length }]); }
   function removeRouteRow(idx: number) { setEditRoutes(p => p.filter((_, i) => i !== idx)); }
 
@@ -1145,6 +1192,35 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
 
   return (
     <div>
+      <div className="panel" style={{ marginBottom: 16, padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Routing states</h3>
+            <div className="text-muted" style={{ fontSize: 12 }}>Versioned snapshots for safe provider/model experiments. Publishing a state is metadata-only until state-aware execution is explicitly enabled.</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input className="input" style={{ minWidth: 210 }} placeholder="New state name" value={newStateName} onChange={e => setNewStateName(e.target.value)} />
+          <input className="input" style={{ minWidth: 260 }} placeholder="Description (optional)" value={newStateDescription} onChange={e => setNewStateDescription(e.target.value)} />
+          <select className="input" value={stateSourceId} onChange={e => setStateSourceId(e.target.value)}>
+            <option value="">Clone current live routing</option>
+            {states.map(s => <option key={s.id} value={s.id}>Clone: {s.name}</option>)}
+          </select>
+          <button className="btn-primary" onClick={createRoutingState} disabled={stateSaving || !newStateName.trim()}>Create draft</button>
+        </div>
+        {states.length > 0 && (
+          <div className="table-shell" style={{ marginTop: 12 }}>
+            <table className="table table-compact"><thead><tr><th>Name</th><th>Status</th><th>Routes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+              {states.map(s => <tr key={s.id}>
+                <td><div style={{ fontWeight: 600 }}>{s.name}</div><div className="text-muted" style={{ fontSize: 11 }}>{s.description || "No description"}</div></td>
+                <td><span className={`badge ${s.status === "published" ? "badge-success" : s.status === "archived" ? "badge-muted" : "badge-warning"}`}>{s.status}</span></td>
+                <td>{s.route_count}</td><td>{relativeTime(s.updated_at)}</td>
+                <td style={{ display: "flex", gap: 6 }}>{s.status === "draft" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "published")}>Publish</button>}{s.status !== "archived" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "archived")}>Archive</button>}</td>
+              </tr>)}
+            </tbody></table>
+          </div>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <input className="input" placeholder="Search agents..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: 250 }} />
         <select className="input" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}>
