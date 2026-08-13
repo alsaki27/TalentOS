@@ -237,7 +237,7 @@ export default function AiControlCenterPage() {
   }, [tab]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
+    <div className="ai-control-center" style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
       <div className="page-header" style={{ marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 28 }}>AI Control Center</h1>
@@ -537,7 +537,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
         </div>
       ) : (
         <div className="table-shell">
-          <table className="table table-compact">
+          <table className="table table-compact ai-key-table">
             <thead>
               <tr>
                 <th>Key</th>
@@ -1319,7 +1319,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         </div>
         {states.length > 0 && (
           <div className="table-shell" style={{ marginTop: 12 }}>
-            <table className="table table-compact"><thead><tr><th>Name</th><th>Status</th><th>Routes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+            <table className="table table-compact ai-routing-states-table"><thead><tr><th>Name</th><th>Status</th><th>Routes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
               {states.map(s => <tr key={s.id}>
                 <td><div style={{ fontWeight: 600 }}>{s.name} {s.is_active && <span className="badge badge-success">ACTIVE</span>}</div><div className="text-muted" style={{ fontSize: 11 }}>{s.description || "No description"}</div></td>
                 <td><span className={`badge ${s.is_active ? "badge-success" : s.status === "archived" ? "badge-muted" : "badge-warning"}`}>{s.is_active ? "active" : s.status}</span></td>
@@ -1348,7 +1348,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
       )}
 
       <div className="table-shell">
-        <table className="table table-compact">
+        <table className="table table-compact ai-agent-table">
           <thead>
             <tr>
               <th>Agent</th>
@@ -1658,7 +1658,7 @@ function UsageTab({ onError }: { onError: (e: string) => void }) {
       ) : (
         <>
           <div className="table-shell">
-            <table className="table table-compact">
+            <table className="table table-compact ai-usage-table">
               <thead>
                 <tr>
                   <th>Time</th>
