@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get("search") || "").trim();
   const needsReply = url.searchParams.get("needsReply");
   const relevant = url.searchParams.get("relevant");
+  const hasOpenTask = url.searchParams.get("hasOpenTask");
   const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(10, Number.parseInt(url.searchParams.get("pageSize") || "25", 10) || 25));
 
@@ -28,6 +29,7 @@ export async function GET(req: NextRequest) {
   if (candidateId && !isUuid(candidateId)) return NextResponse.json({ error: "Invalid candidateId." }, { status: 400 });
   if (needsReply && !["true", "false"].includes(needsReply)) return NextResponse.json({ error: "Invalid needsReply filter." }, { status: 400 });
   if (relevant && !["true", "false"].includes(relevant)) return NextResponse.json({ error: "Invalid relevant filter." }, { status: 400 });
+  if (hasOpenTask && !["true", "false"].includes(hasOpenTask)) return NextResponse.json({ error: "Invalid hasOpenTask filter." }, { status: 400 });
 
   const params: unknown[] = [];
   const predicates = ["1=1"];
@@ -42,6 +44,10 @@ export async function GET(req: NextRequest) {
   if (category) predicates.push(`ec.ai_category = ${add(category)}`);
   if (needsReply) predicates.push(`ec.needs_reply = ${add(needsReply === "true")}`);
   if (relevant) predicates.push(`ec.ai_relevant = ${add(relevant === "true")}`);
+  if (hasOpenTask) {
+    const existsSql = `EXISTS (SELECT 1 FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress'))`;
+    predicates.push(hasOpenTask === "true" ? existsSql : `NOT ${existsSql}`);
+  }
   if (search) {
     const term = `%${search}%`;
     const p = add(term);
@@ -67,6 +73,8 @@ export async function GET(req: NextRequest) {
               ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
               ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
               ec.gmail_is_unread, ec.gmail_is_important,
+              ec.suppression_reason, ec.suppression_rule,
+              (SELECT COUNT(*)::int FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress')) AS open_task_count,
               j.title AS job_title, j.company AS company_name,
               COUNT(*) OVER (PARTITION BY ec.gmail_thread_id)::int AS message_count,
               ROW_NUMBER() OVER (PARTITION BY ec.gmail_thread_id ORDER BY ec.sent_at DESC, ec.id DESC) AS thread_row

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, ALL_USER_ROLES } from "@/lib/auth";
-import { query } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +21,14 @@ for (var rawStatusKey in DISPLAY_GROUPS) {
 
 // The computed "display status" every filter/sort/count query must agree on:
 // applications marked applied via ae_stage collapse to the raw "applied"
-// status regardless of the legacy a.status value underneath.
-var STATUS_EXPR = "(CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END)";
+// status regardless of the legacy a.status value underneath - but only while
+// the AE pipeline itself is what set ae_stage='applied'. Without the
+// "AND a.status IN (...)" guard, an application the AI email-triage pipeline
+// later moved to e.g. 'interview' (see applicationStatusService.ts) would
+// still display as "Applied" forever, since ae_stage stays 'applied' from
+// the original AE hand-off and this expression would keep masking the real
+// status underneath it.
+var STATUS_EXPR = "(CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END)";
 
 // Escapes ILIKE wildcard/escape characters in free-text search input so a
 // literal "%", "_", or "\" the user typed is matched literally, not as a
@@ -60,28 +66,6 @@ interface CandidateOption {
   id: string;
   name: string;
   application_count: number;
-}
-
-interface PendingEmailTask {
-  id: string;
-  candidate_id: string;
-  candidate_name: string;
-  application_id: string | null;
-  type: string;
-  title: string;
-  description: string | null;
-  suggested_action: string | null;
-  priority: string;
-  due_at: string | null;
-  escalated_at: string | null;
-  status: string;
-  created_at: string;
-  email_communication_id: string | null;
-  email_subject: string | null;
-  email_sent_at: string | null;
-  gmail_thread_id: string | null;
-  job_title: string | null;
-  company_name: string | null;
 }
 
 export async function GET(req: NextRequest) {
@@ -243,36 +227,40 @@ export async function GET(req: NextRequest) {
       if (cand) selectedCandidateName = cand.name;
     }
 
+    // Counts only, not the up-to-100 joined rows this used to return on
+    // every dashboard load (see /inbox and /inbox/approvals for the actual
+    // work queue - this dashboard just needs to know whether to show a
+    // link and how many badges to put on it).
     var taskParams: unknown[] = [];
     var taskFilter = "";
     if (candidateId) {
-      taskFilter = " AND ai.candidate_id = $1";
+      taskFilter = " AND candidate_id = $1";
       taskParams.push(candidateId);
     }
-    var pendingEmailTasks = await query<PendingEmailTask>(
-      `SELECT ai.id, ai.candidate_id, c.name AS candidate_name,
-              ai.application_id, ai.type, ai.title, ai.description,
-              ai.suggested_action, ai.priority, ai.status, ai.created_at, ai.due_at, ai.escalated_at,
-              ai.email_communication_id, ec.subject AS email_subject,
-              ec.sent_at AS email_sent_at, ec.gmail_thread_id,
-              j.title AS job_title, j.company AS company_name
-       FROM action_items ai
-       JOIN candidates c ON c.id = ai.candidate_id
-       LEFT JOIN email_communications ec ON ec.id = ai.email_communication_id
-       LEFT JOIN applications a ON a.id = ai.application_id
-       LEFT JOIN jobs j ON j.id = a.job_id
-       WHERE ai.status IN ('open', 'in_progress')${taskFilter}
-       ORDER BY CASE ai.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
-                ai.created_at DESC
-       LIMIT 100`,
+    var emailTaskCountsRow = await queryOne<{ pending_approvals: number; needs_reply: number; interviews: number; untracked: number; total: number }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE type = 'status_change_approval')::int AS pending_approvals,
+         COUNT(*) FILTER (WHERE type = 'needs_reply')::int AS needs_reply,
+         COUNT(*) FILTER (WHERE type = 'interview_followup')::int AS interviews,
+         COUNT(*) FILTER (WHERE type = 'untracked_application')::int AS untracked,
+         COUNT(*)::int AS total
+       FROM action_items
+       WHERE status IN ('open', 'in_progress')${taskFilter}`,
       taskParams
     );
+    var emailTaskCounts = {
+      pendingApprovals: emailTaskCountsRow?.pending_approvals ?? 0,
+      needsReply: emailTaskCountsRow?.needs_reply ?? 0,
+      interviews: emailTaskCountsRow?.interviews ?? 0,
+      untracked: emailTaskCountsRow?.untracked ?? 0,
+      total: emailTaskCountsRow?.total ?? 0,
+    };
 
     return NextResponse.json({
       applications: paged, total, page, pageSize,
       statusCounts, sourceCounts, candidates,
       selectedCandidateName,
-      pendingEmailTasks,
+      emailTaskCounts,
     });
   } catch (error: any) {
     console.error("[Candidate Dashboard API] Error:", error.message);

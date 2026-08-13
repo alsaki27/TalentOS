@@ -168,7 +168,11 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
      LEFT JOIN profiles p ON p.user_id::text = pm.interviewer_id::text
      WHERE a.candidate_id = $1
        AND CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END NOT IN ('assigned', 'stacked', 'in_progress')
-       AND (s.id IS NOT NULL OR CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END = 'interview')
+       -- Guarded: without "AND a.status IN (...)" this could never be true
+       -- once ae_stage='applied' (set once, at AE hand-off), so an
+       -- email-detected interview would never appear here even after the
+       -- AI pipeline moved the application's real status to 'interview'.
+       AND (s.id IS NOT NULL OR (CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END) = 'interview')
      GROUP BY s.id, a.id, j.title, j.company, j.location, s.round_name, s.round_number,
               s.scheduled_at, s.duration_minutes, s.status, s.meeting_link
      ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC, a.updated_at DESC
@@ -208,7 +212,9 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
   const application = await queryOne<any>(
     `SELECT
        a.id,
-       CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS status,
+       -- Guarded so a status the AI email-triage pipeline moved past
+       -- 'applied' isn't masked back to "Applied" for display.
+       CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END AS status,
        CASE WHEN a.ae_stage = 'applied'
          THEN COALESCE(a.applied_at, a.ae_applied_at, a.created_at)
          ELSE COALESCE(a.applied_at, a.created_at)
@@ -368,7 +374,9 @@ function buildBaseCte() {
     WITH candidate_apps AS (
       SELECT
         a.id,
-        CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS status,
+        -- Guarded so a status the AI email-triage pipeline moved past
+        -- 'applied' isn't masked back to "Applied" for display.
+        CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END AS status,
         CASE WHEN a.ae_stage = 'applied'
           THEN COALESCE(a.applied_at, a.ae_applied_at, a.created_at)
           ELSE COALESCE(a.applied_at, a.created_at)
@@ -444,7 +452,10 @@ function buildBaseCte() {
                AND (rv.status IN ('approved', 'final') OR packet.packet_status IN ('approved', 'sent')) THEN COALESCE(rv.updated_at, rv.created_at)
           ELSE NULL
         END AS resume_generated_at,
-        CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS public_status_key
+        -- Same guard as the status column above - otherwise this feeds
+        -- statusCounts/the status filter and would keep counting an
+        -- email-detected interview/offer/rejection as "Applied".
+        CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END AS public_status_key
       FROM applications a
       LEFT JOIN jobs j ON j.id = a.job_id
       LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id

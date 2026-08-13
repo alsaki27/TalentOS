@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import StatCard from "@/components/StatCard";
 import ApplicationStatusChart from "@/components/candidates/shared/ApplicationStatusChart";
 import ApplicationSourceChart from "@/components/candidates/shared/ApplicationSourceChart";
@@ -38,6 +39,14 @@ interface DashboardRow {
   tailored_resume_version_id: string | null;
 }
 
+interface EmailTaskCounts {
+  pendingApprovals: number;
+  needsReply: number;
+  interviews: number;
+  untracked: number;
+  total: number;
+}
+
 interface DashboardData {
   applications: DashboardRow[];
   total: number;
@@ -47,28 +56,7 @@ interface DashboardData {
   sourceCounts: Record<string, number>;
   candidates: CandidateOption[];
   selectedCandidateName: string | null;
-  pendingEmailTasks: PendingEmailTask[];
-}
-
-interface PendingEmailTask {
-  id: string;
-  candidate_id: string;
-  candidate_name: string;
-  application_id: string | null;
-  type: string;
-  title: string;
-  description: string | null;
-  suggested_action: string | null;
-  priority: string;
-  due_at: string | null;
-  escalated_at: string | null;
-  status: string;
-  created_at: string;
-  email_subject: string | null;
-  email_sent_at: string | null;
-  gmail_thread_id: string | null;
-  job_title: string | null;
-  company_name: string | null;
+  emailTaskCounts: EmailTaskCounts;
 }
 
 var DISPLAY_GROUPS: Record<string, string> = {
@@ -157,16 +145,6 @@ function CandidateDashboardInner() {
     }
   }
 
-  async function updateEmailTask(taskId: string, status: string, note?: string) {
-    var res = await fetch("/api/action-items/" + taskId, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: status, resolution_note: note || undefined, takeover: status === "done" }),
-    });
-    if (!res.ok) throw new Error("Could not update email task");
-    fetchData();
-  }
-
   var statusCounts = data?.statusCounts ?? {};
   var sourceCounts = data?.sourceCounts ?? {};
   var candidates = data?.candidates ?? [];
@@ -253,21 +231,24 @@ function CandidateDashboardInner() {
         ); })}
       </div>
 
-      {/* AE email work queue */}
-      {(data?.pendingEmailTasks?.length ?? 0) > 0 && (
-        <div className="card" style={{ padding: 18, border: "1px solid rgba(245,158,11,0.35)", borderRadius: 12, background: "linear-gradient(135deg, rgba(245,158,11,0.08), var(--surface))" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "var(--ink)" }}>Email work queue</h3>
-              <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-soft)" }}>AI found recruiting activity that still needs an AE decision or reply.</p>
-            </div>
-            <span style={{ fontSize: 12, fontWeight: 800, color: "#b45309", background: "rgba(245,158,11,0.16)", padding: "5px 9px", borderRadius: 999 }}>{data?.pendingEmailTasks?.length} pending</span>
+      {/* Email work queue — full list lives on /inbox now; this is just a
+          counts summary + link, replacing what used to be every open
+          action item rendered inline here with no truncation. */}
+      {(data?.emailTaskCounts?.total ?? 0) > 0 && (
+        <div className="card" style={{ padding: 18, border: "1px solid rgba(245,158,11,0.35)", borderRadius: 12, background: "linear-gradient(135deg, rgba(245,158,11,0.08), var(--surface))", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: "var(--ink)" }}>Email work queue</h3>
+            <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-soft)" }}>
+              {data?.emailTaskCounts.pendingApprovals ?? 0} need approval · {data?.emailTaskCounts.needsReply ?? 0} need a reply · {data?.emailTaskCounts.interviews ?? 0} interviews
+            </p>
           </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {data?.pendingEmailTasks?.map(function (task) {
-              return <EmailTaskRow key={task.id} task={task} onUpdate={updateEmailTask} />;
-            })}
-          </div>
+          <Link
+            href={candidateId ? `/inbox?candidateId=${candidateId}` : "/inbox"}
+            className="btn-primary"
+            style={{ textDecoration: "none" }}
+          >
+            Open Candidate Inbox →
+          </Link>
         </div>
       )}
 
@@ -343,64 +324,6 @@ function CandidateDashboardInner() {
       </div>
 
       {notesAppId && <ApplicationNotesModal applicationId={notesAppId} onClose={function () { setNotesAppId(null); }} />}
-    </div>
-  );
-}
-
-function EmailTaskRow({ task, onUpdate }: { task: PendingEmailTask; onUpdate: (id: string, status: string, note?: string) => Promise<void> }) {
-  var [note, setNote] = useState("");
-  var [busy, setBusy] = useState(false);
-  var [draft, setDraft] = useState<{ subject: string; body_text: string } | null>(null);
-  var [company, setCompany] = useState("");
-  var [jobTitle, setJobTitle] = useState("");
-  var [applyUrl, setApplyUrl] = useState("");
-  async function update(status: string) {
-    setBusy(true);
-    try { await onUpdate(task.id, status, note); } finally { setBusy(false); }
-  }
-  async function createDraft() {
-    setBusy(true);
-    try {
-      var response = await fetch("/api/action-items/" + task.id + "/draft-reply", { method: "POST" });
-      var result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not create draft");
-      setDraft(result.draft);
-    } finally { setBusy(false); }
-  }
-  async function addApplication() {
-    if (!company.trim() || !jobTitle.trim()) return;
-    setBusy(true);
-    try {
-      var response = await fetch("/api/action-items/" + task.id + "/add-application", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company, jobTitle, applyUrl }) });
-      var result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not add application");
-      await onUpdate(task.id, "done", "AE added the missing application to TalentOS.");
-    } finally { setBusy(false); }
-  }
-  var mailUrl = task.gmail_thread_id ? "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(task.gmail_thread_id) : null;
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "center", padding: "12px 14px", border: "1px solid var(--border)", borderRadius: 10, background: "var(--surface)" }}>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <strong style={{ color: "var(--ink)", fontSize: 13 }}>{task.title}</strong>
-          <span style={{ fontSize: 10, fontWeight: 800, textTransform: "uppercase", color: task.priority === "urgent" ? "#b91c1c" : "var(--accent)" }}>{task.priority}</span>
-        </div>
-        <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}</div>
-        {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>“{task.email_subject}”</div>}
-        {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
-        {task.type === "untracked_application" && <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6, maxWidth: 700 }}><input value={company} onChange={function (e) { setCompany(e.target.value); }} placeholder="Company" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /><input value={jobTitle} onChange={function (e) { setJobTitle(e.target.value); }} placeholder="Job title" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /><input value={applyUrl} onChange={function (e) { setApplyUrl(e.target.value); }} placeholder="Application URL (optional)" style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} /></div>}
-        {task.escalated_at && <div style={{ marginTop: 4, color: "#b91c1c", fontSize: 11, fontWeight: 800 }}>ESCALATED — overdue AE action</div>}
-        {task.due_at && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 11 }}>Due {new Date(task.due_at).toLocaleString()}</div>}
-        <input value={note} onChange={function (e) { setNote(e.target.value); }} placeholder="Required note before resolving; optional when taking over" style={{ marginTop: 8, width: "100%", maxWidth: 620, padding: "7px 9px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--ink)", fontSize: 12 }} />
-        {draft && (function (currentDraft) { return <div style={{ marginTop: 8, padding: 10, borderRadius: 8, background: "var(--bg)", border: "1px solid var(--border)" }}><strong style={{ fontSize: 12 }}>Draft reply: {currentDraft.subject}</strong><textarea value={currentDraft.body_text} onChange={function (e) { setDraft({ subject: currentDraft.subject, body_text: e.target.value }); }} style={{ display: "block", width: "100%", minHeight: 90, marginTop: 6, padding: 8, fontSize: 12, background: "var(--surface)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 6 }} /></div>; })(draft)}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 118 }}>
-        {mailUrl && <a href={mailUrl} target="_blank" rel="noreferrer" style={{ textAlign: "center", padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", color: "var(--ink)", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>Open email</a>}
-        {task.type === "untracked_application" && <button disabled={busy || !company.trim() || !jobTitle.trim()} onClick={addApplication} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Add application</button>}
-        <button disabled={busy} onClick={createDraft} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Draft reply</button>
-        <button disabled={busy} onClick={function () { update("in_progress"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "1px solid var(--accent)", background: "var(--accent-soft)", color: "var(--accent)", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Take over</button>
-        <button disabled={busy} onClick={function () { update("done"); }} style={{ padding: "7px 10px", borderRadius: 7, border: "none", background: "var(--accent)", color: "white", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Resolve</button>
-      </div>
     </div>
   );
 }

@@ -16,10 +16,11 @@ import {
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
 import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
-import { triageEmail, AUTO_WRITE_CATEGORIES, AUTO_WRITE_CONFIDENCE_THRESHOLD, type TriageCandidateContext } from "@/lib/ai/emailTriage";
+import { triageEmail, INTERVIEW_EXTRACTION_CONFIDENCE, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
-import { logActivity } from "@/lib/activity";
-import { gmailSuppressionReason } from "@/lib/integrations/gmailSuppression";
+import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
+import { changeApplicationStatus, emailStageTarget } from "@/server/services/applicationStatusService";
+import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 
@@ -149,85 +150,20 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   return row?.id ?? null;
 }
 
-type EmailStageTarget = "applied" | "interview" | "offer" | "rejected";
-
-function emailStageTarget(category: string): EmailStageTarget | null {
-  if (category === "application_confirmation") return "applied";
-  if (category === "interview_invite" || category === "scheduling") return "interview";
-  if (category === "offer") return "offer";
-  if (category === "rejection") return "rejected";
-  return null;
-}
-
-function shouldAcceptEmailStage(currentStatus: string, target: EmailStageTarget) {
-  if (currentStatus === target) return false;
-  if (currentStatus === "withdrawn") return false;
-  if (currentStatus === "offer" && target !== "offer") return false;
-  if (currentStatus === "rejected" && target !== "rejected") return false;
-  if (target === "rejected") return currentStatus !== "offer";
-  if (target === "interview") return !["offer", "rejected", "withdrawn"].includes(currentStatus);
-  if (target === "applied") return !["interview", "offer", "rejected", "withdrawn"].includes(currentStatus);
-  return true;
-}
-
-async function applyEmailStageDecision(applicationId: string, category: string, confidence: number, summary: string) {
-  const target = emailStageTarget(category);
-  if (!target) return false;
-
-  const current = await queryOne<{
-    status: string;
-    ae_stage: string | null;
-    application_stage: string | null;
-    applied_at: string | null;
-  }>(
-    "SELECT status, ae_stage, application_stage, applied_at FROM applications WHERE id = $1",
-    [applicationId],
-  );
-  if (!current || !shouldAcceptEmailStage(current.status, target)) return false;
-
-  const now = new Date().toISOString();
-  const updated = await queryOne<{ status: string }>(
-    `UPDATE applications
-        SET status = $2,
-            application_stage = $2,
-            application_stage_changed_at = $3,
-            application_stage_changed_by_name = 'Email Triage (AI)',
-            applied_at = CASE WHEN $2 = 'applied' THEN COALESCE(applied_at, $3) ELSE applied_at END,
-            updated_at = $3
-      WHERE id = $1
-      RETURNING status`,
-    [applicationId, target, now],
-  );
-  if (!updated) return false;
-
-  const fromStage = current.application_stage || current.ae_stage || current.status;
-  await execute(
-    `INSERT INTO application_stage_history
-       (application_id, from_stage, to_stage, changed_at, changed_by_name, reason, source)
-     VALUES ($1, $2, $3, $4, 'Email Triage (AI)', $5, 'email_ai')`,
-    [applicationId, fromStage, target, now, summary || `Email classified as ${category}.`],
-  );
-  await execute(
-    `INSERT INTO application_events (application_id, from_status, to_status, note)
-     VALUES ($1, $2, $3, $4)`,
-    [applicationId, current.status, target, `Email Triage (AI): ${summary || category} (${Math.round(confidence * 100)}% confidence).`],
-  );
-  await logActivity({
-    actorName: "Email Triage (AI)",
-    actorType: "ai",
-    type: "email_triage_status_change",
-    description: `Email triage moved application from "${current.status}" to "${target}" (${Math.round(confidence * 100)}% confidence)`,
-    entityType: "application",
-    entityId: applicationId,
-  });
-  return true;
-}
-
-async function triageStoredMessage(id: string, accessToken: string) {
+// Exported for src/test/services/gmailSyncService.triageStoredMessage.test.ts,
+// which asserts the status_change_approval proposal insert always uses
+// resolution_rule='manual_only' - the easiest bug to introduce here, since a
+// 'manual_or_thread_reply' proposal would be silently auto-closed by
+// storeRawMessage's thread-reply sweep the moment anyone replied in-thread.
+//
+// policyOverride lets tests and the retriage service (Chunk H) inject the
+// email_triage approval policy deterministically instead of hitting the DB
+// (and the 60s module-scope cache) on every call.
+export async function triageStoredMessage(id: string, accessToken: string, policyOverride?: EmailTriagePolicy) {
   const row = await queryOne<{
-    id: string; candidate_id: string; subject: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
+    id: string; candidate_id: string; subject: string | null; snippet: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
   }>(
-    "SELECT id, candidate_id, subject, body_text, from_email, direction, gmail_message_id FROM email_communications WHERE id = $1",
+    "SELECT id, candidate_id, subject, snippet, body_text, from_email, direction, gmail_message_id FROM email_communications WHERE id = $1",
     [id]
   );
   if (!row || row.direction !== "inbound") {
@@ -239,11 +175,23 @@ async function triageStoredMessage(id: string, accessToken: string) {
   const applications = await getCandidateApplicationContext(row.candidate_id);
   const bodyText = row.body_text || "";
   const subject = (row.subject || "").toLowerCase();
-  const suppressionReason = gmailSuppressionReason({ from: row.from_email, subject: row.subject, bodyText });
-  if (suppressionReason) {
+  const verdict = classifyGmailMessage({ from: row.from_email, subject: row.subject, snippet: row.snippet, bodyText });
+  if (verdict.suppress || verdict.storeButHide) {
+    // storeButHide is the reachable case here: it passes runGmailSync's
+    // pre-storage suppress gate (classifyGmailMessage(msg).suppress is
+    // false) so the row gets stored, then lands here. suppress is a
+    // defensive fallback for any future caller of triageStoredMessage that
+    // skips that gate. Either way: same zero-AI-cost outcome as a
+    // pre-storage drop, but recoverable via the "Show hidden mail" toggle
+    // since the row still exists — and unlike the old prose-only
+    // ai_summary, suppression_reason/suppression_rule are the queryable
+    // columns the /inbox UI and hidden-mail count already read.
     await execute(
-      "UPDATE email_communications SET ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1, needs_reply = false, triaged_at = now() WHERE id = $2",
-      [`Suppressed before AI processing: ${suppressionReason}.`, id]
+      `UPDATE email_communications SET
+         ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1,
+         needs_reply = false, suppression_reason = $2, suppression_rule = $3, triaged_at = now()
+       WHERE id = $4`,
+      [`Filtered by ${verdict.rule}.`, verdict.reason, verdict.rule, id]
     );
     return;
   }
@@ -266,12 +214,18 @@ async function triageStoredMessage(id: string, accessToken: string) {
     triage.confidence = Math.max(triage.confidence, 0.9);
   }
 
+  // A sender that structurally cannot receive a reply (no-reply address,
+  // job-board alert) can never need one, regardless of what the AI
+  // inferred from the message content - this is a logical invariant, not a
+  // heuristic, applied on top of the model's own needsReply judgment.
+  const needsReply = triage.needsReply && !verdict.forceNeedsReplyFalse;
+
   await execute(
     `UPDATE email_communications SET
        ai_relevant = $1, ai_category = $2, ai_confidence = $3, ai_summary = $4,
        ai_matched_application_id = $5, needs_reply = $6, triaged_at = now()
      WHERE id = $7`,
-    [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, triage.needsReply, id]
+    [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
 
   if (!triage.relevant) return;
@@ -312,7 +266,7 @@ async function triageStoredMessage(id: string, accessToken: string) {
     try {
       const details = await extractInterviewDetails(row.subject, bodyText);
       await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2", [JSON.stringify(details), id]);
-      if (details.scheduledAt && details.confidence >= 0.75) {
+      if (details.scheduledAt && details.confidence >= INTERVIEW_EXTRACTION_CONFIDENCE) {
         const existing = await queryOne<{ id: string }>("SELECT id FROM interview_schedules WHERE application_id = $1 AND scheduled_at = $2 LIMIT 1", [triage.matchedApplicationId, details.scheduledAt]);
         if (!existing) await execute(
           "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
@@ -360,30 +314,87 @@ async function triageStoredMessage(id: string, accessToken: string) {
     return;
   }
 
-  const canAutoWrite =
-    triage.matchedApplicationId &&
-    (AUTO_WRITE_CATEGORIES.has(triage.category) || triage.category === "application_confirmation") &&
-    triage.confidence >= (triage.category === "application_confirmation" ? 0.9 : AUTO_WRITE_CONFIDENCE_THRESHOLD);
+  const stageTarget = emailStageTarget(triage.category);
+  const policy = policyOverride ?? (await loadEmailTriagePolicy());
+  const decision = decideStatusWrite(policy, {
+    category: triage.category,
+    confidence: triage.confidence,
+    hasMatchedApplication: Boolean(triage.matchedApplicationId),
+    stageTarget,
+  });
+  const canAutoWrite = decision.action === "auto_write";
+
+  // A plausible status-change signal that isn't confident/eligible enough to
+  // auto-write yet becomes a proposal for AE review, instead of silently
+  // doing nothing or falling into the generic needs_reply bucket below.
+  // MUST be resolution_rule='manual_only': storeRawMessage auto-closes any
+  // open item with resolution_rule='manual_or_thread_reply' whose source
+  // email shares a thread with a later outbound message, which would
+  // silently discard a pending decision the moment anyone replied in the
+  // thread - a proposal must never be closeable that way.
+  let proposalCreated = false;
+  if (decision.action === "propose") {
+    const proposedFromStatus = applications.find((a) => a.applicationId === triage.matchedApplicationId)?.status ?? null;
+    const priority = triage.category === "offer" ? "urgent" : (triage.category === "interview_invite" || triage.category === "rejection") ? "high" : "normal";
+    const { rowCount } = await execute(
+      `INSERT INTO action_items
+         (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
+          resolution_rule, dedupe_key, proposed_status, proposed_from_status, ai_confidence, proposal_source,
+          approval_policy_at_creation)
+       VALUES ($1, $2, $3, 'status_change_approval', $4, $5, $6, 'open',
+               'manual_only', $7, $8, $9, $10, 'email_triage', $11)
+       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+      [
+        row.candidate_id, triage.matchedApplicationId, id,
+        `AI proposes moving application to "${stageTarget}"`,
+        triage.summary, priority, `email:${id}:status-approval`,
+        stageTarget, proposedFromStatus, triage.confidence, policy.policy,
+      ],
+    );
+    proposalCreated = rowCount > 0;
+  }
 
   if (canAutoWrite) {
-    const changed = await applyEmailStageDecision(triage.matchedApplicationId!, triage.category, triage.confidence, triage.summary);
-    if (changed) {
-      const stage = emailStageTarget(triage.category);
+    const result = await changeApplicationStatus({
+      applicationId: triage.matchedApplicationId!,
+      toStatus: stageTarget!,
+      actorType: "ai",
+      actorName: "Email Triage (AI)",
+      source: "email_ai",
+      reason: triage.summary || `Email classified as ${triage.category}.`,
+      emailCommunicationId: id,
+      confidence: triage.confidence,
+    });
+    if (result.changed) {
       await execute(
         `INSERT INTO action_items
            (candidate_id, application_id, email_communication_id, type, title, description, priority, status,
-            resolution_rule, resolution_kind, dedupe_key)
+            resolution_rule, resolution_kind, dedupe_key,
+            decision, decided_at, proposed_status, ai_confidence)
          VALUES ($1, $2, $3, 'status_change_review', $4, $5, 'low', 'done',
-                 'informational', 'informational', $6)
+                 'informational', 'informational', $6,
+                 'auto_approved', now(), $7, $8)
          ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-        [row.candidate_id, triage.matchedApplicationId, id, `Email moved application to "${stage}" (FYI)`, triage.summary, `email:${id}:status-update`],
+        [row.candidate_id, triage.matchedApplicationId, id, `Email moved application to "${stageTarget}" (FYI)`, triage.summary, `email:${id}:status-update`, stageTarget, triage.confidence],
       );
       return;
     }
   }
 
-  const type = triage.needsReply ? "needs_reply" : "status_change_review";
-  const priority = triage.category === "offer" ? "urgent" : triage.needsReply ? "high" : "normal";
+  if (proposalCreated) return;
+
+  // A sender that structurally can't receive a reply, or a job-board
+  // "application invite" alert (the exact shape behind the historical
+  // needs_reply backlog - see gmailSuppression.ts), never gets a generic
+  // action item either: there is nothing an AE can actually do with it.
+  if (verdict.senderClass !== "human" || triage.category === "application_invite") return;
+
+  // Same corrected needsReply as the email_communications UPDATE above -
+  // otherwise a no-reply/job-board sender would still generate a
+  // "needs_reply / high priority" action item even though the stored
+  // column says false, leaving the actual dashboard backlog undefused.
+  const type = needsReply ? "needs_reply" : "status_change_review";
+  const priority = triage.category === "offer" ? "urgent" : needsReply ? "high" : "normal";
   await execute(
     `INSERT INTO action_items
        (candidate_id, application_id, email_communication_id, type, title, description, suggested_action, priority, status,
@@ -395,7 +406,7 @@ async function triageStoredMessage(id: string, accessToken: string) {
       triage.matchedApplicationId,
       id,
       type,
-      triage.needsReply ? "Candidate email needs a reply" : `Review: ${triage.category.replace("_", " ")}`,
+      needsReply ? "Candidate email needs a reply" : `Review: ${triage.category.replace("_", " ")}`,
       triage.summary,
       triage.suggestedStatus ? `Consider updating application status to "${triage.suggestedStatus}"` : null,
       priority,
@@ -505,7 +516,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       for (const messageId of fetchResult.ids) {
         const msg = await getMessage(accessToken, messageId, account.email);
         if (!msg) continue;
-        if (gmailSuppressionReason(msg)) {
+        if (classifyGmailMessage(msg).suppress) {
           outcome.suppressed++;
           continue;
         }

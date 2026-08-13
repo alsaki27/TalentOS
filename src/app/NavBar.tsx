@@ -21,6 +21,7 @@ interface MeResponse {
 interface Notifications {
   queue: { overdue: number; pendingReview: number; urgent: number };
   followUps: { due: number };
+  inbox?: { pendingApprovals: number; needsReply: number };
 }
 
 export default function NavBar() {
@@ -74,7 +75,6 @@ export default function NavBar() {
   }
 
   const moreLinks = [
-    { href: "/communications/gmail", label: "Gmail Inbox", show: true },
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
@@ -130,6 +130,12 @@ export default function NavBar() {
         <Link href="/follow-ups" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
           Follow-ups
           {notifications && notifications.followUps.due > 0 && <span className="nav-badge bg-orange-500/20 text-orange-400">{notifications.followUps.due}</span>}
+        </Link>
+        <Link href="/inbox" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
+          Inbox
+          {notifications?.inbox && notifications.inbox.pendingApprovals > 0 && (
+            <span className="nav-badge bg-violet-500/20 text-violet-400">{notifications.inbox.pendingApprovals}</span>
+          )}
         </Link>
         <div className="nav-more relative" ref={moreRef}>
           <button

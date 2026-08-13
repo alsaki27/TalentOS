@@ -543,13 +543,187 @@ label {
   background: var(--surface-raised);
 }
 
-/* Application Queue's 13-column table needs every horizontal pixel it can
+/* Application Queue's 11-column table needs every horizontal pixel it can
    get - tighter cell padding than the rest of the app's tables, scoped so
    this doesn't cramp candidates/companies/interviews tables elsewhere. */
 .app-queue-page .table th,
 .app-queue-page .table td {
   padding-left: 10px;
   padding-right: 10px;
+}
+
+/* Readability pass, scoped to this page only:
+   - filter bar gets real breathing room instead of the default cramped
+     inline-flow spacing (.filter-group has no base styling anywhere else,
+     so its children were only separated by incidental JSX whitespace)
+   - header/badge/button text nudged up from the tiny 11px this page had
+     leaned on to fit its wide table, to a standard readable size */
+.app-queue-page .filter-bar {
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.app-queue-page .filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  flex: 1 1 auto;
+}
+.app-queue-page .filter-bar input,
+.app-queue-page .filter-bar select {
+  min-width: 160px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+.app-queue-page .table th {
+  font-size: 12px;
+}
+.app-queue-page .badge {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.app-queue-page .btn-compact {
+  font-size: 12.5px;
+  padding: 7px 11px;
+}
+.app-queue-page .action-group {
+  gap: 8px;
+}
+.app-queue-page .queue-stage-meta {
+  font-size: 12px;
+}
+
+/* `text-muted` is a Tailwind color utility, so it compiles to
+   `color: hsl(var(--muted))` — and --muted is the shadcn HSL triplet
+   `217.2 32.6% 17.5%`, i.e. a near-black slate. Against this app's dark
+   shell that renders secondary text (emails, company/location, "by
+   <assigner>", em-dashes) as barely-visible dark-on-dark. Point it at the
+   real muted-text token instead. Scoped to this page so the many other
+   pages using `text-muted` keep their current appearance untouched. */
+.app-queue-page .text-muted {
+  color: var(--ink-soft);
+}
+
+/* `table-layout: fixed` gives every column a hard width, but nothing in the
+   base table styles stops a cell's content from spilling past that width.
+   Long unbroken tokens — candidate emails, hyphenated job titles, category
+   labels — overflowed their cell and visually collided with the column
+   next door. Wrap them instead, so nothing is lost and nothing overlaps.
+   (`th` already did this inline via overflow/textOverflow; `td` never did.) */
+.app-queue-page .table td {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.app-queue-page .table td a,
+.app-queue-page .table td .row-link {
+  overflow-wrap: anywhere;
+}
+/* Multi-word category badges are the one badge long enough to overrun a
+   cell; let those wrap rather than clip. Short #-chips stay on one line. */
+.app-queue-page .cell-category-badge {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.35;
+}
+
+/* C#/A#/J# reference numbers. Previously these sat inline beside the
+   candidate/job name, where a narrow fixed-width column left them
+   squeezed against the link or pushed out of the cell entirely. They get
+   their own row now, so each number renders in full at a legible size. */
+.app-queue-page .ref-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.app-queue-page .ref-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-soft);
+}
+.app-queue-page .ref-chip-candidate {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: #c4b5fd;
+}
+.app-queue-page .ref-chip-job {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc;
+}
+
+/* Ticket/Job and Resume ID cells: two labeled, individually-copyable rows
+   per cell (replacing four separate near-illegible truncated-ID columns
+   with an explicit copy affordance instead of click-anywhere-to-copy). */
+.app-queue-page .id-pair-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.app-queue-page .id-pair-row + .id-pair-row {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.app-queue-page .id-pair-label {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.app-queue-page .id-pair-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-queue-page .id-pair-copy {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  color: var(--ink-soft);
+}
+.app-queue-page .id-pair-copy:hover {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent);
+  transform: none;
+  box-shadow: none;
+}
+.app-queue-page .id-pair-copy.copied {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.12);
 }
 
 .table-compact td {
@@ -744,6 +918,41 @@ label {
   color: var(--ink-soft);
 }
 
+/* .notice and .alert* were used across 15 sites (application-queue,
+   admin/ai, candidates, candidates/[id]/job-search-profiles, ops,
+   ops/components/ai-agent-manager, and now /inbox) but never defined
+   anywhere - every one rendered as a bare unstyled div. Purely additive:
+   no existing rule is overridden. */
+.notice, .alert {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.alert-error {
+  border-color: rgba(var(--danger-rgb), 0.4);
+  background: rgba(var(--danger-rgb), 0.10);
+  color: var(--danger);
+}
+.alert-success {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.10);
+}
+.alert-close {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -830,22 +1039,6 @@ label {
 .queue-stage-meta-changed { color: #bfdbfe; }
 .queue-stage-meta-reviewed { color: #fde68a; }
 .queue-stage-meta-applied { color: #86efac; margin-top: 2px; }
-.queue-applied-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 36px;
-  padding: 0 10px;
-  border: 1px solid rgba(110, 231, 183, 0.45);
-  border-radius: 8px;
-  color: #bbf7d0;
-  background: rgba(16, 185, 129, 0.12);
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.queue-applied-toggle input { accent-color: #10b981; }
-
 /* Jobs masterlist: keep the control surface readable and make the wide data
    table intentionally scrollable instead of silently clipping actions. */
 .jobs-page { min-width: 0; }
