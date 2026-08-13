@@ -524,6 +524,9 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
         </div>
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add API Key</button>
       </div>
+      <div className="text-muted" style={{ marginBottom: 16, fontSize: 12 }}>
+        OpenCode Go and Google Vertex keys are managed as provider pools: healthy keys rotate round-robin, failed or quota-limited keys cool down, and only then does the configured fallback route run.
+      </div>
 
       {showAdd && <AddKeyForm onDone={() => { setShowAdd(false); loadKeys(); }} onError={onError} />}
       {editingKey && <EditKeyForm keyItem={editingKey} onDone={() => { setEditingKey(null); loadKeys(); }} onCancel={() => setEditingKey(null)} onError={onError} />}
