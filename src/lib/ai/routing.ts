@@ -18,6 +18,8 @@ export interface AutomationRouteResult {
   automationId: string;
   model?: string | null;
   routeRank: number | null;
+  /** Stable route id, used to retry a different model on the same provider key. */
+  routeId?: string | null;
   limitSkipped?: boolean;
 }
 
@@ -86,6 +88,7 @@ export async function getProviderForAutomation(
   automationId: string,
   excludeKeyIds?: Set<string>,
   excludeProviderNames?: Set<string>,
+  excludeRouteIds?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -97,6 +100,7 @@ export async function getProviderForAutomation(
         aiKeyId: null,
         automationId,
         routeRank: 0,
+        routeId: null,
       };
     }
   }
@@ -112,6 +116,7 @@ export async function getProviderForAutomation(
   // 2. Try each route in order, excluding failed keys
   let limitSkipped = false;
   for (const route of routes) {
+    if (excludeRouteIds?.has(route.id)) continue;
     if (route.ai_key_id) {
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
@@ -155,6 +160,7 @@ export async function getProviderForAutomation(
           automationId,
           model: effectiveModel,
           routeRank: route.rank,
+          routeId: route.id,
           limitSkipped,
         };
       }
@@ -170,6 +176,7 @@ export async function getProviderForAutomation(
           automationId,
           model: route.model_override,
           routeRank: route.rank,
+          routeId: route.id,
           limitSkipped,
         };
       }
@@ -217,6 +224,7 @@ export async function getProviderForAutomation(
             automationId,
             model: effectiveModel,
             routeRank: route.rank,
+            routeId: route.id,
             limitSkipped,
           };
         }
@@ -261,6 +269,7 @@ export async function getProviderForAutomation(
       aiKeyId: null,
       automationId,
       routeRank: null,
+      routeId: null,
     };
   }
 
@@ -290,6 +299,7 @@ export async function getProviderForAutomation(
       aiKeyId: null,
       automationId,
       routeRank: null,
+      routeId: null,
     };
   }
 
@@ -362,6 +372,7 @@ export async function callWithUsageTracking<T>(
   const MAX_RETRIES = 3;
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
+  const excludedRouteIds = new Set<string>();
 
   let lastError: Error | null = null;
   let lastResolved: AutomationRouteResult | null = null;
@@ -371,6 +382,7 @@ export async function callWithUsageTracking<T>(
       automationId,
       excludedKeyIds,
       attempt > 0 ? excludedProviders : undefined,
+      excludedRouteIds,
     );
 
     if (!resolved) {
@@ -483,8 +495,12 @@ export async function callWithUsageTracking<T>(
         errorCode === "rate_limit" || errorCode === "auth_error";
 
       if (isRetriable && attempt < MAX_RETRIES) {
-        if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
-        if (resolved.name) excludedProviders.add(resolved.name);
+        // Exclude the exact failed route, not the whole key/provider. This
+        // allows a model-level fallback (for example DeepSeek V4 -> MiniMax)
+        // to reuse the same OpenCode gateway credential safely.
+        if (resolved.routeId) excludedRouteIds.add(resolved.routeId);
+        // Keep provider exclusions for global emergency fallback only; route
+        // selection above is now precise at the route-id level.
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
             `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
