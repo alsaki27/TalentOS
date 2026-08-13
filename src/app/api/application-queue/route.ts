@@ -25,6 +25,9 @@ export async function GET(req: NextRequest) {
   const appliedOnly = url.searchParams.get("applied_only") === "1";
   const timeWindow = url.searchParams.get("time_window") || "";
   const timeWindowHours = ({ "12h": 12, "24h": 24, "3d": 72, "7d": 168 } as Record<string, number>)[timeWindow] ?? null;
+  const requestedSort = url.searchParams.get("sort");
+  const sort = requestedSort === "final_score" || requestedSort === "average_score" ? requestedSort : "due";
+  const sortDirection = url.searchParams.get("direction") === "asc" ? "asc" : "desc";
 
   try {
     const result = await listApplicationQueue({
@@ -44,6 +47,8 @@ export async function GET(req: NextRequest) {
       userRole: context!.profile.role,
       pipelineStatuses: appliedOnly ? ["applied"] : ["assigned", "stacked", "in_progress"],
       timeWindowHours,
+      sort,
+      sortDirection,
     });
 
     return NextResponse.json({ items: result.items, total: result.total, page, pageSize, stats: result.stats });

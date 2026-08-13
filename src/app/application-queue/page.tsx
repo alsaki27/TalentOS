@@ -39,6 +39,11 @@ interface QueueItem {
   workflow_id?: string | null;
   workflow_stage?: number | null;
   workflow_score?: number | null;
+  hiring_panel_ats_score?: number | null;
+  hiring_panel_recruiter_score?: number | null;
+  hiring_panel_role_fit_score?: number | null;
+  hiring_panel_truth_score?: number | null;
+  average_score?: number | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
   base_resume_id?: string | null;
@@ -108,6 +113,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   job: 190,
   status: 110,
   aiPipeline: 170,
+  score: 108,
   stage: 260,
   owner: 140,
   due: 90,
@@ -118,7 +124,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   actions: 220,
 };
 const COLUMN_ORDER = [
-  "checkbox", "candidate", "job", "status", "aiPipeline", "stage", "owner", "due",
+  "checkbox", "candidate", "job", "status", "aiPipeline", "score", "stage", "owner", "due",
   "ticketId", "jobId", "baseResumeId", "tailoredResumeId", "actions",
 ];
 
@@ -202,6 +208,8 @@ export default function ApplicationQueuePage() {
   const [candidateFilter, setCandidateFilter] = useState("");
   const [timeWindow, setTimeWindow] = useState("");
   const [appliedOnly, setAppliedOnly] = useState(false);
+  const [sort, setSort] = useState<"due" | "final_score" | "average_score">("due");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -251,6 +259,10 @@ export default function ApplicationQueuePage() {
     if (viewFilter !== "all") p.set("view", viewFilter);
     if (timeWindow) p.set("time_window", timeWindow);
     if (appliedOnly) p.set("applied_only", "1");
+    if (sort !== "due") {
+      p.set("sort", sort);
+      p.set("direction", sortDirection);
+    }
     return p;
   }
 
@@ -306,7 +318,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, appliedOnly, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, appliedOnly, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -803,6 +815,29 @@ export default function ApplicationQueuePage() {
             <input type="checkbox" checked={appliedOnly} onChange={e => setAppliedOnly(e.target.checked)} />
             <span>AE Applied only</span>
           </label>
+          <select
+            className="input"
+            value={sort}
+            onChange={e => {
+              const next = e.target.value as "due" | "final_score" | "average_score";
+              setSort(next);
+              setSortDirection(next === "due" ? "asc" : "desc");
+            }}
+            aria-label="Sort application queue"
+          >
+            <option value="due">Sort: due date</option>
+            <option value="final_score">Sort: Final QA score</option>
+            <option value="average_score">Sort: Average of all scores</option>
+          </select>
+          {sort !== "due" && (
+            <button
+              className="btn-compact"
+              onClick={() => setSortDirection((d) => d === "desc" ? "asc" : "desc")}
+              title="Change score ordering"
+            >
+              {sortDirection === "desc" ? "High → low" : "Low → high"}
+            </button>
+          )}
         </div>
         <span className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} / {total}</span>
       </div>
@@ -847,6 +882,7 @@ export default function ApplicationQueuePage() {
                   { id: "job", label: "Job" },
                   { id: "status", label: "Status" },
                   { id: "aiPipeline", label: "AI Pipeline" },
+                  { id: "score", label: "Scores" },
                   { id: "stage", label: "Stage" },
                   { id: "owner", label: "Owner" },
                   { id: "due", label: "Due" },
@@ -950,11 +986,18 @@ export default function ApplicationQueuePage() {
                             <strong>Error:</strong> {workflowDetails[item.workflow_id!].workflow.last_error}
                           </div>
                         )}
+                        {(item.workflow_stage ?? 0) >= 2 && (
+                          <QueueFindingsPanel details={workflowDetails[item.workflow_id!]} />
+                        )}
                         <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
                           View full pipeline in Status page →
                         </Link>
                       </div>
                     )}
+                  </td>
+
+                  <td>
+                    <QueueScoreCell item={item} />
                   </td>
 
                   <td>
@@ -1123,16 +1166,80 @@ export default function ApplicationQueuePage() {
   );
 }
 
-/** Deep link into /resume-parsing-status, the canonical place for AI
- *  findings (Hiring Panel score, Final Polish outcome) — this page no
- *  longer duplicates that UI in a local modal. Only worth showing once
- *  Hiring Panel has actually run (stage index >= 3). */
-function FindingsButton({ item }: { item: QueueItem }) {
-  if (!item.workflow_id || (item.workflow_stage ?? 0) < 3) return null;
+function scoreLabel(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(1)}/10`;
+}
+
+function QueueScoreCell({ item }: { item: QueueItem }) {
+  const average = item.average_score == null ? null : Number(item.average_score);
+  const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
+  if (average == null && finalScore == null) return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
   return (
-    <Link href={`/resume-parsing-status?workflow=${item.workflow_id}`} className="btn-compact btn-sm" style={{ textDecoration: "none" }}>
-      📋 AI findings
-    </Link>
+    <div style={{ display: "grid", gap: 2, fontSize: 11 }}>
+      <span className="badge badge-info" title="Average of ATS, recruiter, role fit, truth, and Final QA scores">Avg {scoreLabel(average)}</span>
+      <span className="text-muted" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>
+    </div>
+  );
+}
+
+/** Findings are displayed inline in the queue, matching the pipeline board,
+ * so reviewers do not lose their place by opening another page. */
+function QueueFindingsPanel({ details }: { details: any }) {
+  const artifacts: any[] = details?.artifacts ?? [];
+  const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
+  const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+  return (
+    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
+      {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+            {[
+              ["ATS", hiringPanel.atsScore],
+              ["Recruiter", hiringPanel.recruiterScore],
+              ["Role fit", hiringPanel.roleFitScore],
+              ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
+            ].map(([label, value]) => (
+              <div key={String(label)} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: "var(--muted)" }}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{scoreLabel(value as number | null) }</div>
+              </div>
+            ))}
+          </div>
+          {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--muted)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
+          {hiringPanel.requiredEdits?.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
+              {hiringPanel.requiredEdits.map((e: any, i: number) => (
+                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
+                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
+                  <span>{e.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {finalPolish && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                Final Polish
+                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
+                  {finalPolish.exportReady ? "ready" : "not ready"}
+                </span>
+              </div>
+              {finalPolish.unresolvedWarnings?.length > 0 && <div style={{ color: "var(--muted)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void; expandedWorkflow: string | null }) {
+  if (!item.workflow_id || (item.workflow_stage ?? 0) < 2) return null;
+  return (
+    <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} title="Show Hiring Panel and Final Polish findings inline">
+      {expandedWorkflow === item.workflow_id ? "▲ Hide findings" : "📋 Findings"}
+    </button>
   );
 }
 
@@ -1173,7 +1280,7 @@ function PipelineActions({
           title="Restart the full AI pipeline from scratch and replace this tailored resume">
           {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
         </button>
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }
@@ -1193,7 +1300,7 @@ function PipelineActions({
           disabled={actionLoading === item.id}>
           {actionLoading === item.id ? "Retrying..." : "🔄 Retry"}
         </button>
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }
@@ -1228,7 +1335,7 @@ function PipelineActions({
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
               {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
             </button>
-            <FindingsButton item={item} />
+            <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
           </>
         )}
       </div>
@@ -1252,7 +1359,7 @@ function PipelineActions({
             {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
           </button>
         )}
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }

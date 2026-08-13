@@ -151,6 +151,8 @@ export interface ListApplicationsQuery {
   userRole?: string;
   pipelineStatuses?: string[];
   timeWindowHours?: number | null;
+  sort?: "due" | "final_score" | "average_score";
+  sortDirection?: "asc" | "desc";
 }
 
 export interface PaginatedApplicationsResult {
@@ -430,6 +432,17 @@ export async function listApplicationQueue(
   const searchParam = `%${search}%`;
   const statuses = queryParams.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
   const timeWindowHours = queryParams.timeWindowHours ?? null;
+  const sort = queryParams.sort === "final_score" || queryParams.sort === "average_score"
+    ? queryParams.sort
+    : "due";
+  const sortDirection = queryParams.sortDirection === "asc" ? "ASC" : "DESC";
+  // Keep the original due-date ordering as the default. Score ordering is
+  // deliberately whitelisted before it is interpolated into SQL.
+  const orderBy = sort === "final_score"
+    ? `workflow_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
+    : sort === "average_score"
+      ? `average_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
+      : "a.assignment_due_at ASC NULLS LAST, a.applied_at DESC";
   const today = new Date().toISOString().slice(0, 10);
 
   const dataSql = `
@@ -444,7 +457,12 @@ export async function listApplicationQueue(
       w.status as workflow_status,
       w.id as workflow_id,
       w.current_stage as workflow_stage,
-      (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' ORDER BY created_at DESC LIMIT 1) as workflow_score,
+      CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (fp.data->>'finalQaScore')::numeric END as workflow_score,
+      CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END as hiring_panel_ats_score,
+      CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END as hiring_panel_recruiter_score,
+      CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END as hiring_panel_role_fit_score,
+      CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END as hiring_panel_truth_score,
+      score.average_score,
       a.tailored_resume_version_id as workflow_resume_version_id,
       rv.title as workflow_resume_title,
       rv.base_resume_id as base_resume_id,
@@ -457,6 +475,27 @@ export async function listApplicationQueue(
       WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
       ORDER BY created_at DESC LIMIT 1
     ) w ON true
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_hiring_panel'
+      ORDER BY created_at DESC LIMIT 1
+    ) hp ON true
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_final_polish'
+      ORDER BY created_at DESC LIMIT 1
+    ) fp ON true
+    LEFT JOIN LATERAL (
+      SELECT AVG(value)::numeric AS average_score
+      FROM (VALUES
+        (CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END),
+        (CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END),
+        (CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END),
+        (CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END),
+        (CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (fp.data->>'finalQaScore')::numeric END)
+      ) AS score_values(value)
+      WHERE value IS NOT NULL
+    ) score ON true
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
     WHERE a.status = ANY($1)
       -- Every role (including application_engineer) sees the whole queue regardless
@@ -479,7 +518,7 @@ export async function listApplicationQueue(
       AND ($13 = '' OR a.candidate_id::text = $13)
       AND ($14 = '' OR a.ae_stage = $14)
       AND ($15::int IS NULL OR a.created_at >= NOW() - ($15::int * INTERVAL '1 hour'))
-    ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
+    ORDER BY ${orderBy}
     OFFSET $11 LIMIT $12
   `;
   const items = await query<ApplicationRow>(dataSql, [
