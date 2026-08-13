@@ -69,6 +69,7 @@ export function buildProviderFromDbKey(
   chatEndpoint?: string | null,
   customHeaders?: Record<string, string> | null,
   providerConfig?: Record<string, unknown> | null,
+  reasoningEffort?: string | null,
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
@@ -277,9 +278,12 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       const selectedModel = model || "deepseek-v4-flash";
+      const normalizedReasoning = reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : null;
       const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
-        ? { thinking: { type: "enabled" }, reasoning_effort: "high" }
-        : undefined;
+        ? { thinking: { type: "enabled" }, reasoning_effort: normalizedReasoning || "high" }
+        : normalizedReasoning
+          ? { reasoning_effort: normalizedReasoning }
+          : undefined;
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)

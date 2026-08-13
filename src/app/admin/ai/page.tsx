@@ -78,6 +78,7 @@ interface RouteItem {
   key_model: string | null;
   key_fingerprint: string | null;
   key_status: string | null;
+  reasoning_effort?: string | null;
 }
 
 interface AgentConfig {
@@ -180,6 +181,7 @@ const PIPELINE_AGENT_IDS = new Set([
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
+  "application_tailoring",
 ]);
 
 function statusBadge(status: string): string {
@@ -1141,7 +1143,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [states, setStates] = useState<RoutingState[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; rank: number }[]>([]);
+  const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; reasoningEffort: string; rank: number }[]>([]);
   const [editRouteVersion, setEditRouteVersion] = useState<number>(0);
   const [editConfig, setEditConfig] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
@@ -1154,22 +1156,59 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [newStateDescription, setNewStateDescription] = useState("");
   const [stateSourceId, setStateSourceId] = useState("");
   const [stateSaving, setStateSaving] = useState(false);
+  const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
+  const [stateRoutesByAutomation, setStateRoutesByAutomation] = useState<Record<string, RouteItem[]>>({});
+  const [stateRoutesLoading, setStateRoutesLoading] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [agentsRes, keysRes] = await Promise.all([
+      const [agentsRes, keysRes, statesRes] = await Promise.all([
         fetch("/api/admin/ai/agents"),
         fetch("/api/admin/ai/keys"),
+        fetch("/api/admin/ai/states"),
       ]);
       if (agentsRes.ok) setAgents((await agentsRes.json()).agents ?? []);
       if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
-      const statesRes = await fetch("/api/admin/ai/states");
-      if (statesRes.ok) setStates((await statesRes.json()).states ?? []);
+      if (statesRes.ok) {
+        const nextStates = (await statesRes.json()).states ?? [];
+        setStates(nextStates);
+        const preferred = selectedStateId && nextStates.some((s: RoutingState) => s.id === selectedStateId)
+          ? selectedStateId
+          : nextStates.find((s: RoutingState) => s.is_active)?.id ?? nextStates[0]?.id ?? null;
+        if (preferred) {
+          setSelectedStateId(preferred);
+          await loadStateRoutes(preferred);
+        }
+      }
     } catch (e: any) { onError(e.message); }
     finally { setLoading(false); }
+  }
+
+  async function loadStateRoutes(stateId: string) {
+    setStateRoutesLoading(true);
+    try {
+      const res = await fetch(`/api/admin/ai/states/${stateId}`);
+      if (!res.ok) throw new Error("Failed to load routing state routes");
+      const data = await res.json();
+      const grouped: Record<string, RouteItem[]> = {};
+      for (const route of (data.routes ?? []) as RouteItem[]) {
+        if (!grouped[route.automation_id]) grouped[route.automation_id] = [];
+        grouped[route.automation_id].push(route);
+      }
+      setStateRoutesByAutomation(grouped);
+    } catch (e: any) {
+      onError(e.message || "Failed to load routing state routes");
+    } finally {
+      setStateRoutesLoading(false);
+    }
+  }
+
+  function selectState(stateId: string) {
+    setSelectedStateId(stateId);
+    loadStateRoutes(stateId);
   }
 
   async function fetchKeyModels(keyId: string) {
@@ -1193,7 +1232,8 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
 
   function startEdit(agent: AgentItem) {
     setEditingAgent(agent.id);
-    setEditRoutes(agent.routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", rank: r.rank })));
+    const routes = stateRoutesByAutomation[agent.id] ?? agent.routes;
+    setEditRoutes(routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", reasoningEffort: r.reasoning_effort || "", rank: r.rank })));
     setEditRouteVersion(agent.route_version ?? 0);
     setEditConfig(agent.config || { is_active: agent.is_active } as any);
     setMessage(null);
@@ -1212,10 +1252,16 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     try {
       const routes = editRoutes
         .filter(r => r.keyId)
-        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, rank: i + 1 }));
-      const res = await fetch(`/api/admin/ai/agents/${agentId}/routes`, {
+        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, reasoning_effort: r.reasoningEffort || null, rank: i + 1 }));
+      const endpoint = selectedStateId
+        ? `/api/admin/ai/states/${selectedStateId}/routes`
+        : `/api/admin/ai/agents/${agentId}/routes`;
+      const body = selectedStateId
+        ? { automation_id: agentId, routes }
+        : { routes, routeVersion: editRouteVersion };
+      const res = await fetch(endpoint, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routes, routeVersion: editRouteVersion }),
+        body: JSON.stringify(body),
       });
       if (res.status === 409) {
         const d = await res.json().catch(() => ({}));
@@ -1229,7 +1275,11 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         throw new Error(d.error || "Failed to save routes");
       }
       const data = await res.json();
-      setEditRouteVersion(data.routeVersion ?? 0);
+      if (selectedStateId) {
+        setStateRoutesByAutomation(prev => ({ ...prev, [agentId]: data.routes ?? [] }));
+      } else {
+        setEditRouteVersion(data.routeVersion ?? 0);
+      }
       setMessage({ type: "success", text: "Routes saved" });
       loadAll();
     } catch (e: any) { setMessage({ type: "error", text: e.message }); }
@@ -1294,7 +1344,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     finally { setStateSaving(false); }
   }
 
-  function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", rank: p.length }]); }
+  function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", reasoningEffort: "", rank: p.length + 1 }]); }
   function removeRouteRow(idx: number) { setEditRoutes(p => p.filter((_, i) => i !== idx)); }
 
   if (loading) return <div className="loading-panel" style={{ padding: 40, textAlign: "center" }}>Loading agents...</div>;
@@ -1305,7 +1355,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           <div>
             <h3 style={{ margin: 0 }}>Routing states</h3>
-            <div className="text-muted" style={{ fontSize: 12 }}>Versioned provider/model snapshots. Publishing atomically activates a state for runtime routing; only one can be active.</div>
+            <div className="text-muted" style={{ fontSize: 12 }}>Choose a state below, then edit each agent's provider, model, and fallback chain inside that state. Publishing the state activates it for runtime routing.</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1324,13 +1374,23 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                 <td><div style={{ fontWeight: 600 }}>{s.name} {s.is_active && <span className="badge badge-success">ACTIVE</span>}</div><div className="text-muted" style={{ fontSize: 11 }}>{s.description || "No description"}</div></td>
                 <td><span className={`badge ${s.is_active ? "badge-success" : s.status === "archived" ? "badge-muted" : "badge-warning"}`}>{s.is_active ? "active" : s.status}</span></td>
                 <td>{s.route_count}</td><td>{relativeTime(s.updated_at)}</td>
-                <td style={{ display: "flex", gap: 6 }}>{!s.is_active && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "published")}>Activate</button>}{!s.is_active && s.status !== "archived" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "archived")}>Archive</button>}</td>
+                <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button className="btn-compact btn-sm" disabled={stateRoutesLoading} onClick={() => selectState(s.id)}>
+                    {selectedStateId === s.id ? "Editing" : "Edit routes"}
+                  </button>
+                  {!s.is_active && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "published")}>Activate</button>}
+                  {!s.is_active && s.status !== "archived" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "archived")}>Archive</button>}
+                </td>
               </tr>)}
             </tbody></table>
           </div>
         )}
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <strong style={{ color: "var(--ink)" }}>
+          {selectedStateId ? `Editing: ${states.find(s => s.id === selectedStateId)?.name || "routing state"}` : "Legacy live routes"}
+        </strong>
+        {stateRoutesLoading && <span className="text-muted">Loading state routes…</span>}
         <input className="input" placeholder="Search agents..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: 250 }} />
         <select className="input" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}>
           <option value="">All groups</option>
@@ -1364,8 +1424,9 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
           </thead>
           <tbody>
             {filtered.map(a => {
-              const primary = a.routes.find(r => r.rank === 0 && r.is_enabled);
-              const fallback1 = a.routes.find(r => r.rank === 1 && r.is_enabled);
+              const agentRoutes = (stateRoutesByAutomation[a.id] ?? a.routes).filter(r => r.is_enabled).sort((x, y) => x.rank - y.rank);
+              const primary = agentRoutes[0];
+              const fallback1 = agentRoutes[1];
               return (
                 <tr key={a.id}>
                   <td className="cell-main">
@@ -1390,7 +1451,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                     {fallback1?.key_label ? (
                       <div>
                         <div>{fallback1.key_label}</div>
-                        <div className="text-muted">{fallback1.key_provider}</div>
+                        <div className="text-muted">{fallback1.key_provider} {fallback1.model_override && ` · ${fallback1.model_override}`}</div>
                       </div>
                     ) : <span className="text-muted">—</span>}
                   </td>
@@ -1414,6 +1475,11 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         <div className="modal-overlay" onClick={() => setEditingAgent(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
             <h2>{agents.find(a => a.id === editingAgent)?.label || "Agent"} Configuration</h2>
+            <div className="text-muted" style={{ marginBottom: 16 }}>
+              {selectedStateId
+                ? `Editing routes in ${states.find(s => s.id === selectedStateId)?.name || "selected state"}. Changes to the active state take effect immediately; draft states remain isolated until activated.`
+                : "Editing the legacy live route chain."}
+            </div>
 
               <div style={{ marginBottom: 20 }}>
                 <h4>Routes</h4>
@@ -1436,7 +1502,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
 
                   return (
                   <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
-                    <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i}</span>
+                    <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i + 1}</span>
                     <select className="input" style={{ flex: 1, minWidth: 180 }} value={r.keyId} onChange={e => {
                       const keyId = e.target.value;
                       const updated = [...editRoutes];
@@ -1472,6 +1538,22 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                           }} />
                       )}
                     </div>
+                    {selectedKey?.provider === "opencode" && (
+                      <select className="input" style={{ minWidth: 130, marginTop: 0 }} value={r.reasoningEffort}
+                        onChange={e => {
+                          const updated = [...editRoutes];
+                          updated[i].reasoningEffort = e.target.value;
+                          setEditRoutes(updated);
+                        }}>
+                        <option value="">Reasoning: default</option>
+                        <option value="off">Reasoning: off</option>
+                        <option value="low">Reasoning: low</option>
+                        <option value="medium">Reasoning: medium</option>
+                        <option value="high">Reasoning: high</option>
+                        <option value="xhigh">Reasoning: xhigh</option>
+                        <option value="max">Reasoning: max</option>
+                      </select>
+                    )}
                     <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)} style={{ marginTop: 6 }}>×</button>
                     {capabilityWarnings.length > 0 && (
                       <div style={{ flexBasis: "100%", marginTop: 4 }}>

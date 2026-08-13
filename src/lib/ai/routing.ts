@@ -16,6 +16,7 @@ export interface AutomationRouteResult {
   aiKeyId: string | null;
   automationId: string;
   model?: string | null;
+  reasoningEffort?: string | null;
   routeRank: number | null;
   /** Stable route id, used to retry a different model on the same provider key. */
   routeId?: string | null;
@@ -30,6 +31,7 @@ interface AutomationRouteRow {
   rank: number;
   is_enabled: boolean;
   model_override: string | null;
+  reasoning_effort?: string | null;
 }
 
 // These providers are intentionally pooled by provider rather than treated as
@@ -173,7 +175,8 @@ export async function getProviderForAutomation(
   let routes = runtime.active_routing_state_id
     ? await query<AutomationRouteRow>(
         `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
-                automation_id, ai_key_id, provider, rank, is_enabled, model_override
+                automation_id, ai_key_id, provider, rank, is_enabled, model_override,
+                reasoning_effort
          FROM ai_routing_state_routes
          WHERE state_id = $1 AND automation_id = $2 AND is_enabled = true
          ORDER BY rank ASC`,
@@ -236,7 +239,9 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
+        const provider = route.reasoning_effort
+          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
+          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
         if (provider) {
           return {
             provider,
@@ -244,6 +249,7 @@ export async function getProviderForAutomation(
             aiKeyId: keyRow.id,
             automationId,
             model: effectiveModel,
+            reasoningEffort: route.reasoning_effort,
             routeRank: route.rank,
             routeId: route.id,
             limitSkipped,
@@ -284,7 +290,9 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
+        const dbProvider = route.reasoning_effort
+          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
+          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
         if (dbProvider) {
           return {
             provider: dbProvider,
@@ -292,6 +300,7 @@ export async function getProviderForAutomation(
             aiKeyId: keyRow.id,
             automationId,
             model: effectiveModel,
+            reasoningEffort: route.reasoning_effort,
             routeRank: route.rank,
             routeId: route.id,
             limitSkipped,
