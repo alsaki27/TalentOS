@@ -48,10 +48,26 @@ export async function POST(req: NextRequest) {
     `SELECT a.id, c.name AS candidate_name, COALESCE(j.company, 'Unknown Company') AS company_name,
             COALESCE(j.title, 'Job Application') AS job_title
      FROM applications a
-     JOIN application_resume_versions arv ON arv.application_id = a.id
+     JOIN application_resume_versions arv ON arv.id = $2
      JOIN candidates c ON c.id = a.candidate_id
      LEFT JOIN jobs j ON j.id = a.job_id
-     WHERE a.id = $1 AND arv.id = $2`,
+     WHERE a.id = $1
+       AND (
+         arv.application_id = a.id
+         OR EXISTS (
+           SELECT 1
+           FROM application_packets p
+           WHERE p.application_id = a.id
+             AND p.final_resume_version_id = arv.id
+         )
+         OR (
+           arv.candidate_id = a.candidate_id
+           AND EXISTS (
+             SELECT 1 FROM target_jobs tj
+             WHERE tj.id = arv.target_job_id AND tj.job_id = a.job_id
+           )
+         )
+       )`,
     [applicationId, resumeVersionId]
   );
   if (!linked) {

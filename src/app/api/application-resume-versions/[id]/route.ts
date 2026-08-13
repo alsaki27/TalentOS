@@ -25,18 +25,35 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
   if (data) {
     const packet = await queryOne<{ application_id: string }>(
-        `SELECT application_id FROM application_packets WHERE resume_version_id = $1 OR final_resume_version_id = $1 LIMIT 1`,
-        [params.id]
-      );
-    data.application_id = packet?.application_id ?? null;
-  }
+      `SELECT application_id FROM application_packets
+       WHERE resume_version_id = $1 OR final_resume_version_id = $1
+       LIMIT 1`,
+      [params.id]
+    );
 
-  if (data) {
-    const packet = await queryOne<{ application_id: string }>(
-        `SELECT application_id FROM application_packets WHERE resume_version_id = $1 OR final_resume_version_id = $1 LIMIT 1`,
-        [params.id]
+    // Newer rows carry the application ID directly. Preserve it; the previous
+    // packet-only enrichment overwrote it with null for rows that had not yet
+    // been attached to a packet, which silently disabled SharePoint archiving
+    // in the browser export path.
+    data.application_id = data.application_id ?? packet?.application_id ?? null;
+
+    // Older rows may have neither the direct link nor a packet yet. Resolve the
+    // application deterministically from the resume's candidate + target job so
+    // an export never falls back to a download-only path when a matching ticket
+    // already exists.
+    if (!data.application_id && data.candidate_id && data.target_job_id) {
+      const inferred = await queryOne<{ id: string }>(
+        `SELECT a.id
+         FROM applications a
+         JOIN target_jobs tj ON tj.job_id = a.job_id
+         WHERE a.candidate_id = $1
+           AND tj.id = $2
+         ORDER BY a.applied_at DESC NULLS LAST, a.created_at DESC NULLS LAST
+         LIMIT 1`,
+        [data.candidate_id, data.target_job_id]
       );
-    data.application_id = packet?.application_id ?? null;
+      data.application_id = inferred?.id ?? null;
+    }
   }
 
   // Neon returns JSONB columns as raw strings. The studio page and other

@@ -6,7 +6,8 @@
 // so the original high-fidelity templates run unchanged here instead of needing a
 // degraded substitute or an external Node service.
 //
-// Generation produces a Blob immediately for download; uploading that blob to R2
+// Generation produces a Blob immediately for download; uploading that blob to the
+// configured archive (SharePoint in production)
 // for history/re-download is a separate, best-effort step (see uploadResumeExport)
 // that the caller can fire in the background without blocking the download.
 

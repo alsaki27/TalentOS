@@ -110,6 +110,7 @@ interface ResumeExport {
   file_name: string;
   file_path: string | null;
   storage_provider: string | null;
+  storage_url: string | null;
   file_size_bytes: number | null;
   status: "created" | "failed" | "deleted";
   error: string | null;
@@ -302,7 +303,8 @@ export default function ApplicationResumeStudioPage() {
       if (!res.ok) throw new Error("Failed to load application resume version");
       const ar: ApplicationResumeVersion = await res.json();
       setAppResume(ar);
-      setApplicationId((ar as any).application_id || (ar as any).applicationId || null);
+      const resolvedApplicationId = (ar as any).application_id || (ar as any).applicationId || null;
+      setApplicationId(resolvedApplicationId);
 
       // Neon returns JSONB columns as raw strings. The "deep clone" idiom
       // JSON.parse(JSON.stringify(str)) returns the same string, not an object,
@@ -393,14 +395,11 @@ export default function ApplicationResumeStudioPage() {
         const draftData = await draftRes.json();
         setDrafts(draftData.drafts ?? []);
       }
-      // Load exports - reusing the application_id already resolved into `ar`
-      // above (the GET route enriches it via application_packets, since
-      // application_resume_versions has no application_id column of its own) -
-      // no need for a second fetch of the same endpoint just to read the same
-      // field again.
-      const exportAppId = (ar as any).application_id;
-      if (exportAppId) {
-        const historyRes = await fetch(`/api/applications/${exportAppId}/resume-exports`);
+      // Load export history using the same resolved application ID used by
+      // exports. This includes direct links, packet links, and legacy inferred
+      // links returned by the version endpoint.
+      if (resolvedApplicationId) {
+        const historyRes = await fetch(`/api/applications/${resolvedApplicationId}/resume-exports`);
         if (historyRes.ok) {
           const historyData = await historyRes.json();
           setExports(historyData.exports ?? []);
@@ -754,6 +753,10 @@ export default function ApplicationResumeStudioPage() {
 
   async function downloadExport(format: "pdf" | "docx") {
     if (!applicationResumeId || !content) return;
+    if (!applicationId) {
+      setError("This tailored resume is not linked to an application, so it cannot be archived.");
+      return;
+    }
     setExporting(format);
     try {
       // Render once in the browser. The exact same blob is downloaded and then
@@ -761,7 +764,7 @@ export default function ApplicationResumeStudioPage() {
       await exportAndDownloadResume(
         content,
         format,
-        applicationId ? { applicationId, resumeVersionId: applicationResumeId } : undefined
+        { applicationId, resumeVersionId: applicationResumeId }
       );
     } catch (err: any) {
       setError(err?.message || `${format.toUpperCase()} export failed.`);
@@ -1068,6 +1071,28 @@ export default function ApplicationResumeStudioPage() {
     setExportingResume(true);
     setError("");
     try {
+      // PDF/DOCX must use the browser renderer: it is the same high-fidelity
+      // document the AE sees, and it can upload that exact blob to SharePoint.
+      // The old server PDF route is intentionally disabled on Cloudflare and
+      // caused the right-pane PDF button to fail without an archive.
+      if (exportType === "pdf" || exportType === "docx") {
+        if (!content || !applicationId) {
+          throw new Error("This tailored resume is not linked to an application, so it cannot be archived.");
+        }
+        await exportAndDownloadResume(content, exportType, {
+          applicationId,
+          resumeVersionId: applicationResumeId,
+        });
+        const historyRes = await fetch(`/api/applications/${applicationId}/resume-exports`);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setExports(historyData.exports ?? []);
+        }
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+        return;
+      }
+
       const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1112,12 +1137,11 @@ export default function ApplicationResumeStudioPage() {
   }
 
   async function downloadExportById(exportId: string) {
-    const draftRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
-    if (!draftRes.ok) return;
-    const draftData = await draftRes.json();
-    const appId = draftData.applicationId;
-    if (!appId) return;
-    const res = await fetch(`/api/applications/${appId}/resume-exports/${exportId}/download`);
+    if (!applicationId) {
+      setError("This tailored resume is not linked to an application.");
+      return;
+    }
+    const res = await fetch(`/api/applications/${applicationId}/resume-exports/${exportId}/download`);
     if (res.ok) {
       const blob = await res.blob();
       const fileName = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "resume";
@@ -1127,6 +1151,9 @@ export default function ApplicationResumeStudioPage() {
       a.download = fileName;
       a.click();
       window.URL.revokeObjectURL(url);
+    } else {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || "Failed to download the archived export.");
     }
   }
 
@@ -1889,9 +1916,21 @@ export default function ApplicationResumeStudioPage() {
                         <p style={{ fontSize: 11, color: "var(--danger)", margin: "4px 0 0" }}>{ex.error}</p>
                       )}
                       {ex.status !== "failed" && (
-                        <button className="btn btn-compact" style={{ marginTop: 6 }} onClick={() => downloadExportById(ex.id)}>
-                          Download
-                        </button>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                          <button className="btn btn-compact" onClick={() => downloadExportById(ex.id)}>
+                            Download
+                          </button>
+                          {ex.storage_url && ex.storage_provider === "sharepoint" && (
+                            <a
+                              className="btn btn-compact"
+                              href={ex.storage_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open SharePoint
+                            </a>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
