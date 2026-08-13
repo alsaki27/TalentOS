@@ -244,6 +244,16 @@ body::before {
   padding-right: 16px;
 }
 
+/* The AI Control Center contains operational tables wider than the default
+   1100px content shell. Give this page the same deliberate full-width canvas
+   as the application queue so its action column is visible without forcing
+   operators to discover a hidden horizontal scroll first. */
+.page:has(.ai-control-center) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 .page-header {
   display: flex;
   align-items: center;
