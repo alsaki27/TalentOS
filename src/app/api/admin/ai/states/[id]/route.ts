@@ -29,9 +29,36 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const body = await req.json();
     const status = body.status;
     if (!['draft', 'published', 'archived'].includes(status)) return NextResponse.json({ error: "status must be draft, published, or archived" }, { status: 400 });
-    const state = await queryOne<any>(`UPDATE ai_routing_states
-      SET status = $2, published_at = CASE WHEN $2 = 'published' THEN COALESCE(published_at, now()) ELSE published_at END, updated_at = now()
-      WHERE id = $1 RETURNING *`, [params.id, status]);
+    // Publishing is an operational action, not just a label. Previously this
+    // endpoint only changed the state metadata, so the UI could say
+    // "published" while the live resolver continued using the old routes.
+    // Apply the snapshot in the same database-side operation as the publish.
+    if (status === "published") {
+      await execute(`WITH published AS (
+        UPDATE ai_routing_states
+        SET status = 'published', published_at = COALESCE(published_at, now()), updated_at = now()
+        WHERE id = $1
+        RETURNING id
+      ), snapshot AS (
+        SELECT r.automation_id, r.rank, r.ai_key_id, r.provider, r.model_override, r.is_enabled
+        FROM ai_routing_state_routes r
+        JOIN published p ON p.id = r.state_id
+      )
+      UPDATE ai_automation_routes live
+      SET ai_key_id = snapshot.ai_key_id,
+          provider = snapshot.provider,
+          model_override = snapshot.model_override,
+          is_enabled = snapshot.is_enabled,
+          updated_at = now()
+      FROM snapshot
+      WHERE snapshot.automation_id = live.automation_id
+        AND snapshot.rank = live.rank`, [params.id]);
+    } else {
+      await execute(`UPDATE ai_routing_states
+        SET status = $2, updated_at = now()
+        WHERE id = $1`, [params.id, status]);
+    }
+    const state = await queryOne<any>("SELECT * FROM ai_routing_states WHERE id = $1", [params.id]);
     if (!state) return NextResponse.json({ error: "Routing state not found" }, { status: 404 });
     return NextResponse.json({ state });
   } catch (err: any) {
