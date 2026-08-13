@@ -245,8 +245,8 @@ export default function AiKeyManager() {
         </div>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
-        DB-managed AI API keys as backup/fallback providers. Env-based keys (ANTHROPIC_API_KEY, NVIDIA_API_KEY)
-        are still used first. Keys are encrypted server-side and never displayed after saving.
+        Neon-managed AI API keys are the primary and fallback providers. Credentials are encrypted
+        server-side and never displayed after saving.
       </p>
 
       {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}

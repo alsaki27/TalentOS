@@ -111,6 +111,9 @@ export async function PATCH(
     is_enabled?: boolean;
     apiKey?: string;
     isProtected?: boolean;
+    baseUrl?: string | null;
+    providerConfig?: Record<string, unknown>;
+    chatEndpoint?: string | null;
   } = {};
 
   if (body.label !== undefined) standardUpdates.label = body.label;
@@ -118,6 +121,27 @@ export async function PATCH(
   if (body.priority !== undefined) standardUpdates.priority = body.priority;
   if (body.is_enabled !== undefined) standardUpdates.is_enabled = body.is_enabled;
   if (body.is_protected !== undefined) standardUpdates.isProtected = body.is_protected === true;
+  if (body.base_url !== undefined) {
+    const baseUrl = typeof body.base_url === "string" && body.base_url.trim() ? body.base_url.trim() : null;
+    if (baseUrl) {
+      try {
+        const parsed = new URL(baseUrl);
+        if (parsed.protocol !== "https:" || ["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname.toLowerCase())) {
+          return NextResponse.json({ error: "base_url must be a public HTTPS endpoint" }, { status: 400 });
+        }
+      } catch {
+        return NextResponse.json({ error: "base_url is not a valid URL" }, { status: 400 });
+      }
+    }
+    standardUpdates.baseUrl = baseUrl;
+  }
+  if (body.chat_endpoint !== undefined) standardUpdates.chatEndpoint = typeof body.chat_endpoint === "string" && body.chat_endpoint.trim() ? body.chat_endpoint.trim() : null;
+  if (body.provider_config !== undefined) {
+    if (!body.provider_config || typeof body.provider_config !== "object" || Array.isArray(body.provider_config)) {
+      return NextResponse.json({ error: "provider_config must be an object" }, { status: 400 });
+    }
+    standardUpdates.providerConfig = body.provider_config;
+  }
   if (body.apiKey !== undefined) {
     if (typeof body.apiKey !== "string" || body.apiKey.trim() === "") {
       return NextResponse.json(
@@ -140,10 +164,6 @@ export async function PATCH(
   const extraValues: any[] = [];
   let extraIdx = 1;
 
-  if (body.base_url !== undefined) {
-    extraFields.push(`base_url = $${extraIdx++}`);
-    extraValues.push(typeof body.base_url === "string" && body.base_url.trim() ? body.base_url.trim() : null);
-  }
   if (body.notes !== undefined) {
     extraFields.push(`notes = $${extraIdx++}`);
     extraValues.push(typeof body.notes === "string" ? body.notes : null);

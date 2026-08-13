@@ -1,12 +1,7 @@
 // src/lib/ai/index.ts
-// Picks whichever AI provider is actually configured. Set AI_PROVIDER=anthropic or
-// AI_PROVIDER=nvidia to force one; otherwise prefers Anthropic if its key is set,
-// falling back to NVIDIA (Kimi K2 via integrate.api.nvidia.com) if not. Callers
-// (chat route, digest cron) only see the AiProvider interface either way.
-//
-// Chunk 3.5 addition: getActiveProviderAsync() also tries DB-managed keys as
-// fallback when no env-based provider is configured. This is the preferred path
-// for new code; getActiveProvider() remains for backward compatibility.
+// Canonical AI-provider lookup. Production credentials and endpoint configuration
+// are loaded from the Neon-backed Control Center. The synchronous helpers remain
+// only for backward-compatible mock/test callers and never read provider secrets.
 //
 // Phase 2 addition: getProviderForCategory(category) reads ai_task_category_config
 // to let admins route specific task categories to specific providers/keys.
@@ -25,7 +20,7 @@ import { queryOne } from "@/server/db/neon";
 
 export interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" | "mock";
+  name: string;
 }
 
 export type AiTaskCategory =
@@ -88,7 +83,7 @@ async function getDbProviderByName(name: string): Promise<ActiveProvider | null>
   for (const key of matching) {
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
     if (provider) {
       return { provider, name: keyRow.provider as ActiveProvider["name"] };
     }
@@ -154,15 +149,10 @@ export function getActiveProvider(): ActiveProvider | null {
 }
 
 /**
- * Async version that falls back to DB-managed keys when no env-based provider
- * is configured. Preferred for new code in workflow routes.
+ * Canonical async provider lookup. Production credentials are resolved from
+ * Neon only so deployment secrets cannot shadow Control Center configuration.
  */
 export async function getActiveProviderAsync(): Promise<ActiveProvider | null> {
-  // Try env-based providers first (same logic as sync version)
-  const envProvider = getActiveProvider();
-  if (envProvider) return envProvider;
-
-  // Fallback to DB-managed keys
   return getActiveProviderWithFallback();
 }
 
@@ -170,8 +160,8 @@ export async function getActiveProviderAsync(): Promise<ActiveProvider | null> {
  * Per-task-category provider routing.
  * 1. Looks up ai_task_category_config for the given category.
  * 2. If ai_key_id is set, builds a provider from that exact DB key.
- * 3. If provider is set (no specific key), tries the env-based getter for that
- *    provider, then its highest-priority enabled DB key.
+ * 3. If provider is set (no specific key), tries its highest-priority enabled
+ *    Neon key.
  * 4. Falls back to getActiveProviderAsync() (global default chain) if no override
  *    is configured or the override provider is not actually available.
  */
@@ -195,16 +185,13 @@ export async function getProviderForCategory(
   if (row.ai_key_id) {
     const keyRow = await getAiKeyWithDecryptedKey(row.ai_key_id);
     if (!keyRow) return getActiveProviderAsync();
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
     if (!provider) return getActiveProviderAsync();
     return { provider, name: keyRow.provider as ActiveProvider["name"] };
   }
 
-  // 3. If provider is set (no specific key), try env-based then DB keys
+  // 3. Provider-only categories resolve from Neon.
   if (row.provider) {
-    const envProvider = getProviderByName(row.provider);
-    if (envProvider) return envProvider;
-
     const dbProvider = await getDbProviderByName(row.provider);
     if (dbProvider) return dbProvider;
   }

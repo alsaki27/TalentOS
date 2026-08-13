@@ -8,7 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { query } from "@/server/db/neon";
-import { MAX_CONCURRENT_AI_WORKFLOWS } from "@/server/repositories/applicationAiWorkflowRepository";
+import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +30,7 @@ interface OverviewRow {
 export async function GET(_req: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
+  const runtimeConfig = await getAiRuntimeConfig();
 
   const counts = await query<{ status: string; n: number }>(
     `SELECT status, COUNT(*)::int AS n FROM application_ai_workflows GROUP BY status`
@@ -72,7 +73,7 @@ export async function GET(_req: NextRequest) {
   return NextResponse.json({
     concurrency: {
       active: activeCount?.[0]?.n ?? 0,
-      max: MAX_CONCURRENT_AI_WORKFLOWS,
+      max: runtimeConfig.workflow_max_concurrency,
     },
     statusCounts,
     inFlight: inFlight ?? [],

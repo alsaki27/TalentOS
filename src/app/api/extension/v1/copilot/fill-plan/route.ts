@@ -79,6 +79,13 @@ export async function POST(request: NextRequest) {
       const body = await req.json();
       const { applicationId, candidateId, formSnapshot, selectedResumeId, pageContext } = body;
 
+      // A key may be bound to one candidate. Never let a generic extension
+      // key accidentally bypass that binding when the AE is running Copilot
+      // from a page that is not linked to an application.
+      if (auth.key.candidate_id && candidateId && String(auth.key.candidate_id) !== String(candidateId)) {
+        return extensionError("forbidden", "This extension key is bound to a different candidate.", 403);
+      }
+
       if (!Array.isArray(formSnapshot) || formSnapshot.length === 0 || formSnapshot.length > 300) {
         return extensionError("validation_error", "formSnapshot is required.", 400);
       }
@@ -104,13 +111,16 @@ export async function POST(request: NextRequest) {
            WHERE a.id = $1`,
           [applicationId]
         );
+        if (appData && auth.key.candidate_id && String(appData.candidate_id) !== String(auth.key.candidate_id)) {
+          return extensionError("forbidden", "This extension key is bound to a different candidate.", 403);
+        }
         if (appData && candidateId && String(appData.candidate_id) !== String(candidateId)) {
           return extensionError("validation_error", "applicationId does not belong to candidateId.", 400);
         }
       } else {
         // TalentOS may already have a real application (and a resume tailored
         // specifically for it) for the job on the currently-open page — check
-        // before falling back to an ad-hoc application + manual resume pick.
+        // before falling back to an in-memory candidate context + manual resume pick.
         const match = await findMatchingApplication(candidateId, pageContext?.title || "");
         if (match) {
           appData = await queryOne<any>(
@@ -133,11 +143,20 @@ export async function POST(request: NextRequest) {
       }
 
       if (!appData && !applicationId) {
-        // Create an ad-hoc application for the candidate
-        const cand = await queryOne<any>(`SELECT * FROM candidates WHERE id = $1`, [candidateId]);
+        // Copilot is a form assistant. A page without a TalentOS application
+        // is intentionally an in-memory capture context, not an application
+        // queue write. The old implementation inserted a `copilot_adhoc`
+        // application here and set applied_at=NOW(), which made merely
+        // opening/analyzing a page look like an application had been sent.
+        // Job capture belongs to /api/extension/v1/capture-job and queue
+        // creation must happen through an explicit TalentOS workflow.
+        const cand = await queryOne<any>(
+          `SELECT * FROM candidates WHERE id = $1 AND status = 'active'`,
+          [candidateId]
+        );
         if (cand) {
           appData = {
-            application_id: "adhoc-" + Date.now(),
+            application_id: null,
             candidate_id: candidateId,
             job_id: null,
             title: pageContext?.title || "Unknown Job",
@@ -159,16 +178,6 @@ export async function POST(request: NextRequest) {
             eeo_veteran: cand.eeo_veteran,
             eeo_disability: cand.eeo_disability,
           };
-
-          // Actually insert an ad-hoc application into DB so we have a real ID for evidence gathering
-          const adhocApp = await queryOne<any>(`
-            INSERT INTO applications (candidate_id, status, source_type, adhoc_job_data, applied_at)
-            VALUES ($1, 'in_progress', 'copilot_adhoc', $2, NOW())
-            RETURNING id
-          `, [candidateId, JSON.stringify(pageContext || {})]);
-          if (adhocApp) {
-            appData.application_id = adhocApp.id;
-          }
         }
       }
 
@@ -320,7 +329,8 @@ export async function POST(request: NextRequest) {
         resumeVersionId,
         resumeName: matchedApplication
           ? `Tailored resume for ${matchedApplication.title} @ ${matchedApplication.company}`
-          : selectedResumeId ? "Selected Resume" : "No Resume Selected"
+          : selectedResumeId ? "Selected Resume" : "No Resume Selected",
+        captureOnly: !matchedApplication && !applicationId,
       });
     } catch (err) {
       console.error("[Copilot Fill Plan Error]", err);

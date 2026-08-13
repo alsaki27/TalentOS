@@ -1,7 +1,7 @@
 // src/lib/ai/anthropicProvider.ts
 // Anthropic Messages API via raw fetch — no SDK dependency, consistent with how
 // every other external integration in this app (ATS fetchers, USAJobs, career-page
-// extractor) talks to its provider. Requires ANTHROPIC_API_KEY.
+// extractor) talks to its provider. Credentials are injected from Neon.
 
 import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib/ai/provider";
 
@@ -26,8 +26,7 @@ function fromAnthropicContent(content: any[]): AiContentBlock[] {
   });
 }
 
-export function getAnthropicProvider(modelOverride?: string | null): AiProvider | null {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+export function getAnthropicProvider(modelOverride?: string | null, apiKey?: string, apiUrl = ANTHROPIC_API_URL): AiProvider | null {
   if (!apiKey) return null;
 
   return {
@@ -38,7 +37,7 @@ export function getAnthropicProvider(modelOverride?: string | null): AiProvider 
         timer = setTimeout(function () { controller.abort(); }, timeoutMs);
       }
       try {
-      const res = await fetch(ANTHROPIC_API_URL, {
+      const res = await fetch(apiUrl, {
         method: "POST",
         signal: controller.signal,
         headers: {
@@ -47,7 +46,7 @@ export function getAnthropicProvider(modelOverride?: string | null): AiProvider 
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: modelOverride || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+          model: modelOverride || DEFAULT_MODEL,
           max_tokens: maxTokens ?? MAX_TOKENS,
           system,
           messages: messages.map((m) => ({ role: m.role, content: toAnthropicContent(m.content) })),

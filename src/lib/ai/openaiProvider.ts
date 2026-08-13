@@ -16,14 +16,13 @@ const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 // OPENAI_MODEL instead of relying on this default.
 const DEFAULT_MODEL = "gpt-4o";
 
-export function getOpenAiProvider(model?: string): AiProvider | null {
-  const apiKey = process.env.OPENAI_API_KEY;
+export function getOpenAiProvider(model?: string, apiKey?: string, apiUrl = OPENAI_API_URL): AiProvider | null {
   if (!apiKey) return null;
 
   return createOpenAiCompatibleProvider({
-    apiUrl: OPENAI_API_URL,
+    apiUrl,
     apiKey,
-    model: model || process.env.OPENAI_MODEL || DEFAULT_MODEL,
+    model: model || DEFAULT_MODEL,
     errorLabel: "OpenAI API",
   });
 }

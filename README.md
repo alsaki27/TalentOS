@@ -250,10 +250,10 @@ tickets, change a status, or delete anything; that's a deliberate scope decision
 current limitation to "fix" later without re-deciding it. Capped at 200 user messages/day
 per person as a cost guardrail against a runaway client racking up API spend unsupervised.
 
-**Requires `ANTHROPIC_API_KEY` or `NVIDIA_API_KEY`** in `.env.local` (and in Vercel for
-production) — without either, `/chat` returns a clear "not configured" error rather than
-failing silently. `src/lib/ai/index.ts`'s `getActiveProvider()` prefers Anthropic if both are
-set; override with `AI_PROVIDER=anthropic` or `AI_PROVIDER=nvidia`.
+**Requires an enabled, healthy Neon AI Control Center connection and route.** Provider
+credentials, endpoints, and model aliases are encrypted in Neon and are not loaded from
+deployment or GitHub secrets. `AI_KEYS_ENCRYPTION_SECRET` remains an independent runtime
+bootstrap so a database leak alone cannot decrypt provider credentials.
 `src/lib/ai/provider.ts` defines the provider-agnostic interface per the original vision
 doc's "provider abstraction — AI owns reasoning, app owns workflow" principle.
 `src/lib/ai/anthropicProvider.ts` and `src/lib/ai/nvidiaProvider.ts` are the two real

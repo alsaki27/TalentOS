@@ -60,7 +60,7 @@ describe("candidate portal read model", () => {
   });
 
   it("scopes the interview center and only includes candidate-visible updates", async () => {
-    (query as any).mockResolvedValueOnce([{ id: "interview-a", application_id: "application-a", scheduled_at: "2026-08-12T15:00:00.000Z", status: "scheduled", panel: ["Recruiter"], visible_updates: [] }]);
+    (query as any).mockResolvedValueOnce([{ id: "interview-a", application_id: "application-a", scheduled_at: "2099-08-12T15:00:00.000Z", status: "scheduled", panel: ["Recruiter"], visible_updates: [] }]);
     const result = await getCandidatePortalInterviews("candidate-a");
 
     expect(result[0].status).toBe("upcoming");

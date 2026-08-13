@@ -1,14 +1,10 @@
 // src/server/services/aiProvider.ts
 // AI provider management service. Bridges the admin key manager with the AI layer.
-// Provides functions for testing DB-managed keys, recording health, and building
-// providers from encrypted keys. Does NOT replace the existing env-based provider
-// selection in src/lib/ai/index.ts — it extends it.
+// Neon is the canonical provider-credential store; deployment configuration only
+// supplies the independent encryption bootstrap.
 
 import { AiProvider } from "@/lib/ai/provider";
-import { getAnthropicProvider } from "@/lib/ai/anthropicProvider";
-import { getNvidiaProvider } from "@/lib/ai/nvidiaProvider";
-import { getGoogleProvider } from "@/lib/ai/googleProvider";
-import { getGoogleVertexProxyProvider, callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
+import { callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
 import { PROVIDER_NATIVE_DEFAULTS } from "@/lib/ai/providerPresets";
 import {
@@ -23,7 +19,7 @@ import {
 // Re-declare to avoid circular import with src/lib/ai/index.ts
 interface ActiveProvider {
   provider: AiProvider;
-  name: "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm";
+  name: string;
 }
 
 const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
@@ -42,8 +38,8 @@ const FALLBACK_MAX_TOKENS = 8192;
  * Build an AI provider from a DB-managed key.
  * Returns null if the provider adapter is not implemented for this provider type.
  * `model` is the per-key override from ai_api_keys.model (set via the admin AI Key
- * Manager UI) - undefined/null falls back to that provider's env var / built-in
- * default, same as the env-based providers in src/lib/ai/*Provider.ts.
+ * Manager UI). Undefined/null falls back to the adapter's non-secret built-in
+ * model default.
  */
 // A key's base_url and chat_endpoint are stored as two separate columns
 // (sql/neon_fixes/017), but every case below used to fetch() `baseUrl`
@@ -70,28 +66,24 @@ export function buildProviderFromDbKey(
   apiKey: string,
   model?: string | null,
   baseUrl?: string | null,
-  chatEndpoint?: string | null
+  chatEndpoint?: string | null,
+  customHeaders?: Record<string, string> | null,
+  providerConfig?: Record<string, unknown> | null,
 ): AiProvider | null {
   switch (provider) {
     case "google_vertex_proxy": {
-      // Prefer the Worker's own GOOGLE_VERTEX_PROXY_SECRET (matches the
-      // pure-env fallback in getGoogleVertexProxyProvider()); fall back to
-      // this key row's own apiKey only if that env var isn't set, so the
-      // DB row still works standalone if the Cloudflare secret is ever
-      // removed instead of hard-failing.
-      const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
-      const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET || apiKey;
+      // The gateway URL, route, model alias, headers, and credential all come
+      // from this decrypted Neon key record.
+      const proxyUrl = baseUrl;
+      const proxySecret = apiKey;
       if (!proxyUrl || !proxySecret) {
-        // A configured, enabled, healthy Vertex-Proxy route can still be
-        // unusable if this host lacks the proxy env vars (e.g. a local dev
-        // server whose .env.local doesn't carry the Cloudflare Worker
-        // secrets). Returning null here silently skips the route and lets
+        // A configured, enabled Vertex route can still be unusable if its
+        // Neon connection record is incomplete. Returning null here lets
         // routing fall through to the next rank / global fallback - which
         // surfaces downstream as a baffling "why is it using OpenAI" error.
         // Log loudly so the misconfiguration is diagnosable at the source.
         console.warn(
-          `[aiProvider] google_vertex_proxy route skipped: missing ${!proxyUrl ? "GOOGLE_VERTEX_PROXY_URL" : "GOOGLE_VERTEX_PROXY_SECRET"} in this environment. ` +
-            `The routed Vertex Proxy key cannot be used here; routing will fall back to a lower-rank route or the global fallback provider.`
+          `[aiProvider] google_vertex_proxy key skipped: missing ${!proxyUrl ? "base_url" : "encrypted credential"} in its Neon connection record.`
         );
         return null;
       }
@@ -100,7 +92,9 @@ export function buildProviderFromDbKey(
           return callVertexProxy({
             proxyUrl,
             proxySecret,
-            model: model || process.env.GOOGLE_VERTEX_MODEL || "gemini-2.5-flash-lite",
+            chatEndpoint: chatEndpoint || "/chat/completions",
+            extraHeaders: customHeaders ?? undefined,
+            model: model || String(providerConfig?.chat_model_alias || "coding-cheap"),
             system,
             messages,
             tools,
@@ -129,7 +123,7 @@ export function buildProviderFromDbKey(
               "content-type": "application/json",
             },
             body: JSON.stringify({
-              model: model || process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+              model: model || DEFAULT_MODEL,
               max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
               temperature,
               system,
@@ -165,7 +159,7 @@ export function buildProviderFromDbKey(
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
-              model: model || process.env.NVIDIA_MODEL || DEFAULT_MODEL,
+              model: model || DEFAULT_MODEL,
               messages: [{ role: "system", content: system }, ...messages.map((m) => ({ role: m.role, content: m.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n") }))],
               max_tokens: maxTokens ?? FALLBACK_MAX_TOKENS,
               temperature: temperature ?? 0.4,
@@ -192,7 +186,7 @@ export function buildProviderFromDbKey(
       const DEFAULT_MODEL = "gemini-2.5-flash-lite";
       return {
         async send({ system, messages, temperature, maxTokens }) {
-          const resolvedModel = model || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
+          const resolvedModel = model || DEFAULT_MODEL;
           const url = `${apiBase}/${resolvedModel}:generateContent`;
 
           const geminiMessages = messages.map((m) => ({
@@ -246,7 +240,7 @@ export function buildProviderFromDbKey(
       return createOpenAiCompatibleProvider({
         apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
         apiKey,
-        model: model || process.env.OPENAI_MODEL || "gpt-4o",
+        model: model || "gpt-4o",
         errorLabel: "OpenAI API",
       });
     }
@@ -254,7 +248,7 @@ export function buildProviderFromDbKey(
       return createOpenAiCompatibleProvider({
         apiUrl: resolveApiUrl(baseUrl, chatEndpoint, "https://open.bigmodel.cn/api/paas/v4/chat/completions"),
         apiKey,
-        model: model || process.env.GLM_MODEL || "glm-4-plus",
+        model: model || "glm-4-plus",
         errorLabel: "GLM API",
       });
     }
@@ -262,9 +256,9 @@ export function buildProviderFromDbKey(
       const preset = PROVIDER_NATIVE_DEFAULTS["deepseek"];
       const defaultUrl = preset ? preset.baseUrl + preset.chatEndpoint : "https://api.deepseek.com/v1/chat/completions";
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl ? resolveApiUrl(baseUrl, chatEndpoint, defaultUrl) : (process.env.DEEPSEEK_API_BASE || defaultUrl),
+        apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
         apiKey,
-        model: model || process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        model: model || "deepseek-chat",
         errorLabel: "DeepSeek API",
         maxTokens: FALLBACK_MAX_TOKENS,
         temperature: 0.3,
@@ -277,25 +271,20 @@ export function buildProviderFromDbKey(
       return createOpenAiCompatibleProvider({
         apiUrl: resolveApiUrl(baseUrl, chatEndpoint, defaultUrl),
         apiKey,
-        model: model || process.env.MOONSHOT_MODEL || "kimi-k2.6",
+        model: model || "kimi-k2.6",
         errorLabel: "Moonshot API",
       });
     }
     case "opencode": {
-      const directGoBase = "https://opencode.ai/zen/go/v1";
-      const isDirectGo = (baseUrl || "").replace(/\/$/, "") === directGoBase;
-      const effectiveApiKey = isDirectGo
-        ? (process.env.OPENCODE_DIRECT_API_KEY || apiKey)
-        : (process.env.OPENCODE_API_KEY || apiKey);
-      const selectedModel = model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash";
+      const selectedModel = model || "deepseek-v4-flash";
       const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
         ? { thinking: { type: "enabled" }, reasoning_effort: "high" }
         : undefined;
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
-          : (process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions"),
-        apiKey: effectiveApiKey,
+          : "https://api.opencode.ai/v1/chat/completions",
+        apiKey,
         model: selectedModel,
         errorLabel: "OpenCode API",
         maxTokens: 8192,
@@ -347,7 +336,7 @@ export async function testAiKey(id: string): Promise<{
     return { success: false, error: "Key not found", latencyMs: Date.now() - start };
   }
 
-  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
+  const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
   if (!provider) {
     const err = `Provider adapter for "${keyRow.provider}" is not implemented yet.`;
     await recordAiKeyFailure(id, err);
@@ -377,35 +366,21 @@ export async function getEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
 }
 
 /**
- * Try to get an active provider using DB-managed keys as fallback.
- * First tries env-based providers (existing behavior), then falls back to DB keys.
- * This is a conservative integration — the main getActiveProvider() in src/lib/ai/index.ts
- * still handles the primary path. Callers that want fallback can use this instead.
+ * Get the first usable provider from the Neon-managed key pool.
  */
 export async function getActiveProviderWithFallback(): Promise<ActiveProvider | null> {
-  // Try existing env-based providers first
-  const anthropic = getAnthropicProvider();
-  if (anthropic) return { provider: anthropic, name: "anthropic" };
-
-  const nvidia = getNvidiaProvider();
-  if (nvidia) return { provider: nvidia, name: "nvidia" };
-
-  const google = getGoogleProvider();
-  if (google) return { provider: google, name: "google" };
-
-  const googleVertex = getGoogleVertexProxyProvider();
-  if (googleVertex) return { provider: googleVertex, name: "google_vertex_proxy" };
-
-  // Fallback to DB-managed keys
   const dbKeys = await listEnabledAiKeys();
-  const blockedStatuses = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
   for (const key of dbKeys) {
-    if (blockedStatuses.includes(key.status as any)) continue;
+    if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(key.status as any)) continue;
+    if (["rate_limited", "quota_exhausted"].includes(key.status as any)) {
+      const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
+      if (Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000) continue;
+    }
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
-    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
+    const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
     if (provider) {
-      return { provider, name: keyRow.provider as "anthropic" | "nvidia" | "google" | "google_vertex_proxy" | "openai" | "glm" };
+      return { provider, name: keyRow.provider };
     }
   }
 

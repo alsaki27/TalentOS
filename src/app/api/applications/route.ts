@@ -17,8 +17,7 @@ import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { getSourceOfTruth, parseSourceOfTruth } from "@/server/services/sourceOfTruthService";
-import { getGoogleVertexProxyProvider } from "@/lib/ai/googleVertexProxyProvider";
-import { getGoogleProvider } from "@/lib/ai/googleProvider";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 
 export async function GET(req: NextRequest) {
   const currentUser = await getCurrentUserContext();
@@ -183,15 +182,13 @@ export async function POST(req: NextRequest) {
               const existingSoT = await getSourceOfTruth(application.candidate_id);
               if (!existingSoT || !existingSoT.lastParsedAt) {
                 // SoT has never been parsed — auto-parse now
-                const provider = getGoogleVertexProxyProvider("gemini-2.5-pro")
-                               || getGoogleProvider("gemini-2.5-pro");
-                if (provider) {
-                  console.log(`[SoT Auto-Parse] Starting for candidate ${application.candidate_id}`);
-                  await parseSourceOfTruth(application.candidate_id, undefined, provider);
-                  console.log(`[SoT Auto-Parse] Completed for candidate ${application.candidate_id}`);
-                } else {
-                  console.warn(`[SoT Auto-Parse] No AI provider available for candidate ${application.candidate_id}`);
-                }
+                console.log(`[SoT Auto-Parse] Starting for candidate ${application.candidate_id}`);
+                await callWithUsageTracking(
+                  "candidate_source_of_truth",
+                  { userId: currentUser?.profile.user_id, applicationId: application.id },
+                  provider => parseSourceOfTruth(application.candidate_id, undefined, provider)
+                );
+                console.log(`[SoT Auto-Parse] Completed for candidate ${application.candidate_id}`);
               } else {
                 console.log(`[SoT Auto-Parse] Skipped for candidate ${application.candidate_id} — already parsed at ${existingSoT.lastParsedAt}`);
               }
