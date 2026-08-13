@@ -457,7 +457,7 @@ export async function listApplicationQueue(
       w.status as workflow_status,
       w.id as workflow_id,
       w.current_stage as workflow_stage,
-      CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (fp.data->>'finalQaScore')::numeric END as workflow_score,
+      CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN CASE WHEN (fp.data->>'finalQaScore')::numeric BETWEEN 20 AND 100 THEN (fp.data->>'finalQaScore')::numeric / 10 ELSE (fp.data->>'finalQaScore')::numeric END END as workflow_score,
       CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END as hiring_panel_ats_score,
       CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END as hiring_panel_recruiter_score,
       CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END as hiring_panel_role_fit_score,
@@ -492,7 +492,7 @@ export async function listApplicationQueue(
         (CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END),
         (CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END),
         (CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END),
-        (CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (fp.data->>'finalQaScore')::numeric END)
+        (CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN CASE WHEN (fp.data->>'finalQaScore')::numeric BETWEEN 20 AND 100 THEN (fp.data->>'finalQaScore')::numeric / 10 ELSE (fp.data->>'finalQaScore')::numeric END END)
       ) AS score_values(value)
       WHERE value IS NOT NULL
     ) score ON true
