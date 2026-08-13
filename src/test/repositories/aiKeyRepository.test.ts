@@ -31,6 +31,9 @@ vi.mock("@/server/security/secretCrypto", () => ({
   encryptSecret: vi.fn(),
   decryptSecret: decryptSecretMock,
   fingerprintKey: vi.fn(),
+  // Legacy-key migration is disabled in this unit-test fixture; the production
+  // implementation checks this capability before attempting a write-back.
+  isEncryptionAvailable: vi.fn().mockReturnValue(false),
 }));
 
 import { getAiKeyWithDecryptedKey } from "@/server/repositories/aiKeyRepository";
