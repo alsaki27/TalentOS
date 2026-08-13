@@ -979,15 +979,15 @@ export default function ApplicationQueuePage() {
                       workflowDetails={workflowDetails}
                       workflowStageLabel={workflowStageLabel}
                     />
-                    {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
+                    {expandedWorkflow === item.workflow_id && item.workflow_id && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
-                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id!]?.workflow?.last_error && (
+                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (
                           <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
-                            <strong>Error:</strong> {workflowDetails[item.workflow_id!].workflow.last_error}
+                            <strong>Error:</strong> {workflowDetails[item.workflow_id].workflow.last_error}
                           </div>
                         )}
                         {(item.workflow_stage ?? 0) >= 2 && (
-                          <QueueFindingsPanel details={workflowDetails[item.workflow_id!]} />
+                          <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
                         )}
                         <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
                           View full pipeline in Status page →
