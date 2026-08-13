@@ -31,28 +31,23 @@ async function getKey(): Promise<CryptoKey> {
  * Uses AES-256-GCM with a 96-bit (12-byte) IV.
  */
 export async function encryptSecret(plaintext: string): Promise<string> {
-  try {
-    const key = await getKey();
-    const iv = webCrypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for GCM
-    const encoder = new TextEncoder();
-    const ciphertext = await webCrypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
-      key,
-      encoder.encode(plaintext)
-    );
+  const key = await getKey();
+  const iv = webCrypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for GCM
+  const encoder = new TextEncoder();
+  const ciphertext = await webCrypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    encoder.encode(plaintext)
+  );
 
-    // Combine IV + ciphertext
-    const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-    combined.set(iv);
-    combined.set(new Uint8Array(ciphertext), iv.length);
+  // Combine IV + ciphertext
+  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(ciphertext), iv.length);
 
-    // Base64 encode using btoa (available in both Node.js and Workers)
-    const base64 = btoa(String.fromCharCode(...combined));
-    return `enc:${base64}`;
-  } catch (err: any) {
-    console.warn("[SECURITY] AI_KEYS_ENCRYPTION_SECRET not set, storing plaintext key");
-    return plaintext;
-  }
+  // Base64 encode using btoa (available in both Node.js and Workers)
+  const base64 = btoa(String.fromCharCode(...combined));
+  return `enc:${base64}`;
 }
 
 /**

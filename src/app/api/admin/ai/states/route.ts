@@ -9,9 +9,11 @@ export async function GET() {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   try {
-    const states = await query<any>(`SELECT s.*, COUNT(r.*)::int AS route_count
+    const states = await query<any>(`SELECT s.*, COUNT(r.*)::int AS route_count,
+      (s.id = c.active_routing_state_id) AS is_active
       FROM ai_routing_states s LEFT JOIN ai_routing_state_routes r ON r.state_id = s.id
-      GROUP BY s.id ORDER BY s.updated_at DESC`);
+      LEFT JOIN ai_runtime_config c ON c.singleton = true
+      GROUP BY s.id, c.active_routing_state_id ORDER BY s.updated_at DESC`);
     return NextResponse.json({ states });
   } catch (err: any) {
     return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });

@@ -1,6 +1,6 @@
 // src/lib/ai/googleVertexProxyProvider.ts
-// Google Vertex AI via Cloud Run proxy. No API key, no service account JSON.
-// Uses GOOGLE_VERTEX_PROXY_URL + GOOGLE_VERTEX_PROXY_SECRET to call the proxy.
+// Google Vertex AI via an OpenAI-compatible Cloud Run gateway. Callers provide
+// the endpoint and decrypted Neon credential explicitly.
 
 import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib/ai/provider";
 import { fromOpenAiChoice, toOpenAiMessages, toOpenAiTools } from "@/lib/ai/openAiCompatibleProvider";
@@ -104,6 +104,8 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 32768;
 export async function callVertexProxy(opts: {
   proxyUrl: string;
   proxySecret: string;
+  chatEndpoint?: string;
+  extraHeaders?: Record<string, string>;
   model: string;
   system: string;
   messages: AiMessage[];
@@ -128,8 +130,8 @@ export async function callVertexProxy(opts: {
     // LiteLLM exposes the OpenAI-compatible endpoint. Keep the configured
     // secret as the gateway root and normalize callers that still provide a
     // `/v1` suffix so both forms remain safe during rotation.
-    const baseUrl = opts.proxyUrl.replace(/\/$/, "").replace(/\/v1$/, "");
-    const endpoint = `${baseUrl}/v1/chat/completions`;
+    const path = opts.chatEndpoint || "/chat/completions";
+    const endpoint = opts.proxyUrl.replace(/\/$/, "") + (path.startsWith("/") ? path : `/${path}`);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -150,6 +152,7 @@ export async function callVertexProxy(opts: {
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${opts.proxySecret}`,
+            ...(opts.extraHeaders ?? {}),
           },
           body: JSON.stringify({
             model: opts.model,
@@ -163,7 +166,7 @@ export async function callVertexProxy(opts: {
             // contract compatible for a rolling deploy while the canonical
             // OpenAI response_format fields above are used by the new proxy.
             ...(opts.responseMimeType !== undefined || opts.responseSchema
-              ? { responseMimeType: opts.responseMimeType ?? "application/json" }
+              ? { responseMimeType: opts.responseMimeType === undefined ? "application/json" : opts.responseMimeType }
               : {}),
             ...(opts.responseSchema ? { responseSchema: opts.responseSchema } : {}),
             ...responseFormat,
@@ -231,30 +234,23 @@ export async function callVertexProxy(opts: {
   }
 }
 
-export function getGoogleVertexProxyProvider(modelOverride?: string): AiProvider | null {
-  const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
-  const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET;
-
+export function getGoogleVertexProxyProvider(modelOverride?: string, proxyUrl?: string, proxySecret?: string): AiProvider | null {
   if (!proxyUrl || !proxySecret) return null;
 
   return {
     send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
-      const model = modelOverride || process.env.GOOGLE_VERTEX_MODEL || DEFAULT_MODEL;
-      return callVertexProxy({ proxyUrl, proxySecret, model, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
+      const model = modelOverride || DEFAULT_MODEL;
+      return callVertexProxy({ proxyUrl: proxyUrl!, proxySecret: proxySecret!, model, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
     },
   };
 }
 
-export function getGoogleVertexFallbackProvider(): AiProvider | null {
-  const proxyUrl = process.env.GOOGLE_VERTEX_PROXY_URL;
-  const proxySecret = process.env.GOOGLE_VERTEX_PROXY_SECRET;
-  const fallbackModel = process.env.GOOGLE_VERTEX_FALLBACK_MODEL;
-
+export function getGoogleVertexFallbackProvider(proxyUrl?: string, proxySecret?: string, fallbackModel?: string): AiProvider | null {
   if (!proxyUrl || !proxySecret || !fallbackModel) return null;
 
   return {
     send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
-      return callVertexProxy({ proxyUrl, proxySecret, model: fallbackModel, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
+      return callVertexProxy({ proxyUrl: proxyUrl!, proxySecret: proxySecret!, model: fallbackModel!, system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType });
     },
   };
 }

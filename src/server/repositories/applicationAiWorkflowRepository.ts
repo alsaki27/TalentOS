@@ -135,6 +135,9 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
     fields.push(`last_error = $${idx++}`);
     values.push(extra.last_error as string);
   }
+  if (status !== "running") {
+    fields.push("claimed_at = NULL", "claim_expires_at = NULL", "claimed_by = NULL", "heartbeat_at = NULL");
+  }
 
   values.push(id);
   await execute(
@@ -152,7 +155,6 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 // (checked here and in dispatchWorkflowById's claim), i.e. processed in
 // buckets rather than all at once. Reclaiming an expired/stale 'running'
 // workflow is exempt - that's recovering dead work, not adding new load.
-export const MAX_CONCURRENT_AI_WORKFLOWS = Number(process.env.AI_WORKFLOW_MAX_CONCURRENCY) || 8;
 
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
@@ -170,14 +172,17 @@ export const MAX_CONCURRENT_AI_WORKFLOWS = Number(process.env.AI_WORKFLOW_MAX_CO
 // avoids reclaiming a call that's genuinely still in flight.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
-    `WITH active_count AS (
+    `WITH config AS (
+      SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
+      FROM ai_runtime_config WHERE singleton = true
+    ), active_count AS (
       SELECT COUNT(*)::int AS n FROM application_ai_workflows
       WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
     ),
     next_workflow AS (
       SELECT id FROM application_ai_workflows
       WHERE (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
-         OR (status = 'queued' AND (SELECT n FROM active_count) < $1)
+         OR (status = 'queued' AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
       ORDER BY
         CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
         created_at ASC
@@ -190,7 +195,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
                       ELSE 'running'
                  END,
         claimed_at = NOW(),
-        claim_expires_at = NOW() + INTERVAL '2 minutes',
+        claim_expires_at = NOW() + make_interval(secs => (SELECT workflow_claim_ttl_seconds FROM config)),
         claimed_by = 'dispatcher',
         heartbeat_at = NOW(),
         updated_at = NOW(),
@@ -202,14 +207,19 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
     FROM next_workflow n
     WHERE w.id = n.id
     RETURNING w.*`,
-    [MAX_CONCURRENT_AI_WORKFLOWS]
+    []
   );
   return rows[0] ?? null;
 }
 
 export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
   await execute(
-    `UPDATE application_ai_workflows SET heartbeat_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes', updated_at = NOW() WHERE id = $1`,
+    `UPDATE application_ai_workflows w
+     SET heartbeat_at = NOW(),
+         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
+         updated_at = NOW()
+     FROM ai_runtime_config c
+     WHERE w.id = $1 AND c.singleton = true AND w.status = 'running'`,
     [workflowId]
   );
 }

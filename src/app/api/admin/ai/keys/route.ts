@@ -27,19 +27,29 @@ export async function GET() {
           ak.last_error_code, ak.last_error_message, ak.usage_count, ak.failure_count,
           ak.daily_request_warning, ak.daily_request_limit, ak.monthly_request_limit,
           ak.monthly_budget_warning_usd, ak.monthly_budget_limit_usd, ak.notes,
-          ak.created_by, ak.created_at, ak.updated_at,
+          ak.created_by, ak.created_at, ak.updated_at, ak.provider_config,
+          ak.chat_endpoint, ak.models_endpoint,
           ak.supports_tools, ak.supports_json_mode, ak.supports_streaming, ak.is_protected,
          COALESCE(ue.today_calls, 0)::int as today_calls,
          COALESCE(ue.today_tokens, 0)::int as today_tokens,
          COALESCE(ue.today_cost, 0)::numeric as today_cost,
-         COALESCE(ar.assignment_count, 0)::int as assignment_count
+         ue.success_rate,
+         ue.avg_latency,
+         COALESCE(ar.assignment_count, 0)::int as assignment_count,
+         COALESCE(ar.fallback_count, 0)::int as fallback_count
        FROM ai_api_keys ak
        LEFT JOIN (
          SELECT
            ai_key_id,
            COUNT(*)::int as today_calls,
            COALESCE(SUM(input_tokens + COALESCE(output_tokens, 0)), 0)::int as today_tokens,
-           COALESCE(SUM(estimated_cost_usd), 0)::numeric as today_cost
+           COALESCE(SUM(estimated_cost_usd), 0)::numeric as today_cost,
+           ROUND(
+             100.0 * COUNT(*) FILTER (WHERE outcome = 'success')
+             / NULLIF(COUNT(*) FILTER (WHERE outcome <> 'skipped'), 0),
+             1
+           )::numeric as success_rate,
+           ROUND(AVG(latency_ms) FILTER (WHERE latency_ms IS NOT NULL))::int as avg_latency
          FROM ai_usage_events
          WHERE created_at >= CURRENT_DATE
          GROUP BY ai_key_id
@@ -47,7 +57,8 @@ export async function GET() {
        LEFT JOIN (
          SELECT
            ai_key_id,
-           COUNT(*)::int as assignment_count
+           COUNT(*) FILTER (WHERE rank = 1)::int as assignment_count,
+           COUNT(*) FILTER (WHERE rank > 1)::int as fallback_count
          FROM ai_automation_routes
          WHERE is_enabled = true
          GROUP BY ai_key_id
@@ -126,6 +137,9 @@ export async function POST(req: NextRequest) {
   const authHeaderName = typeof body.auth_header_name === "string" && body.auth_header_name.trim() ? body.auth_header_name.trim() : null;
   const authScheme = typeof body.auth_scheme === "string" && body.auth_scheme.trim() ? body.auth_scheme.trim() : null;
   const customHeaders = body.custom_headers !== null && typeof body.custom_headers === "object" && !Array.isArray(body.custom_headers) ? body.custom_headers : null;
+  const providerConfig = body.provider_config !== null && typeof body.provider_config === "object" && !Array.isArray(body.provider_config)
+    ? body.provider_config as Record<string, unknown>
+    : {};
   if (customHeaders) {
     const forbiddenHeaders = new Set(["authorization", "x-api-key", "x-goog-api-key", "host", "content-type"]);
     for (const key of Object.keys(customHeaders)) {
@@ -175,6 +189,7 @@ export async function POST(req: NextRequest) {
       label,
       apiKey,
       model,
+      baseUrl,
       priority,
       isEnabled,
       createdBy: context?.profile.user_id,
@@ -185,6 +200,7 @@ export async function POST(req: NextRequest) {
       authHeaderName,
       authScheme,
       customHeaders,
+      providerConfig,
       availableModels,
       defaultModel,
       supportsModelDiscovery,

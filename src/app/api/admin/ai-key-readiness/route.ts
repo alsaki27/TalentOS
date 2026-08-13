@@ -21,32 +21,35 @@ export async function GET(req: NextRequest) {
   let totalKeys = 0;
   let encryptedKeys = 0;
   let plaintextKeys = 0;
+  let placeholderKeys = 0;
+  let unhealthyEnabledKeys = 0;
   let disabledKeys = 0;
 
   if (encryptionConfigured) {
     try {
-      const keys = await query<{ encrypted_key: string; is_enabled: boolean; provider: string }>(
-        `SELECT encrypted_key, is_enabled, provider FROM ai_api_keys`
+      const keys = await query<{ encrypted_key: string; is_enabled: boolean; status: string }>(
+        `SELECT encrypted_key, is_enabled, status FROM ai_api_keys`
       );
       totalKeys = keys.length;
       for (const key of keys) {
         if (!key.is_enabled) disabledKeys++;
-        
-        // The Google Vertex Proxy key's secret lives in Cloudflare env vars.
-        // The DB row only stores a plaintext placeholder. Skip it for readiness checks.
-        if (key.provider === 'google_vertex_proxy') continue;
-
-        if (key.encrypted_key.startsWith("enc:")) {
+        const isPlaceholder = key.encrypted_key.startsWith("enc:placeholder");
+        if (isPlaceholder) placeholderKeys++;
+        else if (key.encrypted_key.startsWith("enc:")) {
           encryptedKeys++;
         } else {
           plaintextKeys++;
+        }
+        if (key.is_enabled && ["invalid", "invalid_credential", "disabled"].includes(key.status)) {
+          unhealthyEnabledKeys++;
         }
       }
     } catch (err: any) {
       console.error("[ai-key-readiness] Query failed:", err.message);
       return NextResponse.json({
         encryptionConfigured: isEncryptionAvailable(),
-        totalKeys: 0, encryptedKeys: 0, plaintextKeys: 0, disabledKeys: 0,
+        totalKeys: 0, encryptedKeys: 0, plaintextKeys: 0, placeholderKeys: 0,
+        unhealthyEnabledKeys: 0, disabledKeys: 0,
         ready: false,
         error: "READINESS_QUERY_FAILED",
       }, { status: 503 });
@@ -58,7 +61,9 @@ export async function GET(req: NextRequest) {
     totalKeys,
     encryptedKeys,
     plaintextKeys,
+    placeholderKeys,
+    unhealthyEnabledKeys,
     disabledKeys,
-    ready: encryptionConfigured && plaintextKeys === 0,
+    ready: encryptionConfigured && plaintextKeys === 0 && placeholderKeys === 0 && unhealthyEnabledKeys === 0,
   });
 }

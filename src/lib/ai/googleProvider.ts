@@ -44,14 +44,13 @@ function fromGeminiResponse(data: any): AiResponse {
   return { content: [{ type: "text", text }], stopReason };
 }
 
-export function getGoogleProvider(modelOverride?: string): AiProvider | null {
-  const apiKey = process.env.GOOGLE_API_KEY;
+export function getGoogleProvider(modelOverride?: string, apiKey?: string, apiBase = GOOGLE_API_BASE): AiProvider | null {
   if (!apiKey) return null;
 
   return {
     async send({ system, messages, temperature, maxTokens, timeoutMs }) {
-      const model = modelOverride || process.env.GOOGLE_MODEL || DEFAULT_MODEL;
-      const url = `${GOOGLE_API_BASE}/${model}:generateContent`;
+      const model = modelOverride || DEFAULT_MODEL;
+      const url = `${apiBase}/${model}:generateContent`;
 
       const geminiMessages = toGeminiMessages(messages);
 
@@ -99,14 +98,12 @@ export function getGoogleProvider(modelOverride?: string): AiProvider | null {
   };
 }
 
-export function getGoogleFallbackProvider(): AiProvider | null {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const fallbackModel = process.env.GOOGLE_FALLBACK_MODEL;
+export function getGoogleFallbackProvider(apiKey?: string, fallbackModel?: string, apiBase = GOOGLE_API_BASE): AiProvider | null {
   if (!apiKey || !fallbackModel) return null;
 
   return {
     async send({ system, messages, temperature, maxTokens, timeoutMs }) {
-      const url = `${GOOGLE_API_BASE}/${fallbackModel}:generateContent`;
+      const url = `${apiBase}/${fallbackModel}:generateContent`;
 
       const geminiMessages = toGeminiMessages(messages);
 
