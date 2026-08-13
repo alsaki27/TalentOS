@@ -17,6 +17,8 @@ export interface AutomationRouteResult {
   automationId: string;
   model?: string | null;
   routeRank: number | null;
+  /** Stable route id, used to retry a different model on the same provider key. */
+  routeId?: string | null;
   limitSkipped?: boolean;
 }
 
@@ -94,11 +96,18 @@ export async function getProviderForAutomation(
   automationId: string,
   excludeKeyIds?: Set<string>,
   excludeProviderNames?: Set<string>,
-  excludeRouteKeys?: Set<string>,
+  excludeRouteIds?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
-    return { provider: createMockProvider(), name: "mock", aiKeyId: null, automationId, routeRank: 0 };
+    return {
+      provider: createMockProvider(),
+      name: "mock",
+      aiKeyId: null,
+      automationId,
+      routeRank: 0,
+      routeId: null,
+    };
   }
 
   const runtime = await getAiRuntimeConfig();
@@ -124,8 +133,7 @@ export async function getProviderForAutomation(
   // 2. Try each route in order, excluding failed keys
   let limitSkipped = false;
   for (const route of routes) {
-    const routeKey = `${route.ai_key_id ?? route.provider ?? "unknown"}:${route.model_override ?? "default"}:${route.rank}`;
-    if (excludeRouteKeys?.has(routeKey)) continue;
+    if (excludeRouteIds?.has(route.id)) continue;
     if (route.ai_key_id) {
       if (excludeKeyIds?.has(route.ai_key_id)) continue;
       const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
@@ -168,6 +176,7 @@ export async function getProviderForAutomation(
           automationId,
           model: effectiveModel,
           routeRank: route.rank,
+          routeId: route.id,
           limitSkipped,
         };
       }
@@ -217,6 +226,7 @@ export async function getProviderForAutomation(
             automationId,
             model: effectiveModel,
             routeRank: route.rank,
+            routeId: route.id,
             limitSkipped,
           };
         }
@@ -232,6 +242,7 @@ export async function getProviderForAutomation(
   // Emergency fallback is still Neon-managed. There is deliberately no
   // environment-provider loop here: provider keys outside the Control Center
   // would make production routing impossible to inspect or reproduce.
+  // Last resort: the remaining enabled Neon key pool.
   const dbFallback = await getActiveProviderWithFallback();
   if (dbFallback && !excludeProviderNames?.has(dbFallback.name)) {
     await recordUsageEvent({
@@ -257,6 +268,7 @@ export async function getProviderForAutomation(
       aiKeyId: null,
       automationId,
       routeRank: null,
+      routeId: null,
     };
   }
 
@@ -329,7 +341,7 @@ export async function callWithUsageTracking<T>(
   const MAX_RETRIES = 3;
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
-  const excludedRouteKeys = new Set<string>();
+  const excludedRouteIds = new Set<string>();
 
   let lastError: Error | null = null;
   let lastResolved: AutomationRouteResult | null = null;
@@ -341,7 +353,7 @@ export async function callWithUsageTracking<T>(
         automationId,
         excludedKeyIds,
         attempt > 0 ? excludedProviders : undefined,
-        excludedRouteKeys,
+        excludedRouteIds,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -474,11 +486,15 @@ export async function callWithUsageTracking<T>(
       const isRetriable = ["rate_limit", "auth_error", "timeout", "server_error", "not_found", "configuration_error"].includes(errorCode ?? "");
 
       if (isRetriable && attempt < MAX_RETRIES) {
-        if (errorCode === "rate_limit" || errorCode === "auth_error") {
+        if (errorCode === "auth_error") {
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
-        } else {
-          excludedRouteKeys.add(`${resolved.aiKeyId ?? resolved.name}:${resolved.model ?? "default"}:${resolved.routeRank ?? "fallback"}`);
+        } else if (resolved.routeId) {
+          // Exclude the exact failed route, not the whole key/provider. This
+          // lets a model-level fallback reuse the same gateway credential.
+          excludedRouteIds.add(resolved.routeId);
+        } else if (resolved.name) {
+          excludedProviders.add(resolved.name);
         }
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +

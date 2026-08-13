@@ -276,15 +276,20 @@ export function buildProviderFromDbKey(
       });
     }
     case "opencode": {
+      const selectedModel = model || "deepseek-v4-flash";
+      const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
+        ? { thinking: { type: "enabled" }, reasoning_effort: "high" }
+        : undefined;
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
           : "https://api.opencode.ai/v1/chat/completions",
         apiKey,
-        model: model || "deepseek-v4-flash",
+        model: selectedModel,
         errorLabel: "OpenCode API",
         maxTokens: 8192,
         temperature: 0.3,
+        extraBody: deepSeekV4ProBody,
         extraHeaders: {},
       });
     }

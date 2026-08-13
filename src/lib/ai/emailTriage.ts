@@ -48,9 +48,23 @@ export interface TriageResult {
 
 // Auto-write applications.status only for high-confidence, unambiguous
 // categories. Everything else always goes to a human via action_items —
-// see §4.3 of the handover doc for the reasoning.
+// see §4.3 of the handover doc for the reasoning. These are the risk_based
+// policy's fallback defaults (see emailApprovalPolicy.ts) - used verbatim
+// when the ai_agent_configs row for email_triage is missing or its
+// minimum_score is unset, so removing that row can never loosen behavior.
 export const AUTO_WRITE_CATEGORIES: ReadonlySet<EmailCategory> = new Set(["interview_invite", "rejection", "offer"]);
 export const AUTO_WRITE_CONFIDENCE_THRESHOLD = 0.85;
+
+// application_confirmation keeps its own, separate, higher confidence bar -
+// a qualitatively different judgment (did the candidate definitely apply)
+// from the interview/offer/rejection signal AUTO_WRITE_CONFIDENCE_THRESHOLD
+// (and its admin-tunable replacement, minimum_score) governs. Not affected
+// by the risk_based policy's configurable threshold.
+export const APPLICATION_CONFIRMATION_CONFIDENCE = 0.9;
+
+// Minimum extractInterviewDetails confidence required to actually write an
+// interview_schedules row (vs. just leaving an AE to review the raw email).
+export const INTERVIEW_EXTRACTION_CONFIDENCE = 0.75;
 
 function buildPrompt(input: TriageInput): string {
   const appList = input.applications.length

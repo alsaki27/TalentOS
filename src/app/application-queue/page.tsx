@@ -39,6 +39,11 @@ interface QueueItem {
   workflow_id?: string | null;
   workflow_stage?: number | null;
   workflow_score?: number | null;
+  hiring_panel_ats_score?: number | null;
+  hiring_panel_recruiter_score?: number | null;
+  hiring_panel_role_fit_score?: number | null;
+  hiring_panel_truth_score?: number | null;
+  average_score?: number | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
   base_resume_id?: string | null;
@@ -100,26 +105,30 @@ const AE_STAGE_STYLES: Record<string, { background: string; border: string; colo
 
 // Drag-to-resize column widths (persisted to localStorage) — order here
 // must match the <colgroup>/<th> order in the table below.
-const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v1";
+// v2: the four single-ID columns were merged into two labeled ID columns, and
+// the remaining widths were rebalanced so the whole table fits a standard
+// desktop without a horizontal scrollbar at readable (non-shrunken) text
+// sizes. Bumping the key retires any v1 widths saved against the old column
+// set, which would otherwise pin users to the previous cramped layout.
+const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v2";
 const MIN_COLUMN_WIDTH = 50;
 const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
-  checkbox: 28,
-  candidate: 190,
-  job: 190,
-  status: 110,
-  aiPipeline: 170,
-  stage: 260,
-  owner: 140,
-  due: 90,
-  ticketId: 78,
-  jobId: 78,
-  baseResumeId: 78,
-  tailoredResumeId: 78,
-  actions: 220,
+  checkbox: 32,
+  candidate: 205,
+  job: 205,
+  status: 100,
+  aiPipeline: 158,
+  score: 100,
+  stage: 200,
+  owner: 120,
+  due: 78,
+  ticketJobIds: 162,
+  resumeIds: 162,
+  actions: 208,
 };
 const COLUMN_ORDER = [
-  "checkbox", "candidate", "job", "status", "aiPipeline", "stage", "owner", "due",
-  "ticketId", "jobId", "baseResumeId", "tailoredResumeId", "actions",
+  "checkbox", "candidate", "job", "status", "aiPipeline", "score", "stage", "owner", "due",
+  "ticketJobIds", "resumeIds", "actions",
 ];
 
 /** Thin draggable strip pinned to a <th>'s right edge. Mouse-drag only
@@ -170,16 +179,36 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
-function IdCell({ value }: { value: string | null | undefined }) {
-  if (!value) return <span className="text-muted" style={{ fontSize: 11 }}>—</span>;
+/** One labeled ID row with an explicit copy button (rather than a bare
+ *  click-anywhere-to-copy span) so the copy action is actually discoverable. */
+function CopyableId({ label, value }: { label: string; value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) {
+    return (
+      <div className="id-pair-row">
+        <span className="id-pair-label">{label}</span>
+        <span className="text-muted" style={{ fontSize: 12 }}>—</span>
+      </div>
+    );
+  }
   return (
-    <span
-      title={value}
-      style={{ fontSize: 11, fontFamily: "monospace", cursor: "pointer" }}
-      onClick={() => navigator.clipboard?.writeText(value)}
-    >
-      {value.slice(0, 8)}…
-    </span>
+    <div className="id-pair-row">
+      <span className="id-pair-label">{label}</span>
+      <span className="id-pair-value" title={value}>{value.slice(0, 8)}…</span>
+      <button
+        type="button"
+        className={copied ? "id-pair-copy copied" : "id-pair-copy"}
+        title={`Copy ${label} ID`}
+        aria-label={`Copy ${label} ID`}
+        onClick={() => {
+          navigator.clipboard?.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+      >
+        {copied ? "✓" : "⧉"}
+      </button>
+    </div>
   );
 }
 
@@ -201,7 +230,8 @@ export default function ApplicationQueuePage() {
   const [viewFilter, setViewFilter] = useState<TabView>("all");
   const [candidateFilter, setCandidateFilter] = useState("");
   const [timeWindow, setTimeWindow] = useState("");
-  const [appliedOnly, setAppliedOnly] = useState(false);
+  const [sort, setSort] = useState<"due" | "final_score" | "average_score">("due");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -250,7 +280,10 @@ export default function ApplicationQueuePage() {
     if (reviewFilter) p.set("review", reviewFilter);
     if (viewFilter !== "all") p.set("view", viewFilter);
     if (timeWindow) p.set("time_window", timeWindow);
-    if (appliedOnly) p.set("applied_only", "1");
+    if (sort !== "due") {
+      p.set("sort", sort);
+      p.set("direction", sortDirection);
+    }
     return p;
   }
 
@@ -306,7 +339,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, appliedOnly, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -799,10 +832,29 @@ export default function ApplicationQueuePage() {
             <option value="3d">Past 3 days</option>
             <option value="7d">Past 7 days</option>
           </select>
-          <label className="queue-applied-toggle">
-            <input type="checkbox" checked={appliedOnly} onChange={e => setAppliedOnly(e.target.checked)} />
-            <span>AE Applied only</span>
-          </label>
+          <select
+            className="input"
+            value={sort}
+            onChange={e => {
+              const next = e.target.value as "due" | "final_score" | "average_score";
+              setSort(next);
+              setSortDirection(next === "due" ? "asc" : "desc");
+            }}
+            aria-label="Sort application queue"
+          >
+            <option value="due">Sort: due date</option>
+            <option value="final_score">Sort: Final QA score</option>
+            <option value="average_score">Sort: Average of all scores</option>
+          </select>
+          {sort !== "due" && (
+            <button
+              className="btn-compact"
+              onClick={() => setSortDirection((d) => d === "desc" ? "asc" : "desc")}
+              title="Change score ordering"
+            >
+              {sortDirection === "desc" ? "High → low" : "Low → high"}
+            </button>
+          )}
         </div>
         <span className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} / {total}</span>
       </div>
@@ -828,9 +880,9 @@ export default function ApplicationQueuePage() {
       {renderPagination({ marginTop: 0, marginBottom: 16 })}
 
       {loading ? (
-        <div className="loading-panel" style={{ padding: "40px 0", textAlign: "center", color: "var(--muted)" }}>Loading...</div>
+        <div className="loading-panel" style={{ padding: "40px 0", textAlign: "center", color: "var(--ink-soft)" }}>Loading...</div>
       ) : total === 0 ? (
-        <div className="empty-state" style={{ padding: "40px 0", textAlign: "center", color: "var(--muted)" }}>No application tickets found.</div>
+        <div className="empty-state" style={{ padding: "40px 0", textAlign: "center", color: "var(--ink-soft)" }}>No application tickets found.</div>
       ) : (
         <div className="table-shell">
           <table className="table table-compact" style={{ tableLayout: "fixed" }}>
@@ -847,13 +899,12 @@ export default function ApplicationQueuePage() {
                   { id: "job", label: "Job" },
                   { id: "status", label: "Status" },
                   { id: "aiPipeline", label: "AI Pipeline" },
+                  { id: "score", label: "Scores" },
                   { id: "stage", label: "Stage" },
                   { id: "owner", label: "Owner" },
                   { id: "due", label: "Due" },
-                  { id: "ticketId", label: "Ticket ID" },
-                  { id: "jobId", label: "Job ID" },
-                  { id: "baseResumeId", label: "Base Resume ID" },
-                  { id: "tailoredResumeId", label: "Tailored Resume ID" },
+                  { id: "ticketJobIds", label: "Ticket / Job" },
+                  { id: "resumeIds", label: "Resume IDs" },
                   { id: "actions", label: "Actions" },
                 ].map((col) => (
                   <th key={col.id} style={{ position: "relative", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -871,20 +922,24 @@ export default function ApplicationQueuePage() {
                   <td className="cell-main">
                     {item.candidates ? (
                       <>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
                           {item.candidates.avatar_url ? (
                             <img className="avatar-circle" src={item.candidates.avatar_url} alt={item.candidates.name} />
                           ) : (
                             <span className="avatar-circle">{initials(item.candidates.name)}</span>
                           )}
                           <Link className="row-link" href={`/candidates/${item.candidates.id}`}>{item.candidates.name}</Link>
-                          {item.candidates.candidate_number != null && (
-                            <span className="badge badge-info" style={{ fontSize: 11, fontFamily: "monospace" }}>C#{item.candidates.candidate_number}</span>
-                          )}
-                          {item.app_number != null && (
-                            <span className="badge" style={{ fontSize: 11, fontFamily: "monospace", background: "var(--surface-2)" }}>A#{item.app_number}</span>
-                          )}
                         </div>
+                        {(item.candidates.candidate_number != null || item.app_number != null) && (
+                          <div className="ref-chip-row">
+                            {item.candidates.candidate_number != null && (
+                              <span className="ref-chip ref-chip-candidate" title={`Candidate number ${item.candidates.candidate_number}`}>C#{item.candidates.candidate_number}</span>
+                            )}
+                            {item.app_number != null && (
+                              <span className="ref-chip" title={`Application number ${item.app_number}`}>A#{item.app_number}</span>
+                            )}
+                          </div>
+                        )}
                         <div className="text-muted" style={{ fontSize: 12 }}>{item.candidates.email || item.candidates.phone || ""}</div>
                         <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
                           {item.candidates.resume_url && <a href={item.candidates.resume_url} target="_blank" rel="noreferrer">Uploaded Resume</a>}
@@ -896,18 +951,18 @@ export default function ApplicationQueuePage() {
                   <td className="cell-main">
                     {item.jobs ? (
                       <>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                          <Link className="row-link" href={`/jobs/${item.jobs.id}`}>{item.jobs.title}</Link>
-                          {item.jobs.job_number != null && (
-                            <span className="badge badge-info" style={{ fontSize: 11, fontFamily: "monospace" }}>J#{item.jobs.job_number}</span>
-                          )}
-                        </div>
+                        <Link className="row-link" href={`/jobs/${item.jobs.id}`}>{item.jobs.title}</Link>
+                        {item.jobs.job_number != null && (
+                          <div className="ref-chip-row">
+                            <span className="ref-chip ref-chip-job" title={`Job number ${item.jobs.job_number}`}>J#{item.jobs.job_number}</span>
+                          </div>
+                        )}
                         <div className="text-muted" style={{ fontSize: 12 }}>
                           {item.jobs.company || "—"} {item.jobs.location ? `• ${item.jobs.location}` : ""}
                         </div>
-                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
-                          {item.jobs.job_category && <span className="badge badge-info" style={{ fontSize: 11 }}>{item.jobs.job_category}</span>}
-                          {item.jobs.source_url && !item.jobs.source_url.includes("example.com") && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 11 }}>Posting</a>}
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
+                          {item.jobs.job_category && <span className="badge badge-info cell-category-badge">{item.jobs.job_category}</span>}
+                          {item.jobs.source_url && !item.jobs.source_url.includes("example.com") && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Posting</a>}
                         </div>
                       </>
                     ) : <span className="text-muted">Ad-hoc</span>}
@@ -943,12 +998,15 @@ export default function ApplicationQueuePage() {
                       workflowDetails={workflowDetails}
                       workflowStageLabel={workflowStageLabel}
                     />
-                    {expandedWorkflow === item.workflow_id && workflowDetails[item.workflow_id!] && (
+                    {expandedWorkflow === item.workflow_id && item.workflow_id && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
-                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id!]?.workflow?.last_error && (
+                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (
                           <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
-                            <strong>Error:</strong> {workflowDetails[item.workflow_id!].workflow.last_error}
+                            <strong>Error:</strong> {workflowDetails[item.workflow_id].workflow.last_error}
                           </div>
+                        )}
+                        {(item.workflow_stage ?? 0) >= 2 && (
+                          <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
                         )}
                         <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
                           View full pipeline in Status page →
@@ -958,21 +1016,32 @@ export default function ApplicationQueuePage() {
                   </td>
 
                   <td>
+                    <QueueScoreCell item={item} />
+                  </td>
+
+                  <td>
                     <select
                       value={item.ae_stage}
                       disabled={actionLoading === `${item.id}:ae_stage`}
                       onChange={(e) => changeAeStage(item.id, e.target.value)}
                       title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
                       style={{
-                        width: "100%", minWidth: 230, fontSize: 14, fontWeight: 700, padding: "8px 10px",
+                        width: "100%", minWidth: 0, fontSize: 13, fontWeight: 700, padding: "8px 8px",
                         background: AE_STAGE_STYLES[item.ae_stage]?.background,
                         border: `1px solid ${AE_STAGE_STYLES[item.ae_stage]?.border}`,
                         color: AE_STAGE_STYLES[item.ae_stage]?.color,
                         borderRadius: 8,
                       }}
                     >
+                      {/* No per-option background/color here on purpose: the dropdown
+                          list is a native OS popup, not part of the page, and it
+                          doesn't composite the translucent AE_STAGE_STYLES tints the
+                          same way the closed control does — that left every option
+                          except the selected one rendering as unreadable near-black
+                          text on near-black. The global `select option` rule (solid
+                          surface background + solid ink text) is reliably readable. */}
                       {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-                        <option key={value} value={value} style={{ background: AE_STAGE_STYLES[value]?.background, color: AE_STAGE_STYLES[value]?.color }}>{label}</option>
+                        <option key={value} value={value}>{label}</option>
                       ))}
                     </select>
                     {item.ae_stage_updated_at && (
@@ -994,17 +1063,21 @@ export default function ApplicationQueuePage() {
 
                   <td>
                     <div style={{ fontWeight: 500, fontSize: 13 }}>{ownerLabel(item)}</div>
-                    {item.assigned_by && <div className="text-muted" style={{ fontSize: 11 }}>by {item.assigned_by}</div>}
+                    {item.assigned_by && <div className="text-muted" style={{ fontSize: 12 }}>by {item.assigned_by}</div>}
                   </td>
 
                   <td className={item.assignment_due_at ? dueClass(item.assignment_due_at) : "text-muted"} style={{ fontSize: 13 }}>
                     {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
                   </td>
 
-                  <td><IdCell value={item.id} /></td>
-                  <td><IdCell value={item.jobs?.id ?? null} /></td>
-                  <td><IdCell value={item.base_resume_id ?? null} /></td>
-                  <td><IdCell value={item.workflow_resume_version_id ?? null} /></td>
+                  <td>
+                    <CopyableId label="Ticket" value={item.id} />
+                    <CopyableId label="Job" value={item.jobs?.id ?? null} />
+                  </td>
+                  <td>
+                    <CopyableId label="Base" value={item.base_resume_id ?? null} />
+                    <CopyableId label="Tailored" value={item.workflow_resume_version_id ?? null} />
+                  </td>
 
                   <td>
                     <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -1123,16 +1196,80 @@ export default function ApplicationQueuePage() {
   );
 }
 
-/** Deep link into /resume-parsing-status, the canonical place for AI
- *  findings (Hiring Panel score, Final Polish outcome) — this page no
- *  longer duplicates that UI in a local modal. Only worth showing once
- *  Hiring Panel has actually run (stage index >= 3). */
-function FindingsButton({ item }: { item: QueueItem }) {
-  if (!item.workflow_id || (item.workflow_stage ?? 0) < 3) return null;
+function scoreLabel(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(1)}/10`;
+}
+
+function QueueScoreCell({ item }: { item: QueueItem }) {
+  const average = item.average_score == null ? null : Number(item.average_score);
+  const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
+  if (average == null && finalScore == null) return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
   return (
-    <Link href={`/resume-parsing-status?workflow=${item.workflow_id}`} className="btn-compact btn-sm" style={{ textDecoration: "none" }}>
-      📋 AI findings
-    </Link>
+    <div style={{ display: "grid", gap: 2, fontSize: 11 }}>
+      <span className="badge badge-info" title="Average of ATS, recruiter, role fit, truth, and Final QA scores">Avg {scoreLabel(average)}</span>
+      <span className="text-muted" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>
+    </div>
+  );
+}
+
+/** Findings are displayed inline in the queue, matching the pipeline board,
+ * so reviewers do not lose their place by opening another page. */
+function QueueFindingsPanel({ details }: { details: any }) {
+  const artifacts: any[] = details?.artifacts ?? [];
+  const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
+  const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+  return (
+    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
+      {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+            {[
+              ["ATS", hiringPanel.atsScore],
+              ["Recruiter", hiringPanel.recruiterScore],
+              ["Role fit", hiringPanel.roleFitScore],
+              ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
+            ].map(([label, value]) => (
+              <div key={String(label)} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{scoreLabel(value as number | null) }</div>
+              </div>
+            ))}
+          </div>
+          {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--ink-soft)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
+          {hiringPanel.requiredEdits?.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
+              {hiringPanel.requiredEdits.map((e: any, i: number) => (
+                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
+                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
+                  <span>{e.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {finalPolish && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                Final Polish
+                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
+                  {finalPolish.exportReady ? "ready" : "not ready"}
+                </span>
+              </div>
+              {finalPolish.unresolvedWarnings?.length > 0 && <div style={{ color: "var(--ink-soft)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void; expandedWorkflow: string | null }) {
+  if (!item.workflow_id || (item.workflow_stage ?? 0) < 2) return null;
+  return (
+    <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} title="Show Hiring Panel and Final Polish findings inline">
+      {expandedWorkflow === item.workflow_id ? "▲ Hide findings" : "📋 Findings"}
+    </button>
   );
 }
 
@@ -1161,7 +1298,7 @@ function PipelineActions({
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-success">✅ Generated</span>
         {formattedWorkflowScore !== null && (
-          <span style={{ fontSize: 11 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+          <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
         <button className="btn-primary btn-sm"
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
@@ -1173,7 +1310,7 @@ function PipelineActions({
           title="Restart the full AI pipeline from scratch and replace this tailored resume">
           {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
         </button>
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }
@@ -1193,7 +1330,7 @@ function PipelineActions({
           disabled={actionLoading === item.id}>
           {actionLoading === item.id ? "Retrying..." : "🔄 Retry"}
         </button>
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }
@@ -1204,7 +1341,7 @@ function PipelineActions({
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-warning">Human Review</span>
         {formattedWorkflowScore !== null && (
-          <span style={{ fontSize: 11 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+          <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
         )}
         {item.workflow_id && (
           <>
@@ -1228,7 +1365,7 @@ function PipelineActions({
             <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
               {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
             </button>
-            <FindingsButton item={item} />
+            <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
           </>
         )}
       </div>
@@ -1245,14 +1382,14 @@ function PipelineActions({
           {wfStatus === "running" ? "Running" : "Queued"}
         </span>
         {item.workflow_stage !== null && item.workflow_stage !== undefined && (
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>{workflowStageLabel(item.workflow_stage)}</span>
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{workflowStageLabel(item.workflow_stage)}</span>
         )}
         {item.workflow_id && (
           <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
             {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
           </button>
         )}
-        <FindingsButton item={item} />
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
       </div>
     );
   }

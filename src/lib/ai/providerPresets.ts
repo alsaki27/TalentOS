@@ -139,6 +139,7 @@ export const PROVIDER_MODEL_PRESETS: Record<string, { id: string; label: string 
     { id: "kimi-k2.6", label: "Kimi K2.6" },
     { id: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
     { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+    { id: "minimax-m2.5", label: "MiniMax M2.5" },
   ],
   glm: [
     { id: "glm-5.2", label: "GLM 5.2" },

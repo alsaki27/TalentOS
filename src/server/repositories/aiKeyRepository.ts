@@ -2,7 +2,7 @@
 // Data-access abstraction for the ai_api_keys table.
 
 import { query, queryOne, execute } from "@/server/db/neon";
-import { encryptSecret, decryptSecret, fingerprintKey } from "@/server/security/secretCrypto";
+import { encryptSecret, decryptSecret, fingerprintKey, isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export type AiProvider =
   | "anthropic"
@@ -259,9 +259,28 @@ export async function getAiKeyWithDecryptedKey(id: string): Promise<(AiApiKeyRow
   if (!row) return null;
 
   try {
+    const wasLegacyPlaintext = !row.encrypted_key.startsWith("enc:");
+    const decryptedKey = await decryptSecret(row.encrypted_key);
+
+    // Older rows could be stored as plaintext when the encryption secret was
+    // absent. Upgrade them opportunistically once a working secret is
+    // available, without changing the resolved credential or interrupting the
+    // current request.
+    if (wasLegacyPlaintext && isEncryptionAvailable()) {
+      try {
+        const reencrypted = await encryptSecret(decryptedKey);
+        await execute(
+          "UPDATE ai_api_keys SET encrypted_key = $1, updated_at = now() WHERE id = $2",
+          [reencrypted, id]
+        );
+      } catch (upgradeError) {
+        console.warn(`[AI_KEY] Could not re-encrypt legacy key ${id}; continuing with the resolved key.`, upgradeError);
+      }
+    }
+
     return {
       ...row,
-      decrypted_key: await decryptSecret(row.encrypted_key),
+      decrypted_key: decryptedKey,
     };
   } catch (err) {
     console.error(`[AI_KEY] Failed to decrypt key ${id}. The AI_KEYS_ENCRYPTION_SECRET has likely changed or the row is corrupt.`, err);

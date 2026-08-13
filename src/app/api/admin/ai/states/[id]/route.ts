@@ -48,6 +48,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
              ON CONFLICT (singleton) DO UPDATE
                SET active_routing_state_id = EXCLUDED.active_routing_state_id,
                    updated_by = EXCLUDED.updated_by, updated_at = now()
+           ), synced AS (
+             INSERT INTO ai_automation_routes
+               (automation_id, rank, ai_key_id, provider, model_override, is_enabled, updated_at)
+             SELECT r.automation_id, r.rank, r.ai_key_id, r.provider,
+                    r.model_override, r.is_enabled, now()
+             FROM ai_routing_state_routes r JOIN published p ON p.id = r.state_id
+             ON CONFLICT (automation_id, rank) DO UPDATE
+               SET ai_key_id = EXCLUDED.ai_key_id,
+                   provider = EXCLUDED.provider,
+                   model_override = EXCLUDED.model_override,
+                   is_enabled = EXCLUDED.is_enabled,
+                   updated_at = now()
            ) SELECT * FROM published`,
           [params.id, context?.profile.user_id ?? null]
         )

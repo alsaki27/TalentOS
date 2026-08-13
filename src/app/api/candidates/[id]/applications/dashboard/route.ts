@@ -68,7 +68,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     var allRows = await query<DashboardRow>(
       `SELECT
         a.id AS application_id,
-        CASE WHEN a.ae_stage = 'applied' THEN 'applied' ELSE a.status END AS status,
+        -- Guarded so a status the AI email-triage pipeline later moved past
+        -- 'applied' (e.g. 'interview') isn't masked back to "Applied" just
+        -- because ae_stage still says 'applied' from the original AE hand-off.
+        CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END AS status,
         a.ae_stage,
         a.priority,
         COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,

@@ -149,8 +149,15 @@ export interface ListApplicationsQuery {
   userEmail?: string | null;
   userDisplayName?: string | null;
   userRole?: string;
-  pipelineStatuses?: string[];
+  /** Statuses to hide from the queue. Defaults to DEFAULT_EXCLUDED_STATUSES
+   *  (the terminal/archived ones). Pass [] to show every status - the
+   *  caller does this whenever the AE has already narrowed results with an
+   *  explicit Status or Stage selection, so that choice is always honored
+   *  in full instead of being silently filtered further. */
+  excludeStatuses?: string[];
   timeWindowHours?: number | null;
+  sort?: "due" | "final_score" | "average_score";
+  sortDirection?: "asc" | "desc";
 }
 
 export interface PaginatedApplicationsResult {
@@ -348,6 +355,19 @@ export async function findExistingCandidateIdsForJob(
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
+
+// The Application Queue previously showed a ticket only when `status` was
+// exactly one of assigned/stacked/in_progress (an allowlist) - written
+// before the AI email-triage pipeline started writing interview/offer/
+// replied/rejected directly onto `status` (see applyEmailStageDecision in
+// gmailSyncService.ts). Any ticket the AI moved to one of those newer
+// statuses silently vanished from the queue even though it was still
+// active, unresolved work - confirmed live: 85 tickets sitting at
+// ae_stage='in_ai_pipeline' with status IN ('interview','replied') were
+// invisible regardless of any filter selection. Flipped to a denylist of
+// the genuinely terminal/archived statuses instead, so every other status
+// - old or new - stays visible by default.
+const DEFAULT_EXCLUDED_STATUSES = ["applied", "rejected", "withdrawn"];
 const MAX_PAGE_SIZE = 200;
 
 /**
@@ -428,8 +448,19 @@ export async function listApplicationQueue(
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
-  const statuses = queryParams.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
+  const excludeStatuses = queryParams.excludeStatuses ?? DEFAULT_EXCLUDED_STATUSES;
   const timeWindowHours = queryParams.timeWindowHours ?? null;
+  const sort = queryParams.sort === "final_score" || queryParams.sort === "average_score"
+    ? queryParams.sort
+    : "due";
+  const sortDirection = queryParams.sortDirection === "asc" ? "ASC" : "DESC";
+  // Keep the original due-date ordering as the default. Score ordering is
+  // deliberately whitelisted before it is interpolated into SQL.
+  const orderBy = sort === "final_score"
+    ? `workflow_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
+    : sort === "average_score"
+      ? `average_score ${sortDirection} NULLS LAST, a.assignment_due_at ASC NULLS LAST, a.applied_at DESC`
+      : "a.assignment_due_at ASC NULLS LAST, a.applied_at DESC";
   const today = new Date().toISOString().slice(0, 10);
 
   const dataSql = `
@@ -444,7 +475,12 @@ export async function listApplicationQueue(
       w.status as workflow_status,
       w.id as workflow_id,
       w.current_stage as workflow_stage,
-      (SELECT (data->>'finalQaScore')::numeric FROM application_ai_artifacts WHERE workflow_id = w.id AND automation_id = 'application_final_polish' ORDER BY created_at DESC LIMIT 1) as workflow_score,
+      CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN CASE WHEN (fp.data->>'finalQaScore')::numeric BETWEEN 20 AND 100 THEN (fp.data->>'finalQaScore')::numeric / 10 ELSE (fp.data->>'finalQaScore')::numeric END END as workflow_score,
+      CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END as hiring_panel_ats_score,
+      CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END as hiring_panel_recruiter_score,
+      CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END as hiring_panel_role_fit_score,
+      CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END as hiring_panel_truth_score,
+      score.average_score,
       a.tailored_resume_version_id as workflow_resume_version_id,
       rv.title as workflow_resume_title,
       rv.base_resume_id as base_resume_id,
@@ -457,8 +493,29 @@ export async function listApplicationQueue(
       WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
       ORDER BY created_at DESC LIMIT 1
     ) w ON true
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_hiring_panel'
+      ORDER BY created_at DESC LIMIT 1
+    ) hp ON true
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_final_polish'
+      ORDER BY created_at DESC LIMIT 1
+    ) fp ON true
+    LEFT JOIN LATERAL (
+      SELECT AVG(value)::numeric AS average_score
+      FROM (VALUES
+        (CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END),
+        (CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END),
+        (CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END),
+        (CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END),
+        (CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN CASE WHEN (fp.data->>'finalQaScore')::numeric BETWEEN 20 AND 100 THEN (fp.data->>'finalQaScore')::numeric / 10 ELSE (fp.data->>'finalQaScore')::numeric END END)
+      ) AS score_values(value)
+      WHERE value IS NOT NULL
+    ) score ON true
     LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
-    WHERE a.status = ANY($1)
+    WHERE NOT (a.status = ANY($1))
       -- Every role (including application_engineer) sees the whole queue regardless
       -- of assignment/owner - "mine" ($8) stays available as a voluntary filter.
       -- NOTE: the Neon HTTP driver (like plain pg) errors "could not determine
@@ -479,11 +536,11 @@ export async function listApplicationQueue(
       AND ($13 = '' OR a.candidate_id::text = $13)
       AND ($14 = '' OR a.ae_stage = $14)
       AND ($15::int IS NULL OR a.created_at >= NOW() - ($15::int * INTERVAL '1 hour'))
-    ORDER BY a.assignment_due_at ASC NULLS LAST, a.applied_at DESC
+    ORDER BY ${orderBy}
     OFFSET $11 LIMIT $12
   `;
   const items = await query<ApplicationRow>(dataSql, [
-    statuses,
+    excludeStatuses,
     search,
     searchParam,
     status,
@@ -505,7 +562,7 @@ export async function listApplicationQueue(
     FROM applications a
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
-    WHERE a.status = ANY($1)
+    WHERE NOT (a.status = ANY($1))
       AND ($2 = '' OR c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3)
       AND ($4 = '' OR a.status = $4)
       AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
@@ -521,7 +578,7 @@ export async function listApplicationQueue(
       AND ($13::int IS NULL OR a.created_at >= NOW() - ($13::int * INTERVAL '1 hour'))
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
-    statuses,
+    excludeStatuses,
     search,
     searchParam,
     status,
@@ -548,14 +605,14 @@ export async function listApplicationQueue(
 }
 
 async function buildQueueStats(params: ListApplicationsQuery): Promise<ApplicationQueueStats> {
-  const statuses = params.pipelineStatuses ?? ["assigned", "stacked", "in_progress"];
+  const excludeStatuses = params.excludeStatuses ?? DEFAULT_EXCLUDED_STATUSES;
   // Stats mirror listApplicationQueue's visibility: every role sees the whole
   // queue, "mine" below stays a voluntary breakdown, not an access boundary.
   const baseWhere = `
-    status = ANY($1)
+    NOT (status = ANY($1))
   `;
 
-  const baseParams = [statuses];
+  const baseParams = [excludeStatuses];
 
   const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow] = await Promise.all([
     queryOne<{ total: number }>(

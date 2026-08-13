@@ -42,7 +42,8 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const actionItems = await query<any>(
     `SELECT id, type, title, description, suggested_action, priority, status,
             resolution_rule, resolution_kind, resolution_note, due_at,
-            resolved_at, created_at
+            resolved_at, created_at,
+            proposed_status, proposed_from_status, ai_confidence, decision, decided_at
        FROM action_items
       WHERE email_communication_id IN (SELECT id FROM email_communications WHERE candidate_id = $1 AND gmail_thread_id = $2)
       ORDER BY created_at DESC`,

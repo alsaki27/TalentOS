@@ -50,17 +50,16 @@ enabled = true
 # CRM_INTEGRATION_SECRET â€” server-to-server company directory access for Skarion CRM
 # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 # AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY
-# ANTHROPIC_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY
+# AI provider credentials and endpoints live in encrypted Neon Control Center records.
 # JOB_CEO_INGEST_SECRET — used by /api/job-ceo/ingest endpoint; must match GitHub secret
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
-# GOOGLE_VERTEX_PROXY_URL, GOOGLE_VERTEX_PROXY_SECRET — Cloud Run gateway
-#   (talentos-858973 project, region "global") consumed by
-#   src/lib/ai/googleVertexProxyProvider.ts. Both pushed from GitHub Actions
-#   secrets in deploy.yml, not set by hand — rotate there.
-# GOOGLE_VERTEX_MODEL, GOOGLE_VERTEX_FALLBACK_MODEL — default/fallback model
-#   IDs for that provider when a route has no model_override in ai_automation_routes.
+# Do not add provider API keys, gateway credentials, model aliases, or AI endpoint
+# URLs here. Configure and rotate them at /admin/ai; only AI_KEYS_ENCRYPTION_SECRET
+# remains a deployment bootstrap so a database leak alone cannot decrypt the keys.
 #
 # Free tier: all secrets are free to set. Only KV and R2 have quotas.
+# OPENCODE_DIRECT_API_KEY is the env-managed direct OpenCode Go credential used
+# by the tertiary route at https://opencode.ai/zen/go/v1.
 
 # Optional (free tier): ISR cache via KV
 # KV limits on free tier: 1,000 reads/day, 1,000 writes/day, 1GB storage

@@ -174,9 +174,8 @@ The TalentOS app is a Next.js 14 application currently running on Vercel + Supab
 | `NEON_DATABASE_URL_DIRECT` | **NEW** | ✅ | — | Neon direct connection for migrations. |
 | `AI_KEYS_ENCRYPTION_SECRET` | Yes | ✅ | ✅ | AES-256-GCM key. Must be same or re-encrypt. |
 | `CRON_SECRET` | Yes | ✅ | ✅ | Cron route protection. |
-| `ANTHROPIC_API_KEY` | No | ✅ | ✅ | AI provider. |
-| `NVIDIA_API_KEY` | No | ✅ | ✅ | AI provider. |
-| `AI_PROVIDER` | No | ✅ | ✅ | Preferred AI provider. |
+| AI provider credentials | No | Neon | Neon | Encrypted and managed at `/admin/ai`. |
+| `AI_PROVIDER` | No | ✅ | ✅ | `mock` for local tests only. |
 | `GOOGLE_CLIENT_ID` | No | ✅ | ✅ | Gmail OAuth. |
 | `GOOGLE_CLIENT_SECRET` | No | ✅ | ✅ | Gmail OAuth. |
 | `GOOGLE_OAUTH_REDIRECT_URI` | No | ✅ | ✅ | Gmail OAuth. |

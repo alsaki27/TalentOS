@@ -46,6 +46,16 @@ export async function GET(req: NextRequest) {
       ))
       : (dueFollowUps ?? []);
 
+    // Feeds the NavBar's /inbox badge - reuses this same 60s-polled legacy
+    // endpoint rather than adding a second timer just for one more number.
+    const inboxRow = await queryOne<{ pending_approvals: number; needs_reply: number }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE type = 'status_change_approval')::int AS pending_approvals,
+         COUNT(*) FILTER (WHERE type = 'needs_reply')::int AS needs_reply
+       FROM action_items
+       WHERE status IN ('open', 'in_progress')`
+    );
+
     return NextResponse.json({
       queue: {
         total: visibleQueue.length,
@@ -55,6 +65,10 @@ export async function GET(req: NextRequest) {
       },
       followUps: {
         due: visibleFollowUps.length,
+      },
+      inbox: {
+        pendingApprovals: inboxRow?.pending_approvals ?? 0,
+        needsReply: inboxRow?.needs_reply ?? 0,
       },
     });
   }
