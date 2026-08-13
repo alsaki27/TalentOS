@@ -55,6 +55,85 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
   };
 }
 
+/** Converts the legacy Resumify editor shape into the canonical PDF document shape. */
+export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
+  const personalInfo = data?.personalInfo ?? {};
+  const skills = data?.skills ?? {};
+  const groups = Array.isArray(skills.categorized) ? skills.categorized : [];
+  const simpleSkills = Array.isArray(skills.simple) ? skills.simple : [];
+  const skillSections = groups.length > 0
+    ? groups.map((group: any, index: number) => ({
+        id: group?.id || `skill-${index}`,
+        title: group?.name || "Skills",
+        skills: Array.isArray(group?.skills) ? group.skills : [],
+      }))
+    : [{ id: "skills", title: "Skills", skills: simpleSkills }];
+
+  return normalizeResumeContentForExport({
+    header: {
+      fullName: typeof personalInfo.fullName === "string" ? personalInfo.fullName : "",
+      location: personalInfo.location,
+      phone: personalInfo.phone,
+      email: personalInfo.email,
+      linkedin: personalInfo.linkedin,
+      github: personalInfo.github,
+      portfolio: personalInfo.website,
+    },
+    summary: typeof data?.summary === "string" && data.summary.trim()
+      ? { id: "summary", text: data.summary }
+      : undefined,
+    skills: skillSections,
+    experience: Array.isArray(data?.experience) ? data.experience.map((entry: any, index: number) => ({
+      id: entry?.id || `experience-${index}`,
+      title: entry?.jobTitle || "",
+      company: entry?.company || "",
+      location: entry?.location,
+      startDate: entry?.startDate || "",
+      endDate: entry?.current ? undefined : entry?.endDate,
+      bullets: (Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : []).map((text: unknown, bulletIndex: number) => ({
+        id: `experience-${index}-bullet-${bulletIndex}`,
+        text: typeof text === "string" ? text : "",
+      })),
+    })) : [],
+    education: Array.isArray(data?.education) ? data.education.map((entry: any, index: number) => ({
+      id: entry?.id || `education-${index}`,
+      degree: entry?.degree || "",
+      school: entry?.institution || "",
+      location: entry?.location,
+      graduationDate: entry?.graduationYear,
+    })) : [],
+    projects: Array.isArray(data?.projects) ? data.projects.map((entry: any, index: number) => ({
+      id: entry?.id || `project-${index}`,
+      title: entry?.title || "",
+      description: entry?.description,
+      bullets: [],
+      technologies: Array.isArray(entry?.technologies) ? entry.technologies : [],
+    })) : [],
+    customSections: Array.isArray(data?.customSections) ? data.customSections.map((section: any, index: number) => ({
+      id: section?.id || `custom-${index}`,
+      title: section?.title || "Additional Information",
+      bullets: String(section?.content || "").split(/\r?\n/).filter(Boolean).map((text, bulletIndex) => ({
+        id: `custom-${index}-bullet-${bulletIndex}`,
+        text,
+      })),
+    })) : [],
+    certifications: [],
+    formatting: {
+      pageFormat: data?.pageFormat === "letter" ? "letter" : "a4",
+      fontFamily: typeof data?.fontFamily === "string" ? data.fontFamily : "Inter",
+      fontSize: typeof data?.fontSize === "number" ? data.fontSize : 10,
+      marginTop: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginRight: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginBottom: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginLeft: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      styleId: "resumify-version",
+      sectionSpacing: 5,
+      bulletSpacing: 1,
+      lineHeight: 1.15,
+    },
+  });
+}
+
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
   const { renderResumePdfDoc } = await import("@/lib/falood/skarionPdfDocument");
   const doc = renderResumePdfDoc(content);
@@ -93,6 +172,7 @@ export interface UploadExportParams {
   exportType: "pdf" | "docx";
   blob: Blob;
   fileName: string;
+  archiveLabel?: string;
 }
 
 export interface UploadExportResult {
@@ -113,6 +193,7 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
   form.append("resumeVersionId", params.resumeVersionId);
   form.append("exportType", params.exportType);
   form.append("fileName", params.fileName);
+  if (params.archiveLabel) form.append("archiveLabel", params.archiveLabel);
   form.append("file", params.blob, params.fileName);
 
   const res = await fetch("/api/applications/exports", {

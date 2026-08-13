@@ -30,6 +30,7 @@ export async function POST(req: NextRequest) {
   const applicationId = formData.get("applicationId") as string | null;
   const resumeVersionId = formData.get("resumeVersionId") as string | null;
   const exportType = formData.get("exportType") as string | null;
+  const archiveLabel = formData.get("archiveLabel") as string | null;
 
   if (!file || !applicationId || !resumeVersionId || !exportType) {
     return NextResponse.json(
@@ -87,7 +88,8 @@ export async function POST(req: NextRequest) {
   const candidateName = safeSegment(linked.candidate_name, "Candidate");
   const companyName = safeSegment(linked.company_name, "Company");
   const jobTitle = safeSegment(linked.job_title, "Application");
-  const fileName = `${candidateName} - ${companyName} - ${jobTitle} - app-${applicationId} - resume-${resumeVersionId}.${extension}`;
+  const versionSuffix = archiveLabel ? ` - ${safeSegment(archiveLabel, "version")}` : "";
+  const fileName = `${candidateName} - ${companyName} - ${jobTitle} - app-${applicationId} - resume-${resumeVersionId}${versionSuffix}.${extension}`;
   const path = `${candidateName}/${applicationId}/${fileName}`;
 
   const existing = await queryOne<{ id: string; status: string; storage_url: string | null }>(

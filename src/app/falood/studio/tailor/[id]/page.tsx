@@ -10,6 +10,7 @@ import { ArrowLeft, Download, FileDown, Palette, Save, Settings, Sparkles, Uploa
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
+import { generateResumePdfBlob, resumifyResumeDataToExportDocument, uploadResumeExport } from '@/lib/falood/clientExport';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -29,6 +30,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const lastSavedSnapshotRef = useRef<string | null>(null);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
     const [candidateId, setCandidateId] = useState<string | null>(null);
+    const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -51,6 +53,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                         ? json.data.chatHistory.find((m: any) => m?.id === 'meta-candidate')?.candidateId
                         : null;
                     setCandidateId(json.data.candidateId || legacyCandidateId || null);
+                    setArchiveContext(json.data.archiveContext || null);
 
                     // Pre-seed the chat with a system message about the job
                     const systemMsg = {
@@ -151,14 +154,36 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         
         setIsSaving(true);
         try {
-            await fetch(`/api/falood/applications?id=${applicationId}`, {
+            const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ versions: updatedVersions }),
+                body: JSON.stringify({
+                    versions: updatedVersions,
+                    resumeData: state.resumeData,
+                    chatHistory: state.chatHistory,
+                    jobDescription: state.jobDescription,
+                    companyName: company || null,
+                }),
             });
-            showToast(`Saved version: ${versionName}`);
-        } catch {
-            showToast('Failed to save version');
+            const saveJson = await saveRes.json().catch(() => ({}));
+            if (!saveRes.ok || !saveJson?.success) throw new Error(saveJson?.error || 'Failed to save version');
+
+            if (archiveContext) {
+                const pdfBlob = await generateResumePdfBlob(resumifyResumeDataToExportDocument(state.resumeData));
+                await uploadResumeExport({
+                    applicationId: archiveContext.applicationId,
+                    resumeVersionId: archiveContext.resumeVersionId,
+                    exportType: 'pdf',
+                    blob: pdfBlob,
+                    fileName: `${versionName}.pdf`,
+                    archiveLabel: versionName,
+                });
+                showToast(`Saved version and archived PDF: ${versionName}`);
+            } else {
+                showToast(`Saved version: ${versionName} (no linked application archive)`);
+            }
+        } catch (error) {
+            showToast(error instanceof Error ? error.message : 'Failed to save version');
         } finally {
             setIsSaving(false);
         }
