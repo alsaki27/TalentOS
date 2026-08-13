@@ -282,15 +282,25 @@ export function buildProviderFromDbKey(
       });
     }
     case "opencode": {
+      const directGoBase = "https://opencode.ai/zen/go/v1";
+      const isDirectGo = (baseUrl || "").replace(/\/$/, "") === directGoBase;
+      const effectiveApiKey = isDirectGo
+        ? (process.env.OPENCODE_DIRECT_API_KEY || apiKey)
+        : (process.env.OPENCODE_API_KEY || apiKey);
+      const selectedModel = model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash";
+      const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
+        ? { thinking: { type: "enabled" }, reasoning_effort: "high" }
+        : undefined;
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
           : (process.env.OPENCODE_API_BASE || "https://api.opencode.ai/v1/chat/completions"),
-        apiKey,
-        model: model || process.env.OPENCODE_MODEL || "deepseek/deepseek-v4-flash",
+        apiKey: effectiveApiKey,
+        model: selectedModel,
         errorLabel: "OpenCode API",
         maxTokens: 8192,
         temperature: 0.3,
+        extraBody: deepSeekV4ProBody,
         extraHeaders: {},
       });
     }

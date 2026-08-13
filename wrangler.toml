@@ -61,6 +61,8 @@ enabled = true
 #   IDs for that provider when a route has no model_override in ai_automation_routes.
 #
 # Free tier: all secrets are free to set. Only KV and R2 have quotas.
+# OPENCODE_DIRECT_API_KEY is the env-managed direct OpenCode Go credential used
+# by the tertiary route at https://opencode.ai/zen/go/v1.
 
 # Optional (free tier): ISR cache via KV
 # KV limits on free tier: 1,000 reads/day, 1,000 writes/day, 1GB storage
