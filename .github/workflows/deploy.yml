@@ -193,3 +193,13 @@ jobs:
           GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
           GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
 
+      - name: Set Gmail push sync secrets
+        run: |
+          echo "$GMAIL_PUSH_TOKEN" | npx wrangler secret put GMAIL_PUSH_TOKEN
+          echo "$GMAIL_PUBSUB_TOPIC" | npx wrangler secret put GMAIL_PUBSUB_TOPIC
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GMAIL_PUSH_TOKEN: ${{ secrets.GMAIL_PUSH_TOKEN }}
+          GMAIL_PUBSUB_TOPIC: projects/project-20e2f4c9-0419-46d6-882/topics/talentos-gmail-events
+

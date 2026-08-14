@@ -3,6 +3,15 @@
 
 const GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
+export async function watchGmailMailbox(accessToken: string, topicName: string): Promise<{ historyId: string; expiration: string }> {
+  const res = await gmailFetch("/watch", accessToken, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topicName, labelIds: ["INBOX", "SENT"] }),
+  });
+  const data = await res.json();
+  return { historyId: data.historyId, expiration: new Date(Number(data.expiration)).toISOString() };
+}
+
 async function gmailFetch(path: string, accessToken: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set("Authorization", "Bearer " + accessToken);

@@ -13,9 +13,10 @@ import {
   markGmailAccountError,
   updateGmailHistoryId,
   updateGmailBackfillState,
+  saveGmailWatch,
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
-import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, type GmailMessage } from "@/lib/integrations/gmailApi";
+import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, watchGmailMailbox, type GmailMessage } from "@/lib/integrations/gmailApi";
 import { triageEmail, INTERVIEW_EXTRACTION_CONFIDENCE, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
@@ -664,4 +665,22 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
   await enforceEmailRetention();
   const followUpsEnqueued = await enqueueOverdueFollowUps();
   return { accounts: outcomes, followUpsEnqueued };
+}
+
+export async function registerGmailWatches() {
+  const topic = process.env.GMAIL_PUBSUB_TOPIC;
+  if (!topic) throw new Error("GMAIL_PUBSUB_TOPIC is not configured");
+  const accounts = await listActiveCandidateGmailAccounts(false);
+  const results: Array<{ accountId: string; ok: boolean; error?: string }> = [];
+  for (const row of accounts) {
+    try {
+      const account = await getDecryptedGmailAccount(row.id);
+      if (!account) continue;
+      const token = await ensureFreshAccessToken(account);
+      const watch = await watchGmailMailbox(token, topic);
+      await saveGmailWatch(row.id, crypto.randomUUID(), watch.expiration, watch.historyId);
+      results.push({ accountId: row.id, ok: true });
+    } catch (error: any) { results.push({ accountId: row.id, ok: false, error: error?.message || "watch_failed" }); }
+  }
+  return results;
 }
