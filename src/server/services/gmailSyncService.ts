@@ -344,7 +344,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     }
   }
 
-  if (triage.category === "application_confirmation" && !triage.matchedApplicationId) {
+  if (triage.category === "application_confirmation" && !triage.matchedApplicationId && verdict.senderClass === "human") {
     await execute(
       `INSERT INTO action_items (candidate_id, email_communication_id, type, title, description, suggested_action, priority, status, resolution_rule, dedupe_key)
        VALUES ($1, $2, 'untracked_application', 'Application found outside TalentOS', $3, 'AE: confirm company and role, then add the application manually.', 'high', 'open', 'manual_only', $4)
@@ -552,7 +552,7 @@ async function cleanKnownNonActionableTasks() {
             decision_note = COALESCE(decision_note, 'Automatically dismissed: non-actionable job-board sender')
       FROM email_communications ec
      WHERE ai.email_communication_id = ec.id
-       AND ai.type IN ('needs_reply', 'status_change_review')
+       AND ai.type IN ('needs_reply', 'status_change_review', 'untracked_application')
        AND ai.status IN ('open', 'in_progress')
        AND (ec.suppression_rule LIKE 'job_board:%'
             OR lower(COALESCE(ec.from_email, '')) ~ '(indeed|ziprecruiter|glassdoor|monster|linkedin|careerbuilder)')
