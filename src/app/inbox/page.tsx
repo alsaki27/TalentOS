@@ -96,6 +96,8 @@ export default function InboxPage() {
   const [message, setMessage] = useState("");
   const [tasks, setTasks] = useState<EmailTask[]>([]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [gmailCandidateId, setGmailCandidateId] = useState("");
+  const [connectingClientGmail, setConnectingClientGmail] = useState(false);
   const busyRef = useRef(false);
 
   const loadCounts = useCallback(async () => {
@@ -220,6 +222,12 @@ export default function InboxPage() {
     }
   }
 
+  function connectClientGmail() {
+    if (!gmailCandidateId || connectingClientGmail) return;
+    setConnectingClientGmail(true);
+    window.location.href = `/api/integrations/gmail/start?owner=candidate&candidateId=${encodeURIComponent(gmailCandidateId)}&redirect=${encodeURIComponent("/inbox")}`;
+  }
+
   async function bulkCorrect(status: "dismissed" | "done") {
     if (!selectedTaskIds.length) return;
     const res = await fetch("/api/action-items/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: selectedTaskIds, status, reason: "Bulk corrected from Gmail inbox" }) });
@@ -294,6 +302,15 @@ export default function InboxPage() {
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Link href="/inbox/command-center" className="btn-primary" style={{textDecoration:"none"}}>Command center</Link><Link href="/inbox/health" className="btn" style={{textDecoration:"none"}}>Inbox health</Link><Link href="/gmail-sender-rules" className="btn" style={{textDecoration:"none"}}>Sender rules</Link><button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button></div>
       </div>
+
+      <section className="card" style={{ padding: 16, marginBottom: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ minWidth: 260, flex: 1 }}><strong>Connect a client Gmail</strong><div className="text-muted-foreground" style={{ fontSize: 12, marginTop: 4 }}>Admins and managers can start OAuth for a selected candidate. The client signs into Google and grants mailbox access.</div></div>
+        <select value={gmailCandidateId} onChange={(event) => setGmailCandidateId(event.target.value)} style={{ minWidth: 240 }} aria-label="Client candidate for Gmail connection">
+          <option value="">Select client candidate…</option>
+          {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+        </select>
+        <button className="btn-primary" onClick={connectClientGmail} disabled={!gmailCandidateId || connectingClientGmail}>{connectingClientGmail ? "Opening Google…" : "Connect client Gmail"}</button>
+      </section>
 
       <div className="stats-strip" style={{ marginBottom: 16 }}>
         {tiles.map((tile) => {
