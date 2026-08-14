@@ -287,6 +287,14 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   // internal by default and is deduplicated by source email.
   if (triage.matchedApplicationId) {
     await execute(
+      `INSERT INTO application_email_links
+         (application_id, email_communication_id, match_method, match_confidence)
+       VALUES ($1, $2, 'ai', $3)
+       ON CONFLICT (application_id, email_communication_id) DO UPDATE
+         SET match_confidence = EXCLUDED.match_confidence`,
+      [triage.matchedApplicationId, id, triage.confidence],
+    );
+    await execute(
       `INSERT INTO application_comments
          (application_id, commenter_name, body, visible_to_candidate, source_type, email_communication_id, ai_confidence)
        VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4)
