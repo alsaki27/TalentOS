@@ -349,12 +349,26 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     try {
       const details = await extractInterviewDetails(row.subject, bodyText);
       await execute("UPDATE email_communications SET interview_details = $1 WHERE id = $2", [JSON.stringify(details), id]);
+      const interviewText = `${row.subject || ""}\n${bodyText}`;
+      const cancelled = /\b(cancel(?:led|lation)?|no longer moving forward|position has been filled)\b/i.test(interviewText);
+      const rescheduled = /\b(reschedul|new time|different time|calendar update)\b/i.test(interviewText);
+      if (cancelled) {
+        await execute("UPDATE interview_schedules SET status = 'cancelled' WHERE application_id = $1 AND status NOT IN ('completed','cancelled')", [triage.matchedApplicationId]);
+        await execute(
+          `INSERT INTO action_items (candidate_id, application_id, email_communication_id, type, title, description, priority, status, resolution_rule, dedupe_key)
+           VALUES ($1, $2, $3, 'interview_followup', 'Interview cancellation requires review', 'An email appears to cancel or withdraw an interview. Confirm the application stage and notify the candidate if needed.', 'high', 'open', 'manual_only', $4)
+           ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
+          [row.candidate_id, triage.matchedApplicationId, id, `email:${id}:interview-cancelled`]
+        );
+      }
       if (details.scheduledAt && details.confidence >= INTERVIEW_EXTRACTION_CONFIDENCE) {
         const existing = await queryOne<{ id: string }>("SELECT id FROM interview_schedules WHERE application_id = $1 AND scheduled_at = $2 LIMIT 1", [triage.matchedApplicationId, details.scheduledAt]);
-        if (!existing) await execute(
-          "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
-          [triage.matchedApplicationId, "Email-detected interview", details.scheduledAt, details.durationMinutes || 60, details.location, details.meetingLink]
-        );
+        if (existing) {
+          await execute("UPDATE interview_schedules SET status = 'scheduled', duration_minutes = COALESCE($2, duration_minutes), location = COALESCE($3, location), meeting_link = COALESCE($4, meeting_link) WHERE id = $1", [existing.id, details.durationMinutes || null, details.location, details.meetingLink]);
+        } else await execute(
+            "INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, 1, $2, $3, $4, $5, $6, 'scheduled', 'email-ai')",
+            [triage.matchedApplicationId, rescheduled ? "Rescheduled interview" : "Email-detected interview", details.scheduledAt, details.durationMinutes || 60, details.location, details.meetingLink]
+          );
         const conflict = await queryOne<{ id: string }>(
           `SELECT s.id FROM interview_schedules s
            JOIN applications a ON a.id = s.application_id
