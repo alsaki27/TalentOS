@@ -149,6 +149,16 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CRM_INTEGRATION_SECRET: ${{ secrets.CRM_INTEGRATION_SECRET }}
 
+      - name: Set SkarionCRM outbound secrets
+        run: |
+          if [ -n "$SKARION_CRM_API_KEY" ]; then echo "$SKARION_CRM_API_KEY" | npx wrangler secret put SKARION_CRM_API_KEY; fi
+          if [ -n "$SKARION_CRM_API_URL" ]; then echo "$SKARION_CRM_API_URL" | npx wrangler secret put SKARION_CRM_API_URL; fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SKARION_CRM_API_KEY: ${{ secrets.SKARION_CRM_API_KEY }}
+          SKARION_CRM_API_URL: ${{ secrets.SKARION_CRM_API_URL }}
+
       - name: Set required authentication and encryption secrets
         run: |
           if [ -z "$JWT_SECRET" ] || [ -z "$AI_KEYS_ENCRYPTION_SECRET" ] || [ -z "$CRON_SECRET" ]; then

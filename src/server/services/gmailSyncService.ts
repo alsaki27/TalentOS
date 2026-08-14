@@ -22,6 +22,7 @@ import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
 import { changeApplicationStatus, emailStageTarget } from "@/server/services/applicationStatusService";
 import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
+import { drainRecruitingContactSync, queueRecruitingContact, syncQueuedRecruitingContact } from "@/server/services/skarionCrmContactSyncService";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 const BACKFILL_PAGES_PER_RUN = Math.max(1, Number(process.env.GMAIL_BACKFILL_PAGES_PER_RUN || 8));
@@ -301,6 +302,11 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
       `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1 = 'hiring_manager' THEN $1 ELSE contact_type END WHERE candidate_id = $2 AND email = $3`,
       [contactType, row.candidate_id, contactEmail]
     );
+    if (contactType !== "unknown") {
+      await queueRecruitingContact({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, email: contactEmail, displayName: row.from_email.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null, contactType, subject: row.subject });
+      const queued = await queryOne<{ id: string }>("SELECT id FROM crm_contact_sync_queue WHERE candidate_id=$1 AND contact_email=$2", [row.candidate_id, contactEmail]);
+      if (queued) await syncQueuedRecruitingContact(queued.id);
+    }
   }
 
   if (!triage.relevant) return;
@@ -719,6 +725,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
   await escalateOverdueActionItems();
   await cleanKnownNonActionableTasks();
   await enforceEmailRetention();
+  await drainRecruitingContactSync(25);
   const followUpsEnqueued = await enqueueOverdueFollowUps();
   return { accounts: outcomes, followUpsEnqueued };
 }

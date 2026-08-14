@@ -60,9 +60,11 @@ export async function GET() {
             WHERE status IN ('open', 'in_progress')
             GROUP BY type ORDER BY overdue_count DESC, urgent_count DESC, count DESC`),
     query(`SELECT cp.candidate_id, c.name candidate_name, cp.email, cp.display_name, cp.contact_type,
-                  cp.company, cp.last_seen_at, cp.inbound_count, cp.outbound_count, cp.last_subject
+                  cp.company, cp.last_seen_at, cp.inbound_count, cp.outbound_count, cp.last_subject,
+                  q.status AS crm_sync_status, q.crm_record_url, q.last_error AS crm_sync_error
              FROM gmail_contact_profiles cp
              JOIN candidates c ON c.id = cp.candidate_id
+             LEFT JOIN crm_contact_sync_queue q ON q.candidate_id = cp.candidate_id AND q.contact_email = cp.email
             ORDER BY cp.last_seen_at DESC LIMIT 250`),
     query(`SELECT lower(coalesce(s.status, 'scheduled')) status, count(*)::int count
              FROM interview_schedules s
