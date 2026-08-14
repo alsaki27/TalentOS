@@ -291,7 +291,7 @@ export default function InboxPage() {
           <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
           <p className="page-kicker" style={{ margin: 0 }}>Recruiting email, AI findings, application matches, and AE follow-up in one place.</p>
         </div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Link href="/inbox/health" className="btn" style={{textDecoration:"none"}}>Inbox health</Link><Link href="/gmail-sender-rules" className="btn" style={{textDecoration:"none"}}>Sender rules</Link><button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button></div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Link href="/inbox/command-center" className="btn-primary" style={{textDecoration:"none"}}>Command center</Link><Link href="/inbox/health" className="btn" style={{textDecoration:"none"}}>Inbox health</Link><Link href="/gmail-sender-rules" className="btn" style={{textDecoration:"none"}}>Sender rules</Link><button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button></div>
       </div>
 
       <div className="stats-strip" style={{ marginBottom: 16 }}>
