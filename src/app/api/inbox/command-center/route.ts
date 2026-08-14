@@ -72,5 +72,10 @@ export async function GET() {
     interviewsNext48h: upcoming.filter((x: any) => new Date(x.scheduled_at).getTime() <= Date.now() + 48 * 60 * 60 * 1000).length,
     unlinkedSignals: signals.filter((x: any) => !x.application_id).length,
   };
-  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, contacts, metrics });
+  const alerts = [
+    ...responses.filter((x: any) => x.priority === 'urgent').map((x: any) => ({ severity: 'urgent', kind: 'response', text: `${x.candidate_name} has a reply waiting more than 48 hours.` })),
+    ...upcoming.filter((x: any) => x.risk === 'missing_logistics').map((x: any) => ({ severity: 'urgent', kind: 'interview', text: `${x.candidate_name}'s interview lacks a meeting link or location.` })),
+    ...attention.filter((x: any) => Number(x.overdue_count) > 0).map((x: any) => ({ severity: 'high', kind: 'work', text: `${String(x.type).replaceAll('_', ' ')} has ${x.overdue_count} overdue item(s).` })),
+  ];
+  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, contacts, alerts, metrics });
 }
