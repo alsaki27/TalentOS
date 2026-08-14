@@ -346,4 +346,62 @@ Change discipline:
 
 ## 10. Validation status
 
+## 11. Gmail Backfill Runner and Spare-PC Operations
+
+The spare Windows machine is the preferred high-throughput worker for Gmail backfills and future mailbox automation. It is reachable over SSH at `192.168.1.193` as user `saki-`, with the repository at `C:\JobSearch-Support-Talentos`.
+
+Runtime services:
+
+- `JobSearchApp`: support app on port `3100`.
+- `JobSearchNightly`: nightly cycle at 00:00.
+- `gateway/main.py`: LLM gateway on port `8787`.
+- Cloudflare tunnel: exposes the support service for TalentOS integration.
+
+TalentOS remains the source of truth for Gmail OAuth tokens, candidate ownership, imported messages, triage, application matching, and stage changes. The spare PC should invoke production sync; it must not write directly to Neon or run a second Gmail importer.
+
+Production sync endpoint:
+
+```text
+GET https://talent.skarion.com/api/cron/gmail-sync
+Authorization: Bearer <CRON_SECRET>
+```
+
+The runner must call the endpoint serially, continue while `gmail_backfill_complete=false`, stop on OAuth/token/database errors, and log only status, elapsed time, account scope, and count summaries—not tokens or message bodies. After backfill, it should continue at a low-frequency incremental-sync interval.
+
+Required production variables are separate from Google login credentials:
+
+```text
+GMAIL_CLIENT_ID
+GMAIL_CLIENT_SECRET
+CRON_SECRET
+TALENTOS_BASE_URL=https://talent.skarion.com
+```
+
+### Planned Gmail agents
+
+Register every new agent in the AI Control Center and use the approved low-cost model route unless a human explicitly selects a higher-cost review run:
+
+- `GmailMessageClassifier`: deterministic suppression first, then recruiting relevance.
+- `GmailApplicationMatcher`: match messages to candidate/application/job.
+- `GmailStageUpdater`: propose or apply screening, interview, offer, rejected, and follow-up stages with evidence.
+- `GmailInterviewExtractor`: extract dates, timezone, links, recruiter, location, and deadlines.
+- `GmailAEActionPlanner`: create one deduplicated AE task with due date and evidence.
+- `GmailReplyDraftAgent`: draft replies; sending remains human-approved.
+
+Personal receipts, food delivery, shopping, banking, medical, travel, security alerts, job alerts, and generic job-board recommendations must be suppressed before AI matching. Suppressed mail must not create applications, notes, stage changes, or AE tasks.
+
+### Safe deployment warning
+
+Do not run `deploy.ps1` while unrelated Python processes are active. Its restart step terminates every `python.exe` process on the spare PC. Inspect Python processes and scheduled tasks first and deploy only during a maintenance window.
+
+### Validation checklist
+
+- Confirm the Cloudflare tunnel resolves to the intended spare-PC service.
+- Confirm schedulers target `https://talent.skarion.com`, not the old `workers.dev` hostname.
+- Confirm the Gmail account is active, error-free, and has `gmail.modify` scope.
+- Confirm pagination advances and eventually sets `gmail_backfill_complete=true`.
+- Confirm new mail is imported without duplicate Gmail message IDs.
+- Confirm suppressed mail creates no applications or AE tasks.
+- Confirm recruiter/interview mail is stored, matched to the correct application, and visible in the Gmail log.
+
 The latest source changes passed `git diff --check` before push. Runtime typecheck, unit tests, E2E tests, Gmail calls, and Neon migration execution still need to run in an environment with Node, dependencies, secrets, and database access. That is the receiving developer’s first action after pulling the branch.
