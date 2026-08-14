@@ -25,6 +25,7 @@ export async function GET() {
                   CASE WHEN min(ec.sent_at) < now() - interval '48 hours' THEN 'urgent'
                        WHEN min(ec.sent_at) < now() - interval '24 hours' THEN 'high' ELSE 'normal' END priority,
                   EXTRACT(EPOCH FROM (now() - min(ec.sent_at)))/3600.0 age_hours,
+                  max(ai.id::text) action_item_id,
                   max(ai.assigned_to_user_id::text) assigned_to_user_id,
                   max(p.display_name) assigned_to_name
              FROM email_communications ec
