@@ -17,9 +17,12 @@ export async function GET() {
              LEFT JOIN jobs j ON j.id = a.job_id
             WHERE s.scheduled_at >= now() AND s.scheduled_at <= now() + interval '30 days'
               AND lower(coalesce(s.status, 'scheduled')) NOT IN ('cancelled', 'rejected')
-            ORDER BY s.scheduled_at ASC`),
+             ORDER BY s.scheduled_at ASC`),
     query(`SELECT c.id candidate_id, c.name candidate_name, count(*)::int waiting_count,
-                  min(ec.sent_at) oldest_waiting_at
+                  min(ec.sent_at) oldest_waiting_at,
+                  CASE WHEN min(ec.sent_at) < now() - interval '48 hours' THEN 'urgent'
+                       WHEN min(ec.sent_at) < now() - interval '24 hours' THEN 'high' ELSE 'normal' END priority,
+                  EXTRACT(EPOCH FROM (now() - min(ec.sent_at)))/3600.0 age_hours
              FROM email_communications ec
              JOIN candidates c ON c.id = ec.candidate_id
             WHERE ec.direction = 'inbound' AND ec.needs_reply = true AND ec.replied_at IS NULL
@@ -45,5 +48,11 @@ export async function GET() {
             ORDER BY ec.sent_at DESC LIMIT 250`),
   ]);
 
-  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals });
+  const metrics = {
+    urgentResponses: responses.filter((x: any) => x.priority === 'urgent').length,
+    highResponses: responses.filter((x: any) => x.priority === 'high').length,
+    interviewsNext48h: upcoming.filter((x: any) => new Date(x.scheduled_at).getTime() <= Date.now() + 48 * 60 * 60 * 1000).length,
+    unlinkedSignals: signals.filter((x: any) => !x.application_id).length,
+  };
+  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, metrics });
 }
