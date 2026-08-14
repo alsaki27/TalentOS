@@ -68,7 +68,10 @@ interface GmailMessageListResponse {
 export async function listMessageIds(accessToken: string, query: string, pageToken?: string): Promise<GmailMessageListResponse> {
   const url = new URL(`${GMAIL_BASE}/messages`);
   url.searchParams.set("q", query);
-  url.searchParams.set("maxResults", "50");
+  // Gmail permits up to 500 results per list call.  The sync worker still
+  // bounds detail fetch concurrency, but using the full page size means a
+  // historical mailbox is not artificially slowed by 50-message pages.
+  url.searchParams.set("maxResults", "500");
   if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });

@@ -23,6 +23,10 @@ import { changeApplicationStatus, emailStageTarget } from "@/server/services/app
 import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
+const BACKFILL_PAGES_PER_RUN = Math.max(1, Number(process.env.GMAIL_BACKFILL_PAGES_PER_RUN || 8));
+const BACKFILL_MESSAGES_PER_RUN = Math.max(50, Number(process.env.GMAIL_BACKFILL_MESSAGES_PER_RUN || 1200));
+const MESSAGE_FETCH_CONCURRENCY = Math.max(1, Number(process.env.GMAIL_MESSAGE_FETCH_CONCURRENCY || 8));
+const SYNC_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.GMAIL_SYNC_TIME_BUDGET_MS || 25_000));
 
 interface SyncOutcome {
   accountId: string;
@@ -51,6 +55,7 @@ type MessageFetchResult = {
   ids: string[];
   nextBackfillPageToken: string | null;
   backfillComplete: boolean;
+  fromHistory: boolean;
 };
 
 async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow): Promise<MessageFetchResult> {
@@ -68,7 +73,7 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow)
         pageToken = page.nextPageToken;
       } while (pageToken);
       await updateGmailHistoryId(account.id, latestHistoryId);
-      return { ids: Array.from(ids), nextBackfillPageToken: null, backfillComplete: true };
+      return { ids: Array.from(ids), nextBackfillPageToken: null, backfillComplete: true, fromHistory: true };
     } catch {
       // historyId likely expired (Gmail retains ~1 week) — fall through to backfill.
     }
@@ -86,7 +91,34 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow)
     ids: Array.from(new Set((page.messages ?? []).map((message) => message.id))),
     nextBackfillPageToken: page.nextPageToken ?? null,
     backfillComplete: !page.nextPageToken,
+    fromHistory: false,
   };
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return results;
+}
+
+async function tryAccountLock(accountId: string): Promise<boolean> {
+  const row = await queryOne<{ locked: boolean }>(
+    "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
+    [`gmail-sync:${accountId}`],
+  );
+  return Boolean(row?.locked);
+}
+
+async function releaseAccountLock(accountId: string) {
+  await execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [`gmail-sync:${accountId}`]);
 }
 
 async function getCandidateApplicationContext(candidateId: string): Promise<TriageCandidateContext[]> {
@@ -506,15 +538,21 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
 
   for (const accountRow of accounts) {
     const outcome: SyncOutcome = { accountId: accountRow.id, candidateId: accountRow.candidate_id, fetched: 0, triaged: 0, suppressed: 0 };
+    const locked = await tryAccountLock(accountRow.id);
+    if (!locked) continue;
+    const startedAt = Date.now();
     try {
       const account = await getDecryptedGmailAccount(accountRow.id);
       if (!account) continue;
 
       const accessToken = await ensureFreshAccessToken(account);
-      const fetchResult = await fetchNewMessageIds(accessToken, account);
-
-      for (const messageId of fetchResult.ids) {
-        const msg = await getMessage(accessToken, messageId, account.email);
+      let fetchResult = await fetchNewMessageIds(accessToken, account);
+      let pages = 0;
+      let processedMessages = 0;
+      while (true) {
+        const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, (messageId) => getMessage(accessToken, messageId, account.email)))
+          .filter((msg): msg is GmailMessage => Boolean(msg));
+        for (const msg of messages) {
         if (!msg) continue;
         if (classifyGmailMessage(msg).suppress) {
           outcome.suppressed++;
@@ -526,12 +564,23 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
           await triageStoredMessage(storedId, accessToken);
           outcome.triaged++;
         }
+          processedMessages++;
+        }
+        pages++;
+        if (fetchResult.fromHistory) break;
+        await updateGmailBackfillState(accountRow.id, fetchResult.nextBackfillPageToken, fetchResult.backfillComplete);
+        if (fetchResult.backfillComplete || pages >= BACKFILL_PAGES_PER_RUN || processedMessages >= BACKFILL_MESSAGES_PER_RUN || Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) break;
+        const nextPage = await listMessageIds(accessToken, "in:anywhere -in:spam -in:trash", fetchResult.nextBackfillPageToken ?? undefined);
+        fetchResult = {
+          ids: Array.from(new Set((nextPage.messages ?? []).map((message) => message.id))),
+          nextBackfillPageToken: nextPage.nextPageToken ?? null,
+          backfillComplete: !nextPage.nextPageToken,
+          fromHistory: false,
+        };
       }
-      if (account.gmail_history_id || fetchResult.backfillComplete) {
+      if (fetchResult.fromHistory || fetchResult.backfillComplete) {
         const profile = await getProfile(accessToken);
         if (profile.historyId) await updateGmailHistoryId(accountRow.id, profile.historyId);
-      } else {
-        await updateGmailBackfillState(accountRow.id, fetchResult.nextBackfillPageToken, false);
       }
     } catch (err: any) {
       const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
@@ -539,6 +588,8 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         : err?.message || "Gmail sync failed";
       outcome.error = message;
       await markGmailAccountError(accountRow.id, message);
+    } finally {
+      await releaseAccountLock(accountRow.id);
     }
     outcomes.push(outcome);
   }
