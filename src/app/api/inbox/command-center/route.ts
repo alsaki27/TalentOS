@@ -8,7 +8,7 @@ export async function GET() {
   const { response } = await requireCurrentUser(ALL_USER_ROLES);
   if (response) return response;
 
-  const [upcoming, responses, history, signals, attention] = await Promise.all([
+  const [upcoming, responses, history, signals, attention, contacts] = await Promise.all([
     query(`SELECT s.id, s.scheduled_at, s.round_name, s.round_number, s.duration_minutes, s.status, s.location, s.meeting_link,
                   a.id application_id, c.id candidate_id, c.name candidate_name, j.title job_title, j.company company_name,
                   CASE WHEN s.scheduled_at <= now() + interval '48 hours' AND s.meeting_link IS NULL AND s.location IS NULL THEN 'missing_logistics'
@@ -59,6 +59,11 @@ export async function GET() {
              FROM action_items
             WHERE status IN ('open', 'in_progress')
             GROUP BY type ORDER BY overdue_count DESC, urgent_count DESC, count DESC`),
+    query(`SELECT cp.candidate_id, c.name candidate_name, cp.email, cp.display_name, cp.contact_type,
+                  cp.company, cp.last_seen_at, cp.inbound_count, cp.outbound_count, cp.last_subject
+             FROM gmail_contact_profiles cp
+             JOIN candidates c ON c.id = cp.candidate_id
+            ORDER BY cp.last_seen_at DESC LIMIT 250`),
   ]);
 
   const metrics = {
@@ -67,5 +72,5 @@ export async function GET() {
     interviewsNext48h: upcoming.filter((x: any) => new Date(x.scheduled_at).getTime() <= Date.now() + 48 * 60 * 60 * 1000).length,
     unlinkedSignals: signals.filter((x: any) => !x.application_id).length,
   };
-  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, metrics });
+  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, contacts, metrics });
 }
