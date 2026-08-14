@@ -14,3 +14,13 @@ CREATE TABLE IF NOT EXISTS gmail_sender_rules (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS gmail_sender_rules_email_unique ON gmail_sender_rules(lower(sender_email)) WHERE sender_email IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS gmail_sender_rules_domain_unique ON gmail_sender_rules(lower(sender_domain)) WHERE sender_domain IS NOT NULL;
+
+INSERT INTO gmail_sender_rules (sender_domain, sender_class, creates_tasks, can_change_stage, notes)
+VALUES
+  ('indeed.com','job_board_alert',false,false,'Job alerts and automated recommendations are searchable but never actionable.'),
+  ('match.indeed.com','job_board_alert',false,false,'Indeed matching mail is non-actionable by default.'),
+  ('ziprecruiter.com','job_board_alert',false,false,'ZipRecruiter alerts are searchable but never actionable.'),
+  ('glassdoor.com','job_board_alert',false,false,'Glassdoor alerts are searchable but never actionable.'),
+  ('linkedin.com','job_board_alert',false,false,'LinkedIn alerts are non-actionable unless a human override is created.'),
+  ('monster.com','job_board_alert',false,false,'Monster alerts are searchable but never actionable.')
+ON CONFLICT DO NOTHING;
