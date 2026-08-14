@@ -541,6 +541,43 @@ async function enqueueOverdueFollowUps() {
   return enqueued;
 }
 
+async function cleanKnownNonActionableTasks() {
+  // Older triage versions could create reply tasks for job-board alerts before
+  // sender-class guardrails ran. Keep the email rows for search/audit, but
+  // remove the false AE workload deterministically and reversibly.
+  const result = await execute(
+    `UPDATE action_items ai
+        SET status = 'dismissed', resolved_at = COALESCE(resolved_at, now()),
+            decision = COALESCE(decision, 'rejected'),
+            decision_note = COALESCE(decision_note, 'Automatically dismissed: non-actionable job-board sender')
+      FROM email_communications ec
+     WHERE ai.email_communication_id = ec.id
+       AND ai.type IN ('needs_reply', 'status_change_review')
+       AND ai.status IN ('open', 'in_progress')
+       AND (ec.suppression_rule LIKE 'job_board:%'
+            OR lower(COALESCE(ec.from_email, '')) ~ '(indeed|ziprecruiter|glassdoor|monster|linkedin|careerbuilder)')
+       AND lower(COALESCE(ec.from_email, '')) NOT LIKE '%recruiter%'
+       AND lower(COALESCE(ec.from_email, '')) NOT LIKE '%hiring%'`,
+  );
+  return result.rowCount;
+}
+
+async function triageStoredBacklog(candidateId: string, accessToken: string, limit: number) {
+  if (limit <= 0) return 0;
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM email_communications
+      WHERE candidate_id = $1 AND triaged_at IS NULL
+      ORDER BY sent_at ASC, id ASC LIMIT $2`,
+    [candidateId, limit],
+  );
+  let processed = 0;
+  for (const row of rows) {
+    await triageStoredMessage(row.id, accessToken);
+    processed++;
+  }
+  return processed;
+}
+
 export async function runGmailSync(options: { retryErrored?: boolean } = {}): Promise<{ accounts: SyncOutcome[]; followUpsEnqueued: number }> {
   const accounts = await listActiveCandidateGmailAccounts(Boolean(options.retryErrored));
   const outcomes: SyncOutcome[] = [];
@@ -595,6 +632,11 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         const profile = await getProfile(accessToken);
         if (profile.historyId) await updateGmailHistoryId(accountRow.id, profile.historyId);
       }
+      // Continue older untriaged rows independently of mailbox replication so
+      // the queue drains across scheduled runs instead of only classifying the
+      // messages imported in the current page.
+      const backlogTriaged = await triageStoredBacklog(account.candidate_id, accessToken, TRIAGE_MESSAGES_PER_RUN);
+      outcome.triaged += backlogTriaged;
     } catch (err: any) {
       const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
         ? "Gmail access was revoked or expired — candidate needs to reconnect."
@@ -608,6 +650,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
   }
 
   await escalateOverdueActionItems();
+  await cleanKnownNonActionableTasks();
   await enforceEmailRetention();
   const followUpsEnqueued = await enqueueOverdueFollowUps();
   return { accounts: outcomes, followUpsEnqueued };
