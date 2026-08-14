@@ -152,11 +152,27 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
     [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT"), JSON.stringify(msg.attachments)]
   );
 
+  if (row && msg.from) {
+    const contactEmail = msg.from.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || msg.from.trim().toLowerCase();
+    const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
+    await execute(
+      `INSERT INTO gmail_contact_profiles (candidate_id, email, display_name, last_seen_at, inbound_count, outbound_count, last_subject)
+       VALUES ($1, $2, $3, now(), CASE WHEN $4 = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4 = 'outbound' THEN 1 ELSE 0 END, $5)
+       ON CONFLICT (candidate_id, email) DO UPDATE SET
+         display_name = COALESCE(EXCLUDED.display_name, gmail_contact_profiles.display_name),
+         last_seen_at = now(),
+         inbound_count = gmail_contact_profiles.inbound_count + EXCLUDED.inbound_count,
+         outbound_count = gmail_contact_profiles.outbound_count + EXCLUDED.outbound_count,
+         last_subject = EXCLUDED.last_subject`,
+      [candidateId, contactEmail, contactName, msg.direction, msg.subject]
+    );
+  }
+
   if (row && msg.direction === "outbound") {
     // An outbound reply in this thread clears "needs_reply" on any prior
     // unanswered inbound message in the same thread.
     await execute(
-      `UPDATE email_communications SET needs_reply = false, replied_at = $1
+      `UPDATE email_communications SET needs_reply = false, replied_at = $1, workflow_state = 'resolved', escalation_level = 0
        WHERE gmail_thread_id = $2 AND direction = 'inbound' AND needs_reply = true AND replied_at IS NULL`,
       [msg.sentAt, msg.threadId]
     );
@@ -267,7 +283,11 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   await execute(
     `UPDATE email_communications SET
        ai_relevant = $1, ai_category = $2, ai_confidence = $3, ai_summary = $4,
-       ai_matched_application_id = $5, needs_reply = $6, triaged_at = now()
+       ai_matched_application_id = $5, needs_reply = $6,
+       response_due_at = CASE WHEN $6 THEN now() + CASE $2 WHEN 'interview_invite' THEN interval '12 hours' WHEN 'scheduling' THEN interval '12 hours' WHEN 'offer' THEN interval '8 hours' WHEN 'recruiter_reply' THEN interval '24 hours' ELSE interval '48 hours' END ELSE NULL END,
+       workflow_state = CASE WHEN $6 THEN 'needs_action' WHEN NOT $1 THEN 'suppressed' ELSE 'observed' END,
+       ai_evidence = jsonb_build_object('category', $2, 'confidence', $3, 'summary', $4, 'matched_application_id', $5),
+       triaged_at = now()
      WHERE id = $7`,
     [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
@@ -478,7 +498,18 @@ async function escalateOverdueActionItems() {
     await execute("UPDATE action_items SET priority = 'urgent', escalated_at = now(), escalation_count = escalation_count + 1 WHERE id = $1", [item.id]);
     await logWorkflowEvent({ candidateId: item.candidate_id, applicationId: item.application_id, actionItemId: item.id, eventType: "action_item_escalated", payload: { previousPriority: item.priority } });
   }
-  return overdue.length;
+  const overdueEmails = await query<{ id: string; candidate_id: string; ai_matched_application_id: string | null; escalation_level: number }>(
+    `SELECT id, candidate_id, ai_matched_application_id, escalation_level
+       FROM email_communications
+      WHERE needs_reply = true AND replied_at IS NULL
+        AND response_due_at IS NOT NULL AND response_due_at < now()
+        AND escalation_level < 2`
+  );
+  for (const email of overdueEmails) {
+    await execute("UPDATE email_communications SET escalation_level = escalation_level + 1, last_escalated_at = now(), workflow_state = 'needs_action' WHERE id = $1", [email.id]);
+    await logWorkflowEvent({ candidateId: email.candidate_id, applicationId: email.ai_matched_application_id, emailCommunicationId: email.id, eventType: "email_response_escalated", payload: { previousEscalationLevel: email.escalation_level } });
+  }
+  return overdue.length + overdueEmails.length;
 }
 
 async function enforceEmailRetention() {
