@@ -13,6 +13,7 @@ import {
   updateApplication,
   deleteApplication,
 } from "@/server/repositories/applicationsRepository";
+import { APPLICATION_STAGES } from "@/lib/applicationStages";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
 
@@ -51,7 +52,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "proof_url", "proof_filename", "proof_uploaded_at", "proof_uploaded_by_user_id",
     // ae_stage is deliberately NOT in assignmentFields below - both AEs and
     // managers can move it, unlike the assignment/review fields it sits next to.
-    "ae_stage",
+    "ae_stage", "application_stage",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
@@ -60,6 +61,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   if ("ae_stage" in updates && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
     return NextResponse.json({ error: "Invalid AE stage." }, { status: 400 });
+  }
+  if ("application_stage" in updates && !APPLICATION_STAGES.includes(updates.application_stage as typeof APPLICATION_STAGES[number])) {
+    return NextResponse.json({ error: "Invalid application stage." }, { status: 400 });
+  }
+
+  // application_stage is the canonical lifecycle field. ae_stage remains a
+  // compatibility mirror until the queue and old clients are fully migrated.
+  if ("application_stage" in updates && !("ae_stage" in updates)) {
+    updates.ae_stage = updates.application_stage;
   }
 
   if ("follow_up_at" in updates) {

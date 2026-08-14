@@ -513,7 +513,7 @@ export default function ApplicationQueuePage() {
     setActionLoading(`${id}:${s}`);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
       setActionLoading(null);
       if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
       setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
@@ -640,7 +640,7 @@ export default function ApplicationQueuePage() {
           action: "PATCH",
           table: "applications",
           ids: Array.from(selectedItems).map(i => i.id),
-          updateData: { status: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null }
+            updateData: { application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null }
         })
       });
       const data = await res.json().catch(() => ({}));

@@ -111,6 +111,7 @@ interface ResumeExport {
   file_path: string | null;
   storage_provider: string | null;
   storage_url: string | null;
+  storage_item_id: string | null;
   file_size_bytes: number | null;
   status: "created" | "failed" | "deleted";
   error: string | null;
@@ -1912,6 +1913,11 @@ export default function ApplicationResumeStudioPage() {
                       <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         {new Date(ex.created_at).toLocaleDateString()} {new Date(ex.created_at).toLocaleTimeString()}
                       </p>
+                      {ex.storage_provider === "sharepoint" && ex.storage_item_id && (
+                        <p className="muted" style={{ fontSize: 10, margin: "2px 0 0" }}>
+                          SharePoint item: {ex.storage_item_id}
+                        </p>
+                      )}
                       {ex.status === "failed" && ex.error && (
                         <p style={{ fontSize: 11, color: "var(--danger)", margin: "4px 0 0" }}>{ex.error}</p>
                       )}

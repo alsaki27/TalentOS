@@ -174,7 +174,8 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = await query(
-    `SELECT id, export_type, file_name, status, file_size_bytes, storage_provider, storage_url, error, created_at, updated_at
+    `SELECT id, application_id, resume_version_id, export_type, file_name, status, file_size_bytes,
+            storage_provider, storage_url, storage_item_id, error, created_at, updated_at
      FROM application_resume_exports
      WHERE application_id = $1
      ORDER BY created_at DESC
