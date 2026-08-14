@@ -18,13 +18,17 @@ export async function GET() {
             WHERE s.scheduled_at >= now() AND s.scheduled_at <= now() + interval '30 days'
               AND lower(coalesce(s.status, 'scheduled')) NOT IN ('cancelled', 'rejected')
              ORDER BY s.scheduled_at ASC`),
-    query(`SELECT c.id candidate_id, c.name candidate_name, count(*)::int waiting_count,
+    query(`SELECT c.id candidate_id, c.name candidate_name, count(DISTINCT ec.id)::int waiting_count,
                   min(ec.sent_at) oldest_waiting_at,
                   CASE WHEN min(ec.sent_at) < now() - interval '48 hours' THEN 'urgent'
                        WHEN min(ec.sent_at) < now() - interval '24 hours' THEN 'high' ELSE 'normal' END priority,
-                  EXTRACT(EPOCH FROM (now() - min(ec.sent_at)))/3600.0 age_hours
+                  EXTRACT(EPOCH FROM (now() - min(ec.sent_at)))/3600.0 age_hours,
+                  max(ai.assigned_to_user_id::text) assigned_to_user_id,
+                  max(p.display_name) assigned_to_name
              FROM email_communications ec
              JOIN candidates c ON c.id = ec.candidate_id
+             LEFT JOIN action_items ai ON ai.email_communication_id = ec.id AND ai.status IN ('open','in_progress')
+             LEFT JOIN profiles p ON p.user_id = ai.assigned_to_user_id
             WHERE ec.direction = 'inbound' AND ec.needs_reply = true AND ec.replied_at IS NULL
               AND coalesce(ec.suppression_reason, '') = ''
             GROUP BY c.id, c.name ORDER BY oldest_waiting_at ASC`),
