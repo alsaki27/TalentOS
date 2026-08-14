@@ -209,6 +209,16 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   const bodyText = row.body_text || "";
   const subject = (row.subject || "").toLowerCase();
   const verdict = classifyGmailMessage({ from: row.from_email, subject: row.subject, snippet: row.snippet, bodyText });
+  const senderAddress = (row.from_email || "").match(/<([^>]+)>/)?.[1]?.toLowerCase() || (row.from_email || "").toLowerCase();
+  const senderDomain = senderAddress.split("@")[1] || null;
+  const senderRule = await queryOne<{ sender_class: string; creates_tasks: boolean; can_change_stage: boolean }>(
+    `SELECT sender_class, creates_tasks, can_change_stage FROM gmail_sender_rules
+      WHERE (sender_email IS NOT NULL AND lower(sender_email) = $1)
+         OR (sender_domain IS NOT NULL AND lower(sender_domain) = $2)
+      ORDER BY sender_email NULLS LAST LIMIT 1`,
+    [senderAddress, senderDomain],
+  );
+  const taskAllowedByRule = senderRule ? senderRule.creates_tasks : true;
   if (verdict.suppress || verdict.storeButHide) {
     // storeButHide is the reachable case here: it passes runGmailSync's
     // pre-storage suppress gate (classifyGmailMessage(msg).suppress is
@@ -344,7 +354,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     }
   }
 
-  if (triage.category === "application_confirmation" && !triage.matchedApplicationId && verdict.senderClass === "human") {
+  if (triage.category === "application_confirmation" && !triage.matchedApplicationId && verdict.senderClass === "human" && taskAllowedByRule) {
     await execute(
       `INSERT INTO action_items (candidate_id, email_communication_id, type, title, description, suggested_action, priority, status, resolution_rule, dedupe_key)
        VALUES ($1, $2, 'untracked_application', 'Application found outside TalentOS', $3, 'AE: confirm company and role, then add the application manually.', 'high', 'open', 'manual_only', $4)
@@ -363,7 +373,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     hasMatchedApplication: Boolean(triage.matchedApplicationId),
     stageTarget,
   });
-  const canAutoWrite = decision.action === "auto_write";
+  const canAutoWrite = decision.action === "auto_write" && (!senderRule || senderRule.can_change_stage);
 
   // A plausible status-change signal that isn't confident/eligible enough to
   // auto-write yet becomes a proposal for AE review, instead of silently
@@ -422,7 +432,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     }
   }
 
-  if (proposalCreated) return;
+  if (proposalCreated || !taskAllowedByRule) return;
 
   // A sender that structurally can't receive a reply, or a job-board
   // "application invite" alert (the exact shape behind the historical
