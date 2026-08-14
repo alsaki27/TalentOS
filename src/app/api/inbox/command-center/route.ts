@@ -10,7 +10,9 @@ export async function GET() {
 
   const [upcoming, responses, history, signals] = await Promise.all([
     query(`SELECT s.id, s.scheduled_at, s.round_name, s.round_number, s.duration_minutes, s.status, s.location, s.meeting_link,
-                  a.id application_id, c.id candidate_id, c.name candidate_name, j.title job_title, j.company company_name
+                  a.id application_id, c.id candidate_id, c.name candidate_name, j.title job_title, j.company company_name,
+                  CASE WHEN s.scheduled_at <= now() + interval '48 hours' AND s.meeting_link IS NULL AND s.location IS NULL THEN 'missing_logistics'
+                       WHEN s.scheduled_at <= now() + interval '48 hours' THEN 'imminent' ELSE 'scheduled' END risk
              FROM interview_schedules s
              JOIN applications a ON a.id = s.application_id
              JOIN candidates c ON c.id = a.candidate_id
