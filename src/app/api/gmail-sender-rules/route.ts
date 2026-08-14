@@ -5,6 +5,8 @@ import { execute, query } from "@/server/db/neon";
 function allowed(ctx: any) { return ctx?.profile?.role === "admin" || ctx?.profile?.role === "manager"; }
 
 export async function GET() {
+  const ctx = await getCurrentUserContext();
+  if (!ctx) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   const rows = await query<Record<string, unknown>>(
     "SELECT * FROM gmail_sender_rules ORDER BY updated_at DESC, sender_domain, sender_email",
   );
