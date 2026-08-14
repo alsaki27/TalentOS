@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
               ec.subject, ec.snippet, ec.sent_at, ec.ai_relevant, ec.ai_category,
               ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
               ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
-              ec.gmail_is_unread, ec.gmail_is_important,
+              ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata,
               ec.suppression_reason, ec.suppression_rule,
               (SELECT COUNT(*)::int FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress')) AS open_task_count,
               j.title AS job_title, j.company AS company_name,

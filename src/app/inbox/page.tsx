@@ -28,6 +28,7 @@ interface MailThread {
   replied_at: string | null;
   gmail_is_unread: boolean;
   gmail_is_important: boolean;
+  attachment_metadata: { filename?: string; mimeType?: string; size?: number }[];
   suppression_reason: string | null;
   suppression_rule: string | null;
   open_task_count: number;
@@ -403,6 +404,7 @@ export default function InboxPage() {
                 <a className="btn" href={detail.gmailUrl} target="_blank" rel="noreferrer">Open Gmail</a>
               </div>
               {detail.message.ai_summary && <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "var(--accent-soft)", fontSize: 13 }}>{detail.message.ai_summary}</div>}
+              {!!detail.message.attachment_metadata?.length && <div className="muted" style={{ marginTop: 10 }}>Attachments: {detail.message.attachment_metadata.map((a) => a.filename || "unnamed file").join(", ")}</div>}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
                 <span className="badge">{categoryLabel(detail.message.ai_category)}</span>
                 {detail.message.ai_confidence !== null && <span className="badge">AI {Math.round(detail.message.ai_confidence * 100)}%</span>}
