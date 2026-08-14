@@ -5,7 +5,7 @@ env:
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # workflow dispatch + email queue + Job Agent polling
+    - cron: '*/5 * * * *'  # workflow dispatch + Gmail sync + email queue + Job Agent polling
     - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
@@ -14,7 +14,6 @@ on:
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
     - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
-    - cron: '*/20 * * * *' # Gmail sync + AI triage – every 20 minutes
     - cron: '0 2 * * *'     # Candidate-job matching – 08:00 Asia/Dhaka
   workflow_dispatch:
     inputs:
@@ -357,7 +356,7 @@ jobs:
   gmail-sync:
     if: >
       (github.event_name == 'schedule' &&
-       github.event.schedule == '*/20 * * * *') ||
+       github.event.schedule == '*/5 * * * *') ||
       github.event.inputs.job == 'gmail-sync' ||
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
