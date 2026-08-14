@@ -27,6 +27,7 @@ const BACKFILL_PAGES_PER_RUN = Math.max(1, Number(process.env.GMAIL_BACKFILL_PAG
 const BACKFILL_MESSAGES_PER_RUN = Math.max(50, Number(process.env.GMAIL_BACKFILL_MESSAGES_PER_RUN || 1200));
 const MESSAGE_FETCH_CONCURRENCY = Math.max(1, Number(process.env.GMAIL_MESSAGE_FETCH_CONCURRENCY || 8));
 const SYNC_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.GMAIL_SYNC_TIME_BUDGET_MS || 25_000));
+const TRIAGE_MESSAGES_PER_RUN = Math.max(0, Number(process.env.GMAIL_TRIAGE_MESSAGES_PER_RUN || 40));
 
 interface SyncOutcome {
   accountId: string;
@@ -549,20 +550,24 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       let fetchResult = await fetchNewMessageIds(accessToken, account);
       let pages = 0;
       let processedMessages = 0;
+      let triagedMessages = 0;
       while (true) {
         const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, (messageId) => getMessage(accessToken, messageId, account.email)))
           .filter((msg): msg is GmailMessage => Boolean(msg));
         for (const msg of messages) {
-        if (!msg) continue;
         if (classifyGmailMessage(msg).suppress) {
           outcome.suppressed++;
           continue;
         }
         const storedId = await storeRawMessage(account.candidate_id, account.id, msg);
         outcome.fetched++;
-        if (storedId) {
+        // Mailbox replication is the critical path.  AI triage is deliberately
+        // capped so a large historical page cannot hold the Gmail cursor open
+        // for minutes; subsequent scheduled runs continue triage safely.
+        if (storedId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
           await triageStoredMessage(storedId, accessToken);
           outcome.triaged++;
+          triagedMessages++;
         }
           processedMessages++;
         }
