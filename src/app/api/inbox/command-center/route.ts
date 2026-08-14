@@ -8,7 +8,7 @@ export async function GET() {
   const { response } = await requireCurrentUser(ALL_USER_ROLES);
   if (response) return response;
 
-  const [upcoming, responses, history, signals, attention, contacts] = await Promise.all([
+  const [upcoming, responses, history, signals, attention, contacts, outcomes] = await Promise.all([
     query(`SELECT s.id, s.scheduled_at, s.round_name, s.round_number, s.duration_minutes, s.status, s.location, s.meeting_link,
                   a.id application_id, c.id candidate_id, c.name candidate_name, j.title job_title, j.company company_name,
                   CASE WHEN s.scheduled_at <= now() + interval '48 hours' AND s.meeting_link IS NULL AND s.location IS NULL THEN 'missing_logistics'
@@ -64,6 +64,10 @@ export async function GET() {
              FROM gmail_contact_profiles cp
              JOIN candidates c ON c.id = cp.candidate_id
             ORDER BY cp.last_seen_at DESC LIMIT 250`),
+    query(`SELECT lower(coalesce(s.status, 'scheduled')) status, count(*)::int count
+             FROM interview_schedules s
+            WHERE s.created_at >= now() - interval '90 days'
+            GROUP BY 1 ORDER BY count DESC`),
   ]);
 
   const metrics = {
@@ -77,5 +81,5 @@ export async function GET() {
     ...upcoming.filter((x: any) => x.risk === 'missing_logistics').map((x: any) => ({ severity: 'urgent', kind: 'interview', text: `${x.candidate_name}'s interview lacks a meeting link or location.` })),
     ...attention.filter((x: any) => Number(x.overdue_count) > 0).map((x: any) => ({ severity: 'high', kind: 'work', text: `${String(x.type).replaceAll('_', ' ')} has ${x.overdue_count} overdue item(s).` })),
   ];
-  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, contacts, alerts, metrics });
+  return NextResponse.json({ generatedAt: new Date().toISOString(), upcoming, responses, history, signals, attention, contacts, outcomes, alerts, metrics });
 }
