@@ -93,6 +93,7 @@ export default function InboxPage() {
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
   const [tasks, setTasks] = useState<EmailTask[]>([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const busyRef = useRef(false);
 
   const loadCounts = useCallback(async () => {
@@ -217,6 +218,13 @@ export default function InboxPage() {
     }
   }
 
+  async function bulkCorrect(status: "dismissed" | "done") {
+    if (!selectedTaskIds.length) return;
+    const res = await fetch("/api/action-items/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: selectedTaskIds, status, reason: "Bulk corrected from Gmail inbox" }) });
+    if (!res.ok) { setMessage("Bulk correction failed."); return; }
+    setSelectedTaskIds([]); await Promise.all([loadTasks(), loadCounts()]);
+  }
+
   async function submitFeedback(kind: "noise" | "relevant" | "needs_reply") {
     if (!detail) return;
     const res = await fetch(`/api/gmail-communications/${detail.message.id}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) });
@@ -282,7 +290,7 @@ export default function InboxPage() {
           <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
           <p className="page-kicker" style={{ margin: 0 }}>Recruiting email, AI findings, application matches, and AE follow-up in one place.</p>
         </div>
-        <button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Link href="/inbox/health" className="btn" style={{textDecoration:"none"}}>Inbox health</Link><Link href="/gmail-sender-rules" className="btn" style={{textDecoration:"none"}}>Sender rules</Link><button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button></div>
       </div>
 
       <div className="stats-strip" style={{ marginBottom: 16 }}>
@@ -314,7 +322,8 @@ export default function InboxPage() {
         <div className="card" style={{ padding: 16, marginBottom: 16 }}>
           <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>Needs a reply or a manual check ({tasks.length})</h3>
           <div style={{ display: "grid", gap: 8 }}>
-            {tasks.map((task) => <EmailTaskRow key={task.id} task={task} onUpdate={updateTask} />)}
+            {tasks.length > 0 && <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"8px 0"}}><strong>{selectedTaskIds.length} selected</strong><button className="btn" disabled={!selectedTaskIds.length} onClick={()=>void bulkCorrect("dismissed")}>Dismiss selected</button><button className="btn" disabled={!selectedTaskIds.length} onClick={()=>void bulkCorrect("done")}>Resolve selected</button></div>}
+            {tasks.map((task) => <div key={task.id} style={{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:8,alignItems:"start"}}><input type="checkbox" checked={selectedTaskIds.includes(task.id)} onChange={(e)=>setSelectedTaskIds(prev=>e.target.checked?[...prev,task.id]:prev.filter(id=>id!==task.id))} aria-label={`Select ${task.title}`} /><EmailTaskRow task={task} onUpdate={updateTask} /></div>)}
           </div>
         </div>
       )}
