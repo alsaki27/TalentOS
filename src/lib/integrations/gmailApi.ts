@@ -126,6 +126,7 @@ export interface GmailMessage {
   bodyText: string;
   sentAt: string;
   direction: "inbound" | "outbound";
+  attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string | null }>;
 }
 
 function decodeBase64Url(data: string): string {
@@ -161,6 +162,15 @@ function extractBodyText(payload: any): string {
   return "";
 }
 
+function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
+  if (!payload) return result;
+  if (payload.filename && payload.body && (payload.body.attachmentId || payload.body.size)) {
+    result.push({ filename: payload.filename, mimeType: payload.mimeType || "application/octet-stream", size: Number(payload.body.size || 0), attachmentId: payload.body.attachmentId || null });
+  }
+  for (const part of payload.parts || []) extractAttachments(part, result);
+  return result;
+}
+
 function headerValue(headers: { name: string; value: string }[], name: string): string | null {
   const h = headers.find((x) => x.name.toLowerCase() === name.toLowerCase());
   return h ? h.value : null;
@@ -192,5 +202,6 @@ export async function getMessage(accessToken: string, messageId: string, ownerEm
     bodyText: extractBodyText(data.payload).slice(0, 20000),
     sentAt: dateHeader ? new Date(dateHeader).toISOString() : new Date(Number(data.internalDate)).toISOString(),
     direction: ownerEmail && from?.toLowerCase().includes(ownerEmail.toLowerCase()) ? "outbound" : "inbound",
+    attachments: extractAttachments(data.payload),
   };
 }

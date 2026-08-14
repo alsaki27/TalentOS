@@ -144,11 +144,11 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
     `INSERT INTO email_communications
        (candidate_id, integration_account_id, gmail_message_id, gmail_thread_id, direction,
         from_email, to_emails, subject, snippet, body_text, sent_at,
-        gmail_label_ids, gmail_is_unread, gmail_is_important)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        gmail_label_ids, gmail_is_unread, gmail_is_important, attachment_metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      ON CONFLICT (gmail_message_id) DO NOTHING
      RETURNING id`,
-    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT")]
+    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT"), JSON.stringify(msg.attachments)]
   );
 
   if (row && msg.direction === "outbound") {
