@@ -294,16 +294,23 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   );
 
   if (row.from_email && verdict.senderClass === "human") {
-    const contactType = ["interview_invite", "scheduling", "recruiter_reply", "application_invite"].includes(triage.category)
-      ? "recruiter"
-      : triage.category === "offer" ? "hiring_manager" : "unknown";
+    const contactType = senderRule?.sender_class === "hiring_manager"
+      ? "hiring_manager"
+      : senderRule?.sender_class === "human_recruiter"
+        ? "recruiter"
+        : ["interview_invite", "scheduling", "recruiter_reply", "application_invite"].includes(triage.category)
+          ? "recruiter"
+          : triage.category === "offer" ? "hiring_manager" : "unknown";
     const contactEmail = row.from_email.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || row.from_email.trim().toLowerCase();
     await execute(
       `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1 = 'hiring_manager' THEN $1 ELSE contact_type END WHERE candidate_id = $2 AND email = $3`,
       [contactType, row.candidate_id, contactEmail]
     );
     if (contactType !== "unknown") {
-      await queueRecruitingContact({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, email: contactEmail, displayName: row.from_email.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null, contactType, subject: row.subject });
+      const matchedJob = triage.matchedApplicationId
+        ? await queryOne<{ company: string | null }>("SELECT j.company FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=$1", [triage.matchedApplicationId])
+        : null;
+      await queueRecruitingContact({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, email: contactEmail, displayName: row.from_email.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null, contactType, company: matchedJob?.company || null, subject: row.subject });
       const queued = await queryOne<{ id: string }>("SELECT id FROM crm_contact_sync_queue WHERE candidate_id=$1 AND contact_email=$2", [row.candidate_id, contactEmail]);
       if (queued) await syncQueuedRecruitingContact(queued.id);
     }
