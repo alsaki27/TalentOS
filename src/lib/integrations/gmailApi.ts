@@ -171,7 +171,7 @@ function extractBodyText(payload: any): string {
   return "";
 }
 
-function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
+export function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
   if (!payload) return result;
   if (payload.filename && payload.body && (payload.body.attachmentId || payload.body.size)) {
     result.push({ filename: payload.filename, mimeType: payload.mimeType || "application/octet-stream", size: Number(payload.body.size || 0), attachmentId: payload.body.attachmentId || null });
