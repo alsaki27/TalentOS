@@ -217,6 +217,14 @@ export default function InboxPage() {
     }
   }
 
+  async function submitFeedback(kind: "noise" | "relevant" | "needs_reply") {
+    if (!detail) return;
+    const res = await fetch(`/api/gmail-communications/${detail.message.id}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) });
+    if (!res.ok) { setMessage("Could not save email feedback."); return; }
+    setMessage(kind === "noise" ? "Email marked as noise and related work dismissed." : "Email feedback saved.");
+    await Promise.all([loadCounts(), loadTasks(), openThread(detail.message.id)]);
+  }
+
   function onProposalDecided(itemId: string) {
     setDetail((prev) => prev ? { ...prev, actionItems: prev.actionItems.map((a) => a.id === itemId ? { ...a, decision: "decided" } : a) } : prev);
     loadCounts();
@@ -426,6 +434,11 @@ export default function InboxPage() {
                   <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55 }}>{mail.body_text || mail.snippet || "No body text captured."}</div>
                 </article>
               ))}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
+                <button className="btn" onClick={() => void submitFeedback("noise")}>Mark noise</button>
+                <button className="btn" onClick={() => void submitFeedback("relevant")}>Mark relevant</button>
+                <button className="btn" onClick={() => void submitFeedback("needs_reply")}>Needs reply</button>
+              </div>
               {detail.actionItems.filter((a) => a.type !== "status_change_approval").length > 0 && (
                 <div>
                   <strong style={{ fontSize: 13 }}>Workflow actions</strong>
