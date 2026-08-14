@@ -6,10 +6,9 @@
 // so the original high-fidelity templates run unchanged here instead of needing a
 // degraded substitute or an external Node service.
 //
-// Generation produces a Blob immediately for download; uploading that blob to the
-// configured archive (SharePoint in production)
-// for history/re-download is a separate, best-effort step (see uploadResumeExport)
-// that the caller can fire in the background without blocking the download.
+// Generation produces a Blob in the browser. In the application Studio flow the
+// SharePoint archive is written before the browser download is released, so a
+// downloaded file can never be mistaken for an archived application resume.
 
 // @react-pdf/renderer and docx are loaded via dynamic import() inside each
 // function below, not as static top-level imports here. A static import got
@@ -209,38 +208,32 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
 }
 
 /**
- * Generates the file, downloads it immediately, then archives the same blob so
- * it can be re-downloaded later (this is also what makes the "View PDF" link
- * and pdf_available flag in the candidate profile work). The user's download
- * always happens first and unconditionally - an archive failure is reported
- * via a distinctly-worded error (caught and re-thrown here) so a caller's
- * catch block never tells the user their export failed when it actually
- * succeeded and only the background archive copy did not.
+ * Generates the file, archives the exact same blob in SharePoint, and only then
+ * releases the browser download. This makes the archive the source of truth
+ * for the application's PDF link and prevents untracked local exports.
  */
 export async function exportAndDownloadResume(
   rawContent: any,
   format: "pdf" | "docx",
-  uploadContext?: { applicationId: string; resumeVersionId: string }
-): Promise<UploadExportResult | null> {
+  uploadContext: { applicationId: string; resumeVersionId: string }
+): Promise<UploadExportResult> {
   const content = normalizeResumeContentForExport(rawContent);
   const blob = format === "pdf" ? await generateResumePdfBlob(content) : await generateResumeDocxBlob(content);
   const fileName = fileNameFor(content, format);
-  downloadBlob(blob, fileName);
-
-  if (uploadContext) {
-    try {
-      return await uploadResumeExport({
-        applicationId: uploadContext.applicationId,
-        resumeVersionId: uploadContext.resumeVersionId,
-        exportType: format,
-        blob,
-        fileName,
-      });
-    } catch (err: any) {
-      throw new Error(
-        `${format.toUpperCase()} downloaded, but saving a re-downloadable copy failed: ${err?.message || "unknown error"}`
-      );
-    }
+  let archived: UploadExportResult;
+  try {
+    archived = await uploadResumeExport({
+      applicationId: uploadContext.applicationId,
+      resumeVersionId: uploadContext.resumeVersionId,
+      exportType: format,
+      blob,
+      fileName,
+    });
+  } catch (err: any) {
+    throw new Error(
+      `${format.toUpperCase()} was not downloaded because the SharePoint archive failed: ${err?.message || "unknown error"}`
+    );
   }
-  return null;
+  downloadBlob(blob, fileName);
+  return archived;
 }
