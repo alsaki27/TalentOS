@@ -379,6 +379,121 @@ TALENTOS_BASE_URL=https://talent.skarion.com
 
 ### Planned Gmail agents
 
+> AI agents are not part of the current Gmail sync dependency. Gmail ingestion,
+> pagination, deduplication, token refresh, suppression, and storage must work
+> deterministically before any AI classification or automation is enabled.
+
+### Current code-first Gmail sync
+
+The current Gmail system is a code-driven mailbox importer. Its responsibilities
+are intentionally separate from future AI work:
+
+- OAuth consent and refresh-token storage use `GMAIL_CLIENT_ID` and
+  `GMAIL_CLIENT_SECRET`, separate from Google login credentials.
+- `src/lib/integrations/gmailApi.ts` owns Gmail REST calls, profile lookup,
+  message listing, history listing, message retrieval, labels, and stars.
+- `src/server/services/gmailSyncService.ts` owns account selection, token
+  refresh, incremental history sync, paginated backfill, idempotent storage,
+  and sync error handling.
+- `src/server/repositories/gmailIntegrationRepository.ts` owns encrypted token
+  persistence, account state, history IDs, backfill page tokens, and completion
+  state.
+- `email_communications` is the durable imported-message store. Gmail message
+  IDs and thread IDs are the deduplication keys.
+- `/api/cron/gmail-sync` is the production worker entry point.
+- `/api/candidate-dashboard/force-sync` is the authenticated manual recovery
+  entry point.
+- `.github/workflows/scheduled-jobs.yml` invokes the production endpoint. Its
+  `TALENTOS_BASE_URL` must remain `https://talent.skarion.com`.
+
+### Sync state contract
+
+Every candidate Gmail account must have an observable state:
+
+```text
+active + gmail_backfill_complete=false  = backfill still running
+active + gmail_backfill_complete=true   = incremental sync eligible
+error                                    = sync paused until recovery
+revoked                                  = OAuth permission removed
+```
+
+The sync worker must never silently skip an account. A failed account needs a
+visible `sync_error`, an updated timestamp, and a retry path. Reconnecting Gmail
+must reset the history ID and backfill cursor only when a new OAuth grant is
+actually received.
+
+### Backfill and incremental rules
+
+1. Process one account at a time; never run concurrent syncs for the same
+   candidate.
+2. During backfill, consume `gmail_backfill_page_token` until Gmail returns no
+   next page token, then set `gmail_backfill_complete=true`.
+3. Store each message idempotently by `integration_account_id + gmail_message_id`.
+4. Preserve sent mail, received mail, thread IDs, timestamps, labels, unread,
+   important, and starred flags.
+5. After backfill, persist Gmail `historyId` and use history-based incremental
+   sync. If Gmail reports an expired history ID, restart a bounded backfill
+   rather than losing messages.
+6. Retry transient Gmail 429/5xx failures with bounded backoff. Do not retry
+   invalid OAuth credentials indefinitely.
+7. Never log access tokens, refresh tokens, full email bodies, or authorization
+   headers.
+
+### Candidate onboarding checklist
+
+For every candidate mailbox:
+
+1. Candidate completes Gmail consent from the candidate portal.
+2. Verify the account belongs to the intended candidate email.
+3. Verify the granted scope includes `gmail.modify` when labels/stars are
+   required.
+4. Confirm the account is `active` and `email_sync_paused=false`.
+5. Trigger the first backfill and record the starting count.
+6. Continue until `gmail_backfill_complete=true`.
+7. Confirm a later test email appears through incremental sync.
+8. Confirm duplicate sync runs do not increase the same Gmail message ID count.
+
+### Current operational recovery
+
+If a mailbox is stuck:
+
+```text
+1. Inspect integration_accounts.status, sync_error, last_synced_at,
+   gmail_history_id, gmail_backfill_page_token, and gmail_backfill_complete.
+2. If status=error because of deployment configuration, fix production secrets
+   first; do not delete the candidate's email history.
+3. Set the account active only after the root cause is fixed.
+4. Trigger /api/cron/gmail-sync serially until the cursor advances.
+5. Verify email_communications count, max(ingested_at), and newest sent_at.
+```
+
+The account must not be reset to a blank state merely because one sync request
+failed. Existing imported messages are retained and deduplicated on retry.
+
+### Future Gmail work, still code-first
+
+Before introducing AI agents, complete these deterministic improvements:
+
+- Add a per-account sync-run table with start/end time, page count, fetched,
+  inserted, duplicate, skipped, and error counts.
+- Add an admin Gmail health page showing every candidate account and its exact
+  cursor/backfill state.
+- Add a safe “Continue backfill” button for managers/admins.
+- Add a bounded worker loop on the spare PC or a dedicated scheduled runner;
+  keep one concurrency lock per Gmail account.
+- Add retention-aware cleanup that respects each candidate's privacy setting.
+- Add fixtures for expired history IDs, revoked consent, rate limits, duplicate
+  messages, malformed MIME parts, pagination interruption, and empty inboxes.
+- Add alerts when an active account has not synced for 30 minutes or remains in
+  backfill for an abnormal duration.
+- Add a reconciliation command comparing Gmail message IDs against
+  `email_communications` without importing personal content.
+
+Only after these code paths are reliable should future AI components be allowed
+to classify recruiting relevance, match applications, extract interviews, or
+create AE tasks. AI must consume stored messages; it must never be responsible
+for determining whether Gmail synchronization itself succeeded.
+
 Register every new agent in the AI Control Center and use the approved low-cost model route unless a human explicitly selects a higher-cost review run:
 
 - `GmailMessageClassifier`: deterministic suppression first, then recruiting relevance.
