@@ -292,6 +292,17 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
 
+  if (row.from_email && verdict.senderClass === "human") {
+    const contactType = ["interview_invite", "scheduling", "recruiter_reply", "application_invite"].includes(triage.category)
+      ? "recruiter"
+      : triage.category === "offer" ? "hiring_manager" : "unknown";
+    const contactEmail = row.from_email.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || row.from_email.trim().toLowerCase();
+    await execute(
+      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1 = 'hiring_manager' THEN $1 ELSE contact_type END WHERE candidate_id = $2 AND email = $3`,
+      [contactType, row.candidate_id, contactEmail]
+    );
+  }
+
   if (!triage.relevant) return;
   await logWorkflowEvent({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, eventType: "email_triaged_relevant", payload: { category: triage.category, confidence: triage.confidence, needsReply: triage.needsReply } });
 

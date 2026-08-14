@@ -42,6 +42,7 @@ interface MailMessage extends MailThread {
   ingested_at: string;
   triaged_at: string | null;
   interview_details: Record<string, unknown> | null;
+  ai_evidence: Record<string, unknown> | null;
 }
 
 interface DetailActionItem {
@@ -404,6 +405,7 @@ export default function InboxPage() {
                 <a className="btn" href={detail.gmailUrl} target="_blank" rel="noreferrer">Open Gmail</a>
               </div>
               {detail.message.ai_summary && <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "var(--accent-soft)", fontSize: 13 }}>{detail.message.ai_summary}</div>}
+              {detail.message.ai_evidence && Object.keys(detail.message.ai_evidence).length > 0 && <details style={{ marginTop: 10 }}><summary className="muted" style={{ cursor: "pointer" }}>Why AI classified this</summary><pre style={{ whiteSpace: "pre-wrap", fontSize: 11, color: "var(--ink-soft)", marginTop: 8 }}>{JSON.stringify(detail.message.ai_evidence, null, 2)}</pre></details>}
               {!!detail.message.attachment_metadata?.length && <div className="muted" style={{ marginTop: 10 }}>Attachments: {detail.message.attachment_metadata.map((a) => a.filename || "unnamed file").join(", ")}</div>}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
                 <span className="badge">{categoryLabel(detail.message.ai_category)}</span>
