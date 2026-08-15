@@ -298,7 +298,32 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         const nextStage = input.application_stage ? String(input.application_stage) : undefined;
         if (nextStage && !(APPLICATION_STAGES as readonly string[]).includes(nextStage)) return JSON.stringify({ error: "Invalid application_stage" });
         const updates: any = {};
-        if (nextStage) { updates.application_stage = nextStage; updates.ae_stage = nextStage; updates.ae_stage_updated_at = new Date().toISOString(); updates.ae_stage_updated_by_user_id = ctx.userId ?? null; updates.ae_stage_updated_by_name = ctx.displayName ?? ctx.email ?? "Codex"; }
+        if (nextStage) {
+          if (nextStage === "applied" && !["approved", "not_required"].includes(String((current as any).review_status ?? "not_required"))) {
+            return JSON.stringify({ error: "Manager review must be approved before marking this application applied." });
+          }
+          const now = new Date().toISOString();
+          updates.application_stage = nextStage;
+          updates.ae_stage = nextStage;
+          updates.ae_stage_updated_at = now;
+          updates.ae_stage_updated_by_user_id = ctx.userId ?? null;
+          updates.ae_stage_updated_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          updates.application_stage_changed_at = now;
+          updates.application_stage_changed_by_user_id = ctx.userId ?? null;
+          updates.application_stage_changed_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          if (nextStage === "applied") {
+            updates.status = "applied";
+            updates.applied_at = (current as any).applied_at ?? now;
+            updates.completed_at = (current as any).completed_at ?? now;
+            updates.ae_applied_at = now;
+            updates.ae_applied_by_user_id = ctx.userId ?? null;
+            updates.ae_applied_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          } else if ((current as any).application_stage === "applied") {
+            updates.status = "in_progress";
+            updates.applied_at = null;
+            updates.completed_at = null;
+          }
+        }
         if (input.assigned_to_user_id !== undefined) updates.assigned_to_user_id = input.assigned_to_user_id ? String(input.assigned_to_user_id) : null;
         if (input.priority !== undefined) updates.priority = String(input.priority);
         if (input.notes !== undefined) updates.notes = String(input.notes);
