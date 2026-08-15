@@ -78,6 +78,7 @@ export default function NavBar() {
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
+    { href: "/mcp", label: "MCP Command Center", show: true },
     { href: "/import-sources", label: "Import Sources", show: canManageSources },
     { href: "/audit", label: "Audit Log", show: isAdmin },
     { href: "/ops", label: "System Health", show: isAdmin },
