@@ -707,12 +707,20 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         }))
           .filter((msg): msg is GmailMessage => Boolean(msg));
         for (const msg of messages) {
-        if (classifyGmailMessage(msg).suppress) {
-          outcome.suppressed++;
-          continue;
-        }
-        const storedId = await storeRawMessage(account.candidate_id, account.id, msg);
-        outcome.fetched++;
+          let storedId: string | null = null;
+          try {
+            if (classifyGmailMessage(msg).suppress) {
+              outcome.suppressed++;
+              processedMessages++;
+              continue;
+            }
+            storedId = await storeRawMessage(account.candidate_id, account.id, msg);
+            outcome.fetched++;
+          } catch (replicationError: any) {
+            // A single malformed row/enrichment write must not prevent the
+            // page cursor from advancing or the rest of the mailbox importing.
+            console.warn(`[Gmail sync] Message replication skipped for ${msg.id}; cursor will continue: ${replicationError?.message || replicationError}`);
+          }
         // Mailbox replication is the critical path.  AI triage is deliberately
         // capped so a large historical page cannot hold the Gmail cursor open
         // for minutes; subsequent scheduled runs continue triage safely.
@@ -726,6 +734,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
             // rule or nullable AI field must not stop the backfill cursor.
             console.warn(`[Gmail sync] Triage failed for ${storedId}; keeping message for retry: ${triageError?.message || triageError}`);
           }
+          processedMessages++;
         }
           processedMessages++;
         }
