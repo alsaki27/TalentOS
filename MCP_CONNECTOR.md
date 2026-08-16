@@ -1,0 +1,60 @@
+# TalentOS MCP Connector
+
+## Endpoint
+
+```text
+https://talent.skarion.com/api/mcp
+```
+
+The endpoint uses MCP Streamable HTTP-style JSON-RPC and a separate `mcp_live_*` bearer key. MCP credentials are unrelated to browser-extension keys, public REST keys, AI-provider keys, or candidate portal tokens.
+
+## Create a key
+
+Managers and admins can open `/account/mcp-keys`, create a named key, select scopes, and copy the plaintext key once. TalentOS stores only a SHA-256 hash. Revoke a key from the same page.
+
+Example client configuration:
+
+```json
+{
+  "mcpServers": {
+    "talentos": {
+      "url": "https://talent.skarion.com/api/mcp",
+      "headers": {
+        "Authorization": "Bearer mcp_live_COPY_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
+## Current tools
+
+- `list_active_candidates`
+- `list_recent_jobs`
+- `get_candidate_base_resumes`
+- `list_applications`
+- `get_daily_ae_summary`
+- `get_ai_pipeline_status`
+- `create_application`
+
+`create_application` is idempotent, requires candidate/job/base-resume IDs, starts at `in_ai_pipeline`, and never marks a job applied. It returns the existing record for a duplicate candidate/job or idempotency key.
+
+## Scopes
+
+Read scopes include candidate, resume, job, matching, application, analytics, workflow, and email access. Write scopes are separate for application creation, assignment, stage changes, comments, workflow retry, and resume regeneration. Grant read-only scopes to exploratory agents and add write scopes only to trusted automation clients.
+
+## Audit and safety
+
+Every authenticated tool call writes to `mcp_audit_events` with request ID, tool, action, scopes, result, duration, and relevant entity IDs. Secrets and resume/email bodies are not written to the audit log. The connector does not expose SQL execution or raw credentials.
+
+## Next implementation slice
+
+The next tools should reuse the existing application workflow service rather than inserting workflow rows directly:
+
+1. `rank_jobs_for_candidate` with base-resume evidence and freshness scoring.
+2. `create_application_from_match` with selected base resume and owner.
+3. `retry_application_workflow` and `get_workflow_result`.
+4. Duplicate, SharePoint-export, and missing-tailored-resume audits.
+5. Stage-change and note tools with explicit confirmation and stage-history writes.
+
+All bulk tools should require an idempotency key, return per-record results, and enforce active-candidate, fresh-job, duplicate, and canonical `application_stage` rules server-side.

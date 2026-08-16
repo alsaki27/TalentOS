@@ -80,6 +80,13 @@ function isExtensionApiPath(pathname: string) {
   return pathname.startsWith("/api/extension/v1/");
 }
 
+// The external MCP connector authenticates with its own mcp_live_* bearer key
+// inside the route handler. Do not require a browser session before that
+// handler can validate the machine credential.
+function isMcpApiPath(pathname: string) {
+  return pathname === "/api/mcp";
+}
+
 function getExtensionCorsResponse(req: NextRequest): NextResponse {
   const origin = req.headers.get("origin") || "*";
   if (req.method === "OPTIONS") {
@@ -202,6 +209,7 @@ export async function middleware(req: NextRequest) {
   // authenticates via its own authenticateExtension() call and handles CORS
   // via withExtensionCors(). Intercepting here drops CORS headers on Cloudflare Workers.
   if (isExtensionApiPath(pathname)) return NextResponse.next();
+  if (isMcpApiPath(pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
   if (isOpenJobDataIngestAuthorized(req, pathname)) return NextResponse.next();
