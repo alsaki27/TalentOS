@@ -242,8 +242,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   const senderDomain = senderAddress.split("@")[1] || null;
   const senderRule = await queryOne<{ sender_class: string; creates_tasks: boolean; can_change_stage: boolean }>(
     `SELECT sender_class, creates_tasks, can_change_stage FROM gmail_sender_rules
-      WHERE (sender_email IS NOT NULL AND lower(sender_email) = $1)
-         OR (sender_domain IS NOT NULL AND lower(sender_domain) = $2)
+      WHERE (sender_email IS NOT NULL AND lower(sender_email) = $1::text)
+         OR (sender_domain IS NOT NULL AND lower(sender_domain) = $2::text)
       ORDER BY sender_email NULLS LAST LIMIT 1`,
     [senderAddress, senderDomain],
   );
@@ -711,9 +711,15 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         // capped so a large historical page cannot hold the Gmail cursor open
         // for minutes; subsequent scheduled runs continue triage safely.
         if (storedId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
-          await triageStoredMessage(storedId, accessToken);
-          outcome.triaged++;
-          triagedMessages++;
+          try {
+            await triageStoredMessage(storedId, accessToken);
+            outcome.triaged++;
+            triagedMessages++;
+          } catch (triageError: any) {
+            // Triage is secondary to mailbox replication. A malformed sender
+            // rule or nullable AI field must not stop the backfill cursor.
+            console.warn(`[Gmail sync] Triage failed for ${storedId}; keeping message for retry: ${triageError?.message || triageError}`);
+          }
         }
           processedMessages++;
         }
