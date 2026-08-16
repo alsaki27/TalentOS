@@ -27,6 +27,34 @@ Example client configuration:
 }
 ```
 
+### Claude Desktop with `mcp-remote`
+
+Claude Desktop should force the Streamable HTTP transport. Without the
+explicit transport flag, `mcp-remote` may try SSE after an application-level
+JSON-RPC error, but this endpoint is HTTP-only.
+
+```json
+{
+  "mcpServers": {
+    "talentos": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://talent.skarion.com/api/mcp",
+        "--transport",
+        "http",
+        "--header",
+        "Authorization: Bearer ${TALENTOS_MCP_KEY}"
+      ],
+      "env": {
+        "TALENTOS_MCP_KEY": "mcp_live_COPY_KEY_HERE"
+      }
+    }
+  }
+}
+```
+
 ## Current tools
 
 - `list_active_candidates`

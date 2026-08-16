@@ -22,7 +22,10 @@ const tools = [
 ] as const;
 const scopeFor: Record<string, McpScope> = { list_active_candidates: "mcp:candidates:read", list_recent_jobs: "mcp:jobs:read", get_candidate_base_resumes: "mcp:resumes:read", list_applications: "mcp:applications:read", get_daily_ae_summary: "mcp:analytics:read", get_ai_pipeline_status: "mcp:workflows:read", create_application: "mcp:applications:create", rank_jobs_for_candidate: "mcp:matching:read", find_duplicate_applications: "mcp:applications:read", find_missing_sharepoint_exports: "mcp:applications:read", change_application_stage: "mcp:applications:stage", retry_application_workflow: "mcp:workflows:retry", search_candidate_emails: "mcp:emails:read", regenerate_tailored_resume: "mcp:resumes:regenerate" };
 const jsonRpc = (id: unknown, result: unknown) => NextResponse.json({ jsonrpc: "2.0", id, result });
-const errorRpc = (id: unknown, code: number, message: string) => NextResponse.json({ jsonrpc: "2.0", id, error: { code, message } }, { status: code === -32601 ? 404 : 400 });
+// JSON-RPC errors are application-level responses. Keep the HTTP response at
+// 200 so MCP clients do not interpret a valid server response as a transport
+// failure and incorrectly fall back from Streamable HTTP to SSE.
+const errorRpc = (id: unknown, code: number, message: string) => NextResponse.json({ jsonrpc: "2.0", id, error: { code, message } }, { status: 200 });
 
 export async function GET(req: NextRequest) { const auth = await authenticateMcp(req); if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status }); return NextResponse.json({ name: "TalentOS MCP", version: "1.0.0", transport: "streamable-http", tools }); }
 export async function POST(req: NextRequest) {
