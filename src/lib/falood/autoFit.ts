@@ -1,39 +1,31 @@
 // src/lib/falood/autoFit.ts
-// One-page auto-fit engine (brief section 15). Applies the brief's ordered rules,
-// re-measuring the ACTUAL rendered PDF page count after each step (via
-// countResumePages, not a text-length guess) and stopping as soon as it fits.
-// Only formatting is ever adjusted automatically — rules that would touch resume
-// CONTENT (shortening/merging/removing bullets, rule 9's "ask the user first") are
-// deliberately not auto-applied, matching "never silently delete important content."
+// One-page auto-fit engine. Applies a set of ordered, formatting-only rules,
+// re-measuring the ACTUAL rendered PDF (via renderResumePdfWithMetrics, not a
+// text-length guess) after each step and stopping as soon as it fits. Only
+// formatting is ever adjusted automatically — rules that would touch resume
+// CONTENT (shortening/merging/removing bullets) are deliberately not
+// auto-applied here, matching "never silently delete important content."
+// Content-level trimming lives in finalPolish.ts's bounded, code-enforced
+// deterministic trim instead, which runs inside the AI pipeline where the
+// job's keyword list is available to judge what's safe to shorten.
 
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
-// countResumePages disabled — pdfExport removed for Cloudflare Workers bundle size
-// Use a simple text-length heuristic instead.
+import { renderResumePdfWithMetrics, READABILITY_FLOOR_FONT_SIZE, type ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
+import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 
-function estimatePageCount(content: ResumeDocument): number {
-  let totalChars = 0;
-  if (content.header?.fullName) totalChars += content.header.fullName.length;
-  if (content.summary?.text) totalChars += content.summary.text.length;
-  for (const s of content.skills) totalChars += s.skills.join(", ").length;
-  for (const exp of content.experience) {
-    totalChars += exp.bullets.reduce((sum, b) => sum + b.text.length, 0);
-    totalChars += exp.title.length + exp.company.length;
-  }
-  for (const edu of content.education) {
-    totalChars += edu.degree.length + edu.school.length;
-  }
-  // Rough estimate: ~3000 chars per page
-  return Math.max(1, Math.ceil(totalChars / 3000));
+function measurePages(content: ResumeDocument): number {
+  const { metrics } = renderResumePdfWithMetrics(normalizeResumeContentForExport(content));
+  return metrics.pageCount;
 }
 
-const FLOORS = {
+export const FLOORS = {
   sectionSpacing: 2,
   bulletSpacing: 0,
   marginTop: 0.3,
   marginRight: 0.3,
   marginBottom: 0.3,
   marginLeft: 0.3,
-  fontSize: 8,
+  fontSize: READABILITY_FLOOR_FONT_SIZE,
   lineHeight: 1.0,
 };
 
@@ -59,12 +51,15 @@ const STEPS: FormattingStep[] = [
     }),
   },
   {
-    label: "Reduce font size",
-    apply: (f) => ({ ...f, fontSize: Math.max(FLOORS.fontSize, f.fontSize - 0.5) }),
-  },
-  {
+    // Tried before font size — a smaller line height is far less visually
+    // disruptive than shrinking the type itself, so font size is the last
+    // resort, not the fourth of five options.
     label: "Reduce line height",
     apply: (f) => ({ ...f, lineHeight: Math.max(FLOORS.lineHeight, f.lineHeight - 0.1) }),
+  },
+  {
+    label: "Reduce font size",
+    apply: (f) => ({ ...f, fontSize: Math.max(FLOORS.fontSize, f.fontSize - 0.5) }),
   },
 ];
 
@@ -73,16 +68,21 @@ export interface AutoFitResult {
   pages: number;
   actionsApplied: string[];
   fitsOnePage: boolean;
+  /** Real metrics from the final measured state — richer than `pages` alone. */
+  metrics?: ResumePageMetrics;
 }
 
 const MAX_PASSES = 6; // each pass retries all steps — a single 15% trim often isn't enough to close one page's worth of overflow
 
 export async function autoFitOnePage(content: ResumeDocument): Promise<AutoFitResult> {
   let current = content;
-  let pages = estimatePageCount(current);
+  let pages = measurePages(current);
   const actionsApplied: string[] = [];
 
-  if (pages <= 1) return { content: current, pages, actionsApplied, fitsOnePage: true };
+  if (pages <= 1) {
+    const { metrics } = renderResumePdfWithMetrics(normalizeResumeContentForExport(current));
+    return { content: current, pages, actionsApplied, fitsOnePage: true, metrics };
+  }
 
   for (let pass = 0; pass < MAX_PASSES && pages > 1; pass++) {
     let improvedThisPass = false;
@@ -90,7 +90,7 @@ export async function autoFitOnePage(content: ResumeDocument): Promise<AutoFitRe
       const nextFormatting = step.apply(current.formatting);
       if (JSON.stringify(nextFormatting) === JSON.stringify(current.formatting)) continue; // already at floor
       const candidate = { ...current, formatting: nextFormatting };
-      const candidatePages = estimatePageCount(candidate);
+      const candidatePages = measurePages(candidate);
       if (candidatePages <= pages) {
         current = candidate;
         pages = candidatePages;
@@ -102,5 +102,6 @@ export async function autoFitOnePage(content: ResumeDocument): Promise<AutoFitRe
     if (!improvedThisPass) break; // every step is at its floor — formatting alone can't do more
   }
 
-  return { content: current, pages, actionsApplied, fitsOnePage: pages <= 1 };
+  const { metrics } = renderResumePdfWithMetrics(normalizeResumeContentForExport(current));
+  return { content: current, pages, actionsApplied, fitsOnePage: pages <= 1, metrics };
 }

@@ -1,11 +1,23 @@
+import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
+
 export function buildFinalPolishPrompt(
   job: any,
   baseResume: any,
   draft: any,
   review: any,
   jobAnalysis: any,
-  sourceOfTruth: { confirmedSkills: string[] } | null = null
+  sourceOfTruth: { confirmedSkills: string[] } | null = null,
+  pageMetrics: ResumePageMetrics | null = null
 ): string {
+  const pageMetricsBlock = pageMetrics
+    ? `PAGE QA METRICS (measured from an actual rendered PDF of the draft you are polishing — trust these over any word-count guess):
+- Actual page count: ${pageMetrics.pageCount}
+- Content utilization: ${Math.round(pageMetrics.contentUtilization * 100)}%
+- Bottom whitespace: ${pageMetrics.bottomWhitespaceInches.toFixed(2)} inches
+- Overflow: ${pageMetrics.overflow}
+- Readability floor: ${pageMetrics.readable ? "passed" : "FAILED"}`
+    : `PAGE QA METRICS: unavailable for this run (rendering failed) — judge page fit conservatively from content volume alone.`;
+
   return `You are Final Polish, an AI that applies reviewer feedback to produce a final, QA-passed resume.
 
 Note: The draft may already contain new skills inserted by Resume Forge using the configurable SKILL_CATEGORY_MAP. Preserve these skills while applying reviewer edits.
@@ -31,9 +43,19 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    (past tense for past roles, present for the current one), one to two lines, grammatically
    complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic").
    Keep tense and punctuation consistent within each role.
-5. The final output MUST fit on a single page strictly at any cost (roughly 450-650 words total across experience
-   bullets + skills). Do not shrink font/spacing conceptually or pad whitespace to "cheat" the limit;
-   the content itself must be concise. Only set exportReady to true once the result genuinely fits one page.
+5. The final output MUST fit on a single page strictly at any cost — use the PAGE QA METRICS below
+   (measured from an actual rendered PDF, not a word-count guess) as the real signal for this, not an
+   estimate. Do not shrink font/spacing conceptually or pad whitespace to "cheat" the limit; the content
+   itself must be concise. Only set exportReady to true once the result genuinely fits one page.
+6b. ${pageMetricsBlock}
+   - If overflow is true or content utilization is above 97%: shorten redundant bullets and remove
+     duplicate or low-value skills FIRST, before touching quantified achievements or JD keywords.
+     Never remove an entire role and never drop a role below its per-role bullet minimum (rule 6 below).
+   - If content utilization is below 82% (and overflow is false): expand ONLY with evidence-backed
+     detail already present in the base resume, evidence bank, or Source of Truth — never invent facts
+     merely to fill whitespace. If there is no more truthful detail to add, leave the whitespace and
+     note it in unresolvedWarnings rather than padding.
+   - Preserve every quantified achievement and every job-specific keyword already present.
 6. PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL - DO NOT LEAVE EMPTY WHITESPACE BELOW):
    * Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling out the single page from top to bottom without leaving large empty whitespace at the bottom (which happens when roles are condensed too much).
    * NEVER drop or vanish an entire experience role from the base resume, and NEVER remove all bullet points from any role! Every role from the draft must be preserved.

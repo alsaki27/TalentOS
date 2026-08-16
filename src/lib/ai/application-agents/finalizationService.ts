@@ -87,6 +87,14 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   const truthScore =
     typeof reviewData?.truthfulnessRisk === "number" ? Math.max(0, 10 - reviewData.truthfulnessRisk) : null;
 
+  // pageFit is Final Polish's own measured (never LLM-guessed) page-fit
+  // result - see hiringPanel.ts/finalPolish.ts/pageFitThresholds.ts.
+  // one_page_fit_score is a simple 0-100 convenience number for quick
+  // sorting/badges; page_fit_metrics carries the full detail.
+  const finalPolishPageFit = (finalData as FinalResumeV1)?.pageFit ?? null;
+  const onePageFitScore = finalPolishPageFit ? Math.round(finalPolishPageFit.contentUtilization * 1000) / 10 : null;
+  const pageFitMetricsJson = finalPolishPageFit ? JSON.stringify(finalPolishPageFit) : null;
+
   // The agent schema (FinalResumeV1) carries no contact/identity data; the
   // studio's ResumeDocument shape needs the candidate's header, which lives on
   // the base resume content. Prefer the freshest base_resumes.content via
@@ -146,12 +154,13 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       dbSql`WITH inserted AS (
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
-            title, content, source_type, status, ats_score, truth_score, created_at)
+            title, content, source_type, status, ats_score, truth_score, one_page_fit_score, page_fit_metrics, created_at)
          VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${realBaseResumeId},
-                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${atsScore}, ${truthScore}, NOW())
+                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${atsScore}, ${truthScore}, ${onePageFitScore}, ${pageFitMetricsJson}, NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
          DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score,
-                       truth_score = EXCLUDED.truth_score, updated_at = NOW()
+                       truth_score = EXCLUDED.truth_score, one_page_fit_score = EXCLUDED.one_page_fit_score,
+                       page_fit_metrics = EXCLUDED.page_fit_metrics, updated_at = NOW()
          RETURNING id
        )
        UPDATE applications SET

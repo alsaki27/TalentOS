@@ -13,6 +13,15 @@
 
 import type { FinalResumeV1, ExperienceEntry } from "./schemas";
 
+// FinalResumeV1's QA-only fields (appliedIssueIds, rejectedIssueIds,
+// unresolvedWarnings, finalQaScore, exportReady, pageFit) are never read by
+// this converter - only the 6 renderable content fields are. ResumeDraftV1
+// (Resume Forge's output, what Hiring Panel actually has in hand before Final
+// Polish ever runs) shares identical shapes for all 6, so narrowing the
+// parameter type to this Pick lets Hiring Panel pass its draft straight
+// through with no separate runtime adapter.
+export type RenderableResumeContent = Pick<FinalResumeV1, "summary" | "skills" | "experience" | "education" | "certifications" | "projects">;
+
 export interface ResumeDocumentHeader {
   fullName: string;
   location?: string;
@@ -148,7 +157,7 @@ function mapProjects(projects: FinalResumeV1["projects"]) {
     });
 }
 
-export function finalResumeToStudioDocument(final: FinalResumeV1, baseContent: any): ResumeDocument {
+export function finalResumeToStudioDocument(final: RenderableResumeContent, baseContent: any): ResumeDocument {
   const base = baseContent && typeof baseContent === "object" ? baseContent : {};
   const summary = final.summary && final.summary.trim().length > 0
     ? { id: uid("sum"), text: final.summary }

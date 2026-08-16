@@ -7,6 +7,9 @@ import { exportAndDownloadResume } from "@/lib/falood/clientExport";
 import A4Preview from "@/components/resume/A4Preview";
 import SectionSidebar from "@/components/resume/SectionSidebar";
 import KeywordPanel from "@/components/resume/KeywordPanel";
+import { formatPageFitSummary } from "@/lib/scoreScale";
+import { MIN_UTILIZATION, MAX_UTILIZATION } from "@/lib/falood/pageFitThresholds";
+import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
 /* ──────────── interfaces ──────────── */
 
@@ -44,7 +47,6 @@ interface ApplicationResumeVersion {
   application_id?: string;
   status: "draft" | "in_review" | "approved" | "rejected";
   content: ResumeDocument;
-  fit_score?: number | null;
   recommendation?: string | null;
   source_type?: string | null;
   updated_at: string;
@@ -177,17 +179,18 @@ interface PacketData {
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-function estimatePages(content: ResumeDocument): number {
-  const text = JSON.stringify(content);
-  // Rough heuristic: ~2800 chars ≈ 1 page for a dense resume
-  return Math.max(1, Math.round((text.length / 2800) * 10) / 10);
-}
-
-function pageStatus(content: ResumeDocument): { label: string; color: string } {
-  const pages = estimatePages(content);
-  if (pages <= 1) return { label: `1 page — good`, color: "var(--accent)" };
-  if (pages <= 1.2) return { label: `${pages.toFixed(1)} pages — close`, color: "var(--warn)" };
-  return { label: `${pages.toFixed(1)} pages — over`, color: "var(--danger)" };
+/** Turns real, measured page-fit metrics (from renderResumePdfWithMetrics,
+ *  computed live client-side - see the pageMetrics effect below) into the
+ *  same {label, color} shape the toolbar badge used to get from the old
+ *  character-count heuristic (estimatePages/pageStatus, both removed). */
+function pageFitBadge(metrics: ResumePageMetrics | null): { label: string; color: string } {
+  const label = formatPageFitSummary(metrics);
+  if (!metrics) return { label, color: "var(--ink-soft)" };
+  if (!metrics.readable || metrics.overflow) return { label, color: "var(--danger)" };
+  if (metrics.contentUtilization < MIN_UTILIZATION || metrics.contentUtilization > MAX_UTILIZATION) {
+    return { label, color: "var(--warn)" };
+  }
+  return { label, color: "var(--accent)" };
 }
 
 const QUICK_COMMANDS = [
@@ -268,6 +271,7 @@ export default function ApplicationResumeStudioPage() {
 
   /* editing state */
   const [draftContent, setDraftContent] = useState<ResumeDocument | null>(null);
+  const [pageMetrics, setPageMetrics] = useState<ResumePageMetrics | null>(null);
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
@@ -623,6 +627,32 @@ export default function ApplicationResumeStudioPage() {
   // not just a style nit.
   const content = draftContent ?? appResume?.content;
 
+  // Live, real page-fit metrics (renders through the actual PDF renderer,
+  // client-side only - dynamic import matches the established pattern for
+  // touching skarionPdfDocument.tsx from browser code) - replaces the old
+  // JSON.stringify(content).length/2800 character-count guess. Recomputes
+  // whenever the draft changes so the toolbar badge stays live as the user edits.
+  useEffect(() => {
+    let cancelled = false;
+    if (!content) {
+      setPageMetrics(null);
+      return;
+    }
+    (async () => {
+      try {
+        const [{ renderResumePdfWithMetrics }, { normalizeResumeContentForExport }] = await Promise.all([
+          import("@/lib/falood/skarionPdfDocument"),
+          import("@/lib/falood/clientExport"),
+        ]);
+        const { metrics } = renderResumePdfWithMetrics(normalizeResumeContentForExport(content));
+        if (!cancelled) setPageMetrics(metrics);
+      } catch {
+        if (!cancelled) setPageMetrics(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [content]);
+
   const keywordMap = useMemo(() => {
     if (!targetJob || !content || typeof content !== "object") return {};
     const map: Record<string, string[]> = {};
@@ -787,8 +817,9 @@ export default function ApplicationResumeStudioPage() {
         setLog((prev) => [...prev, { role: "warning", text: data.error ?? "Auto-fit failed." }]);
         return;
       }
+      const measured = formatPageFitSummary(data.metrics ?? null);
       if (data.fitsOnePage && data.actionsApplied.length === 0) {
-        setLog((prev) => [...prev, { role: "assistant", text: `Already fits on one page (${data.pages} page).` }]);
+        setLog((prev) => [...prev, { role: "assistant", text: `Already fits: ${measured}.` }]);
         return;
       }
       setPendingAction({
@@ -799,8 +830,8 @@ export default function ApplicationResumeStudioPage() {
       setLog((prev) => [...prev, {
         role: "assistant",
         text: data.fitsOnePage
-          ? `Now fits on one page. Applied: ${data.actionsApplied.join(", ")}. Review the proposed draft and click Apply.`
-          : `Still ${data.pages} pages after formatting adjustments (${data.actionsApplied.join(", ") || "none possible"}) — getting to one page from here means shortening or removing content, which needs your decision, not an automatic one.`,
+          ? `Now fits: ${measured}. Applied: ${data.actionsApplied.join(", ")}. Review the proposed draft and click Apply.`
+          : `Still ${measured} after formatting adjustments (${data.actionsApplied.join(", ") || "none possible"}) — getting to one page from here means shortening or removing content, which needs your decision, not an automatic one.`,
       }]);
     } finally {
       setFitting(false);
@@ -1363,7 +1394,7 @@ export default function ApplicationResumeStudioPage() {
     );
   }
 
-  const pageInfo = pageStatus(content);
+  const pageInfo = pageFitBadge(pageMetrics);
   const statusBadgeClass =
     appResume.status === "approved"
       ? "badge-review-approved"

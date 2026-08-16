@@ -484,6 +484,8 @@ export async function listApplicationQueue(
       a.tailored_resume_version_id as workflow_resume_version_id,
       rv.title as workflow_resume_title,
       rv.base_resume_id as base_resume_id,
+      rv.one_page_fit_score,
+      rv.page_fit_metrics,
       a.resume_generation_status
     FROM applications a
     LEFT JOIN candidates c ON a.candidate_id = c.id

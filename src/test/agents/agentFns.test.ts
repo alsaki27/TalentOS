@@ -6,6 +6,14 @@ import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext } from "@/lib/ai/application-agents/types";
 import { JobAnalysisSchema, ResumeDraftSchema, ReviewScoreSchema, FinalResumeSchema } from "@/lib/ai/application-agents/schemas";
 
+// runHiringPanel/runFinalPolish now render a real PDF (via jsPDF) to measure
+// page-fit before/after their LLM call - a genuinely heavier synchronous cost
+// than this file's other agent calls. The first test in the process to touch
+// it pays jsPDF's cold module-load cost on top of the render itself, which
+// can exceed vitest's 5000ms default under full-suite load even though each
+// individual test completes in well under a second in isolation.
+vi.setConfig({ testTimeout: 15000 });
+
 function mockProvider(returnText: string): AiProvider {
   return {
     send: vi.fn().mockResolvedValue({

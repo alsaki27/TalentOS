@@ -16,6 +16,7 @@ export interface ApplicationResumeVersionRow {
   ats_score: number | null;
   truth_score: number | null;
   one_page_fit_score: number | null;
+  page_fit_metrics: Record<string, unknown> | null;
   status: ResumeVersionStatus;
   source_type: ResumeVersionSourceType;
   title: string | null;
@@ -49,6 +50,7 @@ export interface UpdateApplicationResumeVersionInput {
   ats_score?: number | null;
   truth_score?: number | null;
   one_page_fit_score?: number | null;
+  page_fit_metrics?: Record<string, unknown> | null;
   title?: string | null;
   version_label?: string | null;
   generated_text?: string | null;
@@ -72,7 +74,7 @@ export async function listResumeVersionsByCandidate(
   candidateId: string
 ): Promise<ApplicationResumeVersionRow[]> {
   return await query<ApplicationResumeVersionRow>(
-    `SELECT id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at
+    `SELECT id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, page_fit_metrics, created_by, created_at, updated_at
      FROM application_resume_versions
      WHERE candidate_id = $1
      ORDER BY created_at DESC`,
@@ -85,7 +87,7 @@ export async function listResumeVersionsByApplication(
   targetJobId: string
 ): Promise<ApplicationResumeVersionRow[]> {
   return await query<ApplicationResumeVersionRow>(
-    `SELECT id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at
+    `SELECT id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, page_fit_metrics, created_by, created_at, updated_at
      FROM application_resume_versions
      WHERE candidate_id = $1 AND target_job_id = $2
      ORDER BY created_at DESC`,
@@ -153,6 +155,10 @@ export async function updateApplicationResumeVersion(
   if (input.one_page_fit_score !== undefined) {
     fields.push(`one_page_fit_score = $${paramIndex++}`);
     values.push(input.one_page_fit_score);
+  }
+  if (input.page_fit_metrics !== undefined) {
+    fields.push(`page_fit_metrics = $${paramIndex++}`);
+    values.push(input.page_fit_metrics);
   }
   if (input.title !== undefined) {
     fields.push(`title = $${paramIndex++}`);

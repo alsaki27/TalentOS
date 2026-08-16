@@ -3,7 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
-import { formatScoreOutOfTen } from "@/lib/scoreScale";
+import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
+
+interface PageFitMetrics {
+  pageCount: number;
+  contentUtilization: number;
+  bottomWhitespaceInches: number;
+  overflow: boolean;
+  readable: boolean;
+  recommendation: "pass" | "trim" | "expand" | "manual_review";
+}
 
 interface QueueItem {
   id: string;
@@ -44,6 +53,8 @@ interface QueueItem {
   hiring_panel_role_fit_score?: number | null;
   hiring_panel_truth_score?: number | null;
   average_score?: number | null;
+  one_page_fit_score?: number | null;
+  page_fit_metrics?: PageFitMetrics | null;
   workflow_resume_version_id?: string | null;
   workflow_resume_title?: string | null;
   base_resume_id?: string | null;
@@ -1258,6 +1269,12 @@ function QueueFindingsPanel({ details }: { details: any }) {
               {finalPolish.unresolvedWarnings?.length > 0 && <div style={{ color: "var(--ink-soft)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>}
             </div>
           )}
+          {(finalPolish?.pageFit || hiringPanel?.pageFit) && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Page fit</div>
+              <div>{formatPageFitSummary(finalPolish?.pageFit ?? hiringPanel?.pageFit)}</div>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1299,6 +1316,11 @@ function PipelineActions({
         <span className="badge badge-success">✅ Generated</span>
         {formattedWorkflowScore !== null && (
           <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+        )}
+        {item.page_fit_metrics && (
+          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
+            {formatPageFitSummary(item.page_fit_metrics)}
+          </span>
         )}
         <button className="btn-primary btn-sm"
           onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
@@ -1349,6 +1371,11 @@ function PipelineActions({
         <span className="badge badge-warning">Human Review</span>
         {formattedWorkflowScore !== null && (
           <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+        )}
+        {item.page_fit_metrics && (
+          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
+            {formatPageFitSummary(item.page_fit_metrics)}
+          </span>
         )}
         {item.workflow_id && (
           <>

@@ -1,137 +1,30 @@
 "use client";
 // src/lib/falood/clientExport.tsx
 // Browser-side PDF/DOCX generation - the actual rendering never touches the
-// Cloudflare Worker. @react-pdf/renderer and docx both ship browser-compatible
-// builds (pdf(<Doc/>).toBlob() and Packer.toBlob()) that work with plain Web APIs,
-// so the original high-fidelity templates run unchanged here instead of needing a
-// degraded substitute or an external Node service.
+// Cloudflare Worker for the DOCX path. docx ships a browser-compatible build
+// (Packer.toBlob()) that works with plain Web APIs. The PDF path
+// (skarionPdfDocument.tsx, jsPDF-based) is also called server-side now by the
+// AI pipeline's page-fit measurement (see hiringPanel.ts/finalPolish.ts) -
+// jsPDF is small enough for that to be safe, unlike the old @react-pdf/renderer
+// PDF path this file used to call, which is why that's gone.
 //
 // Generation produces a Blob in the browser. In the application Studio flow the
 // SharePoint archive is written before the browser download is released, so a
 // downloaded file can never be mistaken for an archived application resume.
 
-// @react-pdf/renderer and docx are loaded via dynamic import() inside each
-// function below, not as static top-level imports here. A static import got
+// docx is loaded via dynamic import() inside generateResumeDocxBlob, not as a
+// static top-level import here. A static import of @react-pdf/renderer once got
 // pulled into the *server* Worker script bundle despite "use client" (confirmed
 // via a real deploy attempt: wrangler's own size-limit error listed
 // node_modules/@react-pdf/pdfkit/lib/pdfkit.browser.js, 900 KiB, as one of the 5
 // largest dependencies "included in your script" - pushing the Worker over
-// Cloudflare's 3 MiB free-plan script size limit). A true dynamic import() inside
-// a function body, not a static `import ... from`, is what actually keeps a
-// module out of the eagerly-bundled graph.
-import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
+// Cloudflare's 3 MiB free-plan script size limit at the time). A true dynamic
+// import() inside a function body, not a static `import ... from`, is what
+// actually keeps a module out of the eagerly-bundled graph for client-only code.
+import { ResumeDocument } from "@/lib/falood/types";
+import { normalizeResumeContentForExport, resumifyResumeDataToExportDocument } from "@/lib/falood/resumeDocumentAdapters";
 
-const DEFAULT_FORMATTING: ResumeFormatting = {
-  styleId: "default",
-  pageFormat: "a4",
-  fontFamily: "Helvetica",
-  fontSize: 10.5,
-  marginTop: 0.5,
-  marginRight: 0.5,
-  marginBottom: 0.5,
-  marginLeft: 0.5,
-  sectionSpacing: 5,
-  bulletSpacing: 1,
-  lineHeight: 1.15,
-};
-
-/**
- * Several resume-studio pages predate the current shared ResumeDocument type and
- * have their own slightly different local interface for the same underlying JSONB
- * content (missing `formatting` entirely; `projects[].title` instead of `.name`).
- * The runtime data is the same JSONB column either way - this just reconciles the
- * type-level drift so callers can pass whatever shape they have without each page
- * needing its own adapter.
- */
-export function normalizeResumeContentForExport(content: any): ResumeDocument {
-  return {
-    ...content,
-    formatting: { ...DEFAULT_FORMATTING, ...(content.formatting ?? {}) },
-    projects: (content.projects ?? []).map((p: any) => ({
-      ...p,
-      name: p.name ?? p.title ?? "",
-    })),
-  };
-}
-
-/** Converts the legacy Resumify editor shape into the canonical PDF document shape. */
-export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
-  const personalInfo = data?.personalInfo ?? {};
-  const skills = data?.skills ?? {};
-  const groups = Array.isArray(skills.categorized) ? skills.categorized : [];
-  const simpleSkills = Array.isArray(skills.simple) ? skills.simple : [];
-  const skillSections = groups.length > 0
-    ? groups.map((group: any, index: number) => ({
-        id: group?.id || `skill-${index}`,
-        title: group?.name || "Skills",
-        skills: Array.isArray(group?.skills) ? group.skills : [],
-      }))
-    : [{ id: "skills", title: "Skills", skills: simpleSkills }];
-
-  return normalizeResumeContentForExport({
-    header: {
-      fullName: typeof personalInfo.fullName === "string" ? personalInfo.fullName : "",
-      location: personalInfo.location,
-      phone: personalInfo.phone,
-      email: personalInfo.email,
-      linkedin: personalInfo.linkedin,
-      github: personalInfo.github,
-      portfolio: personalInfo.website,
-    },
-    summary: typeof data?.summary === "string" && data.summary.trim()
-      ? { id: "summary", text: data.summary }
-      : undefined,
-    skills: skillSections,
-    experience: Array.isArray(data?.experience) ? data.experience.map((entry: any, index: number) => ({
-      id: entry?.id || `experience-${index}`,
-      title: entry?.jobTitle || "",
-      company: entry?.company || "",
-      location: entry?.location,
-      startDate: entry?.startDate || "",
-      endDate: entry?.current ? undefined : entry?.endDate,
-      bullets: (Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : []).map((text: unknown, bulletIndex: number) => ({
-        id: `experience-${index}-bullet-${bulletIndex}`,
-        text: typeof text === "string" ? text : "",
-      })),
-    })) : [],
-    education: Array.isArray(data?.education) ? data.education.map((entry: any, index: number) => ({
-      id: entry?.id || `education-${index}`,
-      degree: entry?.degree || "",
-      school: entry?.institution || "",
-      location: entry?.location,
-      graduationDate: entry?.graduationYear,
-    })) : [],
-    projects: Array.isArray(data?.projects) ? data.projects.map((entry: any, index: number) => ({
-      id: entry?.id || `project-${index}`,
-      title: entry?.title || "",
-      description: entry?.description,
-      bullets: [],
-      technologies: Array.isArray(entry?.technologies) ? entry.technologies : [],
-    })) : [],
-    customSections: Array.isArray(data?.customSections) ? data.customSections.map((section: any, index: number) => ({
-      id: section?.id || `custom-${index}`,
-      title: section?.title || "Additional Information",
-      bullets: String(section?.content || "").split(/\r?\n/).filter(Boolean).map((text, bulletIndex) => ({
-        id: `custom-${index}-bullet-${bulletIndex}`,
-        text,
-      })),
-    })) : [],
-    certifications: [],
-    formatting: {
-      pageFormat: data?.pageFormat === "letter" ? "letter" : "a4",
-      fontFamily: typeof data?.fontFamily === "string" ? data.fontFamily : "Inter",
-      fontSize: typeof data?.fontSize === "number" ? data.fontSize : 10,
-      marginTop: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
-      marginRight: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
-      marginBottom: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
-      marginLeft: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
-      styleId: "resumify-version",
-      sectionSpacing: 5,
-      bulletSpacing: 1,
-      lineHeight: 1.15,
-    },
-  });
-}
+export { normalizeResumeContentForExport, resumifyResumeDataToExportDocument };
 
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
   const { renderResumePdfDoc } = await import("@/lib/falood/skarionPdfDocument");

@@ -200,6 +200,22 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
   },
 };
 
+// ── PageFitV1 ──
+// Never authored by the LLM. ReviewScoreSchema/FinalResumeSchema always parse
+// this to null from raw model JSON - trusting a model to self-report accurate
+// page counts defeats the point of measuring the real rendered PDF. Instead,
+// runHiringPanel/runFinalPolish overwrite it after schema validation succeeds,
+// using real ResumePageMetrics via pageFitThresholds.ts's mapMetricsToPageFit.
+
+export interface PageFitV1 {
+  pageCount: number;
+  contentUtilization: number;
+  bottomWhitespaceInches: number;
+  overflow: boolean;
+  readable: boolean;
+  recommendation: "pass" | "trim" | "expand" | "manual_review";
+}
+
 // ── ReviewScoreV1 ──
 
 export interface ReviewScoreV1 {
@@ -212,6 +228,7 @@ export interface ReviewScoreV1 {
   optionalEdits: { issueId: string; description: string }[];
   passFail: "pass" | "fail" | "review";
   overallComment: string;
+  pageFit: PageFitV1 | null;
 }
 
 export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
@@ -251,6 +268,7 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
       }) : [],
       passFail: passFail === "pass" || passFail === "fail" || passFail === "review" ? passFail : "review",
       overallComment: expectString(input.overallComment, "overallComment") ?? "",
+      pageFit: null,
     };
   },
 };
@@ -269,6 +287,7 @@ export interface FinalResumeV1 {
   unresolvedWarnings: string[];
   finalQaScore: number;
   exportReady: boolean;
+  pageFit: PageFitV1 | null;
 }
 
 export const FinalResumeSchema: Schema<FinalResumeV1> = {
@@ -299,6 +318,7 @@ export const FinalResumeSchema: Schema<FinalResumeV1> = {
       unresolvedWarnings: expectStringArray(input.unresolvedWarnings, "unresolvedWarnings") ?? [],
       finalQaScore,
       exportReady: input.exportReady === true,
+      pageFit: null,
     };
   },
 };

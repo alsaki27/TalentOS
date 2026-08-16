@@ -106,6 +106,38 @@ function bestUnusedMatch(
   return best.entry;
 }
 
+function readYear(value: unknown): number | null {
+  const text = readResumeText(value);
+  const match = text.match(/(19|20)\d{2}/);
+  return match ? parseInt(match[0], 10) : null;
+}
+
+/**
+ * A base resume occasionally has a corrupted/mistyped end date (confirmed
+ * live: a candidate's base resume had startDate "Jul 2025" / endDate
+ * "Jan 2001" - end 24 years before start - for what was actually their
+ * current role, and the pipeline faithfully reproduced it onto the exported
+ * PDF since dates are otherwise taken verbatim from the base resume by
+ * design). This is the one narrow exception to "never touch base resume
+ * dates": a chronologically impossible end date is dropped (never invented
+ * as "Present" - we don't actually know that's true, just that the stored
+ * value is wrong) rather than rendered as-is. A single bad date in one
+ * candidate's base resume out of 33 scanned live - not a systemic pattern,
+ * but worth guarding against wherever it next occurs.
+ */
+function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null, label: string): string | null {
+  if (!rawStartDate || !rawEndDate) return rawEndDate;
+  const startYear = readYear(rawStartDate);
+  const endYear = readYear(rawEndDate);
+  if (startYear !== null && endYear !== null && endYear < startYear) {
+    console.warn(
+      `[resumeIntegrity] Dropping impossible end date for "${label}": "${rawEndDate}" is before start date "${rawStartDate}". Source data needs correction.`
+    );
+    return null;
+  }
+  return rawEndDate;
+}
+
 /**
  * Make the base resume authoritative for employment identity. The AI may tailor
  * bullets, but it cannot add, remove, reorder, rename, relocate, or redate jobs.
@@ -118,15 +150,19 @@ export function enforceExperienceIntegrity(
     (entry): entry is UnknownRecord => isRecord(entry) && Boolean(readResumeText(entry.title))
   );
   if (validBase.length === 0) {
-    return generatedEntries.filter(isRecord).map((entry) => ({
-      title: readResumeText(entry.title),
-      company: readResumeText(entry.company),
-      location: readResumeText(entry.location) || null,
-      startDate: readResumeText(entry.startDate) || null,
-      endDate: readResumeText(entry.endDate) || null,
-      bullets: readBullets(entry),
-      evidenceIds: readEvidenceIds(entry),
-    })).filter((entry) => Boolean(entry.title));
+    return generatedEntries.filter(isRecord).map((entry) => {
+      const startDate = readResumeText(entry.startDate) || null;
+      const rawEndDate = readResumeText(entry.endDate) || null;
+      return {
+        title: readResumeText(entry.title),
+        company: readResumeText(entry.company),
+        location: readResumeText(entry.location) || null,
+        startDate,
+        endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(entry.title)),
+        bullets: readBullets(entry),
+        evidenceIds: readEvidenceIds(entry),
+      };
+    }).filter((entry) => Boolean(entry.title));
   }
 
   const used = new Set<number>();
@@ -140,12 +176,14 @@ export function enforceExperienceIntegrity(
       5
     );
     const tailoredBullets = generated ? readBullets(generated) : [];
+    const startDate = readResumeText(base.startDate) || null;
+    const rawEndDate = readResumeText(base.endDate) || null;
     return {
       title: readResumeText(base.title),
       company: readResumeText(base.company),
       location: readResumeText(base.location) || null,
-      startDate: readResumeText(base.startDate) || null,
-      endDate: readResumeText(base.endDate) || null,
+      startDate,
+      endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(base.title)),
       bullets: tailoredBullets.length > 0 ? tailoredBullets : readBullets(base),
       evidenceIds: generated ? readEvidenceIds(generated) : [],
     };

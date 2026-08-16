@@ -1,11 +1,23 @@
+import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
+
 export function buildHiringPanelPrompt(
   job: any,
   baseResume: any,
   draft: any,
   jobAnalysis: any,
   sourceOfTruth: { confirmedSkills: string[] } | null = null,
-  evidence: any[] = []
+  evidence: any[] = [],
+  pageMetrics: ResumePageMetrics | null = null
 ): string {
+  const pageMetricsBlock = pageMetrics
+    ? `PAGE QA METRICS (measured from an actual rendered PDF of this draft — trust these over any word-count guess):
+- Actual page count: ${pageMetrics.pageCount}
+- Content utilization: ${Math.round(pageMetrics.contentUtilization * 100)}%
+- Bottom whitespace: ${pageMetrics.bottomWhitespaceInches.toFixed(2)} inches
+- Overflow: ${pageMetrics.overflow}
+- Readability floor: ${pageMetrics.readable ? "passed" : "FAILED"}`
+    : `PAGE QA METRICS: unavailable for this run (rendering failed) — judge page fit conservatively from content volume alone.`;
+
   return `You are Hiring Panel, an AI that reviews a tailored resume draft against a job and gives
 constructive, actionable feedback — like a helpful recruiter doing a quick pass, not a strict
 gatekeeper. Your goal is to help the candidate improve, not to fail the resume. Always return a
@@ -49,7 +61,7 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   appears in NONE of: base resume, evidence bank, Source of Truth. A score of 5+ requires a "critical"
   requiredEdit with a specific, named unsupported claim, and you must state in that requiredEdit's
   description that you checked the evidence bank and found no support for it.
-- Formatting & Structure: check that the draft fits on one page strictly at any cost (roughly 450-650 words) without over-shrinking or leaving large bottom whitespace. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Flag a professional summary if present (it must be null).
+- Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess. Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Flag a professional summary if present (it must be null).
 
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
 in the next stage, so don't pad it with nitpicks that could cause good content to get cut.

@@ -1,6 +1,6 @@
 // src/app/api/application-resume-versions/[id]/route.ts
 // GET    -> single with full content
-// PATCH  -> update content, formatting, status, ats_score, truth_score, one_page_fit_score
+// PATCH  -> update content, formatting, status, ats_score, truth_score, one_page_fit_score, page_fit_metrics
 // DELETE -> delete (admin only)
 
 import { NextRequest, NextResponse } from "next/server";
@@ -77,7 +77,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   const body = await req.json();
   const allowedFields = [
-    "content", "formatting", "status", "ats_score", "truth_score", "one_page_fit_score",
+    "content", "formatting", "status", "ats_score", "truth_score", "one_page_fit_score", "page_fit_metrics",
     "title", "version_label", "generated_text", "source_resume_id",
   ];
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };

@@ -98,6 +98,7 @@ const MOCK_REVIEW_SCORE: ReviewScoreV1 = {
   ],
   passFail: "pass",
   overallComment: "Strong candidate with excellent TypeScript and React experience. Resume is well-structured and ATS-friendly.",
+  pageFit: null,
 };
 
 const MOCK_FINAL_RESUME: FinalResumeV1 = {
@@ -155,6 +156,7 @@ const MOCK_FINAL_RESUME: FinalResumeV1 = {
   unresolvedWarnings: [],
   finalQaScore: 9.2,
   exportReady: true,
+  pageFit: null,
 };
 
 type MockResponseFn = (automationId: string) => unknown;
