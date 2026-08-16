@@ -83,6 +83,7 @@ export default function CandidatePortalDashboard({ token }: { token: string }) {
     fit_score: app.fit_score,
     recommendation: null,
     tailored_resume_version_id: null,
+    sharepoint_resume_url: null,
   }; });
 
   return (

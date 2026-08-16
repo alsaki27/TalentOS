@@ -17,6 +17,9 @@ import { logActivity } from "@/lib/activity";
 import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
 import type { FinalResumeV1, ReviewScoreV1 } from "./schemas";
 import { enforceEducationIntegrity, enforceExperienceIntegrity } from "./resumeIntegrity";
+import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
+import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
+import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
   const artifacts = await listArtifacts(workflowId);
@@ -208,6 +211,44 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
 
   if (!exportReady) {
     console.warn(`[finalizeWorkflow] Workflow ${workflowId} completed with exportReady=false — resume saved as draft, needs manual review (see unresolvedWarnings).`);
+  }
+
+  // Auto-archive to SharePoint (best-effort — the resume version row above is
+  // already committed regardless of what happens here). Renders the exact
+  // same studioDocument that was just persisted, through the same renderer
+  // Studio's manual Export button uses, so the archived PDF is never out of
+  // sync with what a reviewer sees on screen. A render/upload failure here
+  // must never fail workflow finalization — see resumeSharePointArchiveService,
+  // which also records the failure on application_resume_exports so the
+  // candidate profile's "Sharepoint" button can report "not archived" instead
+  // of silently claiming success.
+  try {
+    const info = await queryOne<{ candidate_name: string; company_name: string | null; job_title: string | null }>(
+      `SELECT c.name AS candidate_name, j.company AS company_name, j.title AS job_title
+       FROM candidates c
+       LEFT JOIN jobs j ON j.id = $2
+       WHERE c.id = $1`,
+      [wf.candidate_id, wf.job_id]
+    );
+    const doc = renderResumePdfDoc(normalizeResumeContentForExport(studioDocument));
+    const pdfBuffer = new Uint8Array(doc.output("arraybuffer") as ArrayBuffer);
+    const archiveResult = await archiveResumeToSharePoint({
+      applicationId: wf.application_id,
+      resumeVersionId: versionId!,
+      exportType: "pdf",
+      candidateId: wf.candidate_id,
+      candidateName: info?.candidate_name ?? null,
+      companyName: info?.company_name ?? null,
+      jobTitle: info?.job_title ?? null,
+      jobId: wf.job_id,
+      buffer: pdfBuffer,
+      createdByUserId: null,
+    });
+    if (!archiveResult.ok) {
+      console.warn(`[finalizeWorkflow] SharePoint auto-archive failed for workflow ${workflowId} (resume version ${versionId}): ${archiveResult.error}`);
+    }
+  } catch (err: any) {
+    console.warn(`[finalizeWorkflow] SharePoint auto-archive threw for workflow ${workflowId} (resume version ${versionId}):`, err?.message || err);
   }
 
   // Log activity (best-effort — failure here does not roll back)

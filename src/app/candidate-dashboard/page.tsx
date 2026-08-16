@@ -37,6 +37,7 @@ interface DashboardRow {
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
+  sharepoint_resume_url: string | null;
 }
 
 interface EmailTaskCounts {

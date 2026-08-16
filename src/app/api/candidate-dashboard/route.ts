@@ -60,6 +60,7 @@ interface DashboardRow {
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
+  sharepoint_resume_url: string | null;
 }
 
 interface CandidateOption {
@@ -203,11 +204,25 @@ export async function GET(req: NextRequest) {
         j.location,
         j.salary_min, j.salary_max, j.salary_currency,
         tj.fit_score, tj.recommendation,
+        sp.storage_url AS sharepoint_resume_url,
         COUNT(*) OVER()::int AS total_count
       FROM applications a
       JOIN candidates c ON c.id = a.candidate_id
       JOIN jobs j ON a.job_id = j.id
       LEFT JOIN target_jobs tj ON tj.job_id = j.id AND tj.candidate_id = a.candidate_id
+      -- Matched to the exact resume version the "Studio" button opens - see
+      -- api/candidates/[id]/applications/dashboard/route.ts for why this
+      -- joins on tailored_resume_version_id rather than "any PDF ever
+      -- archived for this application".
+      LEFT JOIN LATERAL (
+        SELECT e.storage_url
+        FROM application_resume_exports e
+        WHERE e.application_id = a.id
+          AND e.resume_version_id = a.tailored_resume_version_id
+          AND e.export_type = 'pdf' AND e.status = 'created' AND e.storage_url IS NOT NULL
+        ORDER BY COALESCE(e.updated_at, e.created_at) DESC
+        LIMIT 1
+      ) sp ON true
       ${whereClause}
       ORDER BY ${orderSql}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

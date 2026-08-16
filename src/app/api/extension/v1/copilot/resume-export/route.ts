@@ -10,22 +10,11 @@
 // extension tells the AE to export one from Studio first.
 
 import { NextRequest, NextResponse } from "next/server";
-import { query, queryOne } from "@/server/db/neon";
+import { queryOne } from "@/server/db/neon";
 import { authenticateExtension, checkRequiredHeaders, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
-import { uploadToSharePoint } from "@/lib/integrations/sharepoint";
-import { getPublicUrl } from "@/server/storage/storageApi";
+import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
 
 const EXPORT_TYPES = new Set(["pdf", "docx"]);
-
-function safeSegment(value: string, fallback: string) {
-  const cleaned = value.normalize("NFKD").replace(/[^a-zA-Z0-9._ -]+/g, "").replace(/\s+/g, " ").trim();
-  return (cleaned || fallback).slice(0, 90);
-}
-
-async function sha256Hex(buffer: Uint8Array) {
-  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(buffer));
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 export async function GET(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -41,10 +30,17 @@ export async function GET(request: NextRequest) {
         return extensionError("validation_error", "applicationId is required.", 400);
       }
 
-      const row = await queryOne<{ file_name: string; file_path: string; export_type: string; created_at: string }>(
-        `SELECT file_name, file_path, export_type, created_at
+      // storage_url (the real, already-complete link returned by whichever
+      // provider archived it - SharePoint's webUrl or R2's public URL) is
+      // read directly rather than rebuilt from file_path: file_path for a
+      // SharePoint-archived row is a SharePoint-relative graph path
+      // (CandidateName/JobId/filename.pdf), and running that through R2's
+      // getPublicUrl() previously produced a URL pointing at a bucket that
+      // never had the file - a broken link the extension had no way to detect.
+      const row = await queryOne<{ file_name: string; storage_url: string | null; export_type: string; created_at: string }>(
+        `SELECT file_name, storage_url, export_type, created_at
          FROM application_resume_exports
-         WHERE application_id = $1 AND status = 'created' AND export_type = 'pdf'
+         WHERE application_id = $1 AND status = 'created' AND export_type = 'pdf' AND storage_url IS NOT NULL
          ORDER BY created_at DESC
          LIMIT 1`,
         [applicationId]
@@ -70,7 +66,7 @@ export async function GET(request: NextRequest) {
 
       return NextResponse.json({
         found: true,
-        url: getPublicUrl(row.file_path),
+        url: row.storage_url,
         fileName: row.file_name,
         createdAt: row.created_at,
       });
@@ -106,8 +102,8 @@ export async function POST(request: NextRequest) {
         return extensionError("validation_error", "exportType must be pdf or docx.", 400);
       }
 
-      const linked = await queryOne<{ candidate_name: string; company_name: string; job_title: string }>(
-        `SELECT c.name AS candidate_name, COALESCE(j.company, 'Unknown Company') AS company_name,
+      const linked = await queryOne<{ candidate_id: string; job_id: string | null; candidate_name: string; company_name: string; job_title: string }>(
+        `SELECT a.candidate_id, a.job_id, c.name AS candidate_name, COALESCE(j.company, 'Unknown Company') AS company_name,
                 COALESCE(j.title, 'Job Application') AS job_title
          FROM applications a JOIN candidates c ON c.id = a.candidate_id
          LEFT JOIN jobs j ON j.id = a.job_id
@@ -120,25 +116,20 @@ export async function POST(request: NextRequest) {
       if (!linked) return extensionError("not_found", "Application and resume version do not match.", 404);
 
       const buffer = new Uint8Array(await file.arrayBuffer());
-      const contentHash = await sha256Hex(buffer);
-      const extension = exportType === "pdf" ? "pdf" : "docx";
-      const contentType = exportType === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-      const fileName = `${safeSegment(linked.candidate_name, "Candidate")} - ${safeSegment(linked.company_name, "Company")} - ${safeSegment(linked.job_title, "Application")} - app-${applicationId} - resume-${resumeVersionId}.${extension}`;
-      const path = `${safeSegment(linked.candidate_name, "Candidate")}/${applicationId}/${fileName}`;
-
-      const existing = await queryOne<{ id: string; storage_url: string | null; content_sha256: string | null }>(
-        `SELECT id, storage_url, content_sha256 FROM application_resume_exports
-         WHERE application_id = $1 AND resume_version_id = $2 AND export_type = $3 AND file_name = $4 AND status <> 'deleted'
-         ORDER BY created_at DESC LIMIT 1`, [applicationId, resumeVersionId, exportType, fileName]);
-      if (existing?.storage_url && existing.content_sha256 === contentHash) {
-        return NextResponse.json({ archived: true, duplicate: true, id: existing.id, url: existing.storage_url });
-      }
-
-      const sharePoint = await uploadToSharePoint(path, buffer, contentType);
-      const saved = existing
-        ? await queryOne<{ id: string }>(`UPDATE application_resume_exports SET file_name=$1,file_path=$2,storage_provider='sharepoint',storage_url=$3,storage_item_id=$4,file_size_bytes=$5,status='created',error=NULL,content_sha256=$6,updated_at=NOW() WHERE id=$7 RETURNING id`, [fileName, path, sharePoint.url, sharePoint.itemId ?? null, buffer.byteLength, contentHash, existing.id])
-        : await queryOne<{ id: string }>(`INSERT INTO application_resume_exports (application_id,resume_version_id,export_type,file_name,file_path,storage_provider,storage_url,storage_item_id,file_size_bytes,status,content_sha256,updated_at) VALUES ($1,$2,$3,$4,$5,'sharepoint',$6,$7,$8,'created',$9,NOW()) RETURNING id`, [applicationId, resumeVersionId, exportType, fileName, path, sharePoint.url, sharePoint.itemId ?? null, buffer.byteLength, contentHash]);
-      return NextResponse.json({ archived: true, id: saved?.id, url: sharePoint.url, storageItemId: sharePoint.itemId ?? null });
+      const result = await archiveResumeToSharePoint({
+        applicationId,
+        resumeVersionId,
+        exportType: exportType as "pdf" | "docx",
+        candidateId: linked.candidate_id,
+        candidateName: linked.candidate_name,
+        companyName: linked.company_name,
+        jobTitle: linked.job_title,
+        jobId: linked.job_id,
+        buffer,
+        createdByUserId: null,
+      });
+      if (!result.ok) return extensionError("internal_error", result.error || "Upload failed.", 500);
+      return NextResponse.json({ archived: true, duplicate: result.duplicate, id: result.id, url: result.url, storageItemId: result.storageItemId ?? null });
     } catch (err) {
       console.error("[Copilot Resume Export Archive Error]", err);
       return extensionError("internal_error", String(err), 500);

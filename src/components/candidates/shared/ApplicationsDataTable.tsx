@@ -21,6 +21,7 @@ interface DashboardApplication {
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
+  sharepoint_resume_url: string | null;
 }
 
 interface ApplicationsDataTableProps {
@@ -80,6 +81,7 @@ export default function ApplicationsDataTable({
 }: ApplicationsDataTableProps) {
   var [localStatusLoading, setLocalStatusLoading] = useState<Record<string, boolean>>({});
   var [copiedId, setCopiedId] = useState<string | null>(null);
+  var [sharepointNoticeId, setSharepointNoticeId] = useState<string | null>(null);
 
   var totalPages = totalCount !== undefined ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
   var showCandidateColumn = applications.some(function (a) { return !!a.candidate_name; });
@@ -196,30 +198,85 @@ export default function ApplicationsDataTable({
                   {/* Tailored Resume Column */}
                   <td style={{ padding: "10px 12px", textAlign: "center" }}>
                     {app.tailored_resume_version_id ? (
-                      <button
-                        onClick={function () { openFaloodStudio("application_resume_version", app.tailored_resume_version_id!); }}
-                        title="Open tailored resume in Falood Studio"
-                        style={{
-                          display: "inline-flex", alignItems: "center", gap: 4,
-                          padding: "3px 9px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-                          background: "rgba(99,102,241,0.12)",
-                          color: "var(--accent)",
-                          border: "1px solid rgba(99,102,241,0.3)",
-                          cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
-                        }}
-                        onMouseEnter={function (e) {
-                          var el = e.currentTarget as HTMLButtonElement;
-                          el.style.background = "rgba(99,102,241,0.22)";
-                          el.style.borderColor = "var(--accent)";
-                        }}
-                        onMouseLeave={function (e) {
-                          var el = e.currentTarget as HTMLButtonElement;
-                          el.style.background = "rgba(99,102,241,0.12)";
-                          el.style.borderColor = "rgba(99,102,241,0.3)";
-                        }}
-                      >
-                        <span style={{ fontSize: 12 }}>📄</span> Studio
-                      </button>
+                      <div style={{ display: "inline-flex", flexDirection: "column", gap: 4, alignItems: "stretch" }}>
+                        <button
+                          onClick={function () { openFaloodStudio("application_resume_version", app.tailored_resume_version_id!); }}
+                          title="Open tailored resume in Falood Studio"
+                          style={{
+                            display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                            padding: "3px 9px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                            background: "rgba(99,102,241,0.12)",
+                            color: "var(--accent)",
+                            border: "1px solid rgba(99,102,241,0.3)",
+                            cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap",
+                          }}
+                          onMouseEnter={function (e) {
+                            var el = e.currentTarget as HTMLButtonElement;
+                            el.style.background = "rgba(99,102,241,0.22)";
+                            el.style.borderColor = "var(--accent)";
+                          }}
+                          onMouseLeave={function (e) {
+                            var el = e.currentTarget as HTMLButtonElement;
+                            el.style.background = "rgba(99,102,241,0.12)";
+                            el.style.borderColor = "rgba(99,102,241,0.3)";
+                          }}
+                        >
+                          <span style={{ fontSize: 12 }}>📄</span> Studio
+                        </button>
+                        {app.sharepoint_resume_url ? (
+                          <a
+                            href={app.sharepoint_resume_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open the archived PDF in SharePoint"
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                              padding: "3px 9px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                              background: "rgba(16,185,129,0.10)",
+                              color: "#10b981",
+                              border: "1px solid rgba(16,185,129,0.3)",
+                              cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap", textDecoration: "none",
+                            }}
+                            onMouseEnter={function (e) {
+                              var el = e.currentTarget as HTMLAnchorElement;
+                              el.style.background = "rgba(16,185,129,0.20)";
+                              el.style.borderColor = "#10b981";
+                            }}
+                            onMouseLeave={function (e) {
+                              var el = e.currentTarget as HTMLAnchorElement;
+                              el.style.background = "rgba(16,185,129,0.10)";
+                              el.style.borderColor = "rgba(16,185,129,0.3)";
+                            }}
+                          >
+                            <span style={{ fontSize: 12 }}>☁️</span> SharePoint
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={function (e) {
+                              e.preventDefault();
+                              setSharepointNoticeId(app.application_id);
+                              setTimeout(function () { setSharepointNoticeId(function (cur) { return cur === app.application_id ? null : cur; }); }, 1800);
+                            }}
+                            title="Not archived to SharePoint yet"
+                            style={{
+                              display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
+                              padding: "3px 9px", borderRadius: 5, fontSize: 11, fontWeight: 700,
+                              background: "rgba(148,163,184,0.08)",
+                              color: "var(--ink-soft)",
+                              border: "1px dashed var(--border)",
+                              cursor: "pointer", whiteSpace: "nowrap", opacity: 0.75,
+                            }}
+                          >
+                            <span style={{ fontSize: 12 }}>☁️</span> SharePoint
+                          </button>
+                        )}
+                        {sharepointNoticeId === app.application_id && (
+                          <span style={{ fontSize: 10, color: "var(--ink-soft)", lineHeight: 1.3 }}>
+                            Not stored on SharePoint yet
+                          </span>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ fontSize: 11, color: "var(--ink-soft)", opacity: 0.35 }}>—</span>
                     )}

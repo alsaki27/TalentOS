@@ -37,6 +37,7 @@ interface DashboardRow {
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
+  sharepoint_resume_url: string | null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -89,10 +90,24 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         j.salary_max,
         j.salary_currency,
         tj.fit_score,
-        tj.recommendation
+        tj.recommendation,
+        sp.storage_url AS sharepoint_resume_url
       FROM applications a
       JOIN jobs j ON a.job_id = j.id
       LEFT JOIN target_jobs tj ON tj.job_id = j.id AND tj.candidate_id = a.candidate_id
+      -- Matched to the exact resume version the "Studio" button opens
+      -- (a.tailored_resume_version_id), not just any PDF ever archived for
+      -- this application - a regenerate produces a new version id, so an
+      -- older archived export must not be shown as if it were current.
+      LEFT JOIN LATERAL (
+        SELECT e.storage_url
+        FROM application_resume_exports e
+        WHERE e.application_id = a.id
+          AND e.resume_version_id = a.tailored_resume_version_id
+          AND e.export_type = 'pdf' AND e.status = 'created' AND e.storage_url IS NOT NULL
+        ORDER BY COALESCE(e.updated_at, e.created_at) DESC
+        LIMIT 1
+      ) sp ON true
       WHERE a.candidate_id = $1`,
       [candidateId]
     );
