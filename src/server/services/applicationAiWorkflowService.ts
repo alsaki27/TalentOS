@@ -347,6 +347,7 @@ async function dispatchWorkflowStart(workflowId: string): Promise<void> {
 export async function regenerateAiWorkflowForApplication(
   applicationId: string,
   startedBy?: string,
+  preferredBaseResumeId?: string,
 ): Promise<TriggerWorkflowResult> {
   const existing = await findActiveWorkflowByApplicationId(applicationId);
   if (existing) {
@@ -383,7 +384,7 @@ export async function regenerateAiWorkflowForApplication(
     applicationId,
     job,
     startedBy,
-    previousWorkflow?.base_resume_id ?? undefined,
+    preferredBaseResumeId ?? previousWorkflow?.base_resume_id ?? undefined,
   );
   if (!resumeRow) {
     return { started: false, reason: "No base resume found for this candidate yet" };
