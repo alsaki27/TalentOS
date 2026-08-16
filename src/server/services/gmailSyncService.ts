@@ -30,6 +30,17 @@ const BACKFILL_MESSAGES_PER_RUN = Math.max(50, Number(process.env.GMAIL_BACKFILL
 const MESSAGE_FETCH_CONCURRENCY = Math.max(1, Number(process.env.GMAIL_MESSAGE_FETCH_CONCURRENCY || 8));
 const SYNC_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.GMAIL_SYNC_TIME_BUDGET_MS || 25_000));
 const TRIAGE_MESSAGES_PER_RUN = Math.max(0, Number(process.env.GMAIL_TRIAGE_MESSAGES_PER_RUN || 40));
+// Historical mailbox import starts at June 1, 2026. Mahi is intentionally
+// bounded to the same date so his newly connected mailbox cannot pull older
+// personal mail. Keep this explicit until per-candidate privacy settings exist.
+const DEFAULT_BACKFILL_AFTER = "2026/06/01";
+const MAHI_EMAIL = "muhtadymahi@gmail.com";
+
+function backfillQuery(account: Pick<GmailAccountRow, "email">): string {
+  const normalized = (account.email || "").trim().toLowerCase();
+  const after = normalized === MAHI_EMAIL ? DEFAULT_BACKFILL_AFTER : DEFAULT_BACKFILL_AFTER;
+  return `after:${after} in:anywhere -in:spam -in:trash`;
+}
 
 interface SyncOutcome {
   accountId: string;
@@ -82,12 +93,12 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow)
     }
   }
 
-  // Initial import is not date-limited: candidates asked for historical mail.
-  // Spam/trash are excluded, while gmailSuppressionReason still prevents
-  // personal/promotional messages from being stored or sent to AI triage.
+  // Initial import is bounded to the configured historical window. Spam/trash
+  // are excluded, while gmailSuppressionReason still prevents personal and
+  // promotional messages from being stored or sent to AI triage.
   const page = await listMessageIds(
     accessToken,
-    "in:anywhere -in:spam -in:trash",
+    backfillQuery(account),
     account.gmail_backfill_page_token ?? undefined,
   );
   return {
@@ -700,7 +711,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         if (fetchResult.fromHistory) break;
         await updateGmailBackfillState(accountRow.id, fetchResult.nextBackfillPageToken, fetchResult.backfillComplete);
         if (fetchResult.backfillComplete || pages >= BACKFILL_PAGES_PER_RUN || processedMessages >= BACKFILL_MESSAGES_PER_RUN || Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) break;
-        const nextPage = await listMessageIds(accessToken, "in:anywhere -in:spam -in:trash", fetchResult.nextBackfillPageToken ?? undefined);
+        const nextPage = await listMessageIds(accessToken, backfillQuery(account), fetchResult.nextBackfillPageToken ?? undefined);
         fetchResult = {
           ids: Array.from(new Set((nextPage.messages ?? []).map((message) => message.id))),
           nextBackfillPageToken: nextPage.nextPageToken ?? null,

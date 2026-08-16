@@ -4,6 +4,8 @@ import { queryOne, execute } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { encryptSecret, isEncryptionAvailable } from "@/server/security/secretCrypto";
 import { canonicalUrl } from "@/server/runtimeConfig";
+import { runGmailSync } from "@/server/services/gmailSyncService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 type GmailOAuthState = {
   owner_type: string;
@@ -127,6 +129,12 @@ export async function GET(req: NextRequest) {
       entity_id: accountId,
       metadata: { owner_type: oauthState.owner_type, candidate_id: oauthState.candidate_id, email, scopes },
     });
+    // Start the first bounded backfill immediately after OAuth. The background
+    // registration lets Cloudflare continue importing after the redirect
+    // response, while the five-minute cron keeps advancing the cursor.
+    if (oauthState.owner_type === "candidate") {
+      await backgroundDispatch(runGmailSync({ retryErrored: true }));
+    }
     return oauthRedirect(oauthState, "connected");
   } catch (error) {
     console.error("[gmail-oauth-callback] OAuth callback failed", {
