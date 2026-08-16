@@ -5,12 +5,14 @@
 // data via natural language. Each tool caps its own row limit to keep token usage
 // (and API cost) bounded.
 
-import { query } from "@/server/db/neon";
+import { query, execute } from "@/server/db/neon";
 import { listCandidates, countCandidates } from "@/server/repositories/candidatesRepository";
 import { listJobs, countJobs } from "@/server/repositories/jobsRepository";
 import { listApplicationsForTool, listAllApplicationsWithStatus } from "@/server/repositories/applicationsRepository";
 import { AiTool } from "@/lib/ai/provider";
 import type { UserRole } from "@/lib/auth";
+import { createApplications, updateApplication, deleteApplication, findApplicationById } from "@/server/repositories/applicationsRepository";
+import { APPLICATION_STAGES } from "@/lib/applicationStages";
 
 const MAX_ROWS = 50;
 
@@ -107,10 +109,34 @@ export const TOOLS: AiTool[] = [
       },
     },
   },
+  {
+    name: "create_application",
+    description: "Create an application ticket for an existing candidate and job. Requires candidate_id, job_id, and confirm=true. The action is audited and starts in the appropriate application_stage.",
+    inputSchema: { type: "object", properties: {
+      candidate_id: { type: "string" }, job_id: { type: "string" }, base_resume_id: { type: "string" },
+      priority: { type: "string", description: "low, normal, high, urgent" }, confirm: { type: "boolean" },
+    }, required: ["candidate_id", "job_id", "confirm"] },
+  },
+  {
+    name: "update_application",
+    description: "Update one application through the canonical workflow. Supports application_stage, owner, priority, notes, and review fields. Requires application_id and confirm=true; stage transitions are audited.",
+    inputSchema: { type: "object", properties: {
+      application_id: { type: "string" }, application_stage: { type: "string", enum: APPLICATION_STAGES as unknown as string[] },
+      assigned_to_user_id: { type: "string" }, priority: { type: "string" }, notes: { type: "string" }, event_note: { type: "string" }, confirm: { type: "boolean" },
+    }, required: ["application_id", "confirm"] },
+  },
+  {
+    name: "delete_application",
+    description: "Permanently remove one application and its workflow record. Manager/admin only. Requires application_id and confirm=true.",
+    inputSchema: { type: "object", properties: { application_id: { type: "string" }, confirm: { type: "boolean" } }, required: ["application_id", "confirm"] },
+  },
 ];
 
 export interface ToolContext {
   role: UserRole;
+  userId?: string;
+  email?: string | null;
+  displayName?: string | null;
 }
 
 export async function executeTool(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -243,6 +269,81 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         values.push(limit);
         const data = await query<any>(sql, values);
         return JSON.stringify(data);
+      }
+
+      case "create_application": {
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the candidate and job." });
+        const candidateId = String(input.candidate_id ?? "");
+        const jobId = String(input.job_id ?? "");
+        if (!candidateId || !jobId) return JSON.stringify({ error: "candidate_id and job_id are required" });
+        const rows = await createApplications([{
+          candidate_id: candidateId,
+          job_id: jobId,
+          base_resume_id: input.base_resume_id ? String(input.base_resume_id) : null,
+          priority: input.priority ? String(input.priority) : "normal",
+          status: "in_progress",
+          created_by: ctx.userId ?? null,
+        }]);
+        const created = rows[0];
+        if (!created) return JSON.stringify({ error: "Application was not created" });
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.created','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, created.id, JSON.stringify({ source: "codex_mcp", candidate_id: candidateId, job_id: jobId })]);
+        return JSON.stringify({ ok: true, application: { id: created.id, application_stage: (created as any).application_stage, candidate_id: candidateId, job_id: jobId } });
+      }
+
+      case "update_application": {
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the proposed change." });
+        const id = String(input.application_id ?? "");
+        const current = await findApplicationById(id);
+        if (!current) return JSON.stringify({ error: "Application not found" });
+        const nextStage = input.application_stage ? String(input.application_stage) : undefined;
+        if (nextStage && !(APPLICATION_STAGES as readonly string[]).includes(nextStage)) return JSON.stringify({ error: "Invalid application_stage" });
+        const updates: any = {};
+        if (nextStage) {
+          if (nextStage === "applied" && !["approved", "not_required"].includes(String((current as any).review_status ?? "not_required"))) {
+            return JSON.stringify({ error: "Manager review must be approved before marking this application applied." });
+          }
+          const now = new Date().toISOString();
+          updates.application_stage = nextStage;
+          updates.ae_stage = nextStage;
+          updates.ae_stage_updated_at = now;
+          updates.ae_stage_updated_by_user_id = ctx.userId ?? null;
+          updates.ae_stage_updated_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          updates.application_stage_changed_at = now;
+          updates.application_stage_changed_by_user_id = ctx.userId ?? null;
+          updates.application_stage_changed_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          if (nextStage === "applied") {
+            updates.status = "applied";
+            updates.applied_at = (current as any).applied_at ?? now;
+            updates.completed_at = (current as any).completed_at ?? now;
+            updates.ae_applied_at = now;
+            updates.ae_applied_by_user_id = ctx.userId ?? null;
+            updates.ae_applied_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          } else if ((current as any).application_stage === "applied") {
+            updates.status = "in_progress";
+            updates.applied_at = null;
+            updates.completed_at = null;
+          }
+        }
+        if (input.assigned_to_user_id !== undefined) updates.assigned_to_user_id = input.assigned_to_user_id ? String(input.assigned_to_user_id) : null;
+        if (input.priority !== undefined) updates.priority = String(input.priority);
+        if (input.notes !== undefined) updates.notes = String(input.notes);
+        const updated = await updateApplication(id, updates);
+        if (nextStage && nextStage !== (current as any).application_stage) {
+          await execute(`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1,$2,$3,$4,$5,$6,'codex_mcp')`, [id, (current as any).application_stage, nextStage, ctx.userId ?? null, ctx.displayName ?? ctx.email ?? "Codex", input.event_note ? String(input.event_note) : null]);
+        }
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.updated','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, id, JSON.stringify({ source: "codex_mcp", fields: Object.keys(updates) })]);
+        return JSON.stringify({ ok: true, application: updated });
+      }
+
+      case "delete_application": {
+        if (ctx.role !== "admin" && ctx.role !== "manager") return JSON.stringify({ error: "Permission denied: manager/admin only" });
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the application ID." });
+        const id = String(input.application_id ?? "");
+        const current = await findApplicationById(id);
+        if (!current) return JSON.stringify({ error: "Application not found" });
+        await deleteApplication(id);
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.deleted','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, id, JSON.stringify({ source: "codex_mcp", candidate_id: (current as any).candidate_id, job_id: (current as any).job_id })]);
+        return JSON.stringify({ ok: true, deleted_application_id: id });
       }
 
       default:

@@ -176,7 +176,12 @@ export async function POST(req: NextRequest) {
     lastToolCalls = [];
     for (const toolUse of toolUsesOf(aiResponse.content)) {
       toolsUsed.push(toolUse.name);
-      const result = await executeTool(toolUse.name, toolUse.input, { role: context!.profile.role });
+      const result = await executeTool(toolUse.name, toolUse.input, {
+        role: context!.profile.role,
+        userId: context!.profile.user_id,
+        email: context!.profile.email,
+        displayName: context!.profile.display_name,
+      });
       lastToolCalls.push({ name: toolUse.name, result });
       await insertToolMessage(conversationId, toolUse.name, JSON.stringify({ input: toolUse.input, result }));
       toolResults.push({ type: "tool_result", toolUseId: toolUse.id, content: result });

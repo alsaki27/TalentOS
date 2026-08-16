@@ -244,6 +244,16 @@ body::before {
   padding-right: 16px;
 }
 
+/* The AI Control Center contains operational tables wider than the default
+   1100px content shell. Give this page the same deliberate full-width canvas
+   as the application queue so its action column is visible without forcing
+   operators to discover a hidden horizontal scroll first. */
+.page:has(.ai-control-center) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 .page-header {
   display: flex;
   align-items: center;
@@ -729,6 +739,127 @@ label {
 .table-compact td {
   padding-top: 10px;
   padding-bottom: 10px;
+}
+
+/* AI Control Center readability and wide-table ergonomics. The generated
+   `.text-muted` utility uses the shadcn muted surface token, which is nearly
+   black in the dark theme. On this page it is secondary text, so it must use
+   the actual readable ink token instead. Keep the fix scoped to avoid changing
+   unrelated pages that intentionally use muted surfaces. */
+.ai-control-center {
+  min-width: 0;
+  color: var(--ink);
+}
+
+.ai-control-center .text-muted {
+  color: var(--ink-soft) !important;
+}
+
+.ai-control-center .panel,
+.ai-control-center .table-shell {
+  min-width: 0;
+}
+
+.ai-control-center .table-shell {
+  position: relative;
+  overflow-x: auto;
+  scrollbar-color: var(--border) var(--surface);
+}
+
+.ai-control-center .table th,
+.ai-control-center .table td {
+  line-height: 1.35;
+}
+
+.ai-control-center .ai-key-table,
+.ai-control-center .ai-agent-table,
+.ai-control-center .ai-usage-table {
+  min-width: 1080px;
+}
+
+.ai-control-center .ai-key-table th:first-child,
+.ai-control-center .ai-key-table td:first-child,
+.ai-control-center .ai-agent-table th:first-child,
+.ai-control-center .ai-agent-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 190px;
+  background: var(--surface);
+  box-shadow: 8px 0 12px -12px rgba(var(--shadow-color), 0.8);
+}
+
+.ai-control-center .ai-key-table th:first-child,
+.ai-control-center .ai-agent-table th:first-child {
+  background: var(--surface-raised);
+  z-index: 3;
+}
+
+.ai-control-center .ai-key-table th:last-child,
+.ai-control-center .ai-key-table td:last-child,
+.ai-control-center .ai-agent-table th:last-child,
+.ai-control-center .ai-agent-table td:last-child,
+.ai-control-center .ai-routing-states-table th:last-child,
+.ai-control-center .ai-routing-states-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  min-width: 168px;
+  background: var(--surface);
+  box-shadow: -8px 0 12px -12px rgba(var(--shadow-color), 0.8);
+}
+
+.ai-control-center .ai-key-table th:last-child,
+.ai-control-center .ai-agent-table th:last-child,
+.ai-control-center .ai-routing-states-table th:last-child {
+  background: var(--surface-raised);
+  z-index: 3;
+}
+
+.ai-control-center .ai-key-table td:first-child,
+.ai-control-center .ai-agent-table td:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ai-control-center .ai-key-table td:last-child > div,
+.ai-control-center .ai-agent-table td:last-child,
+.ai-control-center .ai-routing-states-table td:last-child {
+  white-space: normal;
+}
+
+.ai-control-center .ai-key-table td:last-child > div:first-child {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-control-center .ai-routing-states-table {
+  min-width: 720px;
+}
+
+@media (max-width: 900px) {
+  .ai-control-center {
+    padding: 16px !important;
+  }
+
+  .ai-control-center .page-header h1 {
+    font-size: 24px !important;
+  }
+
+  .ai-control-center > .stats-strip {
+    gap: 8px;
+  }
+
+  .ai-control-center .filter-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ai-control-center .filter-group .input {
+    flex: 1 1 170px;
+    width: auto !important;
+  }
 }
 
 .row-link {

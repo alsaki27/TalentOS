@@ -12,6 +12,8 @@ interface KeyItem {
   key_fingerprint: string;
   model: string | null;
   base_url: string | null;
+  chat_endpoint: string | null;
+  provider_config: Record<string, unknown> | null;
   priority: number;
   is_enabled: boolean;
   status: string;
@@ -76,6 +78,7 @@ interface RouteItem {
   key_model: string | null;
   key_fingerprint: string | null;
   key_status: string | null;
+  reasoning_effort?: string | null;
 }
 
 interface AgentConfig {
@@ -102,6 +105,7 @@ interface RoutingState {
   created_at: string;
   updated_at: string;
   published_at: string | null;
+  is_active: boolean;
 }
 
 interface OverviewData {
@@ -177,6 +181,7 @@ const PIPELINE_AGENT_IDS = new Set([
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
+  "application_tailoring",
 ]);
 
 function statusBadge(status: string): string {
@@ -234,7 +239,7 @@ export default function AiControlCenterPage() {
   }, [tab]);
 
   return (
-    <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
+    <div className="ai-control-center" style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
       <div className="page-header" style={{ marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: 28 }}>AI Control Center</h1>
@@ -421,6 +426,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [editingKey, setEditingKey] = useState<KeyItem | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [keyAssignments, setKeyAssignments] = useState<Record<string, any>>({});
   const [search, setSearch] = useState("");
@@ -520,8 +526,12 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
         </div>
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add API Key</button>
       </div>
+      <div className="text-muted" style={{ marginBottom: 16, fontSize: 12 }}>
+        OpenCode Go and Google Vertex keys are managed as provider pools: healthy keys rotate round-robin, failed or quota-limited keys cool down, and only then does the configured fallback route run.
+      </div>
 
       {showAdd && <AddKeyForm onDone={() => { setShowAdd(false); loadKeys(); }} onError={onError} />}
+      {editingKey && <EditKeyForm keyItem={editingKey} onDone={() => { setEditingKey(null); loadKeys(); }} onCancel={() => setEditingKey(null)} onError={onError} />}
 
       {filtered.length === 0 ? (
         <div className="empty-state" style={{ padding: 40, textAlign: "center" }}>
@@ -529,7 +539,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
         </div>
       ) : (
         <div className="table-shell">
-          <table className="table table-compact">
+          <table className="table table-compact ai-key-table">
             <thead>
               <tr>
                 <th>Key</th>
@@ -587,6 +597,7 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
                       <button className="btn-compact btn-sm" onClick={() => testKey(k.id)} disabled={testingKey === k.id}>
                         {testingKey === k.id ? "⟳" : "Test"}
                       </button>
+                      <button className="btn-compact btn-sm" onClick={() => setEditingKey(k)}>Edit</button>
                       <button className="btn-compact btn-sm" onClick={() => toggleKey(k.id, k.is_enabled)}>
                         {k.is_enabled ? "Disable" : "Enable"}
                       </button>
@@ -630,6 +641,66 @@ function ApiKeysTab({ onError }: { onError: (e: string) => void }) {
   );
 }
 
+function EditKeyForm({ keyItem, onDone, onCancel, onError }: {
+  keyItem: KeyItem;
+  onDone: () => void;
+  onCancel: () => void;
+  onError: (e: string) => void;
+}) {
+  const [label, setLabel] = useState(keyItem.label);
+  const [model, setModel] = useState(keyItem.model ?? "");
+  const [baseUrl, setBaseUrl] = useState(keyItem.base_url ?? "");
+  const [chatEndpoint, setChatEndpoint] = useState(keyItem.chat_endpoint ?? "/chat/completions");
+  const [replacementKey, setReplacementKey] = useState("");
+  const [providerConfig, setProviderConfig] = useState(JSON.stringify(keyItem.provider_config ?? {}, null, 2));
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    let parsedConfig: Record<string, unknown>;
+    try {
+      parsedConfig = JSON.parse(providerConfig || "{}");
+      if (!parsedConfig || Array.isArray(parsedConfig) || typeof parsedConfig !== "object") throw new Error();
+    } catch {
+      onError("Provider details must be a valid JSON object.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload: Record<string, unknown> = {
+        label: label.trim(), model: model.trim() || null,
+        base_url: baseUrl.trim() || null, chat_endpoint: chatEndpoint.trim() || null,
+        provider_config: parsedConfig,
+      };
+      if (replacementKey.trim()) payload.apiKey = replacementKey.trim();
+      const res = await fetch(`/api/admin/ai/keys/${keyItem.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to update connection");
+      onDone();
+    } catch (e: any) { onError(e.message); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <div style={{ background: "var(--surface-1)", border: "1px solid var(--border-color)", borderRadius: 8, padding: 20, marginBottom: 20 }}>
+      <h3 style={{ marginTop: 0 }}>Edit AI connection · {keyItem.provider}</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div className="field-group"><label>Friendly name</label><input className="input" value={label} onChange={e => setLabel(e.target.value)} /></div>
+        <div className="field-group"><label>Default model / alias</label><input className="input" value={model} onChange={e => setModel(e.target.value)} /></div>
+        <div className="field-group"><label>Base URL</label><input className="input" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></div>
+        <div className="field-group"><label>Chat endpoint</label><input className="input" value={chatEndpoint} onChange={e => setChatEndpoint(e.target.value)} /></div>
+        <div className="field-group" style={{ gridColumn: "1 / -1" }}><label>Replace encrypted credential (leave blank to keep current)</label><input className="input" type="password" value={replacementKey} onChange={e => setReplacementKey(e.target.value)} /></div>
+        <div className="field-group" style={{ gridColumn: "1 / -1" }}><label>Provider details (non-secret JSON)</label><textarea className="input" rows={10} value={providerConfig} onChange={e => setProviderConfig(e.target.value)} /></div>
+      </div>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 12 }}>
+        <button className="btn-outline" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button className="btn-primary" onClick={save} disabled={saving || !label.trim()}>{saving ? "Saving…" : "Save connection"}</button>
+      </div>
+    </div>
+  );
+}
+
 function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: string) => void }) {
   const [provider, setProvider] = useState("anthropic");
   const [providerMode, setProviderMode] = useState("native");
@@ -654,6 +725,15 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
   const [supportsTools, setSupportsTools] = useState(true);
   const [supportsJsonMode, setSupportsJsonMode] = useState(true);
   const [supportsStreaming, setSupportsStreaming] = useState(false);
+  const [cloudProject, setCloudProject] = useState("");
+  const [vertexLocation, setVertexLocation] = useState("global");
+  const [serviceAccount, setServiceAccount] = useState("");
+  const [cloudRunService, setCloudRunService] = useState("");
+  const [cloudRunRegion, setCloudRunRegion] = useState("");
+  const [healthUrl, setHealthUrl] = useState("");
+  const [embeddingsUrl, setEmbeddingsUrl] = useState("");
+  const [embeddingModel, setEmbeddingModel] = useState("");
+  const [secretManagerResource, setSecretManagerResource] = useState("");
 
   const presetModels = (PROVIDER_MODEL_PRESETS[provider] || []).filter(
     (m) => !modelSearch || m.id.toLowerCase().includes(modelSearch.toLowerCase()) || m.label.toLowerCase().includes(modelSearch.toLowerCase())
@@ -669,10 +749,12 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
     setModelDropdownOpen(false);
     setCustomModelInput("");
     if (p === "google_vertex_proxy") {
-      // The proxy URL comes from the Worker's GOOGLE_VERTEX_PROXY_URL env var,
-      // but the API Key field below IS the real proxy secret sent on every
-      // call - protect this row from accidental deletion by default.
+      // Vertex connections are complete encrypted Neon records, so protect
+      // them from accidental deletion by default.
       setIsProtected(true);
+      setProviderMode("openai_compatible");
+      setChatEndpoint("/chat/completions");
+      setModel("coding-cheap");
     }
   }
 
@@ -731,6 +813,19 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           supports_json_mode: supportsJsonMode,
           supports_streaming: supportsStreaming,
           is_protected: isProtected,
+          provider_config: isVertexProxy ? {
+            google_cloud_project: cloudProject.trim() || null,
+            vertex_location: vertexLocation.trim() || null,
+            service_account: serviceAccount.trim() || null,
+            cloud_run_service: cloudRunService.trim() || null,
+            cloud_run_region: cloudRunRegion.trim() || null,
+            health_url: healthUrl.trim() || null,
+            chat_url: baseUrl.trim() && chatEndpoint.trim() ? `${baseUrl.replace(/\/$/, "")}${chatEndpoint.startsWith("/") ? chatEndpoint : `/${chatEndpoint}`}` : null,
+            embeddings_url: embeddingsUrl.trim() || null,
+            secret_manager_resource: secretManagerResource.trim() || null,
+            chat_model_alias: model || null,
+            embedding_model: embeddingModel.trim() || null,
+          } : {},
         }),
       });
       if (!res.ok) {
@@ -755,9 +850,8 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
 
       {isVertexProxy && (
         <div className="alert alert-info" style={{ marginBottom: 12, fontSize: 13 }}>
-          Google Vertex (Proxy) authenticates with the Worker's <code>GOOGLE_VERTEX_PROXY_URL</code> /{" "}
-          <code>GOOGLE_VERTEX_PROXY_SECRET</code> Cloudflare secrets when they're set — the API Key field below is only
-          used as a fallback if that secret is ever removed, so any placeholder value is fine here.
+          This encrypted Neon record is the complete Vertex gateway connection. The API key must be the real gateway
+          credential; deployment or GitHub AI secrets are not used by runtime routing.
         </div>
       )}
 
@@ -881,6 +975,23 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
               <option value="Bearer">Bearer</option>
               <option value="raw">Raw</option>
             </select>
+          </div>
+        </div>
+      )}
+
+      {isVertexProxy && (
+        <div style={{ marginTop: 16, padding: 14, border: "1px solid var(--border-color)", borderRadius: 8 }}>
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>Vertex gateway details</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <input className="input" placeholder="Google Cloud project" value={cloudProject} onChange={e => setCloudProject(e.target.value)} />
+            <input className="input" placeholder="Vertex location (global)" value={vertexLocation} onChange={e => setVertexLocation(e.target.value)} />
+            <input className="input" placeholder="Service account" value={serviceAccount} onChange={e => setServiceAccount(e.target.value)} />
+            <input className="input" placeholder="Cloud Run service" value={cloudRunService} onChange={e => setCloudRunService(e.target.value)} />
+            <input className="input" placeholder="Cloud Run region" value={cloudRunRegion} onChange={e => setCloudRunRegion(e.target.value)} />
+            <input className="input" placeholder="Health URL" value={healthUrl} onChange={e => setHealthUrl(e.target.value)} />
+            <input className="input" placeholder="Embeddings URL" value={embeddingsUrl} onChange={e => setEmbeddingsUrl(e.target.value)} />
+            <input className="input" placeholder="Embedding model" value={embeddingModel} onChange={e => setEmbeddingModel(e.target.value)} />
+            <input className="input" style={{ gridColumn: "1 / -1" }} placeholder="Secret Manager resource (reference only)" value={secretManagerResource} onChange={e => setSecretManagerResource(e.target.value)} />
           </div>
         </div>
       )}
@@ -1032,7 +1143,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [states, setStates] = useState<RoutingState[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingAgent, setEditingAgent] = useState<string | null>(null);
-  const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; rank: number }[]>([]);
+  const [editRoutes, setEditRoutes] = useState<{ keyId: string; modelOverride: string; reasoningEffort: string; rank: number }[]>([]);
   const [editRouteVersion, setEditRouteVersion] = useState<number>(0);
   const [editConfig, setEditConfig] = useState<Partial<AgentConfig>>({});
   const [saving, setSaving] = useState(false);
@@ -1045,22 +1156,59 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
   const [newStateDescription, setNewStateDescription] = useState("");
   const [stateSourceId, setStateSourceId] = useState("");
   const [stateSaving, setStateSaving] = useState(false);
+  const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
+  const [stateRoutesByAutomation, setStateRoutesByAutomation] = useState<Record<string, RouteItem[]>>({});
+  const [stateRoutesLoading, setStateRoutesLoading] = useState(false);
 
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [agentsRes, keysRes] = await Promise.all([
+      const [agentsRes, keysRes, statesRes] = await Promise.all([
         fetch("/api/admin/ai/agents"),
         fetch("/api/admin/ai/keys"),
+        fetch("/api/admin/ai/states"),
       ]);
       if (agentsRes.ok) setAgents((await agentsRes.json()).agents ?? []);
       if (keysRes.ok) setKeys((await keysRes.json()).keys ?? []);
-      const statesRes = await fetch("/api/admin/ai/states");
-      if (statesRes.ok) setStates((await statesRes.json()).states ?? []);
+      if (statesRes.ok) {
+        const nextStates = (await statesRes.json()).states ?? [];
+        setStates(nextStates);
+        const preferred = selectedStateId && nextStates.some((s: RoutingState) => s.id === selectedStateId)
+          ? selectedStateId
+          : nextStates.find((s: RoutingState) => s.is_active)?.id ?? nextStates[0]?.id ?? null;
+        if (preferred) {
+          setSelectedStateId(preferred);
+          await loadStateRoutes(preferred);
+        }
+      }
     } catch (e: any) { onError(e.message); }
     finally { setLoading(false); }
+  }
+
+  async function loadStateRoutes(stateId: string) {
+    setStateRoutesLoading(true);
+    try {
+      const res = await fetch(`/api/admin/ai/states/${stateId}`);
+      if (!res.ok) throw new Error("Failed to load routing state routes");
+      const data = await res.json();
+      const grouped: Record<string, RouteItem[]> = {};
+      for (const route of (data.routes ?? []) as RouteItem[]) {
+        if (!grouped[route.automation_id]) grouped[route.automation_id] = [];
+        grouped[route.automation_id].push(route);
+      }
+      setStateRoutesByAutomation(grouped);
+    } catch (e: any) {
+      onError(e.message || "Failed to load routing state routes");
+    } finally {
+      setStateRoutesLoading(false);
+    }
+  }
+
+  function selectState(stateId: string) {
+    setSelectedStateId(stateId);
+    loadStateRoutes(stateId);
   }
 
   async function fetchKeyModels(keyId: string) {
@@ -1084,7 +1232,8 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
 
   function startEdit(agent: AgentItem) {
     setEditingAgent(agent.id);
-    setEditRoutes(agent.routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", rank: r.rank })));
+    const routes = stateRoutesByAutomation[agent.id] ?? agent.routes;
+    setEditRoutes(routes.map(r => ({ keyId: r.ai_key_id || "", modelOverride: r.model_override || "", reasoningEffort: r.reasoning_effort || "", rank: r.rank })));
     setEditRouteVersion(agent.route_version ?? 0);
     setEditConfig(agent.config || { is_active: agent.is_active } as any);
     setMessage(null);
@@ -1103,10 +1252,16 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     try {
       const routes = editRoutes
         .filter(r => r.keyId)
-        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, rank: i + 1 }));
-      const res = await fetch(`/api/admin/ai/agents/${agentId}/routes`, {
+        .map((r, i) => ({ ai_key_id: r.keyId, model_override: r.modelOverride || null, reasoning_effort: r.reasoningEffort || null, rank: i + 1 }));
+      const endpoint = selectedStateId
+        ? `/api/admin/ai/states/${selectedStateId}/routes`
+        : `/api/admin/ai/agents/${agentId}/routes`;
+      const body = selectedStateId
+        ? { automation_id: agentId, routes }
+        : { routes, routeVersion: editRouteVersion };
+      const res = await fetch(endpoint, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ routes, routeVersion: editRouteVersion }),
+        body: JSON.stringify(body),
       });
       if (res.status === 409) {
         const d = await res.json().catch(() => ({}));
@@ -1120,7 +1275,11 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         throw new Error(d.error || "Failed to save routes");
       }
       const data = await res.json();
-      setEditRouteVersion(data.routeVersion ?? 0);
+      if (selectedStateId) {
+        setStateRoutesByAutomation(prev => ({ ...prev, [agentId]: data.routes ?? [] }));
+      } else {
+        setEditRouteVersion(data.routeVersion ?? 0);
+      }
       setMessage({ type: "success", text: "Routes saved" });
       loadAll();
     } catch (e: any) { setMessage({ type: "error", text: e.message }); }
@@ -1185,7 +1344,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
     finally { setStateSaving(false); }
   }
 
-  function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", rank: p.length }]); }
+  function addRouteRow() { setEditRoutes(p => [...p, { keyId: "", modelOverride: "", reasoningEffort: "", rank: p.length + 1 }]); }
   function removeRouteRow(idx: number) { setEditRoutes(p => p.filter((_, i) => i !== idx)); }
 
   if (loading) return <div className="loading-panel" style={{ padding: 40, textAlign: "center" }}>Loading agents...</div>;
@@ -1196,7 +1355,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           <div>
             <h3 style={{ margin: 0 }}>Routing states</h3>
-            <div className="text-muted" style={{ fontSize: 12 }}>Versioned snapshots for safe provider/model experiments. Publishing a state is metadata-only until state-aware execution is explicitly enabled.</div>
+            <div className="text-muted" style={{ fontSize: 12 }}>Choose a state below, then edit each agent's provider, model, and fallback chain inside that state. Publishing the state activates it for runtime routing.</div>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1210,18 +1369,28 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         </div>
         {states.length > 0 && (
           <div className="table-shell" style={{ marginTop: 12 }}>
-            <table className="table table-compact"><thead><tr><th>Name</th><th>Status</th><th>Routes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
+            <table className="table table-compact ai-routing-states-table"><thead><tr><th>Name</th><th>Status</th><th>Routes</th><th>Updated</th><th>Actions</th></tr></thead><tbody>
               {states.map(s => <tr key={s.id}>
-                <td><div style={{ fontWeight: 600 }}>{s.name}</div><div className="text-muted" style={{ fontSize: 11 }}>{s.description || "No description"}</div></td>
-                <td><span className={`badge ${s.status === "published" ? "badge-success" : s.status === "archived" ? "badge-muted" : "badge-warning"}`}>{s.status}</span></td>
+                <td><div style={{ fontWeight: 600 }}>{s.name} {s.is_active && <span className="badge badge-success">ACTIVE</span>}</div><div className="text-muted" style={{ fontSize: 11 }}>{s.description || "No description"}</div></td>
+                <td><span className={`badge ${s.is_active ? "badge-success" : s.status === "archived" ? "badge-muted" : "badge-warning"}`}>{s.is_active ? "active" : s.status}</span></td>
                 <td>{s.route_count}</td><td>{relativeTime(s.updated_at)}</td>
-                <td style={{ display: "flex", gap: 6 }}>{s.status === "draft" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "published")}>Publish</button>}{s.status !== "archived" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "archived")}>Archive</button>}</td>
+                <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button className="btn-compact btn-sm" disabled={stateRoutesLoading} onClick={() => selectState(s.id)}>
+                    {selectedStateId === s.id ? "Editing" : "Edit routes"}
+                  </button>
+                  {!s.is_active && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "published")}>Activate</button>}
+                  {!s.is_active && s.status !== "archived" && <button className="btn-compact btn-sm" disabled={stateSaving} onClick={() => updateRoutingState(s.id, "archived")}>Archive</button>}
+                </td>
               </tr>)}
             </tbody></table>
           </div>
         )}
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <strong style={{ color: "var(--ink)" }}>
+          {selectedStateId ? `Editing: ${states.find(s => s.id === selectedStateId)?.name || "routing state"}` : "Legacy live routes"}
+        </strong>
+        {stateRoutesLoading && <span className="text-muted">Loading state routes…</span>}
         <input className="input" placeholder="Search agents..." value={search} onChange={e => setSearch(e.target.value)} style={{ width: 250 }} />
         <select className="input" value={groupFilter} onChange={e => setGroupFilter(e.target.value)}>
           <option value="">All groups</option>
@@ -1239,7 +1408,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
       )}
 
       <div className="table-shell">
-        <table className="table table-compact">
+        <table className="table table-compact ai-agent-table">
           <thead>
             <tr>
               <th>Agent</th>
@@ -1255,8 +1424,9 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
           </thead>
           <tbody>
             {filtered.map(a => {
-              const primary = a.routes.find(r => r.rank === 0 && r.is_enabled);
-              const fallback1 = a.routes.find(r => r.rank === 1 && r.is_enabled);
+              const agentRoutes = (stateRoutesByAutomation[a.id] ?? a.routes).filter(r => r.is_enabled).sort((x, y) => x.rank - y.rank);
+              const primary = agentRoutes[0];
+              const fallback1 = agentRoutes[1];
               return (
                 <tr key={a.id}>
                   <td className="cell-main">
@@ -1281,7 +1451,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                     {fallback1?.key_label ? (
                       <div>
                         <div>{fallback1.key_label}</div>
-                        <div className="text-muted">{fallback1.key_provider}</div>
+                        <div className="text-muted">{fallback1.key_provider} {fallback1.model_override && ` · ${fallback1.model_override}`}</div>
                       </div>
                     ) : <span className="text-muted">—</span>}
                   </td>
@@ -1305,6 +1475,11 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         <div className="modal-overlay" onClick={() => setEditingAgent(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 700, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
             <h2>{agents.find(a => a.id === editingAgent)?.label || "Agent"} Configuration</h2>
+            <div className="text-muted" style={{ marginBottom: 16 }}>
+              {selectedStateId
+                ? `Editing routes in ${states.find(s => s.id === selectedStateId)?.name || "selected state"}. Changes to the active state take effect immediately; draft states remain isolated until activated.`
+                : "Editing the legacy live route chain."}
+            </div>
 
               <div style={{ marginBottom: 20 }}>
                 <h4>Routes</h4>
@@ -1327,7 +1502,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
 
                   return (
                   <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8, flexWrap: "wrap" }}>
-                    <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i}</span>
+                    <span className="badge badge-info" style={{ minWidth: 60, textAlign: "center", marginTop: 6 }}>Rank {i + 1}</span>
                     <select className="input" style={{ flex: 1, minWidth: 180 }} value={r.keyId} onChange={e => {
                       const keyId = e.target.value;
                       const updated = [...editRoutes];
@@ -1363,6 +1538,22 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                           }} />
                       )}
                     </div>
+                    {selectedKey?.provider === "opencode" && (
+                      <select className="input" style={{ minWidth: 130, marginTop: 0 }} value={r.reasoningEffort}
+                        onChange={e => {
+                          const updated = [...editRoutes];
+                          updated[i].reasoningEffort = e.target.value;
+                          setEditRoutes(updated);
+                        }}>
+                        <option value="">Reasoning: default</option>
+                        <option value="off">Reasoning: off</option>
+                        <option value="low">Reasoning: low</option>
+                        <option value="medium">Reasoning: medium</option>
+                        <option value="high">Reasoning: high</option>
+                        <option value="xhigh">Reasoning: xhigh</option>
+                        <option value="max">Reasoning: max</option>
+                      </select>
+                    )}
                     <button className="btn-compact btn-danger btn-sm" onClick={() => removeRouteRow(i)} style={{ marginTop: 6 }}>×</button>
                     {capabilityWarnings.length > 0 && (
                       <div style={{ flexBasis: "100%", marginTop: 4 }}>
@@ -1549,7 +1740,7 @@ function UsageTab({ onError }: { onError: (e: string) => void }) {
       ) : (
         <>
           <div className="table-shell">
-            <table className="table table-compact">
+            <table className="table table-compact ai-usage-table">
               <thead>
                 <tr>
                   <th>Time</th>

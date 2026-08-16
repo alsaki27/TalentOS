@@ -37,9 +37,10 @@ The app supports two deployment targets:
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Same as above | Browser-side |
 | `CRON_SECRET` | Yes | Generate random string | Protects `/api/cron/*` routes |
 | `AI_KEYS_ENCRYPTION_SECRET` | Yes | Generate 32-byte hex string | AES-256-GCM key for AI key encryption |
-| `AI_PROVIDER` | No | `anthropic` or `nvidia` | Optional; falls back to db config |
-| `ANTHROPIC_API_KEY` | No | Anthropic Console | Required if `AI_PROVIDER=anthropic` or db config |
-| `NVIDIA_API_KEY` | No | NVIDIA API Console | Required if `AI_PROVIDER=nvidia` or db config |
+| `AI_PROVIDER` | No | `mock` | Local tests only; production routes are selected in Neon |
+
+Provider API keys, endpoints, and model aliases are configured at `/admin/ai` and
+stored encrypted in Neon. They are intentionally absent from deployment secrets.
 
 **Note:** Supabase vars are temporary. Phase 2 will replace Supabase Auth. Phase 3 will replace Supabase Storage.
 

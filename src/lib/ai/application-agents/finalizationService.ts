@@ -16,6 +16,7 @@ import { query, queryOne, sql as getSql } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
 import type { FinalResumeV1, ReviewScoreV1 } from "./schemas";
+import { enforceEducationIntegrity, enforceExperienceIntegrity } from "./resumeIntegrity";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
   const artifacts = await listArtifacts(workflowId);
@@ -102,7 +103,32 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     baseContent = (wf.config_snapshot?.baseResume as any)?.content ?? null;
   }
 
-  const studioDocument = finalResumeToStudioDocument(finalData as FinalResumeV1, baseContent);
+  // Finalization is the last safety boundary. Never persist an AI document that
+  // silently dropped the candidate's employment or education. Final Polish has
+  // its own integrity guard, but this protects production when an older worker,
+  // partial artifact, or malformed provider response reaches finalization.
+  const safeFinalData = { ...(finalData as FinalResumeV1) };
+  const baseExperience = Array.isArray(baseContent?.experience) ? baseContent.experience : [];
+  const baseEducation = Array.isArray(baseContent?.education) ? baseContent.education : [];
+  if (baseExperience.length > 0) {
+    safeFinalData.experience = enforceExperienceIntegrity(
+      Array.isArray(safeFinalData.experience) ? safeFinalData.experience : [],
+      baseExperience,
+    ) as any;
+  }
+  if (baseEducation.length > 0) {
+    safeFinalData.education = enforceEducationIntegrity(
+      Array.isArray(safeFinalData.education) ? safeFinalData.education : [],
+      baseEducation,
+    ) as any;
+  }
+  if (baseExperience.length > 0 && safeFinalData.experience.length === 0) {
+    throw new Error("Final resume safety check failed: employment section is empty");
+  }
+  if (baseEducation.length > 0 && safeFinalData.education.length === 0) {
+    throw new Error("Final resume safety check failed: education section is empty");
+  }
+  const studioDocument = finalResumeToStudioDocument(safeFinalData, baseContent);
 
   // ATOMICITY BOUNDARY (critical path): all three operations run inside a single
   // database transaction via Neon's sql.transaction(). If any query fails, the

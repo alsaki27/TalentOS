@@ -6,9 +6,9 @@
 // so the original high-fidelity templates run unchanged here instead of needing a
 // degraded substitute or an external Node service.
 //
-// Generation produces a Blob immediately for download; uploading that blob to R2
-// for history/re-download is a separate, best-effort step (see uploadResumeExport)
-// that the caller can fire in the background without blocking the download.
+// Generation produces a Blob in the browser. In the application Studio flow the
+// SharePoint archive is written before the browser download is released, so a
+// downloaded file can never be mistaken for an archived application resume.
 
 // @react-pdf/renderer and docx are loaded via dynamic import() inside each
 // function below, not as static top-level imports here. A static import got
@@ -54,6 +54,85 @@ export function normalizeResumeContentForExport(content: any): ResumeDocument {
   };
 }
 
+/** Converts the legacy Resumify editor shape into the canonical PDF document shape. */
+export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
+  const personalInfo = data?.personalInfo ?? {};
+  const skills = data?.skills ?? {};
+  const groups = Array.isArray(skills.categorized) ? skills.categorized : [];
+  const simpleSkills = Array.isArray(skills.simple) ? skills.simple : [];
+  const skillSections = groups.length > 0
+    ? groups.map((group: any, index: number) => ({
+        id: group?.id || `skill-${index}`,
+        title: group?.name || "Skills",
+        skills: Array.isArray(group?.skills) ? group.skills : [],
+      }))
+    : [{ id: "skills", title: "Skills", skills: simpleSkills }];
+
+  return normalizeResumeContentForExport({
+    header: {
+      fullName: typeof personalInfo.fullName === "string" ? personalInfo.fullName : "",
+      location: personalInfo.location,
+      phone: personalInfo.phone,
+      email: personalInfo.email,
+      linkedin: personalInfo.linkedin,
+      github: personalInfo.github,
+      portfolio: personalInfo.website,
+    },
+    summary: typeof data?.summary === "string" && data.summary.trim()
+      ? { id: "summary", text: data.summary }
+      : undefined,
+    skills: skillSections,
+    experience: Array.isArray(data?.experience) ? data.experience.map((entry: any, index: number) => ({
+      id: entry?.id || `experience-${index}`,
+      title: entry?.jobTitle || "",
+      company: entry?.company || "",
+      location: entry?.location,
+      startDate: entry?.startDate || "",
+      endDate: entry?.current ? undefined : entry?.endDate,
+      bullets: (Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : []).map((text: unknown, bulletIndex: number) => ({
+        id: `experience-${index}-bullet-${bulletIndex}`,
+        text: typeof text === "string" ? text : "",
+      })),
+    })) : [],
+    education: Array.isArray(data?.education) ? data.education.map((entry: any, index: number) => ({
+      id: entry?.id || `education-${index}`,
+      degree: entry?.degree || "",
+      school: entry?.institution || "",
+      location: entry?.location,
+      graduationDate: entry?.graduationYear,
+    })) : [],
+    projects: Array.isArray(data?.projects) ? data.projects.map((entry: any, index: number) => ({
+      id: entry?.id || `project-${index}`,
+      title: entry?.title || "",
+      description: entry?.description,
+      bullets: [],
+      technologies: Array.isArray(entry?.technologies) ? entry.technologies : [],
+    })) : [],
+    customSections: Array.isArray(data?.customSections) ? data.customSections.map((section: any, index: number) => ({
+      id: section?.id || `custom-${index}`,
+      title: section?.title || "Additional Information",
+      bullets: String(section?.content || "").split(/\r?\n/).filter(Boolean).map((text, bulletIndex) => ({
+        id: `custom-${index}-bullet-${bulletIndex}`,
+        text,
+      })),
+    })) : [],
+    certifications: [],
+    formatting: {
+      pageFormat: data?.pageFormat === "letter" ? "letter" : "a4",
+      fontFamily: typeof data?.fontFamily === "string" ? data.fontFamily : "Inter",
+      fontSize: typeof data?.fontSize === "number" ? data.fontSize : 10,
+      marginTop: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginRight: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginBottom: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      marginLeft: typeof data?.pagePadding === "number" ? data.pagePadding : 0.5,
+      styleId: "resumify-version",
+      sectionSpacing: 5,
+      bulletSpacing: 1,
+      lineHeight: 1.15,
+    },
+  });
+}
+
 export async function generateResumePdfBlob(content: ResumeDocument): Promise<Blob> {
   const { renderResumePdfDoc } = await import("@/lib/falood/skarionPdfDocument");
   const doc = renderResumePdfDoc(content);
@@ -92,6 +171,7 @@ export interface UploadExportParams {
   exportType: "pdf" | "docx";
   blob: Blob;
   fileName: string;
+  archiveLabel?: string;
 }
 
 export interface UploadExportResult {
@@ -112,6 +192,7 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
   form.append("resumeVersionId", params.resumeVersionId);
   form.append("exportType", params.exportType);
   form.append("fileName", params.fileName);
+  if (params.archiveLabel) form.append("archiveLabel", params.archiveLabel);
   form.append("file", params.blob, params.fileName);
 
   const res = await fetch("/api/applications/exports", {
@@ -127,38 +208,32 @@ export async function uploadResumeExport(params: UploadExportParams): Promise<Up
 }
 
 /**
- * Generates the file, downloads it immediately, then archives the same blob so
- * it can be re-downloaded later (this is also what makes the "View PDF" link
- * and pdf_available flag in the candidate profile work). The user's download
- * always happens first and unconditionally - an archive failure is reported
- * via a distinctly-worded error (caught and re-thrown here) so a caller's
- * catch block never tells the user their export failed when it actually
- * succeeded and only the background archive copy did not.
+ * Generates the file, archives the exact same blob in SharePoint, and only then
+ * releases the browser download. This makes the archive the source of truth
+ * for the application's PDF link and prevents untracked local exports.
  */
 export async function exportAndDownloadResume(
   rawContent: any,
   format: "pdf" | "docx",
-  uploadContext?: { applicationId: string; resumeVersionId: string }
-): Promise<UploadExportResult | null> {
+  uploadContext: { applicationId: string; resumeVersionId: string }
+): Promise<UploadExportResult> {
   const content = normalizeResumeContentForExport(rawContent);
   const blob = format === "pdf" ? await generateResumePdfBlob(content) : await generateResumeDocxBlob(content);
   const fileName = fileNameFor(content, format);
-  downloadBlob(blob, fileName);
-
-  if (uploadContext) {
-    try {
-      return await uploadResumeExport({
-        applicationId: uploadContext.applicationId,
-        resumeVersionId: uploadContext.resumeVersionId,
-        exportType: format,
-        blob,
-        fileName,
-      });
-    } catch (err: any) {
-      throw new Error(
-        `${format.toUpperCase()} downloaded, but saving a re-downloadable copy failed: ${err?.message || "unknown error"}`
-      );
-    }
+  let archived: UploadExportResult;
+  try {
+    archived = await uploadResumeExport({
+      applicationId: uploadContext.applicationId,
+      resumeVersionId: uploadContext.resumeVersionId,
+      exportType: format,
+      blob,
+      fileName,
+    });
+  } catch (err: any) {
+    throw new Error(
+      `${format.toUpperCase()} was not downloaded because the SharePoint archive failed: ${err?.message || "unknown error"}`
+    );
   }
-  return null;
+  downloadBlob(blob, fileName);
+  return archived;
 }

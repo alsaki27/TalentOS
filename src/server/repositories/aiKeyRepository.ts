@@ -38,14 +38,15 @@ export interface AiApiKeyRow {
   label: string;
   encrypted_key: string;
   key_fingerprint: string;
-  // Per-key model override. Null means the provider's env-var default / built-in
-  // fallback (existing behavior, unchanged) - this exists so the admin UI can
+  // Per-key model override. Null means the adapter's non-secret built-in fallback;
+  // this exists so the admin UI can
   // offer a model dropdown per key rather than one hardcoded default per provider.
   model: string | null;
   // The admin-chosen default model from the per-key catalog (available_models).
   // Backfilled from `model` during migration 017; distinct from `model` so the
   // legacy single-default-field semantics stay untouched.
   default_model: string | null;
+  base_url: string | null;
   priority: number;
   is_enabled: boolean;
   status: AiKeyStatus;
@@ -66,6 +67,7 @@ export interface AiApiKeyRow {
   auth_header_name: string | null;
   auth_scheme: string | null;
   custom_headers: Record<string, string> | null;
+  provider_config: Record<string, unknown>;
   available_models: DiscoveredModelInfo[];
   models_last_synced_at: string | null;
   models_sync_error: string | null;
@@ -76,8 +78,7 @@ export interface AiApiKeyRow {
   // Code-enforced deletion protection (migration 019) — for keys where
   // deleting the row would silently break every automation routed to it
   // with no recovery path (e.g. the google_vertex_proxy row, which is the
-  // only "Google Vertex (Proxy)" handle assignable in the Control Center,
-  // even though its actual secret normally comes from Cloudflare env).
+  // only "Google Vertex (Proxy)" handle assignable in the Control Center).
   is_protected: boolean;
 }
 
@@ -88,6 +89,7 @@ export interface AiApiKeyMetadata {
   key_fingerprint: string;
   model: string | null;
   default_model: string | null;
+  base_url: string | null;
   priority: number;
   is_enabled: boolean;
   status: AiKeyStatus;
@@ -107,6 +109,7 @@ export interface AiApiKeyMetadata {
   auth_header_name: string | null;
   auth_scheme: string | null;
   custom_headers: Record<string, string> | null;
+  provider_config: Record<string, unknown>;
   available_models: DiscoveredModelInfo[];
   models_last_synced_at: string | null;
   models_sync_error: string | null;
@@ -122,6 +125,7 @@ export interface CreateAiKeyInput {
   label: string;
   apiKey: string;
   model?: string | null;
+  baseUrl?: string | null;
   priority?: number;
   isEnabled?: boolean;
   createdBy?: string;
@@ -132,6 +136,7 @@ export interface CreateAiKeyInput {
   authHeaderName?: string | null;
   authScheme?: string | null;
   customHeaders?: Record<string, string> | null;
+  providerConfig?: Record<string, unknown>;
   availableModels?: DiscoveredModelInfo[];
   defaultModel?: string | null;
   supportsModelDiscovery?: boolean;
@@ -144,6 +149,7 @@ export interface CreateAiKeyInput {
 export interface UpdateAiKeyInput {
   label?: string;
   model?: string | null;
+  baseUrl?: string | null;
   defaultModel?: string | null;
   priority?: number;
   is_enabled?: boolean;
@@ -155,6 +161,7 @@ export interface UpdateAiKeyInput {
   authHeaderName?: string | null;
   authScheme?: string | null;
   customHeaders?: Record<string, string> | null;
+  providerConfig?: Record<string, unknown>;
   supportsModelDiscovery?: boolean;
   supportsTools?: boolean;
   supportsJsonMode?: boolean;
@@ -172,7 +179,7 @@ const METADATA_COLUMNS = `id, provider, label, model, default_model, base_url, p
        monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
        key_fingerprint, created_by, created_at, updated_at,
        provider_mode, api_style, models_endpoint, chat_endpoint,
-       auth_header_name, auth_scheme, custom_headers, available_models,
+       auth_header_name, auth_scheme, custom_headers, provider_config, available_models,
        models_last_synced_at, models_sync_error,
        supports_model_discovery, supports_tools, supports_json_mode, supports_streaming,
        is_protected`;
@@ -185,6 +192,7 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
     key_fingerprint: row.key_fingerprint,
     model: row.model ?? null,
     default_model: row.default_model ?? null,
+    base_url: row.base_url ?? null,
     priority: row.priority,
     is_enabled: row.is_enabled,
     status: row.status,
@@ -203,6 +211,7 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
     auth_header_name: row.auth_header_name,
     auth_scheme: row.auth_scheme,
     custom_headers: row.custom_headers,
+    provider_config: row.provider_config ?? {},
     available_models: row.available_models ?? [],
     models_last_synced_at: row.models_last_synced_at,
     models_sync_error: row.models_sync_error,
@@ -291,11 +300,11 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
        provider, label, encrypted_key, key_fingerprint, model, default_model,
        priority, is_enabled, status, created_by,
        provider_mode, api_style, models_endpoint, chat_endpoint,
-       auth_header_name, auth_scheme, custom_headers, available_models,
+       auth_header_name, auth_scheme, custom_headers, provider_config, available_models,
        supports_model_discovery, supports_tools, supports_json_mode, supports_streaming,
-       is_protected
+       is_protected, base_url
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
      RETURNING ${METADATA_COLUMNS}`,
     [
       input.provider, input.label, encrypted, fingerprint,
@@ -305,12 +314,14 @@ export async function createAiKey(input: CreateAiKeyInput): Promise<AiApiKeyMeta
       input.modelsEndpoint ?? null, input.chatEndpoint ?? null,
       input.authHeaderName ?? null, input.authScheme ?? null,
       input.customHeaders ? JSON.stringify(input.customHeaders) : null,
+      JSON.stringify(input.providerConfig ?? {}),
       input.availableModels ? JSON.stringify(input.availableModels) : JSON.stringify([]),
       input.supportsModelDiscovery ?? false,
       input.supportsTools ?? true,
       input.supportsJsonMode ?? true,
       input.supportsStreaming ?? false,
       input.isProtected ?? false,
+      input.baseUrl ?? null,
     ]
   );
   return toMetadata(rows[0]);
@@ -370,6 +381,14 @@ export async function updateAiKey(id: string, input: UpdateAiKeyInput): Promise<
   if (input.customHeaders !== undefined) {
     fields.push(`custom_headers = $${idx++}`);
     values.push(input.customHeaders ? JSON.stringify(input.customHeaders) : null);
+  }
+  if (input.baseUrl !== undefined) {
+    fields.push(`base_url = $${idx++}`);
+    values.push(input.baseUrl);
+  }
+  if (input.providerConfig !== undefined) {
+    fields.push(`provider_config = $${idx++}`);
+    values.push(JSON.stringify(input.providerConfig));
   }
   if (input.supportsModelDiscovery !== undefined) {
     fields.push(`supports_model_discovery = $${idx++}`);
@@ -453,9 +472,12 @@ export async function recordAiKeySuccess(id: string): Promise<void> {
  * Record a failure for an AI key (increments failure_count, updates status).
  */
 export async function recordAiKeyFailure(id: string, error: string): Promise<void> {
-  const errLower = error.toLowerCase();
+  const safeError = typeof error === "string" ? error : String(error ?? "Unknown provider error");
+  const errLower = safeError.toLowerCase();
   let status: AiKeyStatus;
-  if (errLower.includes("rate limit") || errLower.includes("429")) {
+  if (errLower.includes("unauthorized") || errLower.includes("401") || errLower.includes("invalid api key")) {
+    status = "invalid_credential";
+  } else if (errLower.includes("rate limit") || errLower.includes("429")) {
     status = "rate_limited";
   } else if (errLower.includes("quota") || errLower.includes("billing")) {
     status = "quota_exhausted";
@@ -466,7 +488,7 @@ export async function recordAiKeyFailure(id: string, error: string): Promise<voi
   const now = new Date().toISOString();
   await execute(
     `UPDATE ai_api_keys SET status = $1, last_failure_at = $2, last_tested_at = $3, last_error = $4, failure_count = failure_count + 1, updated_at = $5 WHERE id = $6`,
-    [status, now, now, error, now, id]
+    [status, now, now, safeError, now, id]
   );
 }
 

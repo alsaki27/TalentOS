@@ -128,10 +128,13 @@ interface TailoredResumeEntry {
   atsScore?: number | null;
   applicationId?: string | null;
   applicationStatus?: string | null;
+  applicationStage?: string | null;
   proofUrl?: string | null;
   proofFilename?: string | null;
   appliedAt?: string | null;
   pdfAvailable?: boolean;
+  pdfStorageUrl?: string | null;
+  pdfStorageItemId?: string | null;
 }
 
 function initials(name: string): string {
@@ -557,10 +560,13 @@ export default function CandidateProfilePage() {
           atsScore: v.ats_score,
           applicationId: v.application_id ?? null,
           applicationStatus: v.applications?.status ?? null,
+          applicationStage: v.applications?.stage ?? null,
           proofUrl: v.applications?.proof_url ?? null,
           proofFilename: v.applications?.proof_filename ?? null,
           appliedAt: v.applications?.applied_at ?? null,
           pdfAvailable: Boolean(v.pdf_available),
+          pdfStorageUrl: v.pdf_storage_url ?? null,
+          pdfStorageItemId: v.pdf_storage_item_id ?? null,
         }));
 
       const merged = [...faloodTailored, ...aiTailored]
@@ -1452,7 +1458,8 @@ export default function CandidateProfilePage() {
                         <td>
                           {t.applicationId ? (
                             <>
-                              <span className={`badge badge-${t.applicationStatus}`}>{t.applicationStatus ?? "assigned"}</span>
+                              <span className={`badge badge-${t.applicationStage ?? t.applicationStatus}`}>{t.applicationStage ?? t.applicationStatus ?? "assigned"}</span>
+                              {t.appliedAt && <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>Applied {new Date(t.appliedAt).toLocaleDateString()}</span>}
                               {t.proofUrl && (
                                 <a href={t.proofUrl} target="_blank" rel="noreferrer" className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
                                   📎 {t.proofFilename || "proof"}
@@ -1475,6 +1482,7 @@ export default function CandidateProfilePage() {
                           {t.applicationId && (
                             <>
                               {t.pdfAvailable && <a className="btn-compact btn-sm" href={`/api/applications/${t.applicationId}/resume-pdf`} target="_blank" rel="noreferrer">View PDF</a>}
+                              {t.pdfStorageUrl && <a className="btn-compact btn-sm" href={t.pdfStorageUrl} target="_blank" rel="noreferrer">Open SharePoint</a>}
                               <button
                                 className="btn-compact btn-sm"
                                 onClick={() => uploadProofForResume(t)}

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { execute, query, queryOne } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 import { sanitizeApiError } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   try {
     const state = await queryOne<any>("SELECT * FROM ai_routing_states WHERE id = $1", [params.id]);
@@ -23,43 +23,61 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { context, response } = await requireCurrentUser(["admin"]);
   if (response) return response;
   try {
     const body = await req.json();
     const status = body.status;
     if (!['draft', 'published', 'archived'].includes(status)) return NextResponse.json({ error: "status must be draft, published, or archived" }, { status: 400 });
-    // Publishing is an operational action, not just a label. Previously this
-    // endpoint only changed the state metadata, so the UI could say
-    // "published" while the live resolver continued using the old routes.
-    // Apply the snapshot in the same database-side operation as the publish.
-    if (status === "published") {
-      await execute(`WITH published AS (
-        UPDATE ai_routing_states
-        SET status = 'published', published_at = COALESCE(published_at, now()), updated_at = now()
-        WHERE id = $1
-        RETURNING id
-      ), snapshot AS (
-        SELECT r.automation_id, r.rank, r.ai_key_id, r.provider, r.model_override, r.is_enabled
-        FROM ai_routing_state_routes r
-        JOIN published p ON p.id = r.state_id
-      )
-      UPDATE ai_automation_routes live
-      SET ai_key_id = snapshot.ai_key_id,
-          provider = snapshot.provider,
-          model_override = snapshot.model_override,
-          is_enabled = snapshot.is_enabled,
-          updated_at = now()
-      FROM snapshot
-      WHERE snapshot.automation_id = live.automation_id
-        AND snapshot.rank = live.rank`, [params.id]);
-    } else {
-      await execute(`UPDATE ai_routing_states
-        SET status = $2, updated_at = now()
-        WHERE id = $1`, [params.id, status]);
+    const state = status === "published"
+      ? await queryOne<any>(
+          `WITH guard AS (
+             SELECT pg_advisory_xact_lock(hashtext('ai-routing-state-publish'))
+           ), target AS (
+             SELECT s.id FROM ai_routing_states s CROSS JOIN guard WHERE s.id = $1
+           ), archived AS (
+             UPDATE ai_routing_states SET status = 'archived', updated_at = now()
+             WHERE status = 'published' AND id <> $1 AND EXISTS (SELECT 1 FROM target)
+           ), published AS (
+             UPDATE ai_routing_states s
+             SET status = 'published', published_at = now(), updated_at = now()
+             FROM target t WHERE s.id = t.id RETURNING s.*
+           ), activated AS (
+             INSERT INTO ai_runtime_config (singleton, active_routing_state_id, updated_by, updated_at)
+             SELECT true, id, $2, now() FROM published
+             ON CONFLICT (singleton) DO UPDATE
+               SET active_routing_state_id = EXCLUDED.active_routing_state_id,
+                   updated_by = EXCLUDED.updated_by, updated_at = now()
+           ), synced AS (
+             INSERT INTO ai_automation_routes
+               (automation_id, rank, ai_key_id, provider, model_override, is_enabled, updated_at)
+             SELECT r.automation_id, r.rank, r.ai_key_id, r.provider,
+                    r.model_override, r.is_enabled, now()
+             FROM ai_routing_state_routes r JOIN published p ON p.id = r.state_id
+             ON CONFLICT (automation_id, rank) DO UPDATE
+               SET ai_key_id = EXCLUDED.ai_key_id,
+                   provider = EXCLUDED.provider,
+                   model_override = EXCLUDED.model_override,
+                   is_enabled = EXCLUDED.is_enabled,
+                   updated_at = now()
+           ) SELECT * FROM published`,
+          [params.id, context?.profile.user_id ?? null]
+        )
+      : await queryOne<any>(`UPDATE ai_routing_states
+          SET status = $2, updated_at = now()
+          WHERE id = $1
+            AND id IS DISTINCT FROM (SELECT active_routing_state_id FROM ai_runtime_config WHERE singleton = true)
+          RETURNING *`, [params.id, status]);
+    if (!state) {
+      const exists = await queryOne<{ id: string }>("SELECT id FROM ai_routing_states WHERE id = $1", [params.id]);
+      if (exists && status !== "published") {
+        return NextResponse.json(
+          { error: "The active routing state cannot be archived or returned to draft. Publish another state first." },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json({ error: "Routing state not found" }, { status: 404 });
     }
-    const state = await queryOne<any>("SELECT * FROM ai_routing_states WHERE id = $1", [params.id]);
-    if (!state) return NextResponse.json({ error: "Routing state not found" }, { status: 404 });
     return NextResponse.json({ state });
   } catch (err: any) {
     return NextResponse.json({ error: sanitizeApiError(err) }, { status: 500 });

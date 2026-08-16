@@ -1,6 +1,6 @@
 // AI calls for the Falood chatbot studio (/falood/studio/tailor/[id]).
 // Previously src/app/api/falood/suggestions and .../extract-skills called
-// OpenAI directly via a raw process.env.OPENAI_API_KEY, bypassing this app's
+// OpenAI directly via a raw deployment credential, bypassing this app's
 // entire multi-provider routing/key-management system entirely. Confirmed
 // live: that key's OpenAI account is out of billing quota
 // (insufficient_quota), so every chat message failed. Routed through

@@ -28,6 +28,7 @@ interface MailThread {
   replied_at: string | null;
   gmail_is_unread: boolean;
   gmail_is_important: boolean;
+  attachment_metadata: { filename?: string; mimeType?: string; size?: number }[];
   suppression_reason: string | null;
   suppression_rule: string | null;
   open_task_count: number;
@@ -41,6 +42,7 @@ interface MailMessage extends MailThread {
   ingested_at: string;
   triaged_at: string | null;
   interview_details: Record<string, unknown> | null;
+  ai_evidence: Record<string, unknown> | null;
 }
 
 interface DetailActionItem {
@@ -93,6 +95,9 @@ export default function InboxPage() {
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
   const [tasks, setTasks] = useState<EmailTask[]>([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [gmailCandidateId, setGmailCandidateId] = useState("");
+  const [connectingClientGmail, setConnectingClientGmail] = useState(false);
   const busyRef = useRef(false);
 
   const loadCounts = useCallback(async () => {
@@ -217,6 +222,27 @@ export default function InboxPage() {
     }
   }
 
+  function connectClientGmail() {
+    if (!gmailCandidateId || connectingClientGmail) return;
+    setConnectingClientGmail(true);
+    window.location.href = `/api/integrations/gmail/start?owner=candidate&candidateId=${encodeURIComponent(gmailCandidateId)}&redirect=${encodeURIComponent("/inbox")}`;
+  }
+
+  async function bulkCorrect(status: "dismissed" | "done") {
+    if (!selectedTaskIds.length) return;
+    const res = await fetch("/api/action-items/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: selectedTaskIds, status, reason: "Bulk corrected from Gmail inbox" }) });
+    if (!res.ok) { setMessage("Bulk correction failed."); return; }
+    setSelectedTaskIds([]); await Promise.all([loadTasks(), loadCounts()]);
+  }
+
+  async function submitFeedback(kind: "noise" | "relevant" | "needs_reply") {
+    if (!detail) return;
+    const res = await fetch(`/api/gmail-communications/${detail.message.id}/feedback`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) });
+    if (!res.ok) { setMessage("Could not save email feedback."); return; }
+    setMessage(kind === "noise" ? "Email marked as noise and related work dismissed." : "Email feedback saved.");
+    await Promise.all([loadCounts(), loadTasks(), openThread(detail.message.id)]);
+  }
+
   function onProposalDecided(itemId: string) {
     setDetail((prev) => prev ? { ...prev, actionItems: prev.actionItems.map((a) => a.id === itemId ? { ...a, decision: "decided" } : a) } : prev);
     loadCounts();
@@ -274,8 +300,17 @@ export default function InboxPage() {
           <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
           <p className="page-kicker" style={{ margin: 0 }}>Recruiting email, AI findings, application matches, and AE follow-up in one place.</p>
         </div>
-        <button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}><Link href="/inbox/command-center" className="btn-primary" style={{textDecoration:"none"}}>Command center</Link><Link href="/inbox/health" className="btn" style={{textDecoration:"none"}}>Inbox health</Link><Link href="/gmail-sender-rules" className="btn" style={{textDecoration:"none"}}>Sender rules</Link><button className="btn-primary" onClick={forceSync} disabled={syncing}>{syncing ? "Syncing…" : "↻ Sync Gmail"}</button></div>
       </div>
+
+      <section className="card" style={{ padding: 16, marginBottom: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ minWidth: 260, flex: 1 }}><strong>Connect a client Gmail</strong><div className="text-muted-foreground" style={{ fontSize: 12, marginTop: 4 }}>Admins and managers can start OAuth for a selected candidate. The client signs into Google and grants mailbox access.</div></div>
+        <select value={gmailCandidateId} onChange={(event) => setGmailCandidateId(event.target.value)} style={{ minWidth: 240 }} aria-label="Client candidate for Gmail connection">
+          <option value="">Select client candidate…</option>
+          {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+        </select>
+        <button className="btn-primary" onClick={connectClientGmail} disabled={!gmailCandidateId || connectingClientGmail}>{connectingClientGmail ? "Opening Google…" : "Connect client Gmail"}</button>
+      </section>
 
       <div className="stats-strip" style={{ marginBottom: 16 }}>
         {tiles.map((tile) => {
@@ -306,7 +341,8 @@ export default function InboxPage() {
         <div className="card" style={{ padding: 16, marginBottom: 16 }}>
           <h3 style={{ margin: "0 0 10px", fontSize: 14, fontWeight: 700 }}>Needs a reply or a manual check ({tasks.length})</h3>
           <div style={{ display: "grid", gap: 8 }}>
-            {tasks.map((task) => <EmailTaskRow key={task.id} task={task} onUpdate={updateTask} />)}
+            {tasks.length > 0 && <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",padding:"8px 0"}}><strong>{selectedTaskIds.length} selected</strong><button className="btn" disabled={!selectedTaskIds.length} onClick={()=>void bulkCorrect("dismissed")}>Dismiss selected</button><button className="btn" disabled={!selectedTaskIds.length} onClick={()=>void bulkCorrect("done")}>Resolve selected</button></div>}
+            {tasks.map((task) => <div key={task.id} style={{display:"grid",gridTemplateColumns:"22px minmax(0,1fr)",gap:8,alignItems:"start"}}><input type="checkbox" checked={selectedTaskIds.includes(task.id)} onChange={(e)=>setSelectedTaskIds(prev=>e.target.checked?[...prev,task.id]:prev.filter(id=>id!==task.id))} aria-label={`Select ${task.title}`} /><EmailTaskRow task={task} onUpdate={updateTask} /></div>)}
           </div>
         </div>
       )}
@@ -386,6 +422,8 @@ export default function InboxPage() {
                 <a className="btn" href={detail.gmailUrl} target="_blank" rel="noreferrer">Open Gmail</a>
               </div>
               {detail.message.ai_summary && <div style={{ marginTop: 12, padding: 10, borderRadius: 8, background: "var(--accent-soft)", fontSize: 13 }}>{detail.message.ai_summary}</div>}
+              {detail.message.ai_evidence && Object.keys(detail.message.ai_evidence).length > 0 && <details style={{ marginTop: 10 }}><summary className="muted" style={{ cursor: "pointer" }}>Why AI classified this</summary><pre style={{ whiteSpace: "pre-wrap", fontSize: 11, color: "var(--ink-soft)", marginTop: 8 }}>{JSON.stringify(detail.message.ai_evidence, null, 2)}</pre></details>}
+              {!!detail.message.attachment_metadata?.length && <div className="muted" style={{ marginTop: 10 }}>Attachments: {detail.message.attachment_metadata.map((a) => a.filename || "unnamed file").join(", ")}</div>}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
                 <span className="badge">{categoryLabel(detail.message.ai_category)}</span>
                 {detail.message.ai_confidence !== null && <span className="badge">AI {Math.round(detail.message.ai_confidence * 100)}%</span>}
@@ -426,6 +464,11 @@ export default function InboxPage() {
                   <div style={{ marginTop: 10, whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.55 }}>{mail.body_text || mail.snippet || "No body text captured."}</div>
                 </article>
               ))}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingTop: 4 }}>
+                <button className="btn" onClick={() => void submitFeedback("noise")}>Mark noise</button>
+                <button className="btn" onClick={() => void submitFeedback("relevant")}>Mark relevant</button>
+                <button className="btn" onClick={() => void submitFeedback("needs_reply")}>Needs reply</button>
+              </div>
               {detail.actionItems.filter((a) => a.type !== "status_change_approval").length > 0 && (
                 <div>
                   <strong style={{ fontSize: 13 }}>Workflow actions</strong>

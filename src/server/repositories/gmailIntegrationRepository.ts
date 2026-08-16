@@ -95,3 +95,7 @@ export async function updateGmailBackfillState(id: string, nextPageToken: string
     [nextPageToken, complete, id]
   );
 }
+
+export async function saveGmailWatch(id: string, channelId: string, expiration: string, historyId: string) {
+  await execute(`UPDATE integration_accounts SET gmail_watch_channel_id=$1, gmail_watch_expiration=$2, gmail_history_id=COALESCE($3,gmail_history_id), updated_at=now() WHERE id=$4`, [channelId, expiration, historyId, id]);
+}

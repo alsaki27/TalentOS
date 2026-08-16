@@ -14,6 +14,8 @@ export interface ApplicationResumeExportRow {
   file_name: string;
   file_path: string | null;
   storage_provider: string | null;
+  storage_url: string | null;
+  storage_item_id: string | null;
   file_size_bytes: number | null;
   status: ExportStatus;
   error: string | null;

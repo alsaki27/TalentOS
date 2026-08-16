@@ -3,6 +3,15 @@
 
 const GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
+export async function watchGmailMailbox(accessToken: string, topicName: string): Promise<{ historyId: string; expiration: string }> {
+  const res = await gmailFetch("/watch", accessToken, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topicName, labelIds: ["INBOX", "SENT"] }),
+  });
+  const data = await res.json();
+  return { historyId: data.historyId, expiration: new Date(Number(data.expiration)).toISOString() };
+}
+
 async function gmailFetch(path: string, accessToken: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set("Authorization", "Bearer " + accessToken);
@@ -68,7 +77,10 @@ interface GmailMessageListResponse {
 export async function listMessageIds(accessToken: string, query: string, pageToken?: string): Promise<GmailMessageListResponse> {
   const url = new URL(`${GMAIL_BASE}/messages`);
   url.searchParams.set("q", query);
-  url.searchParams.set("maxResults", "50");
+  // Gmail permits up to 500 results per list call.  The sync worker still
+  // bounds detail fetch concurrency, but using the full page size means a
+  // historical mailbox is not artificially slowed by 50-message pages.
+  url.searchParams.set("maxResults", "500");
   if (pageToken) url.searchParams.set("pageToken", pageToken);
 
   const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -123,6 +135,7 @@ export interface GmailMessage {
   bodyText: string;
   sentAt: string;
   direction: "inbound" | "outbound";
+  attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string | null }>;
 }
 
 function decodeBase64Url(data: string): string {
@@ -158,6 +171,15 @@ function extractBodyText(payload: any): string {
   return "";
 }
 
+export function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
+  if (!payload) return result;
+  if (payload.filename && payload.body && (payload.body.attachmentId || payload.body.size)) {
+    result.push({ filename: payload.filename, mimeType: payload.mimeType || "application/octet-stream", size: Number(payload.body.size || 0), attachmentId: payload.body.attachmentId || null });
+  }
+  for (const part of payload.parts || []) extractAttachments(part, result);
+  return result;
+}
+
 function headerValue(headers: { name: string; value: string }[], name: string): string | null {
   const h = headers.find((x) => x.name.toLowerCase() === name.toLowerCase());
   return h ? h.value : null;
@@ -189,5 +211,6 @@ export async function getMessage(accessToken: string, messageId: string, ownerEm
     bodyText: extractBodyText(data.payload).slice(0, 20000),
     sentAt: dateHeader ? new Date(dateHeader).toISOString() : new Date(Number(data.internalDate)).toISOString(),
     direction: ownerEmail && from?.toLowerCase().includes(ownerEmail.toLowerCase()) ? "outbound" : "inbound",
+    attachments: extractAttachments(data.payload),
   };
 }

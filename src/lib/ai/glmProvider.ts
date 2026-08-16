@@ -12,14 +12,13 @@ const GLM_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions";
 // Pick a current model via the admin AI Key Manager UI or GLM_MODEL instead.
 const DEFAULT_MODEL = "glm-4-plus";
 
-export function getGlmProvider(model?: string): AiProvider | null {
-  const apiKey = process.env.GLM_API_KEY;
+export function getGlmProvider(model?: string, apiKey?: string, apiUrl = GLM_API_URL): AiProvider | null {
   if (!apiKey) return null;
 
   return createOpenAiCompatibleProvider({
-    apiUrl: GLM_API_URL,
+    apiUrl,
     apiKey,
-    model: model || process.env.GLM_MODEL || DEFAULT_MODEL,
+    model: model || DEFAULT_MODEL,
     errorLabel: "GLM API",
   });
 }

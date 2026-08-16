@@ -23,6 +23,10 @@ export interface EmailTask {
   gmail_thread_id: string | null;
   job_title: string | null;
   company_name: string | null;
+  email_from?: string | null;
+  email_category?: string | null;
+  email_confidence?: number | null;
+  suppression_rule?: string | null;
 }
 
 export default function EmailTaskRow({
@@ -82,6 +86,7 @@ export default function EmailTaskRow({
           {task.candidate_name}{task.job_title ? " · " + task.job_title : ""}{task.company_name ? " at " + task.company_name : ""}
         </div>
         {task.email_subject && <div style={{ marginTop: 4, color: "var(--ink)", fontSize: 12, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>&ldquo;{task.email_subject}&rdquo;</div>}
+        {(task.email_from || task.email_category) && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 11 }}>Signal: {task.email_category?.replaceAll("_", " ") || "email"} · {task.email_from || "unknown sender"}{task.email_confidence != null ? ` · ${Math.round(Number(task.email_confidence) * 100)}% confidence` : ""}</div>}
         {task.description && <div style={{ marginTop: 4, color: "var(--ink-soft)", fontSize: 12 }}>{task.description}</div>}
         {task.type === "untracked_application" && (
           <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 6, maxWidth: 700 }}>

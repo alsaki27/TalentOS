@@ -31,7 +31,23 @@ export async function runJobLens(
   const raw = textOf(response.content);
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
   const parsed = JSON.parse(stripped);
-  const validated = JobAnalysisSchema.parse(parsed);
+  // The job record is authoritative for identity. A provider occasionally
+  // omits title/company while still returning valid requirement analysis;
+  // treating that omission as a fatal workflow error wastes the entire run.
+  // Fill only identity fields from the stored job and leave all analytical
+  // fields provider-generated so we never invent requirements.
+  const normalized = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? {
+        ...(parsed as Record<string, unknown>),
+        title: typeof (parsed as any).title === "string" && (parsed as any).title.trim()
+          ? (parsed as any).title
+          : (typeof ctx.job?.title === "string" ? ctx.job.title : ""),
+        company: typeof (parsed as any).company === "string" && (parsed as any).company.trim()
+          ? (parsed as any).company
+          : (typeof ctx.job?.company === "string" ? ctx.job.company : "Unknown company"),
+      }
+    : parsed;
+  const validated = JobAnalysisSchema.parse(normalized);
   if ("error" in validated) throw new Error(`Job Lens output validation failed: ${validated.error}`);
 
   // ── DEBUG: Job Lens ─────────────────────────────────────────────

@@ -63,10 +63,13 @@ describe("runJobLens", () => {
     await expect(runJobLens({}, provider, makeContext())).rejects.toThrow();
   });
 
-  it("throws on missing title in AI output", async () => {
+  it("falls back to the canonical job title when AI omits it", async () => {
     const provider = mockProvider(JSON.stringify({ company: "Acme" }));
     const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    await expect(runJobLens({}, provider, makeContext())).rejects.toThrow("output validation failed");
+    await expect(runJobLens({}, provider, makeContext())).resolves.toMatchObject({
+      title: "Engineer",
+      company: "Acme",
+    });
   });
 });
 

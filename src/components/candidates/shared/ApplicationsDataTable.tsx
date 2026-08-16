@@ -272,6 +272,7 @@ export default function ApplicationsDataTable({
                             }}
                           >Copilot</button>
                         )}
+                        <a href={"/applications/" + app.application_id} target="_blank" rel="noreferrer" title="Open application record in a new tab" style={{ height: 28, borderRadius: 6, padding: "0 8px", display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--accent)", background: "rgba(99,102,241,0.12)", color: "var(--accent)", fontSize: 11, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Open · {app.application_id.slice(0, 8)}</a>
                         <button
                           onClick={function () { handleToggle(app.application_id, app.status, "replied"); }}
                           disabled={isLoading}

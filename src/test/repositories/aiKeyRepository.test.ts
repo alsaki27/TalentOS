@@ -31,6 +31,7 @@ vi.mock("@/server/security/secretCrypto", () => ({
   encryptSecret: vi.fn(),
   decryptSecret: decryptSecretMock,
   fingerprintKey: vi.fn(),
+  isEncryptionAvailable: () => false,
 }));
 
 import { getAiKeyWithDecryptedKey } from "@/server/repositories/aiKeyRepository";

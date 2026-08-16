@@ -28,7 +28,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     );
   } else if (status === "in_progress") {
     await execute(
-      "UPDATE action_items SET status = $1, taken_over_at = COALESCE(taken_over_at, now()), taken_over_by_user_id = $2, resolution_note = COALESCE($3, resolution_note) WHERE id = $4",
+      "UPDATE action_items SET status = $1, assigned_to_user_id = $2, taken_over_at = COALESCE(taken_over_at, now()), taken_over_by_user_id = $2, resolution_note = COALESCE($3, resolution_note) WHERE id = $4",
       [status, context.profile.user_id, typeof body.resolution_note === "string" ? body.resolution_note.trim().slice(0, 4000) : null, params.id]
     );
   } else {

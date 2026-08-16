@@ -27,6 +27,44 @@ function normalizeRow(row: any) {
   };
 }
 
+async function resolveArchiveContext(name: unknown) {
+  if (typeof name !== "string") return null;
+  const match = /^application_resume_version:([0-9a-f-]{36})$/i.exec(name.trim());
+  if (!match) return null;
+
+  const resumeVersionId = match[1];
+  const version = await queryOne<{ application_id: string | null; candidate_id: string; target_job_id: string }>(
+    `SELECT application_id, candidate_id, target_job_id
+     FROM application_resume_versions WHERE id = $1`,
+    [resumeVersionId]
+  );
+  if (!version) return null;
+
+  let applicationId = version.application_id;
+  if (!applicationId) {
+    const packet = await queryOne<{ application_id: string }>(
+      `SELECT application_id FROM application_packets
+       WHERE resume_version_id = $1 OR final_resume_version_id = $1 LIMIT 1`,
+      [resumeVersionId]
+    );
+    applicationId = packet?.application_id ?? null;
+  }
+  if (!applicationId) {
+    const fallback = await queryOne<{ id: string }>(
+      `SELECT a.id
+       FROM applications a
+       JOIN target_jobs tj ON tj.job_id = a.job_id
+       WHERE a.candidate_id = $1 AND tj.id = $2
+       ORDER BY a.applied_at DESC NULLS LAST, a.created_at DESC NULLS LAST
+       LIMIT 1`,
+      [version.candidate_id, version.target_job_id]
+    );
+    applicationId = fallback?.id ?? null;
+  }
+
+  return applicationId ? { applicationId, resumeVersionId } : null;
+}
+
 // GET — list all, or get one by ?id=
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
@@ -44,7 +82,9 @@ export async function GET(req: NextRequest) {
       if (!row) {
         return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
       }
-      return NextResponse.json({ success: true, data: normalizeRow(row) });
+      const data = normalizeRow(row);
+      data.archiveContext = await resolveArchiveContext(row.name);
+      return NextResponse.json({ success: true, data });
     }
 
     const rows = await query<any>(

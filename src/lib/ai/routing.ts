@@ -5,11 +5,10 @@
 import { AiProvider, AiMessage, AiTool } from "@/lib/ai/provider";
 import { estimateCost } from "@/lib/ai/pricing";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { listEnabledAiKeys, getAiKeyWithDecryptedKey, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
+import { listEnabledAiKeys, getAiKeyWithDecryptedKey, recordAiKeyFailure, recordAiKeySuccess, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
 import { buildProviderFromDbKey, getActiveProviderWithFallback } from "@/server/services/aiProvider";
-import { getProviderByName } from "@/lib/ai/index";
-
-const ALLOW_GLOBAL_FALLBACK = process.env.ALLOW_GLOBAL_AI_FALLBACK === 'true'; // default false for production
+import { createMockProvider } from "@/lib/ai/mockProvider";
+import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 
 export interface AutomationRouteResult {
   provider: AiProvider;
@@ -17,6 +16,7 @@ export interface AutomationRouteResult {
   aiKeyId: string | null;
   automationId: string;
   model?: string | null;
+  reasoningEffort?: string | null;
   routeRank: number | null;
   /** Stable route id, used to retry a different model on the same provider key. */
   routeId?: string | null;
@@ -31,6 +31,25 @@ interface AutomationRouteRow {
   rank: number;
   is_enabled: boolean;
   model_override: string | null;
+  reasoning_effort?: string | null;
+}
+
+// These providers are intentionally pooled by provider rather than treated as
+// a single credential. A route may name one key as its anchor, but a failed or
+// cooling key should give its siblings a chance before the route advances to
+// the next provider/model fallback.
+const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
+  "opencode",
+  "google_vertex_proxy",
+]);
+
+function isKeyHealthBlocked(keyRow: { status: AiKeyStatus; last_failure_at?: string | null }): boolean {
+  if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
+  if (keyRow.status !== "rate_limited" && keyRow.status !== "quota_exhausted") return false;
+  const failedAt = keyRow.last_failure_at ? Date.parse(keyRow.last_failure_at) : Number.NaN;
+  // Provider-side throttles are not permanent circuit breakers. Retry after a
+  // cooling window; database request/budget limits remain independently enforced.
+  return Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000;
 }
 
 async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?: string }> {
@@ -80,9 +99,59 @@ async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?:
   return { allowed: true };
 }
 
+type PoolCursorRow = { start_index: number | string | null };
+
+/**
+ * Advance a provider pool cursor atomically. If the additive cursor migration
+ * has not reached a worker yet, fail open to index zero so a routing deploy
+ * never takes down all AI calls; the next successful migration run restores
+ * round-robin behavior.
+ */
+async function nextPoolIndex(provider: string, size: number): Promise<number> {
+  if (size <= 1 || !ROUND_ROBIN_POOL_PROVIDERS.has(provider)) return 0;
+  try {
+    const row = await queryOne<PoolCursorRow>(
+      `INSERT INTO ai_key_pool_cursors (pool_key, next_index, updated_at)
+       VALUES ($1, 1, now())
+       ON CONFLICT (pool_key) DO UPDATE
+         SET next_index = ai_key_pool_cursors.next_index + 1,
+             updated_at = now()
+       RETURNING next_index - 1 AS start_index`,
+      [provider]
+    );
+    const value = Number(row?.start_index ?? 0);
+    return Number.isFinite(value) ? Math.max(0, Math.floor(value)) % size : 0;
+  } catch (error) {
+    console.warn(`[routing] round-robin cursor unavailable for ${provider}; using priority order`, error);
+    return 0;
+  }
+}
+
+/**
+ * Return enabled sibling keys in a rotating order. The route's model override
+ * is applied later, so all keys in a provider pool use the same model tier.
+ */
+async function getPoolKeyMetadata(
+  provider: string,
+  excludeKeyIds?: Set<string>,
+): Promise<any[]> {
+  const keys = (await listEnabledAiKeys())
+    .filter((key) => key.provider === provider && !excludeKeyIds?.has(key.id))
+    .filter((key) => !isKeyHealthBlocked(key as any))
+    .sort((a, b) => {
+      const priority = (a.priority ?? 100) - (b.priority ?? 100);
+      if (priority !== 0) return priority;
+      return String(a.created_at ?? "").localeCompare(String(b.created_at ?? "")) || a.id.localeCompare(b.id);
+    });
+
+  if (keys.length <= 1 || !ROUND_ROBIN_POOL_PROVIDERS.has(provider)) return keys;
+  const start = await nextPoolIndex(provider, keys.length);
+  return keys.slice(start).concat(keys.slice(0, start));
+}
+
 /**
  * Resolve a provider for the given automation by walking its ordered fallback chain.
- * Falls back to the global env-based chain if no routes are configured or all fail.
+ * Optionally falls back to the Neon global key pool if runtime policy allows it.
  */
 export async function getProviderForAutomation(
   automationId: string,
@@ -92,102 +161,108 @@ export async function getProviderForAutomation(
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
-    const mockProv = getProviderByName("mock");
-    if (mockProv) {
-      return {
-        provider: mockProv.provider,
-        name: "mock",
-        aiKeyId: null,
-        automationId,
-        routeRank: 0,
-        routeId: null,
-      };
-    }
+    return {
+      provider: createMockProvider(),
+      name: "mock",
+      aiKeyId: null,
+      automationId,
+      routeRank: 0,
+      routeId: null,
+    };
   }
 
-  // 1. Load ordered enabled routes for this automation
-  const routes = await query<AutomationRouteRow>(
-    `SELECT * FROM ai_automation_routes
-     WHERE automation_id = $1 AND is_enabled = $2
-     ORDER BY rank ASC`,
-    [automationId, true]
-  );
+  const runtime = await getAiRuntimeConfig();
+  let routes = runtime.active_routing_state_id
+    ? await query<AutomationRouteRow>(
+        `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
+                automation_id, ai_key_id, provider, rank, is_enabled, model_override,
+                reasoning_effort
+         FROM ai_routing_state_routes
+         WHERE state_id = $1 AND automation_id = $2 AND is_enabled = true
+         ORDER BY rank ASC`,
+        [runtime.active_routing_state_id, automationId]
+      )
+    : [];
+  if (routes.length === 0) {
+    routes = await query<AutomationRouteRow>(
+      `SELECT * FROM ai_automation_routes
+       WHERE automation_id = $1 AND is_enabled = true
+       ORDER BY rank ASC`,
+      [automationId]
+    );
+  }
 
   // 2. Try each route in order, excluding failed keys
   let limitSkipped = false;
   for (const route of routes) {
     if (excludeRouteIds?.has(route.id)) continue;
     if (route.ai_key_id) {
-      if (excludeKeyIds?.has(route.ai_key_id)) continue;
-      const keyRow = await getAiKeyWithDecryptedKey(route.ai_key_id);
-      if (!keyRow || !keyRow.is_enabled) continue;
-      // Skip this key's provider if it already returned a rate-limit error
-      // in the current call chain.
-      if (excludeProviderNames?.has(keyRow.provider)) continue;
-      const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
-      if (blockedStatuses.includes(keyRow.status)) continue;
+      // An explicit key is the route's anchor. For pooled providers, sibling
+      // keys are alternatives at this same route rank; for every other
+      // provider the historical exact-key behavior is preserved.
+      const anchorMetadata = (await listEnabledAiKeys()).find((key) => key.id === route.ai_key_id);
+      const anchor = await getAiKeyWithDecryptedKey(route.ai_key_id);
+      const anchorProvider = anchor?.provider ?? anchorMetadata?.provider;
+      if (!anchorProvider) continue;
+      if (excludeProviderNames?.has(anchorProvider)) continue;
+      const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider)
+        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds)
+        : (anchor && !excludeKeyIds?.has(route.ai_key_id) ? [anchor] : []);
 
-      const limitCheck = await checkKeyLimits(keyRow);
-      if (!limitCheck.allowed) {
-        limitSkipped = true;
-        await recordUsageEvent({
-          automationId,
-          aiKeyId: keyRow.id,
-          provider: keyRow.provider,
-          model: route.model_override ?? keyRow.model ?? null,
-          outcome: "skipped",
-          latencyMs: 0,
-          inputTokens: null,
-          outputTokens: null,
-          errorMessage: null,
-          errorCode: limitCheck.reason ?? null,
-          userId: null,
-          workflowId: null,
-          applicationId: null,
-          attemptNumber: null,
-          routeRank: route.rank,
-        });
-        continue;
-      }
+      for (const candidate of candidates) {
+        const keyRow = candidate.id === anchor?.id
+          ? anchor
+          : await getAiKeyWithDecryptedKey(candidate.id);
+        if (!keyRow || !keyRow.is_enabled || isKeyHealthBlocked(keyRow)) continue;
 
-      const effectiveModel = route.model_override ?? keyRow.model;
-      const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
-      if (provider) {
-        return {
-          provider,
-          name: keyRow.provider as AutomationRouteResult["name"],
-          aiKeyId: keyRow.id,
-          automationId,
-          model: effectiveModel,
-          routeRank: route.rank,
-          routeId: route.id,
-          limitSkipped,
-        };
+        const limitCheck = await checkKeyLimits(keyRow);
+        if (!limitCheck.allowed) {
+          limitSkipped = true;
+          await recordUsageEvent({
+            automationId,
+            aiKeyId: keyRow.id,
+            provider: keyRow.provider,
+            model: route.model_override ?? keyRow.model ?? null,
+            outcome: "skipped",
+            latencyMs: 0,
+            inputTokens: null,
+            outputTokens: null,
+            errorMessage: null,
+            errorCode: limitCheck.reason ?? null,
+            userId: null,
+            workflowId: null,
+            applicationId: null,
+            attemptNumber: null,
+            routeRank: route.rank,
+          });
+          continue;
+        }
+
+        const effectiveModel = route.model_override ?? keyRow.model;
+        const provider = route.reasoning_effort
+          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
+          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
+        if (provider) {
+          return {
+            provider,
+            name: keyRow.provider as AutomationRouteResult["name"],
+            aiKeyId: keyRow.id,
+            automationId,
+            model: effectiveModel,
+            reasoningEffort: route.reasoning_effort,
+            routeRank: route.rank,
+            routeId: route.id,
+            limitSkipped,
+          };
+        }
       }
     } else if (route.provider) {
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
-      const envProvider = getProviderByName(route.provider, route.model_override);
-      if (envProvider) {
-        return {
-          provider: envProvider.provider,
-          name: route.provider as AutomationRouteResult["name"],
-          aiKeyId: null,
-          automationId,
-          model: route.model_override,
-          routeRank: route.rank,
-          routeId: route.id,
-          limitSkipped,
-        };
-      }
-      // Try DB keys for this provider
-      const dbKeys = await listEnabledAiKeys();
+      // Provider-only routes resolve from Neon and never from deployment env.
+      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds);
       for (const key of dbKeys) {
-        if (excludeKeyIds?.has(key.id)) continue;
-        if (excludeProviderNames?.has(key.provider)) continue;
-        if (key.provider !== route.provider) continue;
-        const blockedStatuses: AiKeyStatus[] = ["disabled", "rate_limited", "quota_exhausted", "invalid", "invalid_credential", "admin_limit_reached"];
-        if (blockedStatuses.includes(key.status)) continue;
+        if (isKeyHealthBlocked(key as any)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
 
@@ -215,7 +290,9 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const dbProvider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, (keyRow as any).base_url, (keyRow as any).chat_endpoint);
+        const dbProvider = route.reasoning_effort
+          ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
+          : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
         if (dbProvider) {
           return {
             provider: dbProvider,
@@ -223,6 +300,7 @@ export async function getProviderForAutomation(
             aiKeyId: keyRow.id,
             automationId,
             model: effectiveModel,
+            reasoningEffort: route.reasoning_effort,
             routeRank: route.rank,
             routeId: route.id,
             limitSkipped,
@@ -232,48 +310,15 @@ export async function getProviderForAutomation(
     }
   }
 
-  // 3. Fall back to global env-based chain, then DB keys if the env
-  //    provider is excluded (e.g. rate-limited).
-  if (!ALLOW_GLOBAL_FALLBACK) {
+  // 3. Optional Neon-managed emergency fallback.
+  if (!runtime.allow_unrouted_fallback) {
     throw new Error("All configured routes failed and global fallback is disabled. Configure a route for this automation in /admin/ai → Agents & Routing.");
   }
 
-  const providerNames: Array<"anthropic" | "openai" | "nvidia" | "google" | "google_vertex_proxy" | "glm" | "mock"> = [
-    "anthropic", "nvidia", "google_vertex_proxy", "google", "openai", "glm",
-  ];
-
-  for (const name of providerNames) {
-    if (excludeProviderNames?.has(name)) continue;
-    const envProv = getProviderByName(name);
-    if (!envProv) continue;
-    await recordUsageEvent({
-      automationId,
-      aiKeyId: null,
-      provider: name,
-      model: null,
-      outcome: "success",
-      latencyMs: 0,
-      inputTokens: null,
-      outputTokens: null,
-      errorMessage: null,
-      errorCode: "global_emergency_fallback",
-      userId: null,
-      workflowId: null,
-      applicationId: null,
-      attemptNumber: null,
-      routeRank: null,
-    });
-    return {
-      provider: envProv.provider,
-      name,
-      aiKeyId: null,
-      automationId,
-      routeRank: null,
-      routeId: null,
-    };
-  }
-
-  // 4. Last resort — DB-managed keys
+  // Emergency fallback is still Neon-managed. There is deliberately no
+  // environment-provider loop here: provider keys outside the Control Center
+  // would make production routing impossible to inspect or reproduce.
+  // Last resort: the remaining enabled Neon key pool.
   const dbFallback = await getActiveProviderWithFallback();
   if (dbFallback && !excludeProviderNames?.has(dbFallback.name)) {
     await recordUsageEvent({
@@ -378,12 +423,33 @@ export async function callWithUsageTracking<T>(
   let lastResolved: AutomationRouteResult | null = null;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const resolved = await getProviderForAutomation(
-      automationId,
-      excludedKeyIds,
-      attempt > 0 ? excludedProviders : undefined,
-      excludedRouteIds,
-    );
+    let resolved: AutomationRouteResult | null;
+    try {
+      resolved = await getProviderForAutomation(
+        automationId,
+        excludedKeyIds,
+        attempt > 0 ? excludedProviders : undefined,
+        excludedRouteIds,
+      );
+    } catch (routeError) {
+      // Preserve provider/route metadata when the next fallback cannot resolve.
+      // Raw SDK errors here made failed workflow stages lose their key, model,
+      // route rank, and normalized error code in the Control Center.
+      if (lastError) {
+        if (lastError instanceof AiRouteCallError) throw lastError;
+        throw new AiRouteCallError(
+          lastError.message || "No AI provider available",
+          {
+            aiKeyId: lastResolved?.aiKeyId ?? null,
+            provider: lastResolved?.name ?? "unknown",
+            model: lastResolved?.model ?? null,
+            routeRank: lastResolved?.routeRank ?? null,
+            errorCode: classifyErrorCode(lastError),
+          }
+        );
+      }
+      throw routeError;
+    }
 
     if (!resolved) {
       if (lastError) {
@@ -450,6 +516,7 @@ export async function callWithUsageTracking<T>(
         attemptNumber: ctx?.attemptNumber ?? null,
         routeRank: resolved.routeRank,
       });
+      if (resolved.aiKeyId) await recordAiKeySuccess(resolved.aiKeyId).catch(() => {});
 
       return {
         result,
@@ -489,18 +556,27 @@ export async function callWithUsageTracking<T>(
         attemptNumber: ctx?.attemptNumber ?? null,
         routeRank: resolved.routeRank,
       });
+      if (resolved.aiKeyId) await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
 
       // On rate-limit / quota errors, exclude this provider and retry.
-      const isRetriable =
-        errorCode === "rate_limit" || errorCode === "auth_error";
+      const isRetriable = ["rate_limit", "auth_error", "timeout", "server_error", "not_found", "configuration_error"].includes(errorCode ?? "");
 
       if (isRetriable && attempt < MAX_RETRIES) {
-        // Exclude the exact failed route, not the whole key/provider. This
-        // allows a model-level fallback (for example DeepSeek V4 -> MiniMax)
-        // to reuse the same OpenCode gateway credential safely.
-        if (resolved.routeId) excludedRouteIds.add(resolved.routeId);
-        // Keep provider exclusions for global emergency fallback only; route
-        // selection above is now precise at the route-id level.
+        if (errorCode === "auth_error") {
+          if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
+          else if (resolved.name) excludedProviders.add(resolved.name);
+        } else if (resolved.aiKeyId) {
+          // Keep the route rank alive and rotate to a sibling key for pooled
+          // providers. The next route rank is reached only after the entire
+          // same-provider pool has been exhausted or cooled down.
+          excludedKeyIds.add(resolved.aiKeyId);
+        } else if (resolved.routeId) {
+          // Exclude the exact failed route, not the whole key/provider. This
+          // lets a model-level fallback reuse the same gateway credential.
+          excludedRouteIds.add(resolved.routeId);
+        } else if (resolved.name) {
+          excludedProviders.add(resolved.name);
+        }
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
             `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
@@ -529,6 +605,7 @@ function classifyErrorCode(err: any): string | null {
   if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) return "rate_limit";
   if (msg.includes("timeout") || msg.includes("408") || msg.includes("timed out")) return "timeout";
   if (msg.includes("not found") || msg.includes("404")) return "not_found";
+  if ((msg.includes("model") && msg.includes("not available")) || msg.includes("permission_error") || msg.includes("400") || msg.includes("403")) return "configuration_error";
   if (msg.includes("server error") || msg.includes("500") || msg.includes("502") || msg.includes("503")) return "server_error";
   return null;
 }

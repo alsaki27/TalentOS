@@ -11,14 +11,13 @@ import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvide
 const NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 const DEFAULT_MODEL = "moonshotai/kimi-k2.6";
 
-export function getNvidiaProvider(modelOverride?: string | null): AiProvider | null {
-  const apiKey = process.env.NVIDIA_API_KEY;
+export function getNvidiaProvider(modelOverride?: string | null, apiKey?: string, apiUrl = NVIDIA_API_URL): AiProvider | null {
   if (!apiKey) return null;
 
   return createOpenAiCompatibleProvider({
-    apiUrl: NVIDIA_API_URL,
+    apiUrl,
     apiKey,
-    model: modelOverride || process.env.NVIDIA_MODEL || DEFAULT_MODEL,
+    model: modelOverride || DEFAULT_MODEL,
     temperature: 0.4,
     errorLabel: "NVIDIA API",
     extraBody: {

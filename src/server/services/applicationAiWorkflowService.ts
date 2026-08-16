@@ -27,7 +27,6 @@ import {
   listArtifacts,
   claimNextPendingWorkflow,
   updateWorkflowHeartbeat,
-  MAX_CONCURRENT_AI_WORKFLOWS,
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -641,8 +640,15 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         // pipeline move on, record a clear timeout error, and retry/fail
         // cleanly instead of hanging past the claim TTL with no diagnostic.
         const timeoutMs = agentOptions.timeout_ms ?? 300_000;
-        const callResult = await Promise.race([
-          callWithUsageTracking(
+        const heartbeatTimer = setInterval(() => {
+          void updateWorkflowHeartbeat(workflowId).catch(err =>
+            console.warn(`[Workflow ${workflowId}] heartbeat refresh failed`, err)
+          );
+        }, 60_000);
+        let callResult;
+        try {
+          callResult = await Promise.race([
+            callWithUsageTracking(
             agentId,
             callCtx,
             async (provider: AiProvider) => {
@@ -651,10 +657,13 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
             },
             failedKeyIds.size > 0 ? failedKeyIds : undefined,
           ),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`Agent call timed out after ${timeoutMs}ms`)), timeoutMs)
-          ),
-        ]);
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Agent call timed out after ${timeoutMs}ms`)), timeoutMs)
+            ),
+          ]);
+        } finally {
+          clearInterval(heartbeatTimer);
+        }
         agentOutput = callResult.result;
         resolvedProviderName = callResult.providerName;
         resolvedKeyId = callResult.aiKeyId;
@@ -878,18 +887,21 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   // Over the cap, the workflow just stays 'queued' - the periodic dispatcher
   // picks it up in its turn once capacity frees up.
   const claimed = await queryOne(
-    `UPDATE application_ai_workflows
-     SET status = 'running', claimed_at = NOW(), claim_expires_at = NOW() + INTERVAL '2 minutes',
+    `UPDATE application_ai_workflows w
+     SET status = 'running', claimed_at = NOW(),
+         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
          claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
+     FROM ai_runtime_config c
      WHERE id = $1
+       AND c.singleton = true
        AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
        AND (
          status != 'queued'
          OR (SELECT COUNT(*)::int FROM application_ai_workflows
-             WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()) < $2
+             WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()) < c.workflow_max_concurrency
        )
      RETURNING id`,
-    [workflowId, MAX_CONCURRENT_AI_WORKFLOWS]
+    [workflowId]
   );
   if (!claimed) {
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher, or at concurrency capacity" };

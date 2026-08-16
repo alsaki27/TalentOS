@@ -15,7 +15,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             ec.body_text, ec.sent_at, ec.ingested_at, ec.ai_relevant, ec.ai_category,
             ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
             ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
-            ec.gmail_is_unread, ec.gmail_is_important, ec.interview_details,
+            ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence,
             a.status AS application_status, a.application_stage,
             j.id AS job_id, j.title AS job_title, j.company AS company_name
        FROM email_communications ec
@@ -32,7 +32,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             ec.body_text, ec.snippet, ec.sent_at, ec.ai_relevant, ec.ai_category,
             ec.ai_confidence, ec.ai_summary, ec.needs_reply, ec.replied_at,
             ec.triaged_at, ec.gmail_label_ids, ec.gmail_is_unread,
-            ec.gmail_is_important, ec.interview_details
+            ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence
        FROM email_communications ec
       WHERE ec.candidate_id = $1 AND ec.gmail_thread_id = $2
       ORDER BY ec.sent_at ASC, ec.id ASC`,
