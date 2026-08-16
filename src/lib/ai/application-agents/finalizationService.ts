@@ -80,10 +80,14 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   // if the review artifact is somehow missing.
   const reviewArtifact = artifacts.find((a) => a.automation_id === "application_hiring_panel");
   const reviewData = reviewArtifact?.data as ReviewScoreV1 | undefined;
-  const atsScore =
-    typeof reviewData?.atsScore === "number" ? reviewData.atsScore
-    : typeof (finalData as any).finalQaScore === "number" ? (finalData as any).finalQaScore
-    : null;
+  // Some older hiring-panel artifacts contain a placeholder 0 even when Final
+  // Polish produced a valid QA score. Prefer a positive, finite panel score;
+  // otherwise use the final QA score instead of persisting a misleading zero.
+  const panelAts = typeof reviewData?.atsScore === "number" && Number.isFinite(reviewData.atsScore)
+    ? reviewData.atsScore : null;
+  const finalQa = typeof (finalData as any).finalQaScore === "number" && Number.isFinite((finalData as any).finalQaScore)
+    ? (finalData as any).finalQaScore : null;
+  const atsScore = panelAts !== null && panelAts > 0 ? panelAts : finalQa ?? panelAts;
   const truthScore =
     typeof reviewData?.truthfulnessRisk === "number" ? Math.max(0, 10 - reviewData.truthfulnessRisk) : null;
 
@@ -179,7 +183,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
        RETURNING inserted.id`,
 
       dbSql`UPDATE application_ai_workflows
-        SET status = 'completed', completed_at = NOW()
+        SET status = 'completed', completed_at = NOW(), last_error = NULL
         WHERE id = ${workflowId}`,
 
       dbSql`INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)

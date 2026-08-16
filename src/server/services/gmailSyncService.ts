@@ -30,6 +30,17 @@ const BACKFILL_MESSAGES_PER_RUN = Math.max(50, Number(process.env.GMAIL_BACKFILL
 const MESSAGE_FETCH_CONCURRENCY = Math.max(1, Number(process.env.GMAIL_MESSAGE_FETCH_CONCURRENCY || 8));
 const SYNC_TIME_BUDGET_MS = Math.max(5_000, Number(process.env.GMAIL_SYNC_TIME_BUDGET_MS || 25_000));
 const TRIAGE_MESSAGES_PER_RUN = Math.max(0, Number(process.env.GMAIL_TRIAGE_MESSAGES_PER_RUN || 40));
+// Historical mailbox import starts at June 1, 2026. Mahi is intentionally
+// bounded to the same date so his newly connected mailbox cannot pull older
+// personal mail. Keep this explicit until per-candidate privacy settings exist.
+const DEFAULT_BACKFILL_AFTER = "2026/06/01";
+const MAHI_EMAIL = "muhtadymahi@gmail.com";
+
+function backfillQuery(account: Pick<GmailAccountRow, "email">): string {
+  const normalized = (account.email || "").trim().toLowerCase();
+  const after = normalized === MAHI_EMAIL ? DEFAULT_BACKFILL_AFTER : DEFAULT_BACKFILL_AFTER;
+  return `after:${after} in:anywhere -in:spam -in:trash`;
+}
 
 interface SyncOutcome {
   accountId: string;
@@ -82,12 +93,12 @@ async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow)
     }
   }
 
-  // Initial import is not date-limited: candidates asked for historical mail.
-  // Spam/trash are excluded, while gmailSuppressionReason still prevents
-  // personal/promotional messages from being stored or sent to AI triage.
+  // Initial import is bounded to the configured historical window. Spam/trash
+  // are excluded, while gmailSuppressionReason still prevents personal and
+  // promotional messages from being stored or sent to AI triage.
   const page = await listMessageIds(
     accessToken,
-    "in:anywhere -in:spam -in:trash",
+    backfillQuery(account),
     account.gmail_backfill_page_token ?? undefined,
   );
   return {
@@ -158,7 +169,7 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
     const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
     await execute(
       `INSERT INTO gmail_contact_profiles (candidate_id, email, display_name, last_seen_at, inbound_count, outbound_count, last_subject)
-       VALUES ($1, $2, $3, now(), CASE WHEN $4 = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4 = 'outbound' THEN 1 ELSE 0 END, $5)
+       VALUES ($1::uuid, $2::text, $3::text, now(), CASE WHEN $4::text = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4::text = 'outbound' THEN 1 ELSE 0 END, $5::text)
        ON CONFLICT (candidate_id, email) DO UPDATE SET
          display_name = COALESCE(EXCLUDED.display_name, gmail_contact_profiles.display_name),
          last_seen_at = now(),
@@ -231,8 +242,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   const senderDomain = senderAddress.split("@")[1] || null;
   const senderRule = await queryOne<{ sender_class: string; creates_tasks: boolean; can_change_stage: boolean }>(
     `SELECT sender_class, creates_tasks, can_change_stage FROM gmail_sender_rules
-      WHERE (sender_email IS NOT NULL AND lower(sender_email) = $1)
-         OR (sender_domain IS NOT NULL AND lower(sender_domain) = $2)
+      WHERE (sender_email IS NOT NULL AND lower(sender_email) = $1::text)
+         OR (sender_domain IS NOT NULL AND lower(sender_domain) = $2::text)
       ORDER BY sender_email NULLS LAST LIMIT 1`,
     [senderAddress, senderDomain],
   );
@@ -250,8 +261,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `UPDATE email_communications SET
          ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1,
-         needs_reply = false, suppression_reason = $2, suppression_rule = $3, triaged_at = now()
-       WHERE id = $4`,
+         needs_reply = false, suppression_reason = $2::text, suppression_rule = $3::text, triaged_at = now()
+       WHERE id = $4::uuid`,
       [`Filtered by ${verdict.rule}.`, verdict.reason, verdict.rule, id]
     );
     return;
@@ -283,13 +294,13 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
 
   await execute(
     `UPDATE email_communications SET
-       ai_relevant = $1, ai_category = $2, ai_confidence = $3, ai_summary = $4,
-       ai_matched_application_id = $5, needs_reply = $6,
+       ai_relevant = $1::boolean, ai_category = $2::text, ai_confidence = $3::numeric, ai_summary = $4::text,
+       ai_matched_application_id = $5::uuid, needs_reply = $6::boolean,
        response_due_at = CASE WHEN $6 THEN now() + CASE $2 WHEN 'interview_invite' THEN interval '12 hours' WHEN 'scheduling' THEN interval '12 hours' WHEN 'offer' THEN interval '8 hours' WHEN 'recruiter_reply' THEN interval '24 hours' ELSE interval '48 hours' END ELSE NULL END,
        workflow_state = CASE WHEN $6 THEN 'needs_action' WHEN NOT $1 THEN 'suppressed' ELSE 'observed' END,
        ai_evidence = jsonb_build_object('category', $2, 'confidence', $3, 'summary', $4, 'matched_application_id', $5),
        triaged_at = now()
-     WHERE id = $7`,
+       WHERE id = $7::uuid`,
     [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
 
@@ -303,7 +314,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
           : triage.category === "offer" ? "hiring_manager" : "unknown";
     const contactEmail = row.from_email.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || row.from_email.trim().toLowerCase();
     await execute(
-      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1 = 'hiring_manager' THEN $1 ELSE contact_type END WHERE candidate_id = $2 AND email = $3`,
+      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1::text = 'hiring_manager' THEN $1::text ELSE contact_type END WHERE candidate_id = $2::uuid AND email = $3::text`,
       [contactType, row.candidate_id, contactEmail]
     );
     if (contactType !== "unknown") {
@@ -331,7 +342,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
                 SELECT DISTINCT unnest(COALESCE(gmail_label_ids, '{}') || $1::text[])
               ),
               gmail_is_starred = $2
-        WHERE id = $3`,
+        WHERE id = $3::uuid`,
       [addLabels, addLabels.includes("STARRED"), id],
     );
   } catch (labelError) {
@@ -344,7 +355,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `INSERT INTO application_email_links
          (application_id, email_communication_id, match_method, match_confidence)
-       VALUES ($1, $2, 'ai', $3)
+       VALUES ($1, $2, 'ai', $3::numeric)
        ON CONFLICT (application_id, email_communication_id) DO UPDATE
          SET match_confidence = EXCLUDED.match_confidence`,
       [triage.matchedApplicationId, id, triage.confidence],
@@ -352,7 +363,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `INSERT INTO application_comments
          (application_id, commenter_name, body, visible_to_candidate, source_type, email_communication_id, ai_confidence)
-       VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4)
+       VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4::numeric)
        ON CONFLICT (email_communication_id) WHERE email_communication_id IS NOT NULL DO NOTHING`,
       [triage.matchedApplicationId, triage.summary || `Relevant ${triage.category.replace("_", " ")} email detected.`, id, triage.confidence]
     );
@@ -677,7 +688,17 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       let processedMessages = 0;
       let triagedMessages = 0;
       while (true) {
-        const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, (messageId) => getMessage(accessToken, messageId, account.email)))
+        const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, async (messageId) => {
+          try {
+            return await getMessage(accessToken, messageId, account.email);
+          } catch (error: any) {
+            // Gmail can return FAILED_PRECONDITION for an individual message
+            // (deleted/invalidated message, attachment state, or a transient
+            // provider inconsistency). Do not abort the entire mailbox batch.
+            console.warn(`[Gmail sync] Skipping message ${messageId}: ${error?.message || error}`);
+            return null;
+          }
+        }))
           .filter((msg): msg is GmailMessage => Boolean(msg));
         for (const msg of messages) {
         if (classifyGmailMessage(msg).suppress) {
@@ -690,9 +711,15 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         // capped so a large historical page cannot hold the Gmail cursor open
         // for minutes; subsequent scheduled runs continue triage safely.
         if (storedId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
-          await triageStoredMessage(storedId, accessToken);
-          outcome.triaged++;
-          triagedMessages++;
+          try {
+            await triageStoredMessage(storedId, accessToken);
+            outcome.triaged++;
+            triagedMessages++;
+          } catch (triageError: any) {
+            // Triage is secondary to mailbox replication. A malformed sender
+            // rule or nullable AI field must not stop the backfill cursor.
+            console.warn(`[Gmail sync] Triage failed for ${storedId}; keeping message for retry: ${triageError?.message || triageError}`);
+          }
         }
           processedMessages++;
         }
@@ -700,7 +727,7 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         if (fetchResult.fromHistory) break;
         await updateGmailBackfillState(accountRow.id, fetchResult.nextBackfillPageToken, fetchResult.backfillComplete);
         if (fetchResult.backfillComplete || pages >= BACKFILL_PAGES_PER_RUN || processedMessages >= BACKFILL_MESSAGES_PER_RUN || Date.now() - startedAt >= SYNC_TIME_BUDGET_MS) break;
-        const nextPage = await listMessageIds(accessToken, "in:anywhere -in:spam -in:trash", fetchResult.nextBackfillPageToken ?? undefined);
+        const nextPage = await listMessageIds(accessToken, backfillQuery(account), fetchResult.nextBackfillPageToken ?? undefined);
         fetchResult = {
           ids: Array.from(new Set((nextPage.messages ?? []).map((message) => message.id))),
           nextBackfillPageToken: nextPage.nextPageToken ?? null,

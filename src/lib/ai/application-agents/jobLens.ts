@@ -36,15 +36,21 @@ export async function runJobLens(
   // treating that omission as a fatal workflow error wastes the entire run.
   // Fill only identity fields from the stored job and leave all analytical
   // fields provider-generated so we never invent requirements.
+  const canonicalTitle = typeof ctx.job?.title === "string" && ctx.job.title.trim()
+    ? ctx.job.title.trim()
+    : (typeof (ctx.job as any)?.job_title === "string" ? (ctx.job as any).job_title.trim() : "");
+  const canonicalCompany = typeof ctx.job?.company === "string" && ctx.job.company.trim()
+    ? ctx.job.company.trim()
+    : (typeof (ctx.job as any)?.company_name === "string" ? (ctx.job as any).company_name.trim() : "Unknown company");
   const normalized = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? {
         ...(parsed as Record<string, unknown>),
         title: typeof (parsed as any).title === "string" && (parsed as any).title.trim()
           ? (parsed as any).title
-          : (typeof ctx.job?.title === "string" ? ctx.job.title : ""),
+          : canonicalTitle,
         company: typeof (parsed as any).company === "string" && (parsed as any).company.trim()
           ? (parsed as any).company
-          : (typeof ctx.job?.company === "string" ? ctx.job.company : "Unknown company"),
+          : canonicalCompany,
       }
     : parsed;
   const validated = JobAnalysisSchema.parse(normalized);
