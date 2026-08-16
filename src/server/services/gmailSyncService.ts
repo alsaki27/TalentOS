@@ -167,17 +167,23 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   if (row && msg.from) {
     const contactEmail = msg.from.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || msg.from.trim().toLowerCase();
     const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
-    await execute(
-      `INSERT INTO gmail_contact_profiles (candidate_id, email, display_name, last_seen_at, inbound_count, outbound_count, last_subject)
-       VALUES ($1::uuid, $2::text, $3::text, now(), CASE WHEN $4::text = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4::text = 'outbound' THEN 1 ELSE 0 END, $5::text)
-       ON CONFLICT (candidate_id, email) DO UPDATE SET
-         display_name = COALESCE(EXCLUDED.display_name, gmail_contact_profiles.display_name),
-         last_seen_at = now(),
-         inbound_count = gmail_contact_profiles.inbound_count + EXCLUDED.inbound_count,
-         outbound_count = gmail_contact_profiles.outbound_count + EXCLUDED.outbound_count,
-         last_subject = EXCLUDED.last_subject`,
-      [candidateId, contactEmail, contactName, msg.direction, msg.subject]
-    );
+    try {
+      await execute(
+        `INSERT INTO gmail_contact_profiles (candidate_id, email, display_name, last_seen_at, inbound_count, outbound_count, last_subject)
+         VALUES ($1::uuid, $2::text, $3::text, now(), CASE WHEN $4::text = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4::text = 'outbound' THEN 1 ELSE 0 END, $5::text)
+         ON CONFLICT (candidate_id, email) DO UPDATE SET
+           display_name = COALESCE(EXCLUDED.display_name, gmail_contact_profiles.display_name),
+           last_seen_at = now(),
+           inbound_count = gmail_contact_profiles.inbound_count + EXCLUDED.inbound_count,
+           outbound_count = gmail_contact_profiles.outbound_count + EXCLUDED.outbound_count,
+           last_subject = EXCLUDED.last_subject`,
+        [candidateId, contactEmail, contactName, msg.direction, msg.subject]
+      );
+    } catch (contactError: any) {
+      // Contact enrichment is secondary. Never roll back/abort mailbox import
+      // because a legacy contact-profile row or nullable field is malformed.
+      console.warn(`[Gmail sync] Contact profile update skipped for ${contactEmail}: ${contactError?.message || contactError}`);
+    }
   }
 
   if (row && msg.direction === "outbound") {
