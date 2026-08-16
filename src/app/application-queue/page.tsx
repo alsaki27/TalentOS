@@ -254,6 +254,19 @@ export default function ApplicationQueuePage() {
   const [bulkOwnerId, setBulkOwnerId] = useState("");
   const [editing, setEditing] = useState<QueueItem | null>(null);
 
+  // "Transfer to candidate" — search-as-you-type against /api/candidates
+  // (same debounced pattern as searchInput/search below), not a preloaded
+  // <select>: filterCandidates caps at 500 rows and silently truncates,
+  // which is fine for a filter dropdown but not for picking a specific
+  // transfer target out of a full candidate list.
+  const [transferQuery, setTransferQuery] = useState("");
+  // compact=1 candidate search doesn't return email (see /api/candidates
+  // route.ts's `columns` branch) - id/name is all there is to show here.
+  const [transferResults, setTransferResults] = useState<{ id: string; name: string }[]>([]);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<{ id: string; name: string } | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+
   const [expandedWorkflow, setExpandedWorkflow] = useState<string | null>(null);
   const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
   const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
@@ -359,6 +372,17 @@ export default function ApplicationQueuePage() {
     const t = setTimeout(() => setSearch(searchInput), 300);
     return () => clearTimeout(t);
   }, [searchInput]);
+
+  useEffect(() => {
+    if (!transferQuery.trim()) { setTransferResults([]); return; }
+    const t = setTimeout(() => {
+      fetch(`/api/candidates?compact=1&pageSize=20&search=${encodeURIComponent(transferQuery.trim())}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => setTransferResults(Array.isArray(data) ? data : (data.items ?? [])))
+        .catch(() => setTransferResults([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [transferQuery]);
 
   useEffect(() => {
     fetch("/api/candidates?compact=1&pageSize=500")
@@ -741,6 +765,84 @@ export default function ApplicationQueuePage() {
     setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} deleted; ${data.failed} failed.` : `${data.updated} applications deleted.` });
   }
 
+  // "Transfer to candidate" - moves every selected ticket to a different
+  // candidate. Sequential (not Promise.all) so the per-ticket success/failure
+  // feedback stays trustworthy under partial failure - the explicit "without
+  // any kind of error or misinformation" requirement this feature was built
+  // for. Each successful transfer replaces that row in place (same table
+  // position) with the new application's identity and a freshly-started AI
+  // pipeline, matching /api/applications/[id]/transfer-candidate's contract.
+  async function bulkTransferCandidate() {
+    if (!transferTarget || selected.size === 0 || transferBusy) return;
+    const target = transferTarget;
+    if (!confirm(`Transfer ${selected.size} selected application${selected.size > 1 ? "s" : ""} to ${target.name}? Each ticket's current tailored resume and AI workflow will be replaced by a fresh pipeline run for ${target.name}.`)) return;
+    setTransferBusy(true);
+    setFeedback(null);
+    const targets = selectedItems;
+    let succeeded = 0;
+    let failed = 0;
+    const failMessages: string[] = [];
+    for (const item of targets) {
+      try {
+        const res = await fetch(`/api/applications/${item.id}/transfer-candidate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidateId: target.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          failed++;
+          failMessages.push(`${item.candidates?.name ?? item.id}: ${data.error || `HTTP ${res.status}`}`);
+          continue;
+        }
+        succeeded++;
+        const app = data.application;
+        patchItemLocally(item.id, {
+          id: app.id,
+          candidates: app.candidates,
+          status: app.status,
+          ae_stage: app.ae_stage,
+          workflow_id: null,
+          workflow_status: app.workflowStarted ? "queued" : null,
+          workflow_stage: app.workflowStarted ? 0 : null,
+          workflow_score: null,
+          hiring_panel_ats_score: null,
+          hiring_panel_recruiter_score: null,
+          hiring_panel_role_fit_score: null,
+          hiring_panel_truth_score: null,
+          average_score: null,
+          one_page_fit_score: null,
+          page_fit_metrics: null,
+          workflow_resume_version_id: null,
+          workflow_resume_title: null,
+          base_resume_id: null,
+          resume_generation_status: app.workflowStarted ? "queued" : null,
+        });
+        setSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+        if (!app.workflowStarted && app.workflowReason) {
+          failMessages.push(`${target.name}: ticket created but AI pipeline did not start (${app.workflowReason}).`);
+        }
+      } catch (err: any) {
+        failed++;
+        failMessages.push(`${item.candidates?.name ?? item.id}: ${err.message || "Network error"}`);
+      }
+    }
+    setTransferBusy(false);
+    setTransferTarget(null);
+    setTransferQuery("");
+    setTransferResults([]);
+    setTransferOpen(false);
+    if (failed === 0) {
+      setFeedback({ kind: "success", text: `${succeeded} application${succeeded > 1 ? "s" : ""} transferred to ${target.name}.` });
+    } else {
+      setFeedback({ kind: "error", text: `${succeeded} transferred, ${failed} issue${failed > 1 ? "s" : ""}: ${failMessages.join(" | ")}` });
+    }
+  }
+
   async function removeTicket(item: QueueItem) {
     if (!confirm(`Remove ${item.candidates?.name ?? "this ticket"}?`)) return;
     setActionLoading(`${item.id}:remove`);
@@ -925,6 +1027,45 @@ export default function ApplicationQueuePage() {
               ))}
             </select>
             <button className="btn-compact" onClick={bulkReassign} disabled={!bulkOwnerId}>Go</button>
+            <div style={{ position: "relative", width: 220 }}>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                placeholder="Transfer to candidate..."
+                value={transferTarget ? transferTarget.name : transferQuery}
+                onChange={(e) => {
+                  setTransferTarget(null);
+                  setTransferQuery(e.target.value);
+                  setTransferOpen(true);
+                }}
+                onFocus={() => setTransferOpen(true)}
+                onBlur={() => setTimeout(() => setTransferOpen(false), 150)}
+              />
+              {transferOpen && !transferTarget && transferQuery.trim() && (
+                <div
+                  className="dropdown-menu"
+                  style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, maxHeight: 220, overflowY: "auto" }}
+                >
+                  {transferResults.length === 0 ? (
+                    <div className="dropdown-header" style={{ padding: "8px 12px" }}>No matching candidates.</div>
+                  ) : (
+                    transferResults.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="dropdown-item"
+                        onMouseDown={(e) => { e.preventDefault(); setTransferTarget({ id: c.id, name: c.name }); setTransferOpen(false); }}
+                      >
+                        {c.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <button className="btn-compact" onClick={bulkTransferCandidate} disabled={!transferTarget || transferBusy}>
+              {transferBusy ? "Transferring…" : "Transfer"}
+            </button>
             {isManager && <button className="btn-compact" onClick={bulkDelete} style={{ borderColor: "#ef4444", color: "#fca5a5" }}>Delete selected</button>}
           </div>
         </div>
