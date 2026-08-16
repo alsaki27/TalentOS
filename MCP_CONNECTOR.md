@@ -36,8 +36,17 @@ Example client configuration:
 - `get_daily_ae_summary`
 - `get_ai_pipeline_status`
 - `create_application`
+- `rank_jobs_for_candidate`
+- `find_duplicate_applications`
+- `find_missing_sharepoint_exports`
+- `change_application_stage`
+- `retry_application_workflow`
 
 `create_application` is idempotent, requires candidate/job/base-resume IDs, starts at `in_ai_pipeline`, and never marks a job applied. It returns the existing record for a duplicate candidate/job or idempotency key.
+
+`rank_jobs_for_candidate` compares fresh, unlogged jobs against every available base resume and returns the winning resume, score, and evidence terms. It is a deterministic prefilter intended to give an external model a smaller, explainable candidate set.
+
+Stage changes are restricted to the canonical stage vocabulary and write `application_stage_history`. Workflow retries call the existing application workflow service. SharePoint audits look for a created SharePoint export on applied or later-stage applications.
 
 ## Scopes
 
