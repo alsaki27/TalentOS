@@ -25,7 +25,10 @@ export async function GET(req: NextRequest) {
   await recordJobAttempt("gmail-sync");
 
   try {
-    const result = await runGmailSync();
+    // Scheduled recovery must include accounts that previously failed during
+    // enrichment or a transient provider/database error. OAuth tokens are
+    // reused; this only re-enters the sync state machine.
+    const result = await runGmailSync({ retryErrored: true });
     const durationMs = Date.now() - startedAt;
     await recordJobSuccess(
       "gmail-sync",
