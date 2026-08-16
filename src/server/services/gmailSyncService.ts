@@ -688,7 +688,17 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       let processedMessages = 0;
       let triagedMessages = 0;
       while (true) {
-        const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, (messageId) => getMessage(accessToken, messageId, account.email)))
+        const messages = (await mapWithConcurrency(fetchResult.ids, MESSAGE_FETCH_CONCURRENCY, async (messageId) => {
+          try {
+            return await getMessage(accessToken, messageId, account.email);
+          } catch (error: any) {
+            // Gmail can return FAILED_PRECONDITION for an individual message
+            // (deleted/invalidated message, attachment state, or a transient
+            // provider inconsistency). Do not abort the entire mailbox batch.
+            console.warn(`[Gmail sync] Skipping message ${messageId}: ${error?.message || error}`);
+            return null;
+          }
+        }))
           .filter((msg): msg is GmailMessage => Boolean(msg));
         for (const msg of messages) {
         if (classifyGmailMessage(msg).suppress) {
