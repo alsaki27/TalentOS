@@ -338,6 +338,23 @@ export default function ApplicationQueuePage() {
     }
   }
 
+  // Real-time, in-place row updates - deliberately never call load() for
+  // these. load() replaces `items` wholesale and (outside isBackgroundPoll)
+  // resets selection/expanded-row UI state, which reads as a full page
+  // reload even though `page` itself doesn't change - exactly what made
+  // delete/retry/regenerate feel like they bounced the user back to the
+  // start. Patching `items` directly keeps scroll position, filters, and
+  // every other row's state untouched.
+  function removeItemsLocally(ids: string[]) {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setItems((prev) => prev.filter((i) => !idSet.has(i.id)));
+    setTotal((prev) => Math.max(0, prev - ids.length));
+  }
+  function patchItemLocally(id: string, patch: Partial<QueueItem>) {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  }
+
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), 300);
     return () => clearTimeout(t);
@@ -578,8 +595,17 @@ export default function ApplicationQueuePage() {
         return;
       }
       const data = await res.json();
+      // Patch in place rather than reloading: seeds workflow_id/status
+      // immediately so the row shows "Queued" right away, and so the
+      // existing 6s active-workflows poller (which patches by workflow_id)
+      // picks this row up on its very next tick without a full refetch.
+      patchItemLocally(item.id, {
+        workflow_id: data.workflowId,
+        workflow_status: "queued",
+        workflow_stage: 0,
+        resume_generation_status: "queued",
+      });
       setFeedback({ kind: "success", text: `AI pipeline started: ${data.workflowId}` });
-      load(page, false);
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
     finally { setActionLoading(null); }
   }
@@ -600,8 +626,13 @@ export default function ApplicationQueuePage() {
         return;
       }
       const data = await res.json();
+      patchItemLocally(item.id, {
+        workflow_id: data.workflowId,
+        workflow_status: "queued",
+        workflow_stage: 0,
+        resume_generation_status: "queued",
+      });
       setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
-      load(page, false);
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
     finally { setActionLoading(null); }
   }
@@ -701,18 +732,29 @@ export default function ApplicationQueuePage() {
     const res = await fetch("/api/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "DELETE", table: "applications", ids: Array.from(selected) }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok && res.status !== 207) { setFeedback({ kind: "error", text: data.error || "Bulk delete failed." }); return; }
-    setSelected(new Set());
+    // The route reports exactly which ids succeeded (updatedIds) - remove
+    // precisely those in place, in place, even on a partial failure, rather
+    // than a full reload that would also reshuffle every other row.
+    const succeededIds: string[] = Array.isArray(data.updatedIds) ? data.updatedIds : [];
+    removeItemsLocally(succeededIds);
+    setSelected((prev) => { const next = new Set(prev); for (const id of succeededIds) next.delete(id); return next; });
     setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} deleted; ${data.failed} failed.` : `${data.updated} applications deleted.` });
-    load(Math.min(page, Math.max(1, Math.ceil((total - data.updated) / pageSize))), false);
   }
 
   async function removeTicket(item: QueueItem) {
     if (!confirm(`Remove ${item.candidates?.name ?? "this ticket"}?`)) return;
-    const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
-    if (res.ok) { setFeedback({ kind: "success", text: "Removed." }); load(page, false); }
-    else { 
-      const d = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: d.error || "Remove failed." }); 
+    setActionLoading(`${item.id}:remove`);
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
+      if (res.ok) {
+        removeItemsLocally([item.id]);
+        setFeedback({ kind: "success", text: "Removed." });
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Remove failed." });
+      }
+    } finally {
+      setActionLoading(null);
     }
   }
 
@@ -1001,9 +1043,19 @@ export default function ApplicationQueuePage() {
                           if (!res.ok) {
                             const d = await res.json().catch(() => ({}));
                             alert(d.error || `${action} failed`);
+                            return;
+                          }
+                          // Patch in place, mirroring exactly what the route
+                          // just wrote server-side for each action - no reload.
+                          if (action === "approve") {
+                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 3, resume_generation_status: "resume_review" });
+                          } else if (action === "reject") {
+                            patchItemLocally(item.id, { workflow_status: "failed", resume_generation_status: "failed" });
+                          } else if (action === "reject_and_restart") {
+                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 0, resume_generation_status: "queued" });
                           }
                         } catch (err: any) { alert(err.message); }
-                        finally { setActionLoading(null); load(page, false); }
+                        finally { setActionLoading(null); }
                       }}
                       expandedWorkflow={expandedWorkflow}
                       workflowDetails={workflowDetails}
@@ -1139,7 +1191,9 @@ export default function ApplicationQueuePage() {
                       {isManager && (
                         <>
                           <button className="btn-compact btn-sm" onClick={() => setEditing(item)}>✏️</button>
-                          <button className="btn-danger btn-sm" onClick={() => removeTicket(item)}>🗑</button>
+                          <button className="btn-danger btn-sm" onClick={() => removeTicket(item)} disabled={actionLoading === `${item.id}:remove`} title="Remove this application">
+                            {actionLoading === `${item.id}:remove` ? "⟳" : "🗑"}
+                          </button>
                         </>
                       )}
                     </div>
