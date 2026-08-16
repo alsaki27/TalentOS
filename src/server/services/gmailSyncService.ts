@@ -169,7 +169,7 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
     const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
     await execute(
       `INSERT INTO gmail_contact_profiles (candidate_id, email, display_name, last_seen_at, inbound_count, outbound_count, last_subject)
-       VALUES ($1, $2, $3, now(), CASE WHEN $4 = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4 = 'outbound' THEN 1 ELSE 0 END, $5)
+       VALUES ($1::uuid, $2::text, $3::text, now(), CASE WHEN $4::text = 'inbound' THEN 1 ELSE 0 END, CASE WHEN $4::text = 'outbound' THEN 1 ELSE 0 END, $5::text)
        ON CONFLICT (candidate_id, email) DO UPDATE SET
          display_name = COALESCE(EXCLUDED.display_name, gmail_contact_profiles.display_name),
          last_seen_at = now(),
@@ -314,7 +314,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
           : triage.category === "offer" ? "hiring_manager" : "unknown";
     const contactEmail = row.from_email.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || row.from_email.trim().toLowerCase();
     await execute(
-      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1 = 'hiring_manager' THEN $1 ELSE contact_type END WHERE candidate_id = $2 AND email = $3`,
+      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1::text = 'hiring_manager' THEN $1::text ELSE contact_type END WHERE candidate_id = $2::uuid AND email = $3::text`,
       [contactType, row.candidate_id, contactEmail]
     );
     if (contactType !== "unknown") {
