@@ -669,8 +669,14 @@ async function triageStoredBacklog(candidateId: string, accessToken: string, lim
   );
   let processed = 0;
   for (const row of rows) {
-    await triageStoredMessage(row.id, accessToken);
-    processed++;
+    try {
+      await triageStoredMessage(row.id, accessToken);
+      processed++;
+    } catch (error: any) {
+      // Backlog triage is independent of mailbox replication. Keep the row
+      // untriaged for retry, but never fail the account's sync run/cursor.
+      console.warn(`[Gmail sync] Backlog triage failed for ${row.id}; keeping it queued: ${error?.message || error}`);
+    }
   }
   return processed;
 }
