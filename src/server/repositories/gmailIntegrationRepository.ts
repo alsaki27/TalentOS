@@ -79,9 +79,9 @@ export async function markGmailAccountError(id: string, error: string) {
 export async function updateGmailHistoryId(id: string, historyId: string) {
   await execute(
     `UPDATE integration_accounts
-        SET gmail_history_id = $1, gmail_backfill_page_token = NULL, gmail_backfill_complete = true,
+        SET gmail_history_id = $1::text, gmail_backfill_page_token = NULL, gmail_backfill_complete = true,
             last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now()
-      WHERE id = $2`,
+      WHERE id = $2::uuid`,
     [historyId, id]
   );
 }
@@ -89,9 +89,9 @@ export async function updateGmailHistoryId(id: string, historyId: string) {
 export async function updateGmailBackfillState(id: string, nextPageToken: string | null, complete: boolean) {
   await execute(
     `UPDATE integration_accounts
-        SET gmail_backfill_page_token = $1, gmail_backfill_complete = $2,
+        SET gmail_backfill_page_token = $1::text, gmail_backfill_complete = $2::boolean,
             status = 'active', sync_error = NULL, updated_at = now()
-      WHERE id = $3`,
+      WHERE id = $3::uuid`,
     [nextPageToken, complete, id]
   );
 }
