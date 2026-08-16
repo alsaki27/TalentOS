@@ -261,8 +261,8 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `UPDATE email_communications SET
          ai_relevant = false, ai_category = 'other', ai_confidence = 1, ai_summary = $1,
-         needs_reply = false, suppression_reason = $2, suppression_rule = $3, triaged_at = now()
-       WHERE id = $4`,
+         needs_reply = false, suppression_reason = $2::text, suppression_rule = $3::text, triaged_at = now()
+       WHERE id = $4::uuid`,
       [`Filtered by ${verdict.rule}.`, verdict.reason, verdict.rule, id]
     );
     return;
@@ -294,13 +294,13 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
 
   await execute(
     `UPDATE email_communications SET
-       ai_relevant = $1, ai_category = $2, ai_confidence = $3, ai_summary = $4,
-       ai_matched_application_id = $5, needs_reply = $6,
+       ai_relevant = $1::boolean, ai_category = $2::text, ai_confidence = $3::numeric, ai_summary = $4::text,
+       ai_matched_application_id = $5::uuid, needs_reply = $6::boolean,
        response_due_at = CASE WHEN $6 THEN now() + CASE $2 WHEN 'interview_invite' THEN interval '12 hours' WHEN 'scheduling' THEN interval '12 hours' WHEN 'offer' THEN interval '8 hours' WHEN 'recruiter_reply' THEN interval '24 hours' ELSE interval '48 hours' END ELSE NULL END,
        workflow_state = CASE WHEN $6 THEN 'needs_action' WHEN NOT $1 THEN 'suppressed' ELSE 'observed' END,
        ai_evidence = jsonb_build_object('category', $2, 'confidence', $3, 'summary', $4, 'matched_application_id', $5),
        triaged_at = now()
-     WHERE id = $7`,
+       WHERE id = $7::uuid`,
     [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
 
@@ -342,7 +342,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
                 SELECT DISTINCT unnest(COALESCE(gmail_label_ids, '{}') || $1::text[])
               ),
               gmail_is_starred = $2
-        WHERE id = $3`,
+        WHERE id = $3::uuid`,
       [addLabels, addLabels.includes("STARRED"), id],
     );
   } catch (labelError) {
@@ -355,7 +355,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `INSERT INTO application_email_links
          (application_id, email_communication_id, match_method, match_confidence)
-       VALUES ($1, $2, 'ai', $3)
+       VALUES ($1, $2, 'ai', $3::numeric)
        ON CONFLICT (application_id, email_communication_id) DO UPDATE
          SET match_confidence = EXCLUDED.match_confidence`,
       [triage.matchedApplicationId, id, triage.confidence],
@@ -363,7 +363,7 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
     await execute(
       `INSERT INTO application_comments
          (application_id, commenter_name, body, visible_to_candidate, source_type, email_communication_id, ai_confidence)
-       VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4)
+       VALUES ($1, 'Email Triage (AI)', $2, false, 'email_ai', $3, $4::numeric)
        ON CONFLICT (email_communication_id) WHERE email_communication_id IS NOT NULL DO NOTHING`,
       [triage.matchedApplicationId, triage.summary || `Relevant ${triage.category.replace("_", " ")} email detected.`, id, triage.confidence]
     );
