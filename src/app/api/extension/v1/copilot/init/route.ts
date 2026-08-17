@@ -15,6 +15,7 @@ export const GET = withExtensionCors(async (req) => {
       SELECT id, name, target_roles
       FROM candidates
       WHERE status = 'active'
+        AND COALESCE(pipeline_stage, 'not_started') <> 'paused'
       ORDER BY created_at DESC
     `);
 

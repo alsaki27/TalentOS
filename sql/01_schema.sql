@@ -12,6 +12,7 @@ create table if not exists candidates (
   email                 text,
   phone                 text,
   status                text default 'active',        -- active | placed | paused | dropped
+  pipeline_stage        text not null default 'not_started' check (pipeline_stage in ('not_started', 'applying', 'paused', 'placed', 'dropped')), -- not_started | applying | paused | placed | dropped
   target_tier           text,                          -- osp | adjacent_1 | adjacent_2 | null
   notes                 text,
   resume_url            text,                          -- Supabase Storage path to current resume

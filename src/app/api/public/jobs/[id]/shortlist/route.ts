@@ -25,7 +25,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (!job) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const candidates = await query(
-    'SELECT id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url FROM candidates ORDER BY created_at DESC LIMIT 500',
+    `SELECT id, name, email, status, pipeline_stage, target_tier, target_roles,
+            preferred_locations, work_authorization, resume_url, resume_filename, avatar_url
+       FROM candidates
+      WHERE status = 'active'
+        AND COALESCE(pipeline_stage, 'not_started') <> 'paused'
+      ORDER BY created_at DESC LIMIT 500`,
     []
   );
 

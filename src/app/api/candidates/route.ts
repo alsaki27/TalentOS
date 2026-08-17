@@ -7,6 +7,7 @@ import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
+import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -28,9 +29,10 @@ export async function GET(req: NextRequest) {
   const stageOrder = `CASE c.pipeline_stage
       WHEN 'applying' THEN 0
       WHEN 'not_started' THEN 1
-      WHEN 'placed' THEN 2
-      WHEN 'dropped' THEN 3
-      ELSE 4
+      WHEN 'paused' THEN 2
+      WHEN 'placed' THEN 3
+      WHEN 'dropped' THEN 4
+      ELSE 5
     END`;
 
   const dataSql = `
@@ -67,6 +69,10 @@ export async function POST(req: NextRequest) {
 
   if (!body.name) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
+  }
+
+  if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
+    return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
   }
 
   try {

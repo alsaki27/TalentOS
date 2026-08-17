@@ -33,6 +33,7 @@ CREATE TABLE candidates (
   email                 text,
   phone                 text,
   status                text DEFAULT 'active',
+  pipeline_stage        text NOT NULL DEFAULT 'not_started' CHECK (pipeline_stage IN ('not_started', 'applying', 'paused', 'placed', 'dropped')),
   target_tier           text,
   notes                 text,
   resume_url            text,

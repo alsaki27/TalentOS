@@ -535,6 +535,7 @@ export async function generateAllActiveBaseResumeJobSearchProfiles(options: { us
        FROM base_resumes br
        JOIN candidates c ON c.id = br.candidate_id
       WHERE lower(c.status) = 'active'
+        AND COALESCE(c.pipeline_stage, 'not_started') <> 'paused'
       ORDER BY c.name, br.name`
   );
   const results: Array<Record<string, unknown>> = [];

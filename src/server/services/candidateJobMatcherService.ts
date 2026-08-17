@@ -131,6 +131,7 @@ export async function runActiveCandidateJobMatcher(options: {
          JOIN base_resumes br ON br.id = p.base_resume_id AND br.candidate_id = p.candidate_id
          JOIN candidates c ON c.id = p.candidate_id
         WHERE c.status = 'active'
+          AND COALESCE(c.pipeline_stage, 'not_started') <> 'paused'
           AND p.review_status = 'approved'
           AND p.approved_profile_version = p.profile_version
         ORDER BY p.candidate_id, p.base_resume_id`,
@@ -327,7 +328,10 @@ export async function approveCandidateJobMatch(options: {
        SELECT d.id, d.candidate_id, d.job_id, d.base_resume_id, d.score, d.reason
          FROM candidate_job_match_decisions d
          JOIN jobs j ON j.id = d.job_id
+         JOIN candidates c ON c.id = d.candidate_id
         WHERE d.id = $1 AND d.review_status = 'pending' AND d.outcome = 'recommended'
+          AND c.status = 'active'
+          AND COALESCE(c.pipeline_stage, 'not_started') <> 'paused'
           AND j.posted_at IS NOT NULL
           AND j.posted_at::timestamptz >= NOW() - INTERVAL '7 days'
           AND j.posted_at <= NOW()::date

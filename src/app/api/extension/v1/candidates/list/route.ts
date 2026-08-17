@@ -20,7 +20,9 @@ export async function GET(request: NextRequest) {
       
       let candidateQuery = `
         SELECT id, name, email, status, city, country
-        FROM candidates 
+        FROM candidates
+        WHERE status = 'active'
+          AND COALESCE(pipeline_stage, 'not_started') <> 'paused'
       `;
       const queryParams: any[] = [];
       

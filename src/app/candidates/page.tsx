@@ -6,6 +6,7 @@ import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
 import Pagination from "@/components/Pagination";
+import { CANDIDATE_PIPELINE_STAGES, CANDIDATE_STAGE_BADGE_CLASSES } from "@/lib/candidatePipeline";
 
 interface Candidate {
   id: string;
@@ -18,20 +19,6 @@ interface Candidate {
   resume_filename: string | null;
   avatar_url: string | null;
 }
-
-const STAGE_LABELS: Record<string, string> = {
-  not_started: "Not Started",
-  applying: "Actively Applying",
-  placed: "Placed",
-  dropped: "Dropped",
-};
-
-const STAGE_BADGE_CLASS: Record<string, string> = {
-  not_started: "badge-waiting",
-  applying: "badge-scheduled",
-  placed: "badge-offer",
-  dropped: "badge-closed",
-};
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
@@ -152,6 +139,7 @@ export default function CandidatesPage() {
           <option value="not_started">Not Started</option>
           <option value="applying">Actively Applying</option>
           <option value="placed">Placed</option>
+          <option value="paused">Paused</option>
           <option value="dropped">Dropped</option>
         </select>
         <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
@@ -214,10 +202,10 @@ export default function CandidatesPage() {
                       value={c.pipeline_stage}
                       disabled={stageUpdating === c.id}
                       onChange={(e) => changeStage(c.id, e.target.value)}
-                      className={`badge ${STAGE_BADGE_CLASS[c.pipeline_stage] ?? ""}`}
+                      className={`badge ${CANDIDATE_STAGE_BADGE_CLASSES[c.pipeline_stage as keyof typeof CANDIDATE_STAGE_BADGE_CLASSES] ?? ""}`}
                       style={{ cursor: "pointer", border: "none" }}
                     >
-                      {Object.entries(STAGE_LABELS).map(([value, label]) => (
+                      {Object.entries(CANDIDATE_PIPELINE_STAGES).map(([value, label]) => (
                         <option key={value} value={value}>{label}</option>
                       ))}
                     </select>

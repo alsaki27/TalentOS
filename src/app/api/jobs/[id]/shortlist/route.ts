@@ -34,7 +34,12 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   try {
     [candidates, existingApplications] = await Promise.all([
       query(
-        `SELECT id, name, email, status, target_tier, target_roles, preferred_locations, work_authorization, resume_url, resume_filename, avatar_url FROM candidates ORDER BY created_at DESC LIMIT 500`
+        `SELECT id, name, email, status, pipeline_stage, target_tier, target_roles,
+                preferred_locations, work_authorization, resume_url, resume_filename, avatar_url
+           FROM candidates
+          WHERE status = 'active'
+            AND COALESCE(pipeline_stage, 'not_started') <> 'paused'
+          ORDER BY created_at DESC LIMIT 500`
       ),
       query(
         `SELECT candidate_id FROM applications WHERE job_id = $1`,

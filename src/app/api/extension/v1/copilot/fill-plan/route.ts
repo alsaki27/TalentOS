@@ -151,7 +151,9 @@ export async function POST(request: NextRequest) {
         // Job capture belongs to /api/extension/v1/capture-job and queue
         // creation must happen through an explicit TalentOS workflow.
         const cand = await queryOne<any>(
-          `SELECT * FROM candidates WHERE id = $1 AND status = 'active'`,
+          `SELECT * FROM candidates
+            WHERE id = $1 AND status = 'active'
+              AND COALESCE(pipeline_stage, 'not_started') <> 'paused'`,
           [candidateId]
         );
         if (cand) {
