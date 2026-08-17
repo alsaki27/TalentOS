@@ -19,6 +19,8 @@ export interface FillCorrectionInput {
 
 export interface FillCorrectionRow {
   field_label: string | null;
+  field_selector: string | null;
+  field_type: string | null;  // radio | checkbox | select | combobox | text | etc.
   ai_value: string | null;
   final_value: string | null;
   domain: string;
@@ -43,15 +45,28 @@ export async function recordFillCorrections(inputs: FillCorrectionInput[]): Prom
   const recorded: RecordedCorrection[] = [];
   for (const c of inputs) {
     const wasCorrected = normalize(c.aiValue) !== normalize(c.finalValue);
+    // Skip→fill transitions (AI had null/empty, user filled something) are
+    // definitionally real corrections. Auto-mark them as ai_reviewed=true with
+    // a fixed reason so the Correction Reviewer AI cannot downgrade them later
+    // by mistaking them for "the AE simply adding something the AI wasn't asked to add".
+    const isSkipToFill = (c.aiValue == null || normalize(c.aiValue) === "") &&
+                         c.finalValue != null && normalize(c.finalValue) !== "";
+    const aiReviewed = isSkipToFill ? true : false;
+    const aiReviewReason = isSkipToFill
+      ? "Auto-approved: AI had skipped this field (null/empty) and user explicitly filled it in."
+      : null;
+
     const row = await query<{ id: string }>(
       `INSERT INTO copilot_fill_corrections
          (application_id, candidate_id, domain, field_label, field_selector, field_type,
-          ai_value, ai_confidence, ai_reasoning, final_value, was_corrected)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+          ai_value, ai_confidence, ai_reasoning, final_value, was_corrected,
+          ai_reviewed, ai_review_reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
         c.applicationId, c.candidateId, c.domain, c.fieldLabel, c.fieldSelector, c.fieldType,
         c.aiValue, c.aiConfidence, c.aiReasoning, c.finalValue, wasCorrected,
+        aiReviewed, aiReviewReason,
       ]
     );
     recorded.push({
@@ -90,7 +105,7 @@ export async function getRecentCorrections(
   limit = 15
 ): Promise<FillCorrectionRow[]> {
   const domainRows = await query<FillCorrectionRow>(
-    `SELECT field_label, ai_value, final_value, domain, was_corrected, created_at
+    `SELECT field_label, field_selector, field_type, ai_value, final_value, domain, was_corrected, created_at
      FROM copilot_fill_corrections
      WHERE domain = $1 AND was_corrected = true
      ORDER BY created_at DESC
@@ -100,14 +115,30 @@ export async function getRecentCorrections(
 
   if (!candidateId) return domainRows;
 
+  // Fetch candidate-level corrections from ALL domains (including the current one).
+  // Previously this excluded domain = $2, which meant name/country/phone corrections
+  // learned on the same ATS site were never reused on subsequent visits to that site.
   const candidateRows = await query<FillCorrectionRow>(
-    `SELECT field_label, ai_value, final_value, domain, was_corrected, created_at
+    `SELECT field_label, field_selector, field_type, ai_value, final_value, domain, was_corrected, created_at
      FROM copilot_fill_corrections
-     WHERE candidate_id = $1 AND was_corrected = true AND domain != $2
+     WHERE candidate_id = $1 AND was_corrected = true
      ORDER BY created_at DESC
-     LIMIT 10`,
-    [candidateId, domain]
+     LIMIT 20`,
+    [candidateId]
   );
 
-  return [...domainRows, ...candidateRows];
+  // De-duplicate: domain rows take priority (they are more site-specific).
+  // Candidate rows fill in any labels/selectors not already covered by domain rows.
+  const seenLabels = new Set(domainRows.map((r) => (r.field_label ?? "").trim().toLowerCase()));
+  const seenSelectors = new Set(domainRows.map((r) => r.field_selector ?? "").filter(Boolean));
+  const extraCandidateRows = candidateRows.filter((r) => {
+    const lbl = (r.field_label ?? "").trim().toLowerCase();
+    const sel = r.field_selector ?? "";
+    // Exclude if either label OR selector matches something we already have.
+    if (lbl && seenLabels.has(lbl)) return false;
+    if (sel && seenSelectors.has(sel)) return false;
+    return true;
+  });
+
+  return [...domainRows, ...extraCandidateRows];
 }

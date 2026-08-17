@@ -227,6 +227,7 @@ export async function POST(request: NextRequest) {
 
       // 3. Pull past corrections for this domain (form-structure variance) and
       // this candidate (personal-data variance) so the prompt can self-correct.
+      // These are used both as prompt few-shot examples AND as hard post-plan overrides.
       const domain: string = pageContext?.domain || "unknown";
       const corrections = await getRecentCorrections(domain, appData.candidate_id ?? null);
       const priorCorrections = corrections.map((c) => ({
@@ -235,6 +236,22 @@ export async function POST(request: NextRequest) {
         aiValue: c.ai_value,
         finalValue: c.final_value,
       }));
+      // Build label→{value,fieldType} and selector→{value,fieldType} maps for
+      // deterministic override after the AI runs. Selector wins over label when both exist.
+      // The most-recent correction for each label/selector wins (corrections ordered DESC).
+      const correctionOverrideByLabel = new Map<string, { value: string; fieldType: string }>();
+      const correctionOverrideBySelector = new Map<string, { value: string; fieldType: string; fieldLabel: string | null }>();
+      for (const c of corrections) {
+        const lbl = (c.field_label ?? "").trim().toLowerCase();
+        const sel = (c.field_selector ?? "").trim();
+        const ft = c.field_type ?? "text";
+        if (sel && c.final_value != null && !correctionOverrideBySelector.has(sel)) {
+          correctionOverrideBySelector.set(sel, { value: c.final_value, fieldType: ft, fieldLabel: c.field_label });
+        }
+        if (lbl && c.final_value != null && !correctionOverrideByLabel.has(lbl)) {
+          correctionOverrideByLabel.set(lbl, { value: c.final_value, fieldType: ft });
+        }
+      }
 
       // 4. Copilot Form Analyst — cached per domain, only actually runs the
       // first time this domain is seen.
@@ -307,6 +324,102 @@ export async function POST(request: NextRequest) {
         runCopilotFiller(fillPlannerOptions, provider, ctx)
       );
 
+      // Hard-apply learned corrections on top of the AI plan.
+      // The AI sees corrections as few-shot hints, but may still guess wrong —
+      // especially for short factual fields (name, country, phone). If we have a
+      // human-confirmed correction for a label that matches a field in this plan,
+      // override the AI's value deterministically so the mistake cannot repeat.
+      if (correctionOverrideByLabel.size > 0) {
+        // Build a selector→label map from the full form snapshot for matching.
+        const selectorToLabel = new Map<string, string>(formSnapshot.map((f: any) => [f.selector, (f.label || f.ariaLabel || f.name || "").trim().toLowerCase()]));
+
+        // Helper: apply a correction override to a single instruction object.
+        function applyOverride(instr: any, correction: { value: string; fieldType: string }, fuzzy = false) {
+          // Use the stored fieldType from the correction. Only keep the AI's fieldType
+          // if the correction fieldType would break the field (e.g. don't overwrite a
+          // working radio/select with "text" just because we have a text correction stored).
+          // Checkbox values must be boolean, not a string.
+          let finalFieldType = correction.fieldType;
+          let finalValue: any = correction.value;
+
+          if (finalFieldType === "checkbox" || instr.fieldType === "checkbox") {
+            finalFieldType = "checkbox";
+            finalValue = correction.value === "true" || correction.value === "1" || correction.value === "yes";
+          } else if (finalFieldType === "skip" || finalFieldType === "ai_answer") {
+            // Shouldn't happen (we wouldn't store a skip correction), but guard anyway.
+            finalFieldType = "text";
+          } else if (instr.fieldType === "radio" || instr.fieldType === "select" || instr.fieldType === "combobox") {
+            // If the live field is radio/select/combobox but the stored correction says "text",
+            // trust the live field type — the stored value (the chosen option label) is correct.
+            finalFieldType = instr.fieldType;
+          }
+
+          instr.value = finalValue;
+          instr.fieldType = finalFieldType;
+          instr.confidence = "high";
+          instr.reasoning = fuzzy
+            ? "Learned from past human correction (fuzzy match)"
+            : "Learned from past human correction";
+        }
+
+        // Helper: apply override to an instruction using selector-first, then label.
+        function matchAndOverride(instr: any) {
+          // 1. Exact selector match — most reliable.
+          if (correctionOverrideBySelector.has(instr.selector)) {
+            const stored = correctionOverrideBySelector.get(instr.selector)!;
+            applyOverride(instr, stored);
+            return;
+          }
+          // 2. Exact label match.
+          const fieldLabel = selectorToLabel.get(instr.selector) ?? "";
+          if (fieldLabel && correctionOverrideByLabel.has(fieldLabel)) {
+            applyOverride(instr, correctionOverrideByLabel.get(fieldLabel)!);
+            return;
+          }
+          // 3. Fuzzy label match — stored label is substring of live label or vice versa.
+          if (fieldLabel) {
+            for (const [storedLabel, stored] of correctionOverrideByLabel) {
+              if (storedLabel.length > 3 && (fieldLabel.includes(storedLabel) || storedLabel.includes(fieldLabel))) {
+                applyOverride(instr, stored, true);
+                return;
+              }
+            }
+          }
+        }
+
+        for (const instr of plan.instructions) {
+          matchAndOverride(instr);
+        }
+
+        // Also handle fields the AI completely omitted: if a correction's selector
+        // exists in formSnapshot but has no corresponding instruction, add one.
+        const plannedSelectors = new Set([
+          ...plan.instructions.map((i: any) => i.selector),
+          ...complianceInstructions.map((i: any) => i.selector),
+        ]);
+        const snapshotBySelector = new Map<string, any>(formSnapshot.map((f: any) => [f.selector, f]));
+        for (const [sel, correction] of correctionOverrideBySelector) {
+          if (plannedSelectors.has(sel)) continue;              // already in plan
+          const snapField = snapshotBySelector.get(sel);
+          if (!snapField) continue;                              // field not on this page
+          const liveFieldType = snapField.inputType || snapField.type || "text";
+          const newInstr: any = {
+            selector: sel,
+            value: correction.value,
+            fieldType: liveFieldType,
+            confidence: "high",
+            reasoning: "Learned from past human correction (field was previously omitted by AI)",
+          };
+          applyOverride(newInstr, correction);
+          plan.instructions.push(newInstr);
+        }
+
+        // Also apply to compliance instructions
+        for (const instr of complianceInstructions) {
+          matchAndOverride(instr);
+        }
+      }
+
       // Cover letter / resume file detection — simple label matching is
       // enough here; these just tell the extension which buttons/actions to
       // surface, the actual generation and file handling happens client-side.
@@ -331,6 +444,16 @@ export async function POST(request: NextRequest) {
           ? `Tailored resume for ${matchedApplication.title} @ ${matchedApplication.company}`
           : selectedResumeId ? "Selected Resume" : "No Resume Selected",
         captureOnly: !matchedApplication && !applicationId,
+        // Raw corrections for the extension to apply as its absolute final override step.
+        // The extension renders the plan preview AFTER applying these, so nothing
+        // in the client-side pipeline (profile baseline, mandatory-field rules, etc.)
+        // can re-skip a field the user has explicitly taught the system.
+        learnedCorrections: corrections.map((c) => ({
+          fieldLabel:    c.field_label,
+          fieldSelector: c.field_selector,
+          fieldType:     c.field_type,
+          finalValue:    c.final_value,
+        })),
       });
     } catch (err) {
       console.error("[Copilot Fill Plan Error]", err);

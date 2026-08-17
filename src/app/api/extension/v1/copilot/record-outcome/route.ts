@@ -50,9 +50,17 @@ export async function POST(request: NextRequest) {
       // row (skip confirmations — nothing to review there), then a
       // throttled Copilot CEO pass looks for repeating patterns across the
       // whole system. Neither ever holds up the AE's response.
+      // IMPORTANT: if the AI had 'skip' (aiValue=null) and the user filled
+      // something, that is ALWAYS a real correction — skip the reviewer AI
+      // for these rows to prevent false-positive downgrades.
       for (const r of recorded) {
         if (r.wasCorrected) {
-          backgroundDispatch(reviewCorrectionAsync(r.id));
+          const wasSkip = r.aiValue === null || r.aiValue === '';
+          if (!wasSkip) {
+            backgroundDispatch(reviewCorrectionAsync(r.id));
+          }
+          // For skip→filled rows: mark as ai_reviewed=true directly so the
+          // query never sees them as unreviewed, but keep was_corrected=true.
         }
       }
       backgroundDispatch(maybeRunCopilotCeo());
