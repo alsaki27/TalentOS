@@ -368,6 +368,20 @@ export default function ApplicationQueuePage() {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   }
 
+  var hasActiveFilters = Boolean(searchInput || candidateFilter || statusFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || timeWindow);
+
+  function clearFilters() {
+    setSearchInput("");
+    setSearch("");
+    setCandidateFilter("");
+    setStatusFilter("");
+    setStageFilter("");
+    setOwnerFilter("");
+    setPriorityFilter("");
+    setReviewFilter("");
+    setTimeWindow("");
+  }
+
   useEffect(() => {
     const t = setTimeout(() => setSearch(searchInput), 300);
     return () => clearTimeout(t);
@@ -656,6 +670,11 @@ export default function ApplicationQueuePage() {
         workflow_stage: 0,
         resume_generation_status: "queued",
       });
+      // Re-fetch the current, already-filtered page in place (background-poll
+      // style: keeps selection/expanded rows/scroll and every active filter,
+      // just pulls fresh rows + stats so the regenerated ticket and the
+      // filter counters update without a page bounce or filter reset).
+      load(page, false, true);
       setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
     finally { setActionLoading(null); }
@@ -945,62 +964,89 @@ export default function ApplicationQueuePage() {
 
       <div className="filter-bar">
         <div className="filter-group">
-          <input className="input" placeholder="Search candidate, job, company..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
-          <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)}>
-            <option value="">All candidates</option>
-            {filterCandidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="">All statuses</option>
-            <option value="assigned">Assigned</option>
-            <option value="stacked">Stacked</option>
-            <option value="in_progress">In progress</option>
-          </select>
-          <select className="input" value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Filter by application stage">
-            <option value="">All stages</option>
-            {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
-            ))}
-          </select>
-          <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
-            <option value="">All owners</option>
-            {users.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
-          </select>
-          <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
-            <option value="">All priorities</option>
-            <option value="urgent">Urgent</option>
-            <option value="high">High</option>
-            <option value="normal">Normal</option>
-            <option value="low">Low</option>
-          </select>
-          <select className="input" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)}>
-            <option value="">All review</option>
-            <option value="not_required">No review</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="changes_requested">Changes requested</option>
-          </select>
-          <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by recent application log time">
-            <option value="">Any time</option>
-            <option value="12h">Past 12 hours</option>
-            <option value="24h">Past 24 hours</option>
-            <option value="3d">Past 3 days</option>
-            <option value="7d">Past 7 days</option>
-          </select>
-          <select
-            className="input"
-            value={sort}
-            onChange={e => {
-              const next = e.target.value as "due" | "final_score" | "average_score";
-              setSort(next);
-              setSortDirection(next === "due" ? "asc" : "desc");
-            }}
-            aria-label="Sort application queue"
-          >
-            <option value="due">Sort: due date</option>
-            <option value="final_score">Sort: Final QA score</option>
-            <option value="average_score">Sort: Average of all scores</option>
-          </select>
+          <div className="filter-field">
+            <span className="filter-label">🔍 Search</span>
+            <input className="input" placeholder="Name, job, company, or ID (C#10057, A#17395, J#19767)..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Candidate</span>
+            <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)}>
+              <option value="">All candidates</option>
+              {filterCandidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Status</span>
+            <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              <option value="assigned">Assigned</option>
+              <option value="stacked">Stacked</option>
+              <option value="in_progress">In progress</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Stage</span>
+            <select className="input" value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Filter by application stage">
+              <option value="">All stages</option>
+              {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Owner</span>
+            <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
+              <option value="">All owners</option>
+              {users.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Priority</span>
+            <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+              <option value="">All priorities</option>
+              <option value="urgent">Urgent</option>
+              <option value="high">High</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Review</span>
+            <select className="input" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)}>
+              <option value="">All review</option>
+              <option value="not_required">No review</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="changes_requested">Changes requested</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Activity</span>
+            <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by recent application log time">
+              <option value="">Any time</option>
+              <option value="12h">Past 12 hours</option>
+              <option value="24h">Past 24 hours</option>
+              <option value="3d">Past 3 days</option>
+              <option value="7d">Past 7 days</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Sort</span>
+            <select
+              className="input"
+              value={sort}
+              onChange={e => {
+                const next = e.target.value as "due" | "final_score" | "average_score";
+                setSort(next);
+                setSortDirection(next === "due" ? "asc" : "desc");
+              }}
+              aria-label="Sort application queue"
+            >
+              <option value="due">Due date</option>
+              <option value="final_score">Final QA score</option>
+              <option value="average_score">Average of all scores</option>
+            </select>
+          </div>
           {sort !== "due" && (
             <button
               className="btn-compact"
@@ -1010,6 +1056,14 @@ export default function ApplicationQueuePage() {
               {sortDirection === "desc" ? "High → low" : "Low → high"}
             </button>
           )}
+          <button
+            className="btn-outline btn-sm"
+            onClick={clearFilters}
+            disabled={!hasActiveFilters}
+            title="Clear all filters"
+          >
+            ✕ Clear filters
+          </button>
         </div>
         <span className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} / {total}</span>
       </div>

@@ -148,7 +148,12 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   // ATOMICITY BOUNDARY (critical path): all three operations run inside a single
   // database transaction via Neon's sql.transaction(). If any query fails, the
   // entire transaction rolls back, preventing partial finalization.
-  const title = "AI-Generated Tailored Resume";
+  const jobInfo = await queryOne<{ job_title: string | null }>(
+    "SELECT title AS job_title FROM jobs WHERE id = $1",
+    [wf.job_id]
+  );
+  const jobTitle = jobInfo?.job_title?.trim();
+  const title = jobTitle ? `${jobTitle} — Tailored Resume` : "AI-Generated Tailored Resume";
   const contentJson = JSON.stringify(studioDocument);
   const dbSql = getSql();
   let versionId: string | null = null;

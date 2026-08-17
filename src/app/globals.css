@@ -580,8 +580,23 @@ label {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  align-items: center;
+  align-items: flex-end;
   flex: 1 1 auto;
+}
+
+.app-queue-page .filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-queue-page .filter-field .filter-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
 }
 .app-queue-page .filter-bar input,
 .app-queue-page .filter-bar select {

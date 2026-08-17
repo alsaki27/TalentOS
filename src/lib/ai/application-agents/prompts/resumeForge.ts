@@ -107,11 +107,11 @@ SKILLS SECTION RULES (CRITICAL):
 * DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) Source of Truth confirmed skills listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies.
 * DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
-* Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories.
+* Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories (a single concise "General" group is permitted ONLY when the JD explicitly demands general skills that don't fit any existing category).
 * From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the 'name' property) as the guide.
 * Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
 * Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
-* NEVER carry forward "Microsoft Office", "MS Office", "Office 365", or bare "Word"/"PowerPoint" into the tailored resume, even if it exists in the base resume's skill categories — drop it silently when copying/expanding categories. Universal office-suite literacy wastes space that should go to real technical differentiators. Excel is the exception: it's a genuine, specific skill many roles require — keep "Excel" as its own entry if the base resume/evidence supports it, just never folded into a generic "Microsoft Office" bucket.
+* Office-suite skills ("Microsoft Office", "MS Office", "Office 365", "Outlook", "Word", "PowerPoint") are normally dropped from the tailored resume to save space — EXCEPT when this job's JD explicitly names or requires one of them: in that case the requirement makes it a real differentiator, so include it as a concise entry (keep it in its own group or the most fitting existing category). Excel is always kept as its own entry when the base resume/evidence supports it, never folded into a generic "Microsoft Office" bucket.
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array.
@@ -153,7 +153,7 @@ ${sourceOfTruth?.notesContext ?? "(none)"}
 
 RULES FOR USING SOURCE OF TRUTH & NOTES:
 1. Source of Truth confirmed skills are the candidate's real verified skillset — you MUST consider all of them when expanding the skills section. Pick the ones most relevant to THIS job's JD and place them into the correct existing category from the base resume.
-2. Do NOT include a confirmed skill just because it exists in SoT — only include it if it is relevant to this specific job and fits naturally.
+2. Include a confirmed skill when it is relevant to THIS job OR is explicitly named/required in the JD. When the JD names a general or soft skill (office suite, Outlook, email clients, communication, time management, quality processes, SQP-style workflows, etc.) and the candidate has it confirmed in the Source of Truth or the base resume, you MUST include it — never drop it for being "generic", because the JD demand makes it relevant to this application.
 3. Do NOT invent new employers, job titles, or dates based on the notes. Notes inform emphasis and tone only.
 4. Do NOT copy the notes text into any resume output field.
 

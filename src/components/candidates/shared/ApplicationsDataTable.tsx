@@ -48,7 +48,19 @@ function sourceLabel(source: string): string {
 
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return "—";
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  // Render the stored date portion literally instead of going through
+  // `new Date(...)`, which re-interprets the instant in the viewer's local
+  // timezone and can shift the visible day by one for values written near
+  // UTC midnight (and "date-only" legacy values parse as UTC midnight in
+  // every western timezone). The DB value is the business truth.
+  var iso = typeof dateStr === "string" ? dateStr : String(dateStr);
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return "—";
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var monthIdx = parseInt(m[2], 10) - 1;
+  var day = parseInt(m[3], 10);
+  if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31) return "—";
+  return months[monthIdx] + " " + day + ", " + m[1];
 }
 
 function copyToClipboard(text: string, setFeedback: (v: string | null) => void) {

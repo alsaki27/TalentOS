@@ -432,7 +432,25 @@ export async function listApplicationQueue(
 ): Promise<ApplicationQueueResult> {
   const page = Math.max(1, queryParams.page ?? DEFAULT_PAGE);
   const pageSize = Math.min(100, Math.max(1, queryParams.pageSize ?? DEFAULT_PAGE_SIZE));
-  const search = (queryParams.search || "").trim().replace(/[,()]/g, "");
+  const rawSearch = (queryParams.search || "").trim().replace(/[,()]/g, "");
+  // ID-prefixed searches: C#10057 (candidate), A#17395 (application/ticket),
+  // J#19767 (job). The "#" is optional; a bare number matches any of the
+  // three number columns. When an ID search matches, text search is
+  // disabled so the two never combine into an empty result set.
+  const idSearchMatch = /^([CJA])#?(\d+)$/i.exec(rawSearch);
+  let search = rawSearch;
+  let idSearchNumber: number | null = null;
+  let idSearchKind = "";
+  if (idSearchMatch) {
+    search = "";
+    idSearchNumber = parseInt(idSearchMatch[2], 10);
+    const prefix = idSearchMatch[1].toUpperCase();
+    idSearchKind = prefix === "C" ? "candidate" : prefix === "A" ? "app" : prefix === "J" ? "job" : "any";
+  } else if (/^\d+$/.test(rawSearch)) {
+    search = "";
+    idSearchNumber = parseInt(rawSearch, 10);
+    idSearchKind = "any";
+  }
   const status = queryParams.status || "";
   const requestedStage = queryParams.stage || "";
   const stage = new Set([
@@ -525,7 +543,14 @@ export async function listApplicationQueue(
       -- text - unlike a raw pg.Client test, unused params can't just be left in
       -- the array. Renumbered end-to-end after dropping the old role-restriction
       -- params instead of leaving gaps.
-      AND ($2 = '' OR c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3)
+      AND (($2 = '' AND $16::int IS NULL)
+        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
+        OR ($16::int IS NOT NULL AND (
+          ($17 = 'any' AND (a.app_number = $16 OR c.candidate_number = $16 OR j.job_number = $16))
+          OR ($17 = 'app' AND a.app_number = $16)
+          OR ($17 = 'candidate' AND c.candidate_number = $16)
+          OR ($17 = 'job' AND j.job_number = $16)
+        )))
       AND ($4 = '' OR a.status = $4)
       AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
       AND ($6 = '' OR a.priority = $6)
@@ -557,6 +582,8 @@ export async function listApplicationQueue(
     queryParams.candidateId ?? "",
     stage,
     timeWindowHours,
+    idSearchNumber,
+    idSearchKind,
   ]);
 
   const countSql = `
@@ -565,7 +592,14 @@ export async function listApplicationQueue(
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
     WHERE NOT (a.status = ANY($1))
-      AND ($2 = '' OR c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3)
+      AND (($2 = '' AND $14::int IS NULL)
+        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
+        OR ($14::int IS NOT NULL AND (
+          ($15 = 'any' AND (a.app_number = $14 OR c.candidate_number = $14 OR j.job_number = $14))
+          OR ($15 = 'app' AND a.app_number = $14)
+          OR ($15 = 'candidate' AND c.candidate_number = $14)
+          OR ($15 = 'job' AND j.job_number = $14)
+        )))
       AND ($4 = '' OR a.status = $4)
       AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
       AND ($6 = '' OR a.priority = $6)
@@ -593,6 +627,8 @@ export async function listApplicationQueue(
     queryParams.candidateId ?? "",
     stage,
     timeWindowHours,
+    idSearchNumber,
+    idSearchKind,
   ]);
 
   const stats = await buildQueueStats(queryParams);

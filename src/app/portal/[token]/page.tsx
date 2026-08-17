@@ -35,6 +35,17 @@ interface PortalData {
   skarionEnrolledAt: string | null;
 }
 
+function formatAppliedDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+  if (!m) return "—";
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var monthIdx = parseInt(m[2], 10) - 1;
+  var day = parseInt(m[3], 10);
+  if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31) return "—";
+  return months[monthIdx] + " " + day + ", " + m[1];
+}
+
 interface PortalGmailAccount {
   id: string;
   email: string | null;
@@ -189,7 +200,7 @@ export default function CandidatePortalPage() {
                 <span className={`badge badge-${app.public_status.stage}`}>{app.public_status.label}</span>
               </div>
               <div className="muted" style={{ fontSize: 12, marginBottom: app.updates.length ? 12 : 0 }}>
-                Applied {new Date(app.applied_at).toLocaleDateString()}
+                Applied {formatAppliedDate(app.applied_at)}
               </div>
 
               {app.updates.length > 0 && (

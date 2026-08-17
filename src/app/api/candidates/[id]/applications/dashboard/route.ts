@@ -128,9 +128,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     var filtered = allRows;
     if (search) {
       filtered = filtered.filter(function (r) {
-        return (r.company_name.toLowerCase().indexOf(search) !== -1 ||
-                r.job_title.toLowerCase().indexOf(search) !== -1 ||
-                (r.location && r.location.toLowerCase().indexOf(search) !== -1));
+        return ((r.company_name || "").toLowerCase().indexOf(search) !== -1 ||
+                (r.job_title || "").toLowerCase().indexOf(search) !== -1 ||
+                ((r.location || "").toLowerCase().indexOf(search) !== -1));
       });
     }
     if (statusGroup) {

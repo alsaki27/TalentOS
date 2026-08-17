@@ -141,6 +141,17 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+function formatAppliedDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+  if (!m) return "—";
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var monthIdx = parseInt(m[2], 10) - 1;
+  var day = parseInt(m[3], 10);
+  if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31) return "—";
+  return months[monthIdx] + " " + day + ", " + m[1];
+}
+
 function tailoredResumeDisplayName(t: TailoredResumeEntry): string {
   if (t.name && t.name.trim()) return t.name.trim();
   const jd = (t.jobDescription || "").trim();
@@ -1459,7 +1470,7 @@ export default function CandidateProfilePage() {
                           {t.applicationId ? (
                             <>
                               <span className={`badge badge-${t.applicationStage ?? t.applicationStatus}`}>{t.applicationStage ?? t.applicationStatus ?? "assigned"}</span>
-                              {t.appliedAt && <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>Applied {new Date(t.appliedAt).toLocaleDateString()}</span>}
+                              {t.appliedAt && <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>Applied {formatAppliedDate(t.appliedAt)}</span>}
                               {t.proofUrl && (
                                 <a href={t.proofUrl} target="_blank" rel="noreferrer" className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
                                   📎 {t.proofFilename || "proof"}
