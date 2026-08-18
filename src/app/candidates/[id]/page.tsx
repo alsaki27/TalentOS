@@ -10,6 +10,7 @@ import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsed
 import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
+import { AuditPanel } from "@/components/candidates/AuditPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
 interface BaseResumeSummary {
@@ -353,7 +354,7 @@ export default function CandidateProfilePage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [passwordResetting, setPasswordResetting] = useState(false);
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats">("Applications");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -1037,7 +1038,7 @@ export default function CandidateProfilePage() {
       </div>
 
       <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-        {(["Applications", "Profile Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1268,6 +1269,10 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Notes & Caveats" && (
         <CandidateNotesPanel candidateId={candidate.id} />
+      )}
+
+      {activeTab === "Audit" && (
+        <AuditPanel candidateId={candidate.id} />
       )}
 
       {activeTab === "Evidence Bank" && (

@@ -52,6 +52,8 @@ enabled = true
 # AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY
 # AI provider credentials and endpoints live in encrypted Neon Control Center records.
 # JOB_CEO_INGEST_SECRET — used by /api/job-ceo/ingest endpoint; must match GitHub secret
+# AUDIT_DB_URL — base URL of the spare-PC audit-db HTTP bridge (Cloudflare Tunnel hostname)
+# AUDIT_DB_TOKEN — bearer token for the audit-db HTTP bridge (matches a row in its api_tokens table)
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
 # Do not add provider API keys, gateway credentials, model aliases, or AI endpoint
 # URLs here. Configure and rotate them at /admin/ai; only AI_KEYS_ENCRYPTION_SECRET
