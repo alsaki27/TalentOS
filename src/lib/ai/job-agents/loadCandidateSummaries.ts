@@ -8,6 +8,7 @@ export async function loadCandidateSummaries(limit?: number): Promise<CandidateS
             c.status
      FROM candidates c
      WHERE c.status = 'active'
+       AND COALESCE(c.pipeline_stage, 'not_started') <> 'paused'
        AND c.verified_skills IS NOT NULL
        AND array_length(c.verified_skills, 1) > 0
      ORDER BY c.created_at DESC

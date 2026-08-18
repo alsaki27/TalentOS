@@ -25,7 +25,8 @@ export async function POST(
        FROM candidate_resume_search_profiles p
        JOIN base_resumes br ON br.id = p.base_resume_id
        JOIN candidates c ON c.id = p.candidate_id
-      WHERE p.id = $1 AND p.candidate_id = $2 AND lower(c.status) = 'active'`,
+      WHERE p.id = $1 AND p.candidate_id = $2 AND lower(c.status) = 'active'
+        AND COALESCE(c.pipeline_stage, 'not_started') <> 'paused'`,
     [params.profileId, params.id],
   );
   if (!profile) return NextResponse.json({ error: "Active search profile not found." }, { status: 404 });

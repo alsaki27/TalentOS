@@ -10,6 +10,7 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 import { deleteStorageFile } from "@/lib/storage";
 import { deleteResumeFile } from "@/lib/resumeStorage";
 import { query, queryOne, execute } from "@/server/db/neon";
+import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -47,6 +48,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (response) return response;
 
   const body = await req.json();
+
+  if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
+    return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
+  }
 
   const allowedFields = [
     "name", "email", "phone", "status", "pipeline_stage", "target_tier",
