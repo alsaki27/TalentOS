@@ -23,6 +23,7 @@ export default function AnalyticsLayout({
         <TabLink href="/analytics/pipeline" label="Pipeline" pathname={pathname} />
         <TabLink href="/analytics/diversity" label="Diversity" pathname={pathname} />
         <TabLink href="/analytics/recruiters" label="Recruiters" pathname={pathname} />
+        <TabLink href="/analytics/audits" label="Audits" pathname={pathname} />
       </div>
       {children}
     </div>

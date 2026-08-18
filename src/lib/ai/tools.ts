@@ -13,6 +13,7 @@ import { AiTool } from "@/lib/ai/provider";
 import type { UserRole } from "@/lib/auth";
 import { createApplications, updateApplication, deleteApplication, findApplicationById } from "@/server/repositories/applicationsRepository";
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
+import { findAuditStudentByCandidateId, listMockSessions, getMockSession, getLowScoreStudents } from "@/server/db/auditBridge";
 
 const MAX_ROWS = 50;
 
@@ -129,6 +130,38 @@ export const TOOLS: AiTool[] = [
     name: "delete_application",
     description: "Permanently remove one application and its workflow record. Manager/admin only. Requires application_id and confirm=true.",
     inputSchema: { type: "object", properties: { application_id: { type: "string" }, confirm: { type: "boolean" } }, required: ["application_id", "confirm"] },
+  },
+  {
+    name: "get_candidate_mock_sessions",
+    description: "List a candidate's mock interview sessions from the mentorship/audit system (skarion-student-audit) — session dates, target role, and overall score. Requires candidate_id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        candidate_id: { type: "string" },
+        limit: { type: "number", description: "max rows, default 10, capped at 50" },
+      },
+      required: ["candidate_id"],
+    },
+  },
+  {
+    name: "get_candidate_latest_audit_report",
+    description: "Get a candidate's most recent parsed mock-interview audit report — metrics, strengths, weaknesses, and mentor action items. Requires candidate_id.",
+    inputSchema: {
+      type: "object",
+      properties: { candidate_id: { type: "string" } },
+      required: ["candidate_id"],
+    },
+  },
+  {
+    name: "list_candidates_with_low_audit_scores",
+    description: "Find candidates whose most recent mock-interview audit score is below a threshold — useful for prioritizing who needs more coaching.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        threshold: { type: "number", description: "score out of 10, default 6" },
+        limit: { type: "number", description: "max rows, default 25, capped at 50" },
+      },
+    },
   },
 ];
 
@@ -344,6 +377,30 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         await deleteApplication(id);
         await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.deleted','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, id, JSON.stringify({ source: "codex_mcp", candidate_id: (current as any).candidate_id, job_id: (current as any).job_id })]);
         return JSON.stringify({ ok: true, deleted_application_id: id });
+      }
+
+      case "get_candidate_mock_sessions": {
+        const candidateId = String(input.candidate_id ?? "");
+        const student = await findAuditStudentByCandidateId(candidateId);
+        if (!student) return JSON.stringify({ error: "No audit record linked to this candidate" });
+        const sessions = await listMockSessions(student.id);
+        return JSON.stringify(sessions.slice(0, cappedLimit(input.limit ?? 10)));
+      }
+
+      case "get_candidate_latest_audit_report": {
+        const candidateId = String(input.candidate_id ?? "");
+        const student = await findAuditStudentByCandidateId(candidateId);
+        if (!student) return JSON.stringify({ error: "No audit record linked to this candidate" });
+        const sessions = await listMockSessions(student.id);
+        if (sessions.length === 0) return JSON.stringify({ error: "No mock sessions recorded yet" });
+        const detail = await getMockSession(sessions[0].id);
+        return JSON.stringify({ session_date: detail.session_date, overall_score: detail.overall_score, report: detail.report });
+      }
+
+      case "list_candidates_with_low_audit_scores": {
+        const threshold = typeof input.threshold === "number" ? input.threshold : 6;
+        const data = await getLowScoreStudents(threshold, cappedLimit(input.limit ?? 25));
+        return JSON.stringify(data);
       }
 
       default:
