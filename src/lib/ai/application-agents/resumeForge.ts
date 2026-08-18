@@ -9,6 +9,7 @@ import {
   enforceEducationIntegrity,
   enforceExperienceIntegrity,
   normalizeResumeBullet,
+  readBaseSummary,
 } from "./resumeIntegrity";
 
 export async function runResumeForge(
@@ -149,6 +150,21 @@ export async function runResumeForge(
   // also immutable and always come from the base resume.
   validated.education = enforceEducationIntegrity(validated.education, baseEducation);
   // ──────────────────────────────────────────────────────────────────────────
+
+  // ── PROFESSIONAL SUMMARY GUARD ───────────────────────────────────────────
+  // The summary follows the base resume: allowed only when the base has one.
+  // If the AI dropped it or returned null, restore the base summary verbatim
+  // (truthful by construction - it came from the candidate's own resume); if
+  // the base resume has no summary, force null so nothing is ever invented.
+  const baseSummaryText = readBaseSummary(baseContent);
+  if (baseSummaryText) {
+    if (!validated.summary || !validated.summary.trim()) {
+      validated.summary = baseSummaryText;
+      console.warn("[Agent:ResumeForge] SUMMARY GUARD: restored base professional summary (AI returned none)");
+    }
+  } else {
+    validated.summary = null;
+  }
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   console.log("[Agent:ResumeForge] ── OUTPUT ───────────────────────────────────");

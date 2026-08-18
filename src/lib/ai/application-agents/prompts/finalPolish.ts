@@ -1,5 +1,7 @@
 import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
+import { readBaseSummary } from "../resumeIntegrity";
+
 export function buildFinalPolishPrompt(
   job: any,
   baseResume: any,
@@ -17,6 +19,16 @@ export function buildFinalPolishPrompt(
 - Overflow: ${pageMetrics.overflow}
 - Readability floor: ${pageMetrics.readable ? "passed" : "FAILED"}`
     : `PAGE QA METRICS: unavailable for this run (rendering failed) — judge page fit conservatively from content volume alone.`;
+
+  // Professional summary: preserved and refined when the draft carries one
+  // (which only happens when the base resume has one); never invented here.
+  const draftSummary = typeof (draft as any)?.summary === "string" ? String((draft as any).summary).trim() : "";
+  const baseHasSummary = Boolean(readBaseSummary((baseResume as any)?.content));
+  const summaryDirective = draftSummary
+    ? `* PRESERVE the draft's professional summary. The "summary" field carries the draft's tailored summary (${JSON.stringify(draftSummary.slice(0, 240))}). Keep it: refine wording for the JD if needed, keep every fact supported by the base resume, 2-4 sentences, matching the base resume's tone. If one-page pressure forces trimming, tighten the summary's wording rather than deleting it. Output the final summary in the "summary" field.`
+    : baseHasSummary
+      ? `* The base resume has a professional summary but the draft's "summary" is missing — restore it by lightly tailoring the base resume's own summary toward the JD (only rephrasing what the base summary states; never invent facts). Output it in the "summary" field.`
+      : `* The base resume has no professional summary. The "summary" field must stay null — never invent a summary at this stage.`;
 
   return `You are Final Polish, an AI that applies reviewer feedback to produce a final, QA-passed resume.
 
@@ -75,7 +87,8 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      containing one, rewrite around the keyword.
    * Never cut a role's only quantified bullet. Cut generic, unquantified, non-JD-relevant
      bullets first; quantified + keyword-matched bullets go last.
-   * NEVER generate a professional summary. The summary field must always be null. The skills
+   ${summaryDirective}
+   * The skills
      output MUST stay in the same categorized-group structure the draft used — an array of
      { name: string, skills: string[] } groups, never flattened into one list or one generic "Skills" bucket.
    * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills. NEVER include "Microsoft Office", "MS Office", "Office 365", or bare "Word"/"PowerPoint" — if the draft you're expanding from already has one (carried over from the base resume), remove it rather than expand around it. Excel is the exception: keep it as its own entry if it's genuinely supported, just never folded into a generic "Microsoft Office" bucket.
@@ -90,7 +103,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    record why in unresolvedWarnings.
 
 Return a JSON object with:
-- summary: ALWAYS null
+- summary: the final professional summary per the summary rule above (a non-empty string), or null when the base resume has no summary and the draft has none
 - skills: final array of { name: string, skills: string[] } category groups (see rule 7) —
   NOT a flat array of strings
 - experience: final experience entries with evidenceIds

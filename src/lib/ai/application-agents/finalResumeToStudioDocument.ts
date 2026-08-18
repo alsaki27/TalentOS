@@ -12,6 +12,7 @@
 // can address them by id.
 
 import type { FinalResumeV1, ExperienceEntry } from "./schemas";
+import { readBaseSummary } from "./resumeIntegrity";
 
 // FinalResumeV1's QA-only fields (appliedIssueIds, rejectedIssueIds,
 // unresolvedWarnings, finalQaScore, exportReady, pageFit) are never read by
@@ -159,8 +160,13 @@ function mapProjects(projects: FinalResumeV1["projects"]) {
 
 export function finalResumeToStudioDocument(final: RenderableResumeContent, baseContent: any): ResumeDocument {
   const base = baseContent && typeof baseContent === "object" ? baseContent : {};
-  const summary = final.summary && final.summary.trim().length > 0
-    ? { id: uid("sum"), text: final.summary }
+  // Summary follows the base resume: the pipeline output wins when it has a
+  // summary, the base resume's own summary is the fallback (truthful by
+  // construction), and a base resume without one produces no summary block.
+  const finalSummaryText = typeof final.summary === "string" ? final.summary.trim() : "";
+  const summaryText = finalSummaryText.length > 0 ? final.summary : readBaseSummary(base);
+  const summary = summaryText
+    ? { id: uid("sum"), text: summaryText }
     : undefined;
 
   return {

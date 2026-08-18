@@ -42,6 +42,32 @@ export function normalizeResumeBullet(value: unknown): string | null {
   return text || null;
 }
 
+/**
+ * Read the base resume's professional summary, tolerating the studio shape
+ * ({ id, text }), a plain string, and a few legacy field names (profile /
+ * objective / professionalSummary, and personalInfo.* variants). Returns a
+ * trimmed string or null when the base resume has no summary at all.
+ *
+ * The professional-summary rule across the pipeline is: the tailored resume
+ * may carry a summary ONLY when the base resume has one (tailored toward the
+ * job); a base resume without a summary produces null at every stage.
+ */
+export function readBaseSummary(baseContent: unknown): string | null {
+  if (!isRecord(baseContent)) return null;
+  const direct = readResumeText(baseContent.summary);
+  if (direct) return direct;
+  for (const key of ["profile", "objective", "professionalSummary"]) {
+    const text = readResumeText(baseContent[key]);
+    if (text) return text;
+  }
+  const pi = baseContent.personalInfo;
+  if (isRecord(pi)) {
+    const text = readResumeText(pi.summary) || readResumeText(pi.objective) || readResumeText(pi.profile);
+    if (text) return text;
+  }
+  return null;
+}
+
 function readBullets(entry: unknown): string[] {
   if (!isRecord(entry)) return [];
   const raw = Array.isArray(entry.bullets)

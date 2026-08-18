@@ -9,6 +9,7 @@ import {
   enforceEducationIntegrity,
   enforceExperienceIntegrity,
   normalizeResumeBullet,
+  readBaseSummary,
 } from "./resumeIntegrity";
 import { finalResumeToStudioDocument, type RenderableResumeContent } from "./finalResumeToStudioDocument";
 import { renderResumePdfWithMetrics, type ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
@@ -194,6 +195,22 @@ export async function runFinalPolish(
   // title, company, location, dates, education identity, and graduation month.
   validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
   validated.education = enforceEducationIntegrity(validated.education, baseEducation);
+
+  // ── PROFESSIONAL SUMMARY GUARD ───────────────────────────────────────────
+  // Same base-driven rule as Resume Forge: a summary is allowed only when the
+  // base resume has one. If Final Polish dropped it, restore from the draft
+  // (Resume Forge's tailored summary) or, failing that, the base resume
+  // verbatim. If the base resume has no summary, force null.
+  const baseSummaryText = readBaseSummary(baseContent);
+  const draftSummaryText = typeof (draft as any)?.summary === "string" ? String((draft as any).summary).trim() : "";
+  if (baseSummaryText) {
+    if (!validated.summary || !validated.summary.trim()) {
+      validated.summary = draftSummaryText || baseSummaryText;
+      console.warn("[Agent:FinalPolish] SUMMARY GUARD: restored professional summary (AI returned none)");
+    }
+  } else {
+    validated.summary = null;
+  }
 
   // ── BULLET SAFETY NET ───────────────────────────────────────────
   // Defense in depth: if FinalPolish strips bullets from any role,

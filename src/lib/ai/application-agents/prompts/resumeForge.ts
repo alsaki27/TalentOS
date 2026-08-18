@@ -2,6 +2,8 @@
 // Skills come exclusively from the candidate's Source of Truth (confirmed_skills from DB)
 // and the job analysis. No hardcoded category maps. The AI decides where skills belong.
 
+import { readBaseSummary } from "../resumeIntegrity";
+
 /**
  * Normalise a single bullet that may be stored as a plain string or as a { text: string }
  * object (both formats appear in older base resumes). Returns a plain string or null.
@@ -86,6 +88,10 @@ export function buildResumeForgePrompt(
   // Collect all SoT confirmed skills + recruiter verified skills into one deduplicated list
   const sotSkills = sourceOfTruth?.confirmedSkills ?? [];
 
+  // Professional summary: the tailored resume carries a summary only when the
+  // base resume already has one - rewritten toward this job, never invented.
+  const baseSummary = readBaseSummary(baseContent);
+
   return `Compare the base resume with the job description and create a truthful, ATS-friendly, one-page tailored resume.
 
 Rules:
@@ -100,8 +106,12 @@ Rules:
 * Keep technical skills concise and grouped by relevance (an array of { name: string, skills: string[] } groups, never a flat list).
 * Keep everything readable and within one page strictly at any cost.
 * Verify date consistency, degree accuracy, experience duration, location, and formatting before finalizing.
-* Never generate a professional summary (always return summary as null).
 * Output only the final resume in valid JSON format, not explanations.
+
+PROFESSIONAL SUMMARY RULES (CRITICAL):
+${baseSummary
+  ? `* The base resume CONTAINS a professional summary, so the tailored resume MUST also include one in the "summary" field. Rewrite the base summary so it is tailored to THIS job description: keep every fact from the base summary (only rephrase and re-prioritize, never invent years, metrics, tools, or credentials), lead with the strengths this JD asks for, and reorder emphasis toward the job's required skills and experience. Keep it 2-4 sentences, match the base resume's tone, and fit it inside the one-page budget (if space is tight, tighten wording to 2 sentences rather than dropping the summary). The base summary text is: ${JSON.stringify(baseSummary)}`
+  : `* The base resume has NO professional summary. Output "summary": null. Never invent a summary from scratch.`}
 
 SKILLS SECTION RULES (CRITICAL):
 * DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) Source of Truth confirmed skills listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).

@@ -159,6 +159,33 @@ describe("runResumeForge", () => {
     expect(result.education[0]?.school).toBe("Washington University of Science and Technology (WUST)");
     expect(result.education[0]?.graduationDate).toBe("May 2024");
   });
+
+  it("restores the base professional summary when the AI returns null", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: { summary: { id: "summary-1", text: "Staff Accountant with progressive experience supporting accounting operations." } },
+      } as any,
+    });
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, ctx);
+    expect(result.summary).toBe("Staff Accountant with progressive experience supporting accounting operations.");
+  });
+
+  it("forces summary to null when the base resume has no professional summary", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: "Invented summary that must be discarded",
+      skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, makeContext());
+    expect(result.summary).toBeNull();
+  });
 });
 
 describe("runHiringPanel", () => {
@@ -216,6 +243,29 @@ describe("runFinalPolish", () => {
     const result = await runFinalPolish({}, provider, ctx);
     expect(result.exportReady).toBe(true);
     expect(result.finalQaScore).toBe(9);
+  });
+
+  it("restores the draft's professional summary when the AI returns null and the base has one", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [{ title: "Languages", skills: ["Go"] }], experience: [], education: [],
+      certifications: [], projects: [], appliedIssueIds: [],
+      rejectedIssueIds: [], unresolvedWarnings: [],
+      finalQaScore: 9, exportReady: true,
+    }));
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: { summary: { id: "summary-1", text: "Base financial analyst summary." } },
+      } as any,
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: { summary: "Tailored financial analyst summary." }, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+      },
+    });
+    const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
+    const result = await runFinalPolish({}, provider, ctx);
+    expect(result.summary).toBe("Tailored financial analyst summary.");
   });
 
   it("normalizes percentage-style QA and reasserts base employment and education facts", async () => {

@@ -1,5 +1,7 @@
 import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
+import { readBaseSummary } from "../resumeIntegrity";
+
 export function buildHiringPanelPrompt(
   job: any,
   baseResume: any,
@@ -17,6 +19,8 @@ export function buildHiringPanelPrompt(
 - Overflow: ${pageMetrics.overflow}
 - Readability floor: ${pageMetrics.readable ? "passed" : "FAILED"}`
     : `PAGE QA METRICS: unavailable for this run (rendering failed) — judge page fit conservatively from content volume alone.`;
+
+  const baseHasSummary = Boolean(readBaseSummary((baseResume as any)?.content));
 
   return `You are Hiring Panel, an AI that reviews a tailored resume draft against a job and gives
 constructive, actionable feedback — like a helpful recruiter doing a quick pass, not a strict
@@ -36,8 +40,9 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   in missingRequirements/excludedKeywords) should not lower the score at all.
 - recruiterScore (0-10): does the resume read well and put relevant strengths near the top? Note
   genuinely weak phrasing (fragments, "responsible for", repeated opening verbs, buzzword filler)
-  as optional edits rather than automatic score-tankers. Do not penalize the lack of a professional
-  summary — a summary is intentionally forbidden in this pipeline.
+  as optional edits rather than automatic score-tankers. ${baseHasSummary
+    ? "This candidate's base resume HAS a professional summary, so the draft is expected to carry a tailored one - judge its quality and JD alignment; never penalize its presence."
+    : "Do not penalize the lack of a professional summary - this candidate's base resume has none, and a summary must not be invented."}
 - roleFitScore (0-10): how well does the candidate's experience align with what the role is
   actually asking for? Give credit for adjacent/transferable experience, not just exact matches.
 - truthfulnessRisk (0-10): flag ONLY genuine credential fabrication — a specific license, certification,
@@ -61,7 +66,9 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   appears in NONE of: base resume, evidence bank, Source of Truth. A score of 5+ requires a "critical"
   requiredEdit with a specific, named unsupported claim, and you must state in that requiredEdit's
   description that you checked the evidence bank and found no support for it.
-- Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess. Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Flag a professional summary if present (it must be null).
+- Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess. Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Professional summary: ${baseHasSummary
+    ? "flag it ONLY if it is missing when expected (base resume has one), or if it contains facts with no support in the base resume/evidence bank - never flag a truthful, JD-aligned summary for existing."
+    : "flag it ONLY if one is present - a summary must not be invented when the base resume has none."}
 
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
 in the next stage, so don't pad it with nitpicks that could cause good content to get cut.

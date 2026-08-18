@@ -16,7 +16,7 @@ import { query, queryOne, sql as getSql } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
 import type { FinalResumeV1, ReviewScoreV1 } from "./schemas";
-import { enforceEducationIntegrity, enforceExperienceIntegrity } from "./resumeIntegrity";
+import { enforceEducationIntegrity, enforceExperienceIntegrity, readBaseSummary } from "./resumeIntegrity";
 import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
@@ -136,6 +136,18 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       Array.isArray(safeFinalData.education) ? safeFinalData.education : [],
       baseEducation,
     ) as any;
+  }
+  // Last-line summary guard: same base-driven rule as Resume Forge and Final
+  // Polish. Restore the base summary verbatim if the pipeline lost it; force
+  // null when the base resume has no summary (nothing may ever be invented).
+  const baseSummaryFinal = readBaseSummary(baseContent);
+  if (baseSummaryFinal) {
+    if (!safeFinalData.summary || !String(safeFinalData.summary).trim()) {
+      safeFinalData.summary = baseSummaryFinal;
+      console.warn("[finalizeWorkflow] SUMMARY GUARD: restored base professional summary (pipeline returned none)");
+    }
+  } else {
+    safeFinalData.summary = null;
   }
   if (baseExperience.length > 0 && safeFinalData.experience.length === 0) {
     throw new Error("Final resume safety check failed: employment section is empty");
