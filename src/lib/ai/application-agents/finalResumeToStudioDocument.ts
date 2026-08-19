@@ -87,15 +87,19 @@ function readHeader(baseContent: any): ResumeDocumentHeader {
 }
 
 function mapExperience(entries: ExperienceEntry[]) {
-  return entries.map((e) => ({
-    id: uid("exp"),
-    title: e.title,
-    company: e.company,
-    location: e.location ?? undefined,
-    startDate: e.startDate ?? "",
-    endDate: e.endDate ?? undefined,
-    bullets: e.bullets.map((b) => ({ id: uid("b"), text: b })),
-  }));
+  return entries.map((e) => {
+    const isCurrent = !e.endDate || e.endDate.trim().toLowerCase() === "present";
+    return {
+      id: uid("exp"),
+      title: e.title,
+      company: e.company,
+      location: e.location ?? undefined,
+      startDate: e.startDate ?? "",
+      endDate: isCurrent ? undefined : (e.endDate ?? undefined),
+      isCurrent,
+      bullets: e.bullets.map((b) => ({ id: uid("b"), text: b })),
+    };
+  });
 }
 
 function mapEducation(edu: FinalResumeV1["education"]) {
