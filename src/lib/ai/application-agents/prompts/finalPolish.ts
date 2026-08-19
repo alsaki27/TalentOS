@@ -80,7 +80,8 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    * An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
    * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
-   * DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', never change it to 'Jan 2022 - Jan 2022').
+   * DO NOT OUTPUT employment dates (startDate or endDate) in the JSON! The system will automatically lock and inject the correct dates from the base resume. Omit startDate and endDate completely from your JSON output.
+   * DO NOT touch, alter, or invent job titles, company names, or locations! They must remain 100% identical to the base resume.
 8. Protect the draft's strengths while editing and trimming:
    * Never paraphrase away a verbatim JD keyword the draft deliberately placed ("Vetro
      FiberMap" must not become "fiber mapping software"). If an edit touches a sentence

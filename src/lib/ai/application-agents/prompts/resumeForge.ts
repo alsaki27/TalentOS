@@ -125,7 +125,8 @@ SKILLS SECTION RULES (CRITICAL):
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array.
-* DO NOT touch, alter, or invent job titles, company names, locations, or employment dates! They must remain 100% identical to the base resume (e.g., if a role is 'Jan 2022 - Present', keep it exactly as-is). Future-looking or unconventional dates come from the candidate's real data — preserve them exactly.
+* DO NOT OUTPUT employment dates (startDate or endDate) in the JSON! The system will automatically lock and inject the correct dates from the base resume. Omit startDate and endDate completely from your JSON output.
+* DO NOT touch, alter, or invent job titles, company names, or locations! They must remain 100% identical to the base resume.
 * Every experience entry from the base resume must be preserved exactly once in the same chronological order.
 
 PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY WHITESPACE):
