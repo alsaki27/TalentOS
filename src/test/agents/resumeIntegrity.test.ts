@@ -8,7 +8,7 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
     ];
     const result = enforceExperienceIntegrity([], base);
     expect(result[0].startDate).toBe("Jul 2025");
-    expect(result[0].endDate).toBeNull();
+    expect(result[0].endDate).toBe("Present");
   });
 
   it("keeps a valid, chronologically sound end date untouched", () => {
@@ -43,7 +43,7 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
       { title: "GIS Analyst", company: "BAYSHORE COMMUNICATION", startDate: "Jul 2025", endDate: "Jan 2001", bullets: ["Tailored bullet"] },
     ];
     const result = enforceExperienceIntegrity(generated, base);
-    expect(result[0].endDate).toBeNull();
+    expect(result[0].endDate).toBe("Present");
     expect(result[0].bullets).toEqual(["Tailored bullet"]);
   });
 
