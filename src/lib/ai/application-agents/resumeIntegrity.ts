@@ -151,15 +151,15 @@ function readYear(value: unknown): number | null {
  * candidate's base resume out of 33 scanned live - not a systemic pattern,
  * but worth guarding against wherever it next occurs.
  */
-function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null, label: string): string | null {
+function sanitizeEndDate(rawStartDate: string | null, rawEndDate: string | null, label: string, isCurrentJob: boolean = false): string | null {
   if (!rawStartDate || !rawEndDate) return rawEndDate;
   const startYear = readYear(rawStartDate);
   const endYear = readYear(rawEndDate);
   if (startYear !== null && endYear !== null && endYear < startYear) {
     console.warn(
-      `[resumeIntegrity] Dropping impossible end date for "${label}": "${rawEndDate}" is before start date "${rawStartDate}". Source data needs correction.`
+      `[resumeIntegrity] Dropping impossible end date for "${label}": "${rawEndDate}" is before start date "${rawStartDate}". Changing to "Present".`
     );
-    return null;
+    return "Present";
   }
   return rawEndDate;
 }
@@ -176,7 +176,7 @@ export function enforceExperienceIntegrity(
     (entry): entry is UnknownRecord => isRecord(entry) && Boolean(readResumeText(entry.title))
   );
   if (validBase.length === 0) {
-    return generatedEntries.filter(isRecord).map((entry) => {
+    return generatedEntries.filter(isRecord).map((entry, index) => {
       const startDate = readResumeText(entry.startDate) || null;
       const rawEndDate = readResumeText(entry.endDate) || null;
       return {
@@ -184,7 +184,7 @@ export function enforceExperienceIntegrity(
         company: readResumeText(entry.company),
         location: readResumeText(entry.location) || null,
         startDate,
-        endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(entry.title)),
+        endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(entry.title), index === 0),
         bullets: readBullets(entry),
         evidenceIds: readEvidenceIds(entry),
       };
@@ -209,7 +209,7 @@ export function enforceExperienceIntegrity(
       company: readResumeText(base.company),
       location: readResumeText(base.location) || null,
       startDate,
-      endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(base.title)),
+      endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(base.title), index === 0),
       bullets: tailoredBullets.length > 0 ? tailoredBullets : readBullets(base),
       evidenceIds: generated ? readEvidenceIds(generated) : [],
     };

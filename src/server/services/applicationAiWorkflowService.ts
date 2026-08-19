@@ -368,24 +368,41 @@ export async function regenerateAiWorkflowForApplication(
   const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
   const job: any = jobRow ?? {};
 
-  // The most recent workflow (any status) for this application recorded which
-  // base_resumes row it was tailored from - the authoritative source, more
-  // direct than re-deriving it from application_resume_versions.
-  const previousWorkflow = await queryOne<{ base_resume_id: string | null }>(
-    `SELECT base_resume_id FROM application_ai_workflows
-      WHERE application_id = $1
-      ORDER BY created_at DESC LIMIT 1`,
-    [applicationId]
+  // Prioritise the resume linked to the target_job for this application's
+  // job (e.g. user manually assigned one), falling back to domain-matched base resume.
+  let targetResumeRow = await queryOne<any>(
+    `SELECT arv.* FROM application_resume_versions arv
+     WHERE arv.target_job_id IN (
+       SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
+     )
+     AND arv.source_type = 'base_resume' AND arv.status = 'active'
+     ORDER BY arv.created_at DESC LIMIT 1`,
+    [appRow.candidate_id, appRow.job_id]
   );
 
-  const resumeRow = await materializeFromBaseResume(
-    appRow.candidate_id,
-    appRow.job_id,
-    applicationId,
-    job,
-    startedBy,
-    preferredBaseResumeId ?? previousWorkflow?.base_resume_id ?? undefined,
-  );
+  let matchScore: number | null = null;
+  let matchReason: string | null = null;
+  let resumeRow: any = null;
+
+  if (preferredBaseResumeId) {
+    matchReason = "User-selected base resume";
+    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, preferredBaseResumeId);
+  } else if (targetResumeRow?.base_resume_id) {
+    // If the target job already has a linked base resume, re-materialize from THAT base_resume_id
+    // to pick up any edits made to the base_resumes table since the last run.
+    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, targetResumeRow.base_resume_id);
+  } else {
+    // Domain-matched base resume selection
+    const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
+    if (best) {
+      matchScore = best.score;
+      matchReason = best.reason;
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, best.resume.id);
+    } else {
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy);
+    }
+  }
+
   if (!resumeRow) {
     return { started: false, reason: "No base resume found for this candidate yet" };
   }
@@ -945,6 +962,48 @@ function getSchemaVersion(id: ApplicationAgentId): string {
   }
 }
 
+async function refreshWorkflowBaseResume(workflowId: string, wf: WorkflowRow): Promise<void> {
+  const appRow = await queryOne<{ candidate_id: string; job_id: string | null }>(
+    "SELECT candidate_id, job_id FROM applications WHERE id = $1",
+    [wf.application_id]
+  );
+  if (!appRow || !appRow.job_id) return;
+
+  const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
+  const job: any = jobRow ?? {};
+
+  let targetResumeRow = await queryOne<any>(
+    `SELECT arv.* FROM application_resume_versions arv
+     WHERE arv.target_job_id IN (
+       SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
+     )
+     AND arv.source_type = 'base_resume' AND arv.status = 'active'
+     ORDER BY arv.created_at DESC LIMIT 1`,
+    [appRow.candidate_id, appRow.job_id]
+  );
+
+  let resumeRow: any = null;
+  if (targetResumeRow?.base_resume_id) {
+    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined, targetResumeRow.base_resume_id);
+  } else {
+    const best = await selectBestBaseResume(appRow.candidate_id, { title: job.title, job_category: job.job_category, description_text: job.description_text, company: job.company, location: job.location });
+    if (best) {
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined, best.resume.id);
+    } else {
+      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, wf.application_id, job, undefined);
+    }
+  }
+
+  if (resumeRow) {
+    const snapshot = (wf.config_snapshot ?? {}) as any;
+    snapshot.baseResume = resumeRow;
+    await query(
+      "UPDATE application_ai_workflows SET config_snapshot = $1::jsonb WHERE id = $2",
+      [JSON.stringify(snapshot), workflowId]
+    );
+  }
+}
+
 export async function cancelWorkflow(workflowId: string): Promise<void> {
   await updateWorkflowStatus(workflowId, "cancelled");
   await syncWorkflowToApplication(workflowId, "cancelled");
@@ -954,6 +1013,7 @@ export async function cancelWorkflow(workflowId: string): Promise<void> {
 export async function retryWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
+  await refreshWorkflowBaseResume(workflowId, wf);
   // last_error must be cleared here, not just status - otherwise the Kanban
   // (and Application Queue) keep showing the PREVIOUS failure's message
   // indefinitely after a successful retry, since nothing else ever
@@ -969,6 +1029,7 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
 export async function restartWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
+  await refreshWorkflowBaseResume(workflowId, wf);
   await query(
     "DELETE FROM application_ai_stage_runs WHERE workflow_id = $1",
     [workflowId]
@@ -984,6 +1045,7 @@ export async function restartWorkflow(workflowId: string): Promise<void> {
 export async function rerunFromStage(workflowId: string, stage: number): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf) return;
+  await refreshWorkflowBaseResume(workflowId, wf);
   await updateWorkflowStatus(workflowId, "queued", { current_stage: Math.max(0, stage) });
   await syncWorkflowToApplication(workflowId, "queued");
 }
