@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import dynamic from "next/dynamic";
+
+const EmailActionModal = dynamic(() => import("./EmailActionModal"), { ssr: false });
 
 export interface ApprovalItem {
   id: string;
@@ -54,6 +58,7 @@ export default function ApprovalCard({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState<"approved" | "rejected" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
 
   const superseded = Boolean(
     item.application_current_status && item.proposed_from_status && item.application_current_status !== item.proposed_from_status,
@@ -95,9 +100,19 @@ export default function ApprovalCard({
             <input type="checkbox" checked={Boolean(selected)} onChange={() => onToggleSelect(item.id)} style={{ marginTop: 3, width: "auto" }} />
           )}
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: compact ? 13 : 14, color: "var(--ink)" }}>{item.candidate_name}</div>
+            <Link href={`/candidates/${item.candidate_id}`} className="link" style={{ fontWeight: 700, fontSize: compact ? 13 : 14, color: "var(--ink)", textDecoration: "none" }}>
+              {item.candidate_name}
+            </Link>
             {(item.job_title || item.company_name) && (
-              <div className="text-muted-foreground" style={{ fontSize: 12 }}>{item.job_title}{item.job_title && item.company_name ? " at " : ""}{item.company_name}</div>
+              <div className="text-muted-foreground" style={{ fontSize: 12 }}>
+                {item.application_id ? (
+                  <Link href={`/candidates/${item.candidate_id}#application-${item.application_id}`} className="link" style={{ textDecoration: "none", color: "inherit" }}>
+                    {item.job_title}{item.job_title && item.company_name ? " at " : ""}{item.company_name} ↗
+                  </Link>
+                ) : (
+                  <>{item.job_title}{item.job_title && item.company_name ? " at " : ""}{item.company_name}</>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -116,7 +131,7 @@ export default function ApprovalCard({
       {item.subject && <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink)" }}>&ldquo;{item.subject}&rdquo;</div>}
       {item.ai_summary && <div style={{ marginTop: 4, fontSize: 12 }} className="text-muted-foreground">{item.ai_summary}</div>}
 
-      {superseded && (
+      {superseded && !item.decision && (
         <div style={{ marginTop: 10, padding: "8px 10px", borderRadius: 8, background: "rgba(var(--warn-rgb), 0.12)", border: "1px solid rgba(var(--warn-rgb), 0.4)", fontSize: 12, color: "var(--warn)" }}>
           This application already moved to &ldquo;{label(item.application_current_status)}&rdquo; since this proposal was created.
         </div>
@@ -129,19 +144,65 @@ export default function ApprovalCard({
 
       <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {mailUrl && <a className="btn" href={mailUrl} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>Open in Gmail</a>}
-        <input
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Optional note"
-          style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 10px" }}
-        />
-        <button className="btn-primary" disabled={busy !== null} onClick={() => decide("approved")}>
-          {busy === "approved" ? "Approving…" : "Approve"}
-        </button>
-        <button className="btn" disabled={busy !== null} onClick={() => decide("rejected")}>
-          {busy === "rejected" ? "Rejecting…" : "Reject"}
-        </button>
+        
+        {item.decision ? (
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
+            {(item.decision === "approved" || item.decision === "auto_approved") && (
+              <div style={{ fontSize: 13, color: "var(--success, #16a34a)", display: "flex", alignItems: "center", gap: 6 }}>
+                ✓ Status updated
+                <Link href={`/candidates/${item.candidate_id}#application-${item.application_id}`} className="link" style={{ fontSize: 12, textDecoration: "underline" }}>
+                  View dashboard
+                </Link>
+              </div>
+            )}
+            <div style={{ fontSize: 13, fontWeight: 600, color: item.decision === "approved" || item.decision === "auto_approved" ? "var(--success, #16a34a)" : "var(--danger, #dc2626)" }}>
+              Decision: {label(item.decision)}
+            </div>
+            {item.email_id && (
+              <button className="btn outline sm" onClick={() => setShowModal(true)}>Show Details</button>
+            )}
+          </div>
+        ) : (
+          <>
+            {item.email_id && (
+              <button className="btn outline sm" onClick={() => setShowModal(true)} style={{ marginRight: "auto" }}>Show Details</button>
+            )}
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Optional note"
+              style={{ flex: 1, minWidth: 140, fontSize: 12, padding: "7px 10px" }}
+            />
+            <button className="btn-primary" disabled={busy !== null} onClick={() => decide("approved")}>
+              {busy === "approved" ? "Approving…" : "Approve"}
+            </button>
+            <button className="btn" disabled={busy !== null} onClick={() => decide("rejected")}>
+              {busy === "rejected" ? "Rejecting…" : "Reject"}
+            </button>
+          </>
+        )}
       </div>
+
+      {showModal && item.email_id && (
+        <EmailActionModal
+          thread={{
+            id: item.email_id,
+            candidate_id: item.candidate_id,
+            candidate_name: item.candidate_name,
+            gmail_thread_id: item.gmail_thread_id,
+            subject: item.subject,
+            from_email: item.from_email,
+            job_title: item.job_title,
+            company_name: item.company_name,
+            sent_at: item.created_at,
+          }}
+          candidates={[]}
+          onClose={() => setShowModal(false)}
+          onUpdated={() => {
+            // Can trigger a refresh if needed
+          }}
+        />
+      )}
     </div>
   );
 }

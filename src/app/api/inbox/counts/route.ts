@@ -16,7 +16,7 @@ function isUuid(value: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireCurrentUser(ALL_USER_ROLES);
+  const { context, response } = await requireCurrentUser(ALL_USER_ROLES);
   if (response) return response;
 
   const url = new URL(req.url);
@@ -26,11 +26,12 @@ export async function GET(req: NextRequest) {
   }
   const candidateFilter = candidateId || null;
 
-  const [approvalsRow, mailRow] = await Promise.all([
+  const [approvalsRow, mailRow, draftsRow] = await Promise.all([
     queryOne<{
       pending_approvals: number; urgent_approvals: number; needs_reply: number;
       interviews: number; untracked: number; conflicts: number; escalated: number;
       approved_today: number; rejected_today: number;
+      handovers_assigned_to_me: number; handovers_overdue: number;
     }>(
       `SELECT
          COUNT(*) FILTER (WHERE type = 'status_change_approval' AND status IN ('open', 'in_progress'))::int AS pending_approvals,
@@ -41,10 +42,12 @@ export async function GET(req: NextRequest) {
          COUNT(*) FILTER (WHERE type = 'calendar_conflict' AND status IN ('open', 'in_progress'))::int AS conflicts,
          COUNT(*) FILTER (WHERE status IN ('open', 'in_progress') AND escalated_at IS NOT NULL)::int AS escalated,
          COUNT(*) FILTER (WHERE decision = 'approved' AND decided_at >= date_trunc('day', now()))::int AS approved_today,
-         COUNT(*) FILTER (WHERE decision = 'rejected' AND decided_at >= date_trunc('day', now()))::int AS rejected_today
+         COUNT(*) FILTER (WHERE decision = 'rejected' AND decided_at >= date_trunc('day', now()))::int AS rejected_today,
+         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND assigned_to_user_id = $2)::int AS handovers_assigned_to_me,
+         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND due_at < now())::int AS handovers_overdue
        FROM action_items
        WHERE ($1::uuid IS NULL OR candidate_id = $1)`,
-      [candidateFilter],
+      [candidateFilter, context.profile.user_id],
     ),
     queryOne<{ relevant: number; awaiting_reply: number; hidden: number; total: number; last_message_at: string | null }>(
       `SELECT
@@ -57,6 +60,12 @@ export async function GET(req: NextRequest) {
        WHERE direction = 'inbound' AND ($1::uuid IS NULL OR candidate_id = $1)`,
       [candidateFilter],
     ),
+    queryOne<{ total_drafts: number }>(
+      `SELECT COUNT(*)::int AS total_drafts
+       FROM inbox_drafts
+       WHERE sent_at IS NULL AND discarded_at IS NULL AND ($1::uuid IS NULL OR candidate_id = $1)`,
+      [candidateFilter]
+    )
   ]);
 
   return NextResponse.json({
@@ -80,5 +89,12 @@ export async function GET(req: NextRequest) {
       total: mailRow?.total ?? 0,
       lastMessageAt: mailRow?.last_message_at ?? null,
     },
+    drafts: {
+      total: draftsRow?.total_drafts ?? 0,
+    },
+    handovers: {
+      assignedToMe: approvalsRow?.handovers_assigned_to_me ?? 0,
+      overdue: approvalsRow?.handovers_overdue ?? 0,
+    }
   });
 }

@@ -38,12 +38,21 @@ export async function GET(req: NextRequest) {
     return `$${params.length}`;
   };
 
-  if (direction === "inbox") predicates.push(`ec.direction = 'inbound'`);
+  if (direction === "inbox") {
+    predicates.push(`ec.direction = 'inbound'`);
+    predicates.push(`NOT EXISTS (SELECT 1 FROM action_items ai3 WHERE ai3.email_communication_id = ec.id AND ai3.type = 'status_change_approval' AND ai3.status IN ('open', 'in_progress'))`);
+  }
   if (direction === "sent") predicates.push(`ec.direction = 'outbound'`);
   if (candidateId) predicates.push(`ec.candidate_id = ${add(candidateId)}`);
   if (category) predicates.push(`ec.ai_category = ${add(category)}`);
   if (needsReply) predicates.push(`ec.needs_reply = ${add(needsReply === "true")}`);
-  if (relevant) predicates.push(`ec.ai_relevant = ${add(relevant === "true")}`);
+  if (relevant) {
+    if (relevant === "true") {
+      predicates.push(`ec.suppression_reason IS NULL`);
+    } else {
+      predicates.push(`ec.suppression_reason IS NOT NULL`);
+    }
+  }
   if (hasOpenTask) {
     const existsSql = `EXISTS (SELECT 1 FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress'))`;
     predicates.push(hasOpenTask === "true" ? existsSql : `NOT ${existsSql}`);
@@ -51,7 +60,7 @@ export async function GET(req: NextRequest) {
   if (search) {
     const term = `%${search}%`;
     const p = add(term);
-    predicates.push(`(ec.subject ILIKE ${p} OR ec.from_email ILIKE ${p} OR ec.snippet ILIKE ${p} OR ec.body_text ILIKE ${p} OR c.name ILIKE ${p})`);
+    predicates.push(`(ec.subject ILIKE ${p} OR ec.from_email ILIKE ${p} OR ec.snippet ILIKE ${p} OR ec.body_text ILIKE ${p} OR c.name ILIKE ${p} OR ec.gmail_thread_id ILIKE ${p})`);
   }
 
   const whereSql = predicates.join(" AND ");
