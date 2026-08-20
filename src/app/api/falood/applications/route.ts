@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, execute } from "@/server/db/neon";
+import { resumifyResumeDataToExportDocument } from "@/lib/falood/resumeDocumentAdapters";
 
 export const runtime = "nodejs";
 
@@ -198,6 +199,64 @@ export async function PATCH(req: NextRequest) {
 
     if (!row) {
       return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+    }
+
+    // This Tailor Studio session may represent a candidate's actual base
+    // resume (created by copying from one - see the "base_resume:<id>" name
+    // convention set at creation time). falood_saved_applications is its own,
+    // separate table; the AI resume pipeline never reads it - only
+    // base_resumes.content. Without this, edits made here look saved (they
+    // are - to this table) but are structurally invisible to Generate/
+    // Regenerate, which keeps producing tailored resumes from the OLD base
+    // resume content forever. Push resume-content edits back into
+    // base_resumes in real time so the very next pipeline run picks them up.
+    // Only runs when this save actually included resumeData - a
+    // chatHistory-only or versions-only save has nothing new to sync.
+    // Best-effort: a sync failure must never fail the Tailor Studio's own
+    // save, which has already succeeded by this point.
+    if ("resumeData" in body && typeof row.name === "string") {
+      const match = /^base_resume:([0-9a-f-]{36})$/i.exec(row.name.trim());
+      if (match) {
+        const baseResumeId = match[1];
+        try {
+          const baseRow = await queryOne<{ content: any }>(
+            "SELECT content FROM base_resumes WHERE id = $1",
+            [baseResumeId]
+          );
+          if (baseRow) {
+            const converted = resumifyResumeDataToExportDocument(body.resumeData);
+            // Merge onto the existing content rather than replacing it
+            // wholesale: the resumify editor has no concept of
+            // certifications or the base resume's presentation
+            // "formatting" (styleId/margins/etc.) at all, so a full
+            // overwrite would silently delete them. Only the fields the
+            // Tailor Studio can actually edit are synced.
+            const existingContent =
+              baseRow.content && typeof baseRow.content === "object" && !Array.isArray(baseRow.content)
+                ? baseRow.content
+                : {};
+            const mergedContent = {
+              ...existingContent,
+              header: converted.header,
+              summary: converted.summary,
+              skills: converted.skills,
+              experience: converted.experience,
+              education: converted.education,
+              projects: converted.projects,
+              customSections: converted.customSections,
+            };
+            await execute(
+              "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
+              [JSON.stringify(mergedContent), baseResumeId]
+            );
+          }
+        } catch (syncErr: any) {
+          console.error(
+            "[Falood Applications PATCH] Base resume sync failed (non-critical):",
+            syncErr?.message || syncErr
+          );
+        }
+      }
     }
 
     return NextResponse.json({ success: true, data: normalizeRow(row) });
