@@ -448,18 +448,39 @@ export async function regenerateAiWorkflowForApplication(
   return { started: true, workflowId };
 }
 
-/** Build agent context from the immutable workflow snapshot + previous artifacts. */
+/**
+ * Build agent context from the immutable workflow snapshot + previous
+ * artifacts. baseResume.content is re-read live from base_resumes on every
+ * call (falling back to the snapshot if the row is gone) so a mid-workflow
+ * edit to the candidate's base resume is picked up by every remaining stage -
+ * not just at finalization, which already does this same live-preferred/
+ * snapshot-fallback read (see finalizeWorkflow). Previously only the trigger
+ * and finalization saw the current base resume; stages 2-4 always saw
+ * whatever was current at the instant the workflow started, even if the base
+ * resume was edited seconds later while those stages were still running.
+ */
 async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow[]): Promise<AgentContext> {
   const snapshot = (wf.config_snapshot ?? {}) as any;
   const mapped = mapArtifacts(previousArtifacts);
   const outputsMap: Record<string, ArtifactRecord> = {};
   for (const a of mapped) outputsMap[a.automationId] = a;
 
+  let baseResume = snapshot.baseResume ?? {};
+  if (wf.base_resume_id) {
+    const freshBase = await queryOne<{ content: unknown }>(
+      "SELECT content FROM base_resumes WHERE id = $1",
+      [wf.base_resume_id]
+    );
+    if (freshBase?.content) {
+      baseResume = { ...baseResume, content: freshBase.content };
+    }
+  }
+
   return {
     applicationId: wf.application_id,
     candidateId: snapshot.candidateId ?? "",
     job: snapshot.job ?? {},
-    baseResume: snapshot.baseResume ?? {},
+    baseResume,
     evidence: snapshot.evidence ?? [],
     verifiedSkills: snapshot.verifiedSkills ?? [],
     sourceOfTruth: snapshot.sourceOfTruth ?? null,

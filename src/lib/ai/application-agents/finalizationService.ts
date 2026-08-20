@@ -17,6 +17,7 @@ import { logActivity } from "@/lib/activity";
 import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
 import type { FinalResumeV1, ReviewScoreV1 } from "./schemas";
 import { enforceEducationIntegrity, enforceExperienceIntegrity, readBaseSummary } from "./resumeIntegrity";
+import { auditAndRepairResumeVersionIdentity } from "./postFinalizeIdentityAudit";
 import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
@@ -283,6 +284,28 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   }).catch((err: any) => {
     console.error("[finalizeWorkflow] Activity log failed (non-critical):", err.message || err);
   });
+
+  // Independent final identity check, deliberately re-reading and
+  // re-comparing rather than trusting the enforceExperienceIntegrity/
+  // enforceEducationIntegrity calls above by construction - see
+  // postFinalizeIdentityAudit.ts. Must never block/fail finalization: the
+  // version row above is already committed regardless of what happens here.
+  try {
+    const auditResult = await auditAndRepairResumeVersionIdentity(versionId!);
+    if (auditResult.changed) {
+      console.warn(
+        `[finalizeWorkflow] POST-FINALIZE IDENTITY AUDIT repaired ${auditResult.mismatches.length} mismatch(es) on resume version ${versionId}:`,
+        auditResult.mismatches
+      );
+    } else if (auditResult.mismatches.length > 0) {
+      console.warn(
+        `[finalizeWorkflow] POST-FINALIZE IDENTITY AUDIT found unrepairable issue(s) on resume version ${versionId} (needs human review):`,
+        auditResult.mismatches
+      );
+    }
+  } catch (err: any) {
+    console.error(`[finalizeWorkflow] Post-finalize identity audit threw for resume version ${versionId}:`, err?.message || err);
+  }
 
   return versionId;
 }
