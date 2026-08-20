@@ -367,6 +367,21 @@ export default function ApplicationQueuePage() {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   }
 
+  // Refreshes only the top counters (ALL TICKETS / MINE / AE REVIEW PENDING /
+  // AE APPLICATION PENDING / AI PIPELINE) and the pagination total, never
+  // `items` - the thing that reads as a reload. Used after actions that need
+  // those counters to stay accurate (e.g. regenerate bumping the AI PIPELINE
+  // count) without paying load()'s wholesale-replace cost for it.
+  async function refreshStatsOnly() {
+    try {
+      const res = await fetch(`/api/application-queue?${buildParams(page)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+      setTotal(data.total ?? 0);
+    } catch {}
+  }
+
   var hasActiveFilters = Boolean(searchInput || candidateFilter || statusFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || timeWindow);
 
   function clearFilters() {
@@ -443,7 +458,7 @@ export default function ApplicationQueuePage() {
 
         const byWorkflowId = new Map((data.workflows ?? []).map((w: any) => [w.id, w]));
 
-        const justCompleted: QueueItem[] = [];
+        const needsAppRefresh: QueueItem[] = [];
         setItems((prev) =>
           prev.map((item) => {
             if (!item.workflow_id) return item;
@@ -451,7 +466,21 @@ export default function ApplicationQueuePage() {
             if (!wf) return item;
             const wasActive = item.workflow_status === "queued" || item.workflow_status === "running";
             const nowTerminal = wf.status === "completed" || wf.status === "failed" || wf.status === "cancelled";
-            if (wasActive && nowTerminal) justCompleted.push(item);
+            const justTransitionedToTerminal = wasActive && nowTerminal;
+            // "completed" specifically also needs a retry-until-it-lands check
+            // on every tick, not just the transition tick: the one-shot fetch
+            // below has no retry, and PipelineActions has a "Completed" badge
+            // fallback (meant only for the genuinely-shouldn't-happen case of
+            // a finished workflow with no resume at all) that silently becomes
+            // the resting state - no "Open in Studio", no "Regenerate" button -
+            // whenever resume_generation_status/workflow_resume_version_id
+            // haven't landed yet. Confirmed live: a card can sit stuck on the
+            // bare "Completed" badge indefinitely until a manual page reload
+            // if that one fetch attempt fails silently (network blip, etc.).
+            // Re-checking every tick self-heals instead of giving up after one try.
+            const stillMissingCompletionData =
+              wf.status === "completed" && (item.resume_generation_status !== "ready" || !item.workflow_resume_version_id);
+            if (justTransitionedToTerminal || stillMissingCompletionData) needsAppRefresh.push(item);
             return {
               ...item,
               workflow_status: wf.status,
@@ -461,11 +490,12 @@ export default function ApplicationQueuePage() {
           })
         );
 
-        // A workflow that just finished needs its application row re-read
-        // (resume_generation_status, tailored_resume_version_id, proof
+        // A workflow that just finished (or is still missing its resume link -
+        // see stillMissingCompletionData above) needs its application row
+        // re-read (resume_generation_status, tailored_resume_version_id, proof
         // fields aren't on the active-workflows list) - fetched per-row so
         // only that card updates, not the whole grid.
-        for (const item of justCompleted) {
+        for (const item of needsAppRefresh) {
           fetch(`/api/applications/${item.id}`, { cache: "no-store" })
             .then((r) => (r.ok ? r.json() : null))
             .then((fresh) => {
@@ -669,11 +699,12 @@ export default function ApplicationQueuePage() {
         workflow_stage: 0,
         resume_generation_status: "queued",
       });
-      // Re-fetch the current, already-filtered page in place (background-poll
-      // style: keeps selection/expanded rows/scroll and every active filter,
-      // just pulls fresh rows + stats so the regenerated ticket and the
-      // filter counters update without a page bounce or filter reset).
-      load(page, false, true);
+      // Counters only (AI PIPELINE count, etc.) - never items. load() here
+      // (even with isBackgroundPoll=true) still calls setItems(data.items)
+      // unconditionally, wholesale-replacing every row and reading as a full
+      // page reload despite the patchItemLocally() call right above it -
+      // confirmed live as exactly the "regenerate refreshes the page" report.
+      void refreshStatsOnly();
       setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
     } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
     finally { setActionLoading(null); }
