@@ -9,7 +9,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
-import { queryOne } from "@/server/db/neon";
+import { execute, queryOne } from "@/server/db/neon";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 
 export const dynamic = "force-dynamic";
@@ -75,6 +75,22 @@ export async function POST(req: NextRequest) {
     );
 
     if (existing) {
+      // A base-resume studio session is a bridge/cache, not the source of truth.
+      // Refresh it when the canonical base resume changes so old dates or roles
+      // cannot keep appearing in Falood after a manager edits the base resume.
+      // Do not do this for application_resume_version sessions: those are
+      // job-specific historical snapshots and must remain immutable here.
+      if (source === "base_resume") {
+        await execute(
+          `UPDATE falood_saved_applications
+              SET company_name = $1,
+                  skills = $2,
+                  resume_data = $3,
+                  updated_at = NOW()
+            WHERE id = $4`,
+          [companyName || null, skills, JSON.stringify(resumeData), existing.id]
+        );
+      }
       return NextResponse.json({ id: existing.id, jobTitle, companyName }, { status: 200 });
     }
 
