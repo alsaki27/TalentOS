@@ -127,7 +127,6 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   checkbox: 32,
   candidate: 205,
   job: 205,
-  status: 100,
   aiPipeline: 158,
   score: 100,
   stage: 200,
@@ -138,7 +137,7 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   actions: 208,
 };
 const COLUMN_ORDER = [
-  "checkbox", "candidate", "job", "status", "aiPipeline", "score", "stage", "owner", "due",
+  "checkbox", "candidate", "job", "aiPipeline", "score", "stage", "owner", "due",
   "ticketJobIds", "resumeIds", "actions",
 ];
 
@@ -1145,7 +1144,6 @@ export default function ApplicationQueuePage() {
                   { id: "checkbox", label: <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} /> },
                   { id: "candidate", label: "Candidate" },
                   { id: "job", label: "Job" },
-                  { id: "status", label: "Status" },
                   { id: "aiPipeline", label: "AI Pipeline" },
                   { id: "score", label: "Scores" },
                   { id: "stage", label: "Stage" },
@@ -1214,12 +1212,6 @@ export default function ApplicationQueuePage() {
                         </div>
                       </>
                     ) : <span className="text-muted">Ad-hoc</span>}
-                  </td>
-
-                  <td>
-                    <span className={`badge badge-${item.status}`}>
-                      {STATUS_ICONS[item.status] || ""} {item.status.replaceAll("_", " ")}
-                    </span>
                   </td>
 
                   <td>

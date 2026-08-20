@@ -133,15 +133,15 @@ export default function ApplicationsDataTable({
           <thead>
             <tr>
               {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "12%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}
-              <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "14%" }}>Company {renderSortIndicator("company_name")}</th>
+              <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "12%" }}>Company {renderSortIndicator("company_name")}</th>
               <th onClick={function () { onSort("job_title"); }} style={{ ...TH_STYLE }}>Job Role {renderSortIndicator("job_title")}</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "9%" }}>Job ID</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "9%" }}>Source</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "12%" }}>Location</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Job ID</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Source</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "10%" }}>Location</th>
               <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "8%" }}>Resume</th>
-              <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "14%" }}>Status {renderSortIndicator("status")}</th>
-              <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "9%" }}>Applied {renderSortIndicator("applied_at")}</th>
-              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "16%" }}>Actions</th>}
+              <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "12%" }}>Status {renderSortIndicator("status")}</th>
+              <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "8%" }}>Applied {renderSortIndicator("applied_at")}</th>
+              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "10%" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -341,7 +341,6 @@ export default function ApplicationsDataTable({
                             }}
                           >Copilot</button>
                         )}
-                        <a href={"/applications/" + app.application_id} target="_blank" rel="noreferrer" title="Open application record in a new tab" style={{ height: 28, borderRadius: 6, padding: "0 8px", display: "inline-flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--accent)", background: "rgba(99,102,241,0.12)", color: "var(--accent)", fontSize: 11, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}>Open · {app.application_id.slice(0, 8)}</a>
                         <button
                           onClick={function () { handleToggle(app.application_id, app.status, "replied"); }}
                           disabled={isLoading}

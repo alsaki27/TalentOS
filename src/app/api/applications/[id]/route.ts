@@ -148,10 +148,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       updates.status = "applied";
       updates.applied_at = appliedAt;
       updates.completed_at = currentApplication?.completed_at ?? appliedAt;
-    } else if (previousAeStage === "applied") {
+    } else {
       updates.status = "in_progress";
-      updates.applied_at = null;
-      updates.completed_at = null;
+      if (previousAeStage === "applied") {
+        updates.applied_at = null;
+        updates.completed_at = null;
+      }
     }
 
   }
