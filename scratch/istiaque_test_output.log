@@ -1,0 +1,104 @@
+﻿Setting up 4 applications for candidate 16ad4c1b-ef2f-4535-b7b4-c5115acfe09c...
+[DB] Initializing Neon connection (host: ep-withered-leaf-at0ubn6s-pooler.c-9.us-east-1.aws.neon.tech)
+  Application ae5f5901-1be9-457b-af86-c5842d931e3c created for "HVAC & Utility Mechanical Engineer" @ Boviet Solar Technologies (base resume: MD AMINUL SARKER)
+    -> workflow 0b9f54e2-7c9e-41b4-94f6-4a0f2bc617e8 queued
+  Application df5b7b12-4638-4a79-86f8-6cb6a080c666 created for "DFT Engineer" @ JNL Technologies (base resume: MD AMINUL SARKER)
+    -> workflow 44cf86c3-9af5-462a-9659-edb9eaabc3d8 queued
+  Application 592dcf7f-5bfc-449d-9b71-99942522d46e created for "Engineer - Entry Level, Solar (PV)" @ Intertek (base resume: SADDAM H.)
+    -> workflow 8dbabcae-27f3-4455-9cf6-4f17423d7f95 queued
+  Application 2e7a8491-4387-4118-ac71-57ab8971328a created for "Mechanical Design Engineer" @ Insight Global (base resume: SADDAM H.)
+    -> workflow 4c3605d4-c803-43be-b74d-a6f8448355f9 queued
+
+4 of 4 workflows queued. Kicking off dispatch...
+  [dispatch poke] HTTP 200
+  [poll] 4c3605d4:queued(stage 0)  8dbabcae:running(stage 0)  44cf86c3:running(stage 0)  0b9f54e2:running(stage 1)
+  [dispatch poke] HTTP 200
+  [poll] 4c3605d4:running(stage 1)  8dbabcae:running(stage 1)  44cf86c3:running(stage 2)  0b9f54e2:running(stage 3)
+  [dispatch poke] HTTP 200
+  [poll] 8dbabcae:running(stage 2)  4c3605d4:running(stage 2)  44cf86c3:running(stage 3)  0b9f54e2:completed(stage 3)
+  [dispatch poke] HTTP 200
+  [poll] 4c3605d4:running(stage 3)  8dbabcae:running(stage 3)  44cf86c3:completed(stage 3)  0b9f54e2:completed(stage 3)
+  [dispatch poke] HTTP 200
+  [poll] 44cf86c3:completed(stage 3)  4c3605d4:completed(stage 3)  8dbabcae:completed(stage 3)  0b9f54e2:completed(stage 3)
+  All workflows terminal.
+
+
+================ IDENTITY-FIELD REPORT ================
+
+
+########## Job 601b415d-2b48-45dc-a22f-414033b09285 — application ae5f5901-1be9-457b-af86-c5842d931e3c ##########
+  workflow status: completed  base_resume_id used: e4efba67-2cfb-45bc-997b-13c6f9e95eb9  last_error: none
+
+   [Stage: application_job_lens]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_resume_forge]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_hiring_panel]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_final_polish]
+      (stage output carries no personalInfo/header field - expected)
+
+   [FINAL PERSISTED resume 922568e0-d92b-4e2d-a71e-dc2a8ada7b79]
+      FINAL DOCUMENT MATCHES BASE RESUME on all checked fields.
+
+
+########## Job 3b834d81-5dec-4811-ac3d-3eb19c188399 — application df5b7b12-4638-4a79-86f8-6cb6a080c666 ##########
+  workflow status: completed  base_resume_id used: e4efba67-2cfb-45bc-997b-13c6f9e95eb9  last_error: none
+
+   [Stage: application_job_lens]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_resume_forge]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_hiring_panel]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_final_polish]
+      (stage output carries no personalInfo/header field - expected)
+
+   [FINAL PERSISTED resume 5e07745a-4cf6-4f95-9378-ca2974aa50f5]
+      FINAL DOCUMENT MATCHES BASE RESUME on all checked fields.
+
+
+########## Job 3e803d2f-878a-4683-82ad-1b1116139161 — application 592dcf7f-5bfc-449d-9b71-99942522d46e ##########
+  workflow status: completed  base_resume_id used: 40b3750b-8ea6-4613-bffe-56021ad2e1ef  last_error: none
+
+   [Stage: application_job_lens]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_resume_forge]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_hiring_panel]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_final_polish]
+      (stage output carries no personalInfo/header field - expected)
+
+   [FINAL PERSISTED resume b92ba6cb-7ed8-4b71-9a30-4da9ebdf77e1]
+      FINAL DOCUMENT MATCHES BASE RESUME on all checked fields.
+
+
+########## Job cfd63ee3-5091-4764-bf51-d02383fe7bba — application 2e7a8491-4387-4118-ac71-57ab8971328a ##########
+  workflow status: completed  base_resume_id used: 40b3750b-8ea6-4613-bffe-56021ad2e1ef  last_error: none
+
+   [Stage: application_job_lens]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_resume_forge]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_hiring_panel]
+      (stage output carries no personalInfo/header field - expected)
+
+   [Stage: application_final_polish]
+      (stage output carries no personalInfo/header field - expected)
+
+   [FINAL PERSISTED resume d9af85a4-ab00-48cc-b6eb-563f8cf53fb6]
+      FINAL DOCUMENT MATCHES BASE RESUME on all checked fields.
+
+================ END REPORT ================

@@ -1,0 +1,49 @@
+﻿=== Step 1: verify sync fix is live (retrying for deploy propagation) ===
+
+Attempt 1/8:
+  PATCH HTTP 200, success=true
+[DB] Initializing Neon connection (host: ep-withered-leaf-at0ubn6s-pooler.c-9.us-east-1.aws.neon.tech)
+  base_resumes.header now: {"email":"md.sarker.aminul@gmail.com","phone":"(269) 312-1996","fullName":"MD AMINUL SARKER","linkedin":"https://www.linkedin.com/in/mdaminulislam.sarker","location":"Flushing, NY"}
+  Not yet reflected - waiting 45s (likely still deploying)...
+
+Attempt 2/8:
+  PATCH HTTP 200, success=true
+  base_resumes.header now: {"email":"md.sarker.aminul@gmail.com","phone":"(269) 312-1996","fullName":"MD AMINUL SARKER","linkedin":"https://www.linkedin.com/in/mdaminulislam.sarker","location":"Flushing, NY"}
+  Not yet reflected - waiting 45s (likely still deploying)...
+
+Attempt 3/8:
+  PATCH HTTP 200, success=true
+  base_resumes.header now: {"email":"md.sarker.aminul@gmail.com","phone":"(269) 312-1996","fullName":"MD AMINUL SARKER","linkedin":"https://www.linkedin.com/in/mdaminulislam.sarker","location":"Flushing, NY"}
+  Not yet reflected - waiting 45s (likely still deploying)...
+
+Attempt 4/8:
+  PATCH HTTP 200, success=true
+  base_resumes.header now: {"email":"md.sarker.aminul@gmail.com","phone":"(269) 312-1996","fullName":"MD AMINUL SARKER","linkedin":"https://www.linkedin.com/in/mdaminulislam.sarker","location":"Flushing, NY"}
+  Not yet reflected - waiting 45s (likely still deploying)...
+
+Attempt 5/8:
+  PATCH HTTP 200, success=true
+  base_resumes.header now: {"email":"istiaqeeu234@gmail.com","phone":"(269) 312-1996","github":"https://github.com/shohan-hyder","fullName":"Istiaque Uddin Hyder","linkedin":"https://www.linkedin.com/in/shohan-hyder/","location":"New Work, NY"}
+  ✅ SYNC CONFIRMED WORKING
+
+
+=== Step 2: regenerate both applications tied to this base resume ===
+HVAC & Utility Mechanical Engineer: workflow 48acd1b2-5e4c-4ecd-b2cc-2117cd7dc7b3 queued
+DFT Engineer: workflow 3233e8fe-7a3b-4922-a403-ea59004f0396 queued
+  [dispatch poke] HTTP 200
+  [poll] 3233e8fe:running(stage 1)  48acd1b2:running(stage 1)
+  [dispatch poke] HTTP 200
+  [poll] 3233e8fe:running(stage 3)  48acd1b2:queued(stage 2)
+  [dispatch poke] HTTP 200
+  [poll] 3233e8fe:completed(stage 3)  48acd1b2:running(stage 3)
+  [dispatch poke] HTTP 200
+  [poll] 3233e8fe:completed(stage 3)  48acd1b2:completed(stage 3)
+  All terminal.
+
+
+================ FINAL PROOF ================
+HVAC & Utility Mechanical Engineer: tailored resume header = {"email":"istiaqeeu234@gmail.com","phone":"(269) 312-1996","github":"https://github.com/shohan-hyder","fullName":"Istiaque Uddin Hyder","linkedin":"https://www.linkedin.com/in/shohan-hyder/","location":"New Work, NY"}
+  ✅ REFLECTS THE TAILOR STUDIO EDIT
+DFT Engineer: tailored resume header = {"email":"istiaqeeu234@gmail.com","phone":"(269) 312-1996","github":"https://github.com/shohan-hyder","fullName":"Istiaque Uddin Hyder","linkedin":"https://www.linkedin.com/in/shohan-hyder/","location":"New Work, NY"}
+  ✅ REFLECTS THE TAILOR STUDIO EDIT
+================ END ================
