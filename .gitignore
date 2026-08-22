@@ -46,7 +46,9 @@ next-env.d.ts
 supabase/.temp/
 
 # claude code local settings (per-machine permissions, not project config)
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # large local-only reference data (not needed to run the app)
 dataset_linkedin-jobs-scraper_*.json

@@ -55,6 +55,38 @@ JSON-RPC error, but this endpoint is HTTP-only.
 }
 ```
 
+### Claude Code
+
+Claude Code reads `.mcp.json` at the repo root and expands `${VAR}` references
+against the shell environment, so the key itself never needs to be committed
+or typed into a prompt:
+
+```json
+{
+  "mcpServers": {
+    "talentos": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://talent.skarion.com/api/mcp",
+        "--transport",
+        "http",
+        "--header",
+        "Authorization: Bearer ${TALENTOS_MCP_KEY}"
+      ]
+    }
+  }
+}
+```
+
+Export the key before launching Claude Code (`export TALENTOS_MCP_KEY=mcp_live_...`
+on macOS/Linux, `$env:TALENTOS_MCP_KEY = "mcp_live_..."` in PowerShell), then
+run `/mcp` inside Claude Code (or `claude mcp list` outside it) to confirm the
+connection. This repo also ships the `talentos-ops` Claude Skill
+(`.claude/skills/talentos-ops/`), which documents which of the tools below to
+use for AE-manager reporting and assignment requests, and what's still a gap.
+
 ## Current tools
 
 - `list_active_candidates`

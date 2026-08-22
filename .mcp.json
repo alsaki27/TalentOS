@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "talentos": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://talent.skarion.com/api/mcp",
+        "--transport",
+        "http",
+        "--header",
+        "Authorization: Bearer ${TALENTOS_MCP_KEY}"
+      ]
+    }
+  }
+}
