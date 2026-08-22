@@ -1,0 +1,28 @@
+{
+  "name": "talentos-ops-agent",
+  "version": "1.1.0",
+  "description": "Evidence-first TalentOS recruiting operations over repository and PostgreSQL state, with approval-gated mutation workflows, plus an AE-manager command set (P23-P28) for routing, assignment, and throughput/quality reporting.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Talentos Ops Agent",
+    "shortDescription": "Evidence-first TalentOS backend operations and AE-manager reporting.",
+    "longDescription": "Inspect, rank, reconcile, prepare, execute with approval, and verify TalentOS candidate, job, application, AI pipeline, resume, Gmail, CRM, database, GitHub, and deployment workflows (P01-P22). Adds an AE-manager command center (P23-P28) for surfacing high-ROI roles, assigning applications to application engineers, per-AE application-throughput reporting, a resume-tailoring quality leaderboard, a live bandwidth/ownership snapshot, and a composed daily digest.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "audit_repositories", "inspect_database_schema", "inspect_candidate", "audit_application_queue",
+      "rank_jobs_for_candidate", "prepare_application_drafts", "run_ai_application_pipeline", "reconcile_pipeline",
+      "generate_base_resume_search_profile", "audit_tailored_resume", "export_tailored_resume",
+      "sync_candidate_gmail", "triage_candidate_email", "sync_recruiter_contacts",
+      "migrate_application_stages", "repair_application_state", "build_candidate_dashboard_report",
+      "report_ae_bandwidth", "backup_application_logs", "delete_or_restore_application_logs",
+      "run_browser_fixture", "verify_deployment",
+      "identify_high_roi_roles", "assign_application_to_ae", "ae_application_report",
+      "ae_tailoring_quality_report", "akash_daily_digest", "ae_bandwidth_snapshot"
+    ],
+    "defaultPrompt": "Use the TalentOS Operations playbook (docs/TALENTOS_OPERATIONS_PLAYBOOK.md) to inspect the live repository and database first, then recommend or perform only the explicitly approved scoped change and verify it. For anything from or about the AE-department manager -- routing high-ROI roles, assigning applications, or AE throughput/quality reporting -- use docs/TALENTOS_AKASH_COMMAND_CENTER.md (P23-P28) instead."
+  }
+}
