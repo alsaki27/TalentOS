@@ -15,7 +15,6 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
-  const status = url.searchParams.get("status") || "";
   const stage = url.searchParams.get("stage") || "";
   const owner = url.searchParams.get("owner") || "";
   const priority = url.searchParams.get("priority") || "";
@@ -34,7 +33,6 @@ export async function GET(req: NextRequest) {
       pageSize,
       search,
       candidateId,
-      status,
       stage,
       owner,
       priority,
@@ -49,7 +47,7 @@ export async function GET(req: NextRequest) {
       // or Stage selection, so that choice is always honored in full
       // instead of being silently narrowed further. This is also what makes
       // Stage -> "AE Applied" show every one of those tickets now.
-      excludeStatuses: status || stage ? [] : undefined,
+      excludeStatuses: stage ? [] : undefined,
       timeWindowHours,
       sort,
       sortDirection,

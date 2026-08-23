@@ -139,7 +139,6 @@ export interface ListApplicationsQuery {
   pageSize?: number;
   search?: string;
   candidateId?: string;
-  status?: string;
   stage?: string;
   owner?: string;
   priority?: string;
@@ -451,13 +450,19 @@ export async function listApplicationQueue(
     idSearchNumber = parseInt(rawSearch, 10);
     idSearchKind = "any";
   }
-  const status = queryParams.status || "";
   const requestedStage = queryParams.stage || "";
-  const stage = new Set([
+  const aeStageFilter = new Set([
     "in_ai_pipeline",
     "ready_for_review",
     "ready_for_application",
     "applied",
+  ]).has(requestedStage) ? requestedStage : "";
+  const statusStageFilter = new Set([
+    "screening",
+    "interview",
+    "offer",
+    "rejected",
+    "withdrawn",
   ]).has(requestedStage) ? requestedStage : "";
   const owner = queryParams.owner || "";
   const priority = queryParams.priority || "";
@@ -543,34 +548,33 @@ export async function listApplicationQueue(
       -- text - unlike a raw pg.Client test, unused params can't just be left in
       -- the array. Renumbered end-to-end after dropping the old role-restriction
       -- params instead of leaving gaps.
-      AND (($2 = '' AND $16::int IS NULL)
+      AND (($2 = '' AND $15::int IS NULL)
         OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
-        OR ($16::int IS NOT NULL AND (
-          ($17 = 'any' AND (a.app_number = $16 OR c.candidate_number = $16 OR j.job_number = $16))
-          OR ($17 = 'app' AND a.app_number = $16)
-          OR ($17 = 'candidate' AND c.candidate_number = $16)
-          OR ($17 = 'job' AND j.job_number = $16)
+        OR ($15::int IS NOT NULL AND (
+          ($16 = 'any' AND (a.app_number = $15 OR c.candidate_number = $15 OR j.job_number = $15))
+          OR ($16 = 'app' AND a.app_number = $15)
+          OR ($16 = 'candidate' AND c.candidate_number = $15)
+          OR ($16 = 'job' AND j.job_number = $15)
         )))
-      AND ($4 = '' OR a.status = $4)
-      AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
-      AND ($6 = '' OR a.priority = $6)
-      AND ($7 = '' OR a.review_status = $7)
-      AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
-      AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
-      AND ($8 <> 'review' OR a.review_status = 'pending')
-      AND ($8 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
-      AND ($8 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
-      AND ($13 = '' OR a.candidate_id::text = $13)
-      AND ($14 = '' OR a.ae_stage = $14)
-      AND ($15::int IS NULL OR a.created_at >= NOW() - ($15::int * INTERVAL '1 hour'))
+      AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
+      AND ($5 = '' OR a.priority = $5)
+      AND ($6 = '' OR a.review_status = $6)
+      AND ($7 <> 'mine' OR $8::text IS NULL OR a.assigned_to_user_id::text = $8::text)
+      AND ($7 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $9))
+      AND ($7 <> 'review' OR a.review_status = 'pending')
+      AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
+      AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
+      AND ($12 = '' OR a.candidate_id::text = $12)
+      AND ($13 = '' OR a.ae_stage = $13)
+      AND ($17 = '' OR a.status = $17)
+      AND ($14::int IS NULL OR a.created_at >= NOW() - ($14::int * INTERVAL '1 hour'))
     ORDER BY ${orderBy}
-    OFFSET $11 LIMIT $12
+    OFFSET $10 LIMIT $11
   `;
   const items = await query<ApplicationRow>(dataSql, [
     excludeStatuses,
     search,
     searchParam,
-    status,
     owner,
     priority,
     review,
@@ -580,10 +584,11 @@ export async function listApplicationQueue(
     offset,
     pageSize,
     queryParams.candidateId ?? "",
-    stage,
+    aeStageFilter,
     timeWindowHours,
     idSearchNumber,
     idSearchKind,
+    statusStageFilter,
   ]);
 
   const countSql = `
@@ -592,32 +597,31 @@ export async function listApplicationQueue(
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
     WHERE NOT (a.status = ANY($1))
-      AND (($2 = '' AND $14::int IS NULL)
+      AND (($2 = '' AND $13::int IS NULL)
         OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
-        OR ($14::int IS NOT NULL AND (
-          ($15 = 'any' AND (a.app_number = $14 OR c.candidate_number = $14 OR j.job_number = $14))
-          OR ($15 = 'app' AND a.app_number = $14)
-          OR ($15 = 'candidate' AND c.candidate_number = $14)
-          OR ($15 = 'job' AND j.job_number = $14)
+        OR ($13::int IS NOT NULL AND (
+          ($14 = 'any' AND (a.app_number = $13 OR c.candidate_number = $13 OR j.job_number = $13))
+          OR ($14 = 'app' AND a.app_number = $13)
+          OR ($14 = 'candidate' AND c.candidate_number = $13)
+          OR ($14 = 'job' AND j.job_number = $13)
         )))
-      AND ($4 = '' OR a.status = $4)
-      AND ($5 = '' OR a.assigned_to_user_id::text = $5 OR a.assigned_to = $5)
-      AND ($6 = '' OR a.priority = $6)
-      AND ($7 = '' OR a.review_status = $7)
-      AND ($8 <> 'mine' OR $9::text IS NULL OR a.assigned_to_user_id::text = $9::text)
-      AND ($8 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $10))
-      AND ($8 <> 'review' OR a.review_status = 'pending')
-      AND ($8 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
-      AND ($8 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
-      AND ($11 = '' OR a.candidate_id::text = $11)
-      AND ($12 = '' OR a.ae_stage = $12)
-      AND ($13::int IS NULL OR a.created_at >= NOW() - ($13::int * INTERVAL '1 hour'))
+      AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
+      AND ($5 = '' OR a.priority = $5)
+      AND ($6 = '' OR a.review_status = $6)
+      AND ($7 <> 'mine' OR $8::text IS NULL OR a.assigned_to_user_id::text = $8::text)
+      AND ($7 <> 'overdue' OR (a.assignment_due_at IS NOT NULL AND a.assignment_due_at <= $9))
+      AND ($7 <> 'review' OR a.review_status = 'pending')
+      AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
+      AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
+      AND ($10 = '' OR a.candidate_id::text = $10)
+      AND ($11 = '' OR a.ae_stage = $11)
+      AND ($15 = '' OR a.status = $15)
+      AND ($12::int IS NULL OR a.created_at >= NOW() - ($12::int * INTERVAL '1 hour'))
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     excludeStatuses,
     search,
     searchParam,
-    status,
     owner,
     priority,
     review,
@@ -625,10 +629,11 @@ export async function listApplicationQueue(
     queryParams.userId ?? null,
     today,
     queryParams.candidateId ?? "",
-    stage,
+    aeStageFilter,
     timeWindowHours,
     idSearchNumber,
     idSearchKind,
+    statusStageFilter,
   ]);
 
   const stats = await buildQueueStats(queryParams);

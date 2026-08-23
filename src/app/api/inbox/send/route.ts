@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   // Look up gmail account
   const account = await queryOne<{ refresh_token: string; gmail_email: string }>(
-    `SELECT refresh_token, integration_email as gmail_email FROM integration_accounts WHERE provider = 'gmail' AND owner_type = 'candidate' AND candidate_id = $1 AND status != 'revoked'`,
+    `SELECT refresh_token, email as gmail_email FROM integration_accounts WHERE provider = 'gmail' AND owner_type = 'candidate' AND candidate_id = $1 AND status != 'revoked'`,
     [candidate_id]
   );
 

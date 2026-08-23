@@ -71,9 +71,13 @@ export default function InboxPage() {
   const [gmailCandidateId, setGmailCandidateId] = useState("");
   const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
   const [candidates, setCandidates] = useState<{ id: string; name: string }[]>([]);
+  const [candidatesError, setCandidatesError] = useState(false);
+  const [candidatesLoading, setCandidatesLoading] = useState(true);
+  const [candidatesRetryKey, setCandidatesRetryKey] = useState(0);
   const [category, setCategory] = useState("");
   const [needsReply, setNeedsReply] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  const [clearanceOnly, setClearanceOnly] = useState(false);
   const [threads, setThreads] = useState<MailThread[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -127,6 +131,7 @@ export default function InboxPage() {
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
     if (!showHidden) params.set("relevant", "true");
+    if (clearanceOnly) params.set("clearanceOnly", "true");
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       const data = await response.json();
@@ -140,7 +145,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, search, candidateId, category, needsReply, showHidden, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, showHidden, clearanceOnly, activeTab]);
 
   const loadDraftsData = useCallback(async () => {
     if (activeTab !== "drafts") return;
@@ -174,6 +179,7 @@ export default function InboxPage() {
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
     if (!showHidden) params.set("relevant", "true");
+    if (clearanceOnly) params.set("clearanceOnly", "true");
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) return;
@@ -189,14 +195,43 @@ export default function InboxPage() {
       setTotal(Number(data.total || 0));
       setTotalPages(Number(data.totalPages || 1));
     } catch {}
-  }, [direction, search, candidateId, category, needsReply, showHidden, page, loading, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, showHidden, clearanceOnly, page, loading, activeTab]);
 
   useEffect(() => {
-    fetch("/api/candidates?compact=1&pageSize=500")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setCandidates(Array.isArray(data) ? data : (data.items ?? [])))
-      .catch(() => {});
-      
+    let cancelled = false;
+
+    const loadCandidates = async (attempt: number) => {
+      if (!cancelled) {
+        setCandidatesLoading(true);
+        setCandidatesError(false);
+      }
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        const r = await fetch("/api/candidates?compact=1&pageSize=200", { signal: controller.signal });
+        clearTimeout(timeout);
+        const data = r.ok ? await r.json() : [];
+        if (cancelled) return;
+        setCandidates(Array.isArray(data) ? data : (data.items ?? []));
+        setCandidatesLoading(false);
+      } catch {
+        if (cancelled) return;
+        if (attempt < 2) {
+          setTimeout(() => loadCandidates(attempt + 1), 1500);
+        } else {
+          setCandidatesLoading(false);
+          setCandidatesError(true);
+        }
+      }
+    };
+    void loadCandidates(0);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [candidatesRetryKey]);
+
+  useEffect(() => {
     fetch("/api/integrations/gmail/candidate-status")
       .then((res) => res.json())
       .then((data) => {
@@ -340,8 +375,17 @@ export default function InboxPage() {
             value={gmailCandidateId}
             onChange={setGmailCandidateId}
           />
+          {candidatesLoading && candidates.length === 0 && (
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Loading candidates…</div>
+          )}
+          {candidatesError && (
+            <div style={{ fontSize: 12, color: "var(--danger, #dc2626)", marginTop: 4, display: "flex", gap: 8, alignItems: "center" }}>
+              Couldn't load candidates.
+              <button className="btn text sm" onClick={() => setCandidatesRetryKey((k) => k + 1)}>Retry</button>
+            </div>
+          )}
         </div>
-        
+
         <div style={{ flex: 1, minWidth: 320, background: "var(--surface-2, #1a1a2e)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
           <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Filter inbox & tasks</div>
           <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>Show mail and handovers for a specific candidate.</div>
@@ -450,6 +494,9 @@ export default function InboxPage() {
             </label>
             <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }} title="Include mail filtered out by the AI">
               <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Show hidden
+            </label>
+            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }} title="Only mail matched to a federal job or one requiring security clearance">
+              <input type="checkbox" checked={clearanceOnly} onChange={(event) => setClearanceOnly(event.target.checked)} /> Federal / clearance jobs
             </label>
           </div>
 

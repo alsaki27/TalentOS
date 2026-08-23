@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import ApprovalCard from "./ApprovalCard";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 // Using any for some types to avoid duplicating large interfaces
 export interface EmailActionModalProps {
@@ -339,22 +340,33 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
               {detail?.message?.ai_matched_application_id && (
                 <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)" }}>
                   <div style={{ marginBottom: 8 }}>
-                    <strong>Linked application: </strong> 
-                    <Link href={`/candidates/${thread.candidate_id}#application-${detail.message.ai_matched_application_id}`} target="_blank" className="link">
+                    <strong>Linked application: </strong>
+                    <Link href={`/applications/${detail.message.ai_matched_application_id}`} target="_blank" className="link">
                       {thread.job_title} at {thread.company_name} ↗
                     </Link>
                   </div>
                   <div style={{ marginBottom: 8 }}>
                     <strong>Tailored resume: </strong>
-                    <Link href={`/candidates/${thread.candidate_id}/resume/${detail.message.ai_matched_application_id}`} target="_blank" className="link">
-                      View →
-                    </Link>
+                    {detail.message.resume_version_id ? (
+                      <button
+                        type="button"
+                        className="link"
+                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+                        onClick={() => openFaloodStudio("application_resume_version", detail.message.resume_version_id)}
+                      >
+                        View →
+                      </button>
+                    ) : (
+                      <span style={{ color: "var(--muted)" }}>No tailored resume for this application</span>
+                    )}
                   </div>
                   <div>
                     <strong>Portal shows: </strong> {detail.message.proposed_status || "Applied"}
-                    <Link href={`/portal/${thread.candidate_id}`} target="_blank" className="link" style={{ marginLeft: 12 }}>
-                      [View candidate portal →]
-                    </Link>
+                    {detail.message.portal_token && (
+                      <Link href={`/portal/${detail.message.portal_token}`} target="_blank" className="link" style={{ marginLeft: 12 }}>
+                        [View candidate portal →]
+                      </Link>
+                    )}
                   </div>
                 </div>
               )}

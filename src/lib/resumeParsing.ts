@@ -90,6 +90,20 @@ function reportLinkedinUrlSeedingDebug(
 // this implementation doesn't need a font/glyph layer to know where on the page
 // each character would render, only to find the literal strings PDF's Tj/TJ
 // operators pass to the renderer.
+//
+// 2026-08-20: found a second real-world text representation this needs to
+// handle. Any Chrome-rendered PDF (Chrome's own "Print to PDF", Puppeteer,
+// and most browser-based resume builders that export via a headless-Chrome
+// print pass - confirmed via a real candidate resume whose /Creator string
+// is literally a Chrome UA) embeds subsetted OpenType fonts with /Encoding
+// /Identity-H and shows text as 2-byte glyph-ID HEX strings (`<0189> Tj`),
+// never the literal `(...)` strings the code above was written for. Glyph
+// IDs are arbitrary per-subset numbers, not character codes - the PDF spec's
+// answer is a /ToUnicode CMap the producer embeds alongside each font
+// specifically so hex-encoded text stays copyable, a small text-based
+// lookup table (`beginbfchar`/`beginbfrange` blocks) with no rendering
+// engine involved. Decoding it is pure text/lookup work, so it fits the same
+// "stay inside APIs workerd supports" constraint as everything else here.
 async function inflateDeflateStream(data: Uint8Array): Promise<Uint8Array> {
   // The extra `new Uint8Array(data)` copy guarantees a plain ArrayBuffer-backed
   // view, which is what BlobPart actually requires - same fix as
@@ -107,53 +121,196 @@ async function inflateDeflateStream(data: Uint8Array): Promise<Uint8Array> {
   return out;
 }
 
-function extractTextShowOperators(content: string): string[] {
+// glyph ID (from a hex show-string) -> real Unicode character(s), per font.
+type GlyphMap = Map<number, string>;
+
+function hexToUtf16String(hex: string): string {
+  const padded = hex.length % 4 === 0 ? hex : hex.padStart(hex.length + (4 - (hex.length % 4)), "0");
+  const codeUnits: number[] = [];
+  for (let i = 0; i < padded.length; i += 4) codeUnits.push(parseInt(padded.slice(i, i + 4), 16));
+  try {
+    return String.fromCharCode(...codeUnits);
+  } catch {
+    return "";
+  }
+}
+
+// Parses a /ToUnicode CMap stream's text body (already decompressed) into a
+// glyph-ID -> Unicode lookup, per the standard PDF CMap bfchar/bfrange
+// syntax (ISO 32000-1 §9.10.3). Both forms show up in real producer output:
+// bfchar for one-off mappings, bfrange for contiguous runs.
+function parseToUnicodeCMap(cmapText: string): GlyphMap {
+  const map: GlyphMap = new Map();
+
+  for (const block of cmapText.match(/beginbfchar([\s\S]*?)endbfchar/g) ?? []) {
+    for (const pair of block.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g)) {
+      map.set(parseInt(pair[1], 16), hexToUtf16String(pair[2]));
+    }
+  }
+
+  for (const block of cmapText.match(/beginbfrange([\s\S]*?)endbfrange/g) ?? []) {
+    for (const entry of block.matchAll(/<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(<[0-9A-Fa-f]+>|\[[^\]]*\])/g)) {
+      const lo = parseInt(entry[1], 16);
+      const hi = parseInt(entry[2], 16);
+      const dst = entry[3];
+      if (dst.startsWith("[")) {
+        const items = Array.from(dst.matchAll(/<([0-9A-Fa-f]+)>/g));
+        items.forEach((item, i) => map.set(lo + i, hexToUtf16String(item[1])));
+      } else {
+        const dstHex = dst.slice(1, -1);
+        const dstStart = parseInt(dstHex, 16);
+        for (let code = lo; code <= hi; code++) {
+          map.set(code, hexToUtf16String((dstStart + (code - lo)).toString(16).padStart(dstHex.length, "0")));
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+function decodeHexShowString(hex: string, glyphMap: GlyphMap | undefined): string {
+  const clean = hex.replace(/\s+/g, "");
+  let out = "";
+  for (let i = 0; i + 4 <= clean.length; i += 4) {
+    const code = parseInt(clean.slice(i, i + 4), 16);
+    if (!Number.isNaN(code)) out += glyphMap?.get(code) ?? "";
+  }
+  return out;
+}
+
+interface PdfObject {
+  dict: string;
+  streamBytes: Uint8Array | null;
+}
+
+// Minimal generic indirect-object index ("N 0 obj ... [stream ...] endobj").
+// Used both to resolve font -> /ToUnicode chains and to enumerate content
+// streams, so there is exactly one heuristic for "where does an object's
+// dict end and its stream begin" rather than two subtly different ones.
+function indexPdfObjects(raw: Uint8Array, latin1: string): Map<number, PdfObject> {
+  const objects = new Map<number, PdfObject>();
+  const objRe = /(\d+)\s+0\s+obj\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = objRe.exec(latin1))) {
+    const objNum = parseInt(m[1], 10);
+    const bodyStart = m.index + m[0].length;
+    const endObjIdx = latin1.indexOf("endobj", bodyStart);
+    if (endObjIdx === -1) continue;
+    const body = latin1.slice(bodyStart, endObjIdx);
+
+    const streamMatch = body.match(/^([\s\S]*?)stream\r?\n/);
+    if (!streamMatch) {
+      objects.set(objNum, { dict: body.trim(), streamBytes: null });
+      continue;
+    }
+    const dict = streamMatch[1].trim();
+    const streamStartAbs = bodyStart + streamMatch[0].length;
+    const endstreamIdx = latin1.indexOf("endstream", streamStartAbs);
+    if (endstreamIdx === -1) {
+      objects.set(objNum, { dict, streamBytes: null });
+      continue;
+    }
+    let streamEndAbs = endstreamIdx;
+    while (streamEndAbs > streamStartAbs && (latin1[streamEndAbs - 1] === "\n" || latin1[streamEndAbs - 1] === "\r")) streamEndAbs--;
+    objects.set(objNum, { dict, streamBytes: raw.subarray(streamStartAbs, streamEndAbs) });
+  }
+  return objects;
+}
+
+async function decodeObjectStreamText(dict: string, bytes: Uint8Array): Promise<string | null> {
+  if (dict.includes("/FlateDecode")) {
+    try {
+      return new TextDecoder("latin1").decode(await inflateDeflateStream(bytes));
+    } catch {
+      // Tagged /FlateDecode but not actually deflate-compressed (e.g. an
+      // image stream that only coincidentally shares the filter name).
+      return null;
+    }
+  }
+  if (!dict.includes("/Filter")) return new TextDecoder("latin1").decode(bytes);
+  return null; // Unsupported filter (e.g. DCTDecode/JPX image data) - skip.
+}
+
+// Builds resource-name ("F13") -> glyph map, by resolving every font
+// object's /ToUnicode CMap and every /Font resource dict's name->object
+// references, then merges globally across the whole document rather than
+// tracking exact per-content-stream Resources inheritance. Safe for the
+// common case this fixes (a single render pass assigns resource names
+// consistently document-wide, as Chrome's PDF writer does); a document that
+// reused the same resource name for genuinely different fonts in unrelated
+// Resources dicts could see one shadow the other, but that's strictly better
+// than the previous behavior of extracting nothing at all for any hex-string
+// content.
+async function buildFontGlyphMaps(objects: Map<number, PdfObject>): Promise<Map<string, GlyphMap>> {
+  const fontObjToGlyphMap = new Map<number, GlyphMap>();
+  for (const [objNum, obj] of objects) {
+    const toUnicodeMatch = obj.dict.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if (!toUnicodeMatch) continue;
+    const cmapObj = objects.get(parseInt(toUnicodeMatch[1], 10));
+    if (!cmapObj?.streamBytes) continue;
+    const cmapText = await decodeObjectStreamText(cmapObj.dict, cmapObj.streamBytes);
+    if (cmapText) fontObjToGlyphMap.set(objNum, parseToUnicodeCMap(cmapText));
+  }
+
+  const resourceNameToGlyphMap = new Map<string, GlyphMap>();
+  for (const [, obj] of objects) {
+    const fontDictMatch = obj.dict.match(/\/Font\s*<<([^>]*)>>/);
+    if (!fontDictMatch) continue;
+    for (const ref of fontDictMatch[1].matchAll(/\/(\S+)\s+(\d+)\s+0\s+R/g)) {
+      const glyphMap = fontObjToGlyphMap.get(parseInt(ref[2], 10));
+      if (glyphMap) resourceNameToGlyphMap.set(ref[1], glyphMap);
+    }
+  }
+  return resourceNameToGlyphMap;
+}
+
+// Walks BT/ET text blocks in document order, tracking the currently
+// selected font (Tf) so hex show-strings decode against the right glyph
+// map, and extracting both literal `(...)` and hex `<...>` strings from
+// plain Tj and array-form TJ operators (TJ arrays can freely mix either
+// string form with kerning numbers, which are ignored here same as before).
+function extractTextShowOperators(content: string, resourceNameToGlyphMap: Map<string, GlyphMap>): string[] {
   const extracted: string[] = [];
   const btEtBlocks = content.match(/BT[\s\S]*?ET/g) ?? [];
+  const literalStr = String.raw`\(((?:[^()\\]|\\.)*)\)`;
+  const hexStr = `<([0-9A-Fa-f\\s]*)>`;
+  const tokenRe = new RegExp(
+    `\\/(\\S+)\\s+[\\d.]+\\s+Tf|${literalStr}\\s*Tj|${hexStr}\\s*Tj|\\[((?:[^\\[\\]])*)\\]\\s*TJ`,
+    "g"
+  );
+
   for (const block of btEtBlocks) {
-    const tjMatches = block.match(/\([^)]*\)\s*Tj/g) ?? [];
-    for (const m of tjMatches) {
-      const start = m.indexOf("(");
-      const end = m.lastIndexOf(")");
-      extracted.push(m.slice(start + 1, end).replace(/\\(.)/g, "$1"));
-    }
-    const tjArrayMatches = block.match(/\[[^\]]*\]\s*TJ/g) ?? [];
-    for (const arr of tjArrayMatches) {
-      const strings = arr.match(/\([^)]*\)/g) ?? [];
-      for (const s of strings) extracted.push(s.slice(1, -1).replace(/\\(.)/g, "$1"));
+    let currentGlyphMap: GlyphMap | undefined;
+    for (const tok of block.matchAll(tokenRe)) {
+      if (tok[1] !== undefined) {
+        currentGlyphMap = resourceNameToGlyphMap.get(tok[1]);
+      } else if (tok[2] !== undefined) {
+        extracted.push(tok[2].replace(/\\(.)/g, "$1"));
+      } else if (tok[3] !== undefined) {
+        extracted.push(decodeHexShowString(tok[3], currentGlyphMap));
+      } else if (tok[4] !== undefined) {
+        const itemRe = new RegExp(`${literalStr}|${hexStr}`, "g");
+        for (const item of tok[4].matchAll(itemRe)) {
+          if (item[1] !== undefined) extracted.push(item[1].replace(/\\(.)/g, "$1"));
+          else if (item[2] !== undefined) extracted.push(decodeHexShowString(item[2], currentGlyphMap));
+        }
+      }
     }
   }
   return extracted;
 }
 
 async function extractTextFromPdfBuffer(buffer: Uint8Array): Promise<string> {
-  const raw = buffer;
-  const latin1 = new TextDecoder("latin1").decode(raw);
-  const streamHeaderRe = /(<<[^>]*?>>)\s*stream\r?\n/g;
+  const latin1 = new TextDecoder("latin1").decode(buffer);
+  const objects = indexPdfObjects(buffer, latin1);
+  const resourceNameToGlyphMap = await buildFontGlyphMaps(objects);
+
   const allText: string[] = [];
-  let match: RegExpExecArray | null;
-
-  while ((match = streamHeaderRe.exec(latin1))) {
-    const dict = match[1];
-    const streamStart = match.index + match[0].length;
-    const endIdx = latin1.indexOf("endstream", streamStart);
-    if (endIdx === -1) continue;
-    let streamEnd = endIdx;
-    while (streamEnd > streamStart && (latin1[streamEnd - 1] === "\n" || latin1[streamEnd - 1] === "\r")) streamEnd--;
-
-    const rawBytes = raw.subarray(streamStart, streamEnd);
-
-    if (dict.includes("/FlateDecode")) {
-      try {
-        const inflated = await inflateDeflateStream(new Uint8Array(rawBytes));
-        allText.push(...extractTextShowOperators(new TextDecoder("latin1").decode(inflated)));
-      } catch {
-        // Not actually deflate-compressed text (e.g. an image stream that
-        // happens to also be tagged /FlateDecode) - skip it.
-      }
-    } else if (!dict.includes("/Filter")) {
-      allText.push(...extractTextShowOperators(new TextDecoder("latin1").decode(rawBytes)));
-    }
+  for (const [, obj] of objects) {
+    if (!obj.streamBytes) continue;
+    const text = await decodeObjectStreamText(obj.dict, obj.streamBytes);
+    if (text) allText.push(...extractTextShowOperators(text, resourceNameToGlyphMap));
   }
 
   return allText.join(" ").replace(/\s+/g, " ").trim();

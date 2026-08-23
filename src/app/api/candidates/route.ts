@@ -53,8 +53,10 @@ export async function GET(req: NextRequest) {
   `;
 
   try {
-    const data = await query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]);
-    const countRow = await queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]);
+    const [data, countRow] = await Promise.all([
+      query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]),
+      queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]),
+    ]);
     return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

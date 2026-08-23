@@ -106,7 +106,7 @@ export default function ApprovalCard({
             {(item.job_title || item.company_name) && (
               <div className="text-muted-foreground" style={{ fontSize: 12 }}>
                 {item.application_id ? (
-                  <Link href={`/candidates/${item.candidate_id}#application-${item.application_id}`} className="link" style={{ textDecoration: "none", color: "inherit" }}>
+                  <Link href={`/applications/${item.application_id}`} target="_blank" className="link" style={{ textDecoration: "none", color: "inherit" }}>
                     {item.job_title}{item.job_title && item.company_name ? " at " : ""}{item.company_name} ↗
                   </Link>
                 ) : (

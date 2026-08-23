@@ -17,7 +17,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
             ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence,
             a.status AS application_status, a.application_stage,
-            j.id AS job_id, j.title AS job_title, j.company AS company_name
+            j.id AS job_id, j.title AS job_title, j.company AS company_name,
+            c.portal_token,
+            (SELECT arv.id FROM application_resume_versions arv
+              WHERE arv.candidate_id = ec.candidate_id AND arv.target_job_id = a.job_id
+              ORDER BY arv.created_at DESC LIMIT 1) AS resume_version_id
        FROM email_communications ec
        JOIN candidates c ON c.id = ec.candidate_id
        LEFT JOIN applications a ON a.id = ec.ai_matched_application_id

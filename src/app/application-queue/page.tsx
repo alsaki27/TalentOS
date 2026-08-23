@@ -107,6 +107,15 @@ const AE_STAGE_LABELS: Record<string, string> = {
   applied: "✅ AE Applied",
 };
 
+const STAGE_FILTER_LABELS: Record<string, string> = {
+  ...AE_STAGE_LABELS,
+  screening: "📞 Screening",
+  interview: "💬 Interview",
+  offer: "🎉 Offer",
+  rejected: "❌ Rejected",
+  withdrawn: "🚫 Withdrawn",
+};
+
 const AE_STAGE_STYLES: Record<string, { background: string; border: string; color: string }> = {
   in_ai_pipeline: { background: "rgba(139,92,246,0.16)", border: "rgba(139,92,246,0.55)", color: "#c4b5fd" },
   ready_for_review: { background: "rgba(245,158,11,0.16)", border: "rgba(245,158,11,0.55)", color: "#fbbf24" },
@@ -232,7 +241,6 @@ export default function ApplicationQueuePage() {
   const [pageSize] = useState(50);
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
-  const [statusFilter, setStatusFilter] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
@@ -296,7 +304,6 @@ export default function ApplicationQueuePage() {
     p.set("pageSize", String(pageSize));
     if (search) p.set("search", search);
     if (candidateFilter) p.set("candidate_id", candidateFilter);
-    if (statusFilter) p.set("status", statusFilter);
     if (stageFilter) p.set("stage", stageFilter);
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
@@ -382,13 +389,12 @@ export default function ApplicationQueuePage() {
     } catch {}
   }
 
-  var hasActiveFilters = Boolean(searchInput || candidateFilter || statusFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || timeWindow);
+  var hasActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || timeWindow);
 
   function clearFilters() {
     setSearchInput("");
     setSearch("");
     setCandidateFilter("");
-    setStatusFilter("");
     setStageFilter("");
     setOwnerFilter("");
     setPriorityFilter("");
@@ -419,7 +425,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, statusFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -1006,19 +1012,10 @@ export default function ApplicationQueuePage() {
             </select>
           </div>
           <div className="filter-field">
-            <span className="filter-label">Status</span>
-            <select className="input" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-              <option value="">All statuses</option>
-              <option value="assigned">Assigned</option>
-              <option value="stacked">Stacked</option>
-              <option value="in_progress">In progress</option>
-            </select>
-          </div>
-          <div className="filter-field">
             <span className="filter-label">Stage</span>
             <select className="input" value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Filter by application stage">
               <option value="">All stages</option>
-              {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+              {Object.entries(STAGE_FILTER_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
               ))}
             </select>
