@@ -867,6 +867,7 @@ function AddKeyForm({ onDone, onError }: { onDone: () => void; onError: (e: stri
           <select className="input" value={providerMode} onChange={e => handleProviderModeChange(e.target.value)}>
             <option value="native">Native</option>
             <option value="openai_compatible">OpenAI Compatible</option>
+            <option value="anthropic_compatible">Anthropic Compatible</option>
             <option value="custom">Custom</option>
           </select>
         </div>

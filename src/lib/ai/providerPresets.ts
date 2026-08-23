@@ -100,6 +100,10 @@ export const PROVIDER_MODEL_PRESETS: Record<string, { id: string; label: string 
     { id: "o3-mini", label: "o3-mini" },
   ],
   anthropic: [
+    { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
+    { id: "claude-opus-5", label: "Claude Opus 5" },
+    { id: "claude-fable-5", label: "Claude Fable 5" },
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
     { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
     { id: "claude-opus-4-1", label: "Claude Opus 4.1" },
     { id: "claude-3-7-sonnet-latest", label: "Claude 3.7 Sonnet" },
