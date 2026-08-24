@@ -9,6 +9,7 @@ import { finalResumeToStudioDocument, type RenderableResumeContent } from "./fin
 import { renderResumePdfWithMetrics, type ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 import { mapMetricsToPageFit } from "@/lib/falood/pageFitThresholds";
+import { applyDispositionRules } from "./disposition";
 
 // Renders Resume Forge's draft through the same PDF renderer the actual
 // export/Final-Polish path uses, so Hiring Panel's page-fit numbers are real,
@@ -69,11 +70,20 @@ export async function runHiringPanel(
   if ("error" in validated) throw new Error(`Hiring Panel output validation failed: ${validated.error}`);
   validated.pageFit = mapMetricsToPageFit(pageMetrics);
 
+  // Disposition is deterministic and code-authoritative: the classified job
+  // analysis decides reject/deprioritize, and reasons are guaranteed non-empty
+  // for those dispositions even when the model returned none.
+  const analysisForDisposition =
+    jobAnalysis && typeof jobAnalysis === "object" && !Array.isArray(jobAnalysis)
+      ? (jobAnalysis as { requirementAnalysis?: unknown })
+      : null;
+  const reviewed = applyDispositionRules(validated, analysisForDisposition as any);
+
   // ── DEBUG: Hiring Panel ──────────────────────────────────────────
   console.log("[Agent:HiringPanel] ── OUTPUT ───────────────────────────────────");
-  console.log("[Agent:HiringPanel] validated review:", JSON.stringify(validated, null, 2));
-  console.log("[Agent:HiringPanel] ───────────────────────────────────────────────────────────");
+  console.log("[Agent:HiringPanel] validated review:", JSON.stringify(reviewed, null, 2));
+  console.log("[Agent:HiringPanel] ──────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
 
-  return validated;
+  return reviewed;
 }

@@ -73,6 +73,20 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
 in the next stage, so don't pad it with nitpicks that could cause good content to get cut.
 
+DISPOSITION RULES (CRITICAL — separate role fit from ATS keyword coverage):
+* disposition is your bottom-line call on this application: "pursue" | "review" | "deprioritize" | "reject".
+* A high atsScore must NEVER rescue an application whose roleFitScore is genuinely weak — keyword
+  coverage is not qualification. If the candidate has a major experience, credential, location,
+  security-clearance, or domain mismatch, the disposition reflects that mismatch, not the keywords.
+* Reject when: any requirementAnalysis item has status "hard_blocker" (required license/cert/clearance
+  the candidate has zero evidence for), or passFail is "fail".
+* Deprioritize when: a REQUIRED certification/credential/clearance is classified "unsupported"
+  (no evidence anywhere) even if the rest of the resume reads well.
+* Pursue when passFail is "pass" and no hard blockers exist. Review otherwise.
+* dispositionReasons: 1-4 short, fully specific phrases (max ~12 words each), e.g.
+  "No PE license evidence", "Missing OSP design years", "Strong keywords but 2 years vs 5+ required".
+  Never leave dispositionReasons empty when disposition is deprioritize or reject.
+
 Return a JSON object with:
 - atsScore: number 0-10
 - recruiterScore: number 0-10
@@ -82,6 +96,8 @@ Return a JSON object with:
 - requiredEdits: array of { issueId, description, severity: "minor"|"major"|"critical" }
 - optionalEdits: array of { issueId, description }
 - passFail: "pass" if all scores >= 5, "fail" only if something is genuinely broken (e.g. a real fabrication risk or an empty resume), "review" otherwise
+- disposition: "pursue" | "review" | "deprioritize" | "reject"
+- dispositionReasons: array of short, specific reason strings (required, non-empty for deprioritize/reject)
 - overallComment: brief, constructive comment
 
 JOB ANALYSIS:

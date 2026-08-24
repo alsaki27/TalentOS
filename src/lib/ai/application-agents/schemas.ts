@@ -29,6 +29,30 @@ function expectStringArray(v: unknown, field: string): string[] | null {
 
 // ── JobAnalysisV1 ──
 
+export type RequirementStatus =
+  | "supported_by_resume"
+  | "supported_but_not_surfaced"
+  | "unsupported"
+  | "hard_blocker"
+  | "nice_to_have";
+
+export type RequirementCategory =
+  | "skill"
+  | "tool"
+  | "cert"
+  | "credential"
+  | "clearance"
+  | "other";
+
+export interface RequirementAnalysisEntry {
+  requirement: string;
+  category: RequirementCategory;
+  sourceEvidence: string[];
+  status: RequirementStatus;
+  safeToAdd: boolean;
+  notes?: string;
+}
+
 export interface JobAnalysisV1 {
   title: string;
   company: string;
@@ -46,6 +70,61 @@ export interface JobAnalysisV1 {
   prohibitedUnsupportedClaims: string[];
   ambiguities: string[];
   rawSummary: string;
+  requirementAnalysis: RequirementAnalysisEntry[];
+}
+
+const REQUIREMENT_STATUSES: RequirementStatus[] = [
+  "supported_by_resume",
+  "supported_but_not_surfaced",
+  "unsupported",
+  "hard_blocker",
+  "nice_to_have",
+];
+
+const REQUIREMENT_CATEGORIES: RequirementCategory[] = [
+  "skill",
+  "tool",
+  "cert",
+  "credential",
+  "clearance",
+  "other",
+];
+
+/**
+ * The one place requirement support/evidence normalization happens. The LLM
+ * may suggest a status, but the final call is deterministic:
+ *  - safeToAdd is true ONLY for supported_* rows that cite at least one
+ *    source-evidence pointer. Every other status (unsupported, hard_blocker,
+ *    nice_to_have) is never addable, no matter what the model claimed.
+ *  - Invalid statuses are dropped (never guessed) so a malformed row can't
+ *    silently weaken a downstream gate.
+ */
+function parseRequirementAnalysis(v: unknown): RequirementAnalysisEntry[] {
+  if (!Array.isArray(v)) return [];
+  const rows: RequirementAnalysisEntry[] = [];
+  for (const raw of v) {
+    if (!isRecord(raw)) continue;
+    const requirement = expectString(raw.requirement, "requirement");
+    const status = expectString(raw.status, "status");
+    if (!requirement || !requirement.trim()) continue;
+    if (!status || !REQUIREMENT_STATUSES.includes(status as RequirementStatus)) continue;
+    const category = REQUIREMENT_CATEGORIES.includes(raw.category as RequirementCategory)
+      ? (raw.category as RequirementCategory)
+      : "other";
+    const sourceEvidence = expectStringArray(raw.sourceEvidence, "sourceEvidence") ?? [];
+    const supported =
+      status === "supported_by_resume" || status === "supported_but_not_surfaced";
+    const notes = expectString(raw.notes, "notes");
+    rows.push({
+      requirement: requirement.trim(),
+      category,
+      sourceEvidence,
+      status: status as RequirementStatus,
+      safeToAdd: supported && sourceEvidence.length > 0,
+      ...(notes ? { notes } : {}),
+    });
+  }
+  return rows;
 }
 
 export const JobAnalysisSchema: Schema<JobAnalysisV1> = {
@@ -74,6 +153,7 @@ export const JobAnalysisSchema: Schema<JobAnalysisV1> = {
       prohibitedUnsupportedClaims: expectStringArray(input.prohibitedUnsupportedClaims, "prohibitedUnsupportedClaims") ?? [],
       ambiguities: expectStringArray(input.ambiguities, "ambiguities") ?? [],
       rawSummary: expectString(input.rawSummary, "rawSummary") ?? "",
+      requirementAnalysis: parseRequirementAnalysis(input.requirementAnalysis),
     };
   },
 };
@@ -95,6 +175,14 @@ export interface SkillGroup {
   skills: string[];
 }
 
+export interface RequirementCoverageRow {
+  requirement: string;
+  status: RequirementStatus;
+  surfaced: boolean;
+  placement: "skills" | "bullet" | "both" | "none";
+  gapReason: "candidate_evidence_gap" | "missed_tailoring" | null;
+}
+
 export interface ResumeDraftV1 {
   summary: string | null;
   skills: SkillGroup[];
@@ -111,6 +199,9 @@ export interface ResumeDraftV1 {
   missingRequirements: string[];
   excludedKeywords: string[];
   truthRisks: { risk: string; severity: "low" | "medium" | "high" }[];
+  // Computed by code (never authored by the LLM): which classified JD
+  // requirements the draft actually surfaced, and why the rest are absent.
+  requirementCoverage: RequirementCoverageRow[];
 }
 
 // Accepts the categorized shape ({title, skills}[]) the agents are now prompted to return.
@@ -196,6 +287,7 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
       missingRequirements: expectStringArray(input.missingRequirements, "missingRequirements") ?? [],
       excludedKeywords: expectStringArray(input.excludedKeywords, "excludedKeywords") ?? [],
       truthRisks,
+      requirementCoverage: [],
     };
   },
 };
@@ -227,6 +319,8 @@ export interface ReviewScoreV1 {
   requiredEdits: { issueId: string; description: string; severity: "minor" | "major" | "critical" }[];
   optionalEdits: { issueId: string; description: string }[];
   passFail: "pass" | "fail" | "review";
+  disposition: "pursue" | "review" | "deprioritize" | "reject";
+  dispositionReasons: string[];
   overallComment: string;
   pageFit: PageFitV1 | null;
 }
@@ -255,6 +349,16 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
         requiredEdits.push(e as any);
       }
     }
+    const passFailValue = passFail === "pass" || passFail === "fail" || passFail === "review" ? passFail : "review";
+    const dispositionRaw = expectString(input.disposition, "disposition");
+    const disposition =
+      dispositionRaw === "pursue" || dispositionRaw === "review" || dispositionRaw === "deprioritize" || dispositionRaw === "reject"
+        ? dispositionRaw
+        : passFailValue === "pass"
+          ? "pursue"
+          : passFailValue === "fail"
+            ? "reject"
+            : "review";
     return {
       atsScore,
       recruiterScore,
@@ -266,7 +370,9 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
         if (!isRecord(e)) return false;
         return typeof e.issueId === "string" && typeof e.description === "string";
       }) : [],
-      passFail: passFail === "pass" || passFail === "fail" || passFail === "review" ? passFail : "review",
+      passFail: passFailValue,
+      disposition,
+      dispositionReasons: expectStringArray(input.dispositionReasons, "dispositionReasons") ?? [],
       overallComment: expectString(input.overallComment, "overallComment") ?? "",
       pageFit: null,
     };

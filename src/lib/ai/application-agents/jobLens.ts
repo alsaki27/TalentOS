@@ -20,7 +20,20 @@ export async function runJobLens(
   const response = await provider.send({
     system: options.system_prompt ?? "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
     messages: [
-      { role: "user", content: [{ type: "text", text: buildJobLensPrompt(ctx.job) }] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: buildJobLensPrompt(ctx.job, {
+              baseResume: ctx.baseResume,
+              evidence: ctx.evidence,
+              sourceOfTruth: ctx.sourceOfTruth,
+              verifiedSkills: ctx.verifiedSkills,
+            }),
+          },
+        ],
+      },
     ],
     tools: [],
     temperature: options.temperature,

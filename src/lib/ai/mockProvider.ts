@@ -25,6 +25,15 @@ const MOCK_JOB_ANALYSIS: JobAnalysisV1 = {
   prohibitedUnsupportedClaims: ["Claims of specific revenue impact without evidence", "Claims of single-handedly building entire platforms"],
   ambiguities: ["How much cloud infrastructure experience is truly required"],
   rawSummary: "Senior full-stack TypeScript engineer role at a SaaS company. Remote-friendly, 5+ years experience required.",
+  requirementAnalysis: [
+    { requirement: "TypeScript", category: "skill", sourceEvidence: ["base.experience[0].bullets[0]"], status: "supported_by_resume", safeToAdd: true },
+    { requirement: "React", category: "skill", sourceEvidence: ["base.experience[1].bullets[0]"], status: "supported_by_resume", safeToAdd: true },
+    { requirement: "Node.js", category: "skill", sourceEvidence: ["base.experience[0].bullets[0]"], status: "supported_by_resume", safeToAdd: true },
+    { requirement: "PostgreSQL", category: "tool", sourceEvidence: ["base.experience[0].bullets[1]"], status: "supported_by_resume", safeToAdd: true },
+    { requirement: "GraphQL", category: "skill", sourceEvidence: ["sot:GraphQL"], status: "supported_but_not_surfaced", safeToAdd: true },
+    { requirement: "AWS", category: "tool", sourceEvidence: [], status: "unsupported", safeToAdd: false },
+    { requirement: "Docker", category: "tool", sourceEvidence: ["base.experience[1].bullets[1]"], status: "supported_but_not_surfaced", safeToAdd: true },
+  ],
 };
 
 const MOCK_RESUME_DRAFT: ResumeDraftV1 = {
@@ -84,6 +93,7 @@ const MOCK_RESUME_DRAFT: ResumeDraftV1 = {
   missingRequirements: [],
   excludedKeywords: [],
   truthRisks: [],
+  requirementCoverage: [],
 };
 
 const MOCK_REVIEW_SCORE: ReviewScoreV1 = {
@@ -97,6 +107,8 @@ const MOCK_REVIEW_SCORE: ReviewScoreV1 = {
     { issueId: "opt-1", description: "Consider adding GraphQL project if available" },
   ],
   passFail: "pass",
+  disposition: "pursue",
+  dispositionReasons: ["Strong TypeScript and React evidence matches the role"],
   overallComment: "Strong candidate with excellent TypeScript and React experience. Resume is well-structured and ATS-friendly.",
   pageFit: null,
 };

@@ -3,7 +3,10 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
 import { ResumeDraftSchema, type ResumeDraftV1 } from "./schemas";
-import { buildResumeForgePrompt } from "./prompts/resumeForge";
+import {
+  buildResumeForgePrompt,
+  buildResumeForgeMissedRetryPrompt,
+} from "./prompts/resumeForge";
 import { textOf } from "@/lib/ai/provider";
 import {
   enforceEducationIntegrity,
@@ -11,6 +14,103 @@ import {
   normalizeResumeBullet,
   readBaseSummary,
 } from "./resumeIntegrity";
+import {
+  buildRequirementCoverage,
+  listMissedSupported,
+} from "./requirementCoverage";
+
+/** Strip markdown fences and parse raw model text into JSON. */
+function parseRawJson(raw: string): unknown {
+  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  return JSON.parse(stripped);
+}
+
+/**
+ * Every post-AI safety pass applied to a Forge draft: base-resume identity
+ * restore, employment/education integrity, the per-role bullet safety net,
+ * and the professional-summary guard. Applied identically to the first draft
+ * and to the bounded "supported but missed" retry draft, so the retry can
+ * never smuggle in an identity change while fixing a missing keyword.
+ */
+function applyForgeGuards(
+  validated: ResumeDraftV1,
+  baseContent: any,
+  baseExperience: unknown[],
+  baseEducation: unknown[]
+): void {
+  const basePersonalInfo = baseContent?.personalInfo;
+  if (basePersonalInfo && typeof basePersonalInfo === "object" && !Array.isArray(basePersonalInfo)) {
+    (validated as any).personalInfo = JSON.parse(JSON.stringify(basePersonalInfo));
+  }
+  validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
+
+  // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
+  // Defense in depth: if the AI returned fewer than the required minimum bullets
+  // for any role, force-restore from the base resume. Fires silently — no throw,
+  // no retry — so the resume always has content.
+  //
+  // Per-role minimum (must match buildBulletRequirements in prompts/resumeForge.ts):
+  //   idx 0 (most recent) → 6   idx 1 → 4   idx ≥2 → 3
+  const getMinBullets = (idx: number) => idx === 0 ? 6 : idx === 1 ? 4 : 3;
+
+  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
+    validated.experience.forEach((exp: any, i: number) => {
+      const requiredMin = getMinBullets(i);
+      const currentBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
+      if (currentBullets.length >= requiredMin) return; // already meets requirement
+
+      // Experience integrity reconciliation keeps base and output in the same
+      // order, so index matching is now deterministic and cannot hit a fake role.
+      const baseMatch: any = baseExperience[i];
+
+      if (baseMatch) {
+        // Normalise base bullets from { text } objects or plain strings
+        const rawBase: unknown[] = Array.isArray(baseMatch.bullets)
+          ? baseMatch.bullets
+          : Array.isArray(baseMatch.bulletPoints)
+          ? baseMatch.bulletPoints
+          : [];
+        const baseBullets: string[] = rawBase
+          .map(normalizeResumeBullet)
+          .filter((b): b is string => b !== null);
+
+        if (baseBullets.length > 0) {
+          // Keep AI-generated bullets, then append base bullets until requiredMin is met
+          const merged = [...currentBullets];
+          for (const bb of baseBullets) {
+            if (merged.length >= requiredMin) break;
+            const isDupe = merged.some(
+              (m) => normalizeResumeBullet(m)?.toLocaleLowerCase("en-US").slice(0, 40) === bb.toLocaleLowerCase("en-US").slice(0, 40)
+            );
+            if (!isDupe) merged.push(bb);
+          }
+          exp.bullets = merged;
+          console.warn(
+            `[Agent:ResumeForge] BULLET GUARD "${exp.title}": ${currentBullets.length} → ${merged.length} bullets (required min ${requiredMin})`
+          );
+        }
+      }
+    });
+  }
+  // Education identity and the complete graduation date (including month) are
+  // also immutable and always come from the base resume.
+  validated.education = enforceEducationIntegrity(validated.education, baseEducation);
+
+  // ── PROFESSIONAL SUMMARY GUARD ───────────────────────────────────────────
+  // The summary follows the base resume: allowed only when the base has one.
+  // If the AI dropped it or returned null, restore the base summary verbatim
+  // (truthful by construction - it came from the candidate's own resume); if
+  // the base resume has no summary, force null so nothing is ever invented.
+  const baseSummaryText = readBaseSummary(baseContent);
+  if (baseSummaryText) {
+    if (!validated.summary || !validated.summary.trim()) {
+      validated.summary = baseSummaryText;
+      console.warn("[Agent:ResumeForge] SUMMARY GUARD: restored base professional summary (AI returned none)");
+    }
+  } else {
+    validated.summary = null;
+  }
+}
 
 export async function runResumeForge(
   options: AgentOptions,
@@ -78,9 +178,7 @@ export async function runResumeForge(
     timeoutMs: options.timeout_ms,
   });
 
-  const raw = textOf(response.content);
-  const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-  const parsed = JSON.parse(stripped);
+  const parsed = parseRawJson(textOf(response.content));
   const validated = ResumeDraftSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Resume Forge output validation failed: ${validated.error}`);
 
@@ -92,78 +190,72 @@ export async function runResumeForge(
   const baseEducation: unknown[] = contentEducation.length > 0
     ? contentEducation
     : Array.isArray(ctx.baseResume.education) ? ctx.baseResume.education : [];
-  const basePersonalInfo = (baseContent as any).personalInfo;
-  if (basePersonalInfo && typeof basePersonalInfo === "object" && !Array.isArray(basePersonalInfo)) {
-    (validated as any).personalInfo = JSON.parse(JSON.stringify(basePersonalInfo));
-  }
-  validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
 
-  // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
-  // Defense in depth: if the AI returned fewer than the required minimum bullets
-  // for any role, force-restore from the base resume. Fires silently — no throw,
-  // no retry — so the resume always has content.
-  //
-  // Per-role minimum (must match buildBulletRequirements in prompts/resumeForge.ts):
-  //   idx 0 (most recent) → 6   idx 1 → 4   idx ≥2 → 3
-  const getMinBullets = (idx: number) => idx === 0 ? 6 : idx === 1 ? 4 : 3;
+  applyForgeGuards(validated, baseContent, baseExperience, baseEducation);
 
-  if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
-    validated.experience.forEach((exp: any, i: number) => {
-      const requiredMin = getMinBullets(i);
-      const currentBullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
-      if (currentBullets.length >= requiredMin) return; // already meets requirement
+  // ── REQUIREMENT COVERAGE ─────────────────────────────────────────────────
+  // Deterministic check against Job Lens's classified requirements. Only
+  // supported requirements that failed to surface trigger the bounded retry;
+  // unsupported/hard_blocker gaps are never retried (nothing can truthfully
+  // add them) and stay visible as candidate evidence gaps.
+  const analysisForCoverage =
+    jobAnalysis && typeof jobAnalysis === "object" && !Array.isArray(jobAnalysis)
+      ? (jobAnalysis as { requirementAnalysis?: unknown })
+      : {};
+  let coverage = buildRequirementCoverage(analysisForCoverage as any, validated);
+  const missed = listMissedSupported(coverage);
 
-      // Experience integrity reconciliation keeps base and output in the same
-      // order, so index matching is now deterministic and cannot hit a fake role.
-      const baseMatch: any = baseExperience[i];
-
-      if (baseMatch) {
-        // Normalise base bullets from { text } objects or plain strings
-        const rawBase: unknown[] = Array.isArray(baseMatch.bullets)
-          ? baseMatch.bullets
-          : Array.isArray(baseMatch.bulletPoints)
-          ? baseMatch.bulletPoints
-          : [];
-        const baseBullets: string[] = rawBase
-          .map(normalizeResumeBullet)
-          .filter((b): b is string => b !== null);
-
-        if (baseBullets.length > 0) {
-          // Keep AI-generated bullets, then append base bullets until requiredMin is met
-          const merged = [...currentBullets];
-          for (const bb of baseBullets) {
-            if (merged.length >= requiredMin) break;
-            const isDupe = merged.some(
-              (m) => normalizeResumeBullet(m)?.toLocaleLowerCase("en-US").slice(0, 40) === bb.toLocaleLowerCase("en-US").slice(0, 40)
-            );
-            if (!isDupe) merged.push(bb);
-          }
-          exp.bullets = merged;
-          console.warn(
-            `[Agent:ResumeForge] BULLET GUARD "${exp.title}": ${currentBullets.length} → ${merged.length} bullets (required min ${requiredMin})`
-          );
-        }
+  if (missed.length > 0) {
+    const missedNames = missed.map((row) => row.requirement);
+    console.warn(
+      `[Agent:ResumeForge] COVERAGE RETRY: supported requirements missed in first draft: ${missedNames.join(", ")}`
+    );
+    try {
+      const retryResponse = await provider.send({
+        system: options.system_prompt ?? "You are Resume Forge, an AI that tailors resumes using only supported evidence. Return only valid JSON.",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: buildResumeForgeMissedRetryPrompt(missedNames, validated),
+              },
+            ],
+          },
+        ],
+        tools: [],
+        temperature: options.temperature,
+        maxTokens: options.max_output_tokens,
+        timeoutMs: options.timeout_ms,
+      });
+      const retryParsed = parseRawJson(textOf(retryResponse.content));
+      const retryValidated = ResumeDraftSchema.parse(retryParsed);
+      if ("error" in retryValidated) {
+        console.warn(
+          `[Agent:ResumeForge] COVERAGE RETRY rejected (validation failed: ${retryValidated.error}); keeping first draft`
+        );
+      } else {
+        applyForgeGuards(retryValidated, baseContent, baseExperience, baseEducation);
+        Object.assign(validated, retryValidated);
+        console.warn("[Agent:ResumeForge] COVERAGE RETRY applied - re-checking coverage");
       }
-    });
-  }
-  // Education identity and the complete graduation date (including month) are
-  // also immutable and always come from the base resume.
-  validated.education = enforceEducationIntegrity(validated.education, baseEducation);
-  // ──────────────────────────────────────────────────────────────────────────
-
-  // ── PROFESSIONAL SUMMARY GUARD ───────────────────────────────────────────
-  // The summary follows the base resume: allowed only when the base has one.
-  // If the AI dropped it or returned null, restore the base summary verbatim
-  // (truthful by construction - it came from the candidate's own resume); if
-  // the base resume has no summary, force null so nothing is ever invented.
-  const baseSummaryText = readBaseSummary(baseContent);
-  if (baseSummaryText) {
-    if (!validated.summary || !validated.summary.trim()) {
-      validated.summary = baseSummaryText;
-      console.warn("[Agent:ResumeForge] SUMMARY GUARD: restored base professional summary (AI returned none)");
+    } catch (err: any) {
+      console.warn(`[Agent:ResumeForge] COVERAGE RETRY failed (${err?.message ?? err}); keeping first draft`);
     }
-  } else {
-    validated.summary = null;
+
+    coverage = buildRequirementCoverage(analysisForCoverage as any, validated);
+  }
+
+  validated.requirementCoverage = coverage;
+  const stillMissed = listMissedSupported(coverage);
+  if (stillMissed.length > 0) {
+    const existing = new Set(validated.missingRequirements ?? []);
+    for (const row of stillMissed) existing.add(row.requirement);
+    validated.missingRequirements = Array.from(existing);
+    console.warn(
+      `[Agent:ResumeForge] COVERAGE: still missing after retry (surfaced for Final Polish gate): ${stillMissed.map((r) => r.requirement).join(", ")}`
+    );
   }
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────

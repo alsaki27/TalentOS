@@ -97,6 +97,14 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
    * every JD keyword the candidate can truthfully claim still appears verbatim somewhere;
+   * every requirementAnalysis item with status "supported_by_resume" or
+     "supported_but_not_surfaced" and safeToAdd=true (in JOB ANALYSIS below) is surfaced
+     somewhere in the resume — in the skills section, a bullet, or both. The system
+     re-checks this deterministically after you respond and will fail export if one is
+     missing, so fix it here rather than leaving it for the warning channel;
+   * requirementAnalysis items with status "unsupported" or "hard_blocker" NEVER appear in
+     the resume — they stay absent and are reported to the AE as candidate evidence gaps,
+     never as something you should "try harder" to add;
    * the top third (skills + first role's first two bullets) hits the JD's top selection
      criteria and contains at least one quantified achievement;
    * one-page limit respected strictly at any cost, every experience role preserved with 3 to 7 bullets (no role vanished, no over-shrinking, no empty bottom whitespace), no duplicate titles/dates, no unsupported claims anywhere.

@@ -10,11 +10,17 @@ import {
   enforceExperienceIntegrity,
   normalizeResumeBullet,
   readBaseSummary,
+  validateEmploymentChronology,
 } from "./resumeIntegrity";
 import { finalResumeToStudioDocument, type RenderableResumeContent } from "./finalResumeToStudioDocument";
 import { renderResumePdfWithMetrics, type ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 import { mapMetricsToPageFit, MAX_UTILIZATION } from "@/lib/falood/pageFitThresholds";
+import {
+  buildRequirementCoverage,
+  listEvidenceGaps,
+  listMissedSupported,
+} from "./requirementCoverage";
 
 /**
  * Per-role minimum bullet count.
@@ -307,6 +313,45 @@ export async function runFinalPolish(
     // Render failed — don't block the pipeline, but don't claim a page-fit
     // guarantee either.
     validated.pageFit = null;
+  }
+  // ───────────────────────────────────────────────────────────────
+
+  // ── EXPORT GATES: REQUIREMENT COVERAGE + CHRONOLOGY (TS, deterministic) ─
+  // Runs after every LLM output and every integrity pass, so the final
+  // exportReady verdict reflects the ACTUAL shipped resume text.
+  //
+  // Gate 1 — missing supported requirements: candidate material supports
+  // them but the final resume does not surface them → export is not ready.
+  // Gate 2 — candidate evidence gaps: requirements with no supporting
+  // material anywhere. Visible to the AE as "candidate evidence gap", NOT an
+  // AI failure, and deliberately does NOT fail export — no prompt can
+  // truthfully add a missing credential, so retrying would loop forever.
+  // Gate 3 — chronology: suspicious dates are flagged for review, never
+  // rewritten. Skipped entirely when the job carries no posting date.
+  const analysisForGates =
+    jobAnalysis && typeof jobAnalysis === "object" && !Array.isArray(jobAnalysis)
+      ? (jobAnalysis as { requirementAnalysis?: unknown })
+      : null;
+  const coverageRows = buildRequirementCoverage(analysisForGates as any, validated);
+  for (const row of listMissedSupported(coverageRows)) {
+    validated.exportReady = false;
+    validated.unresolvedWarnings = [
+      ...validated.unresolvedWarnings,
+      `Missing supported requirement: ${row.requirement} — the candidate's material supports it, but the resume does not surface it.`,
+    ];
+  }
+  for (const row of listEvidenceGaps(coverageRows)) {
+    validated.unresolvedWarnings = [
+      ...validated.unresolvedWarnings,
+      `Candidate evidence gap: ${row.requirement} — no supporting material exists. This is not an AI failure; no retry can truthfully add it.`,
+    ];
+  }
+  const chronologyWarnings = validateEmploymentChronology(validated.experience, validated.education, ctx.job);
+  if (chronologyWarnings.length > 0) {
+    validated.unresolvedWarnings = [...validated.unresolvedWarnings, ...chronologyWarnings];
+    console.warn(
+      `[Agent:FinalPolish] CHRONOLOGY FLAGS (${chronologyWarnings.length}): ${chronologyWarnings.join(" | ")}`
+    );
   }
   // ───────────────────────────────────────────────────────────────
 

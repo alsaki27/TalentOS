@@ -241,3 +241,70 @@ export function enforceEducationIntegrity(
     graduationDate: readResumeText(base.graduationDate) || null,
   }));
 }
+
+// ── Chronology validator ─────────────────────────────────────────────────
+// Flags (never rewrites) employment/education dates that are implausible
+// relative to today or to the job's posting date. Rewriting dates is a
+// candidate-truth violation; a flag lets the AE review instead.
+//
+// IMPORTANT: when the job record carries no usable posting/creation date, the
+// job-relative checks are skipped entirely — a missing date field must never
+// block or slow the pipeline, and no flag may be invented from a date that
+// does not exist.
+
+function readYearFromChronologyValue(value: unknown): number | null {
+  const text = readResumeText(value);
+  const match = text.match(/(19|20)\d{2}/);
+  return match ? parseInt(match[0], 10) : null;
+}
+
+function jobPostingYear(job: unknown): number | null {
+  if (!isRecord(job)) return null;
+  for (const key of ["posted_at", "created_at", "date_posted", "posted_date"]) {
+    const year = readYearFromChronologyValue(job[key]);
+    if (year !== null) return year;
+  }
+  return null;
+}
+
+export function validateEmploymentChronology(
+  experience: ExperienceEntry[],
+  education: EducationEntry[],
+  job: unknown,
+  now: Date = new Date()
+): string[] {
+  const warnings: string[] = [];
+  const jobYear = jobPostingYear(job);
+  const nowYear = now.getFullYear();
+
+  for (const entry of experience) {
+    const label = entry.title || "Role";
+    const startYear = entry.startDate ? readYearFromChronologyValue(entry.startDate) : null;
+    const rawEnd = readResumeText(entry.endDate);
+    const isPresent = !rawEnd || rawEnd.toLocaleLowerCase("en-US").includes("present") || rawEnd.toLocaleLowerCase("en-US").includes("current");
+    const endYear = isPresent ? null : entry.endDate ? readYearFromChronologyValue(entry.endDate) : null;
+
+    if (startYear !== null && startYear > nowYear) {
+      warnings.push(`Chronology: "${label}" start date (${entry.startDate}) is in the future — verify with the candidate.`);
+    }
+    if (endYear !== null && endYear > nowYear) {
+      warnings.push(`Chronology: "${label}" end date (${entry.endDate}) is in the future — verify with the candidate.`);
+    }
+    // Only when the job actually carries a posting date: a role that started
+    // more than a year AFTER the posting is implausible work history for this
+    // application.
+    if (jobYear !== null && startYear !== null && startYear > jobYear + 1) {
+      warnings.push(`Chronology: "${label}" starts (${entry.startDate}) after this job was posted (${jobYear}) — verify with the candidate.`);
+    }
+  }
+
+  for (const entry of education) {
+    if (!entry.graduationDate) continue;
+    const graduationYear = readYearFromChronologyValue(entry.graduationDate);
+    if (graduationYear !== null && graduationYear > nowYear + 1) {
+      warnings.push(`Chronology: education graduation date (${entry.graduationDate}) is in the future — verify with the candidate.`);
+    }
+  }
+
+  return warnings;
+}

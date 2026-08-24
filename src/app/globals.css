@@ -1159,6 +1159,136 @@ label {
   margin-top: 20px;
 }
 
+/* ---- Project-wide scrollbar (Midnight Neon) -----------------------------
+   One consistent, professional scrollbar everywhere: thin violet accent
+   thumb on a slate track. Element-specific scrollbar-color rules elsewhere
+   (e.g. .jobs-table-shell) still win over the universal selector. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.45) rgba(15, 23, 42, 0.5);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.45);
+  background-clip: padding-box;
+  border: 2px solid rgba(15, 23, 42, 0.6);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(167, 139, 250, 0.7);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---- Edit Profile modal (wider, sectioned, project-styled) -------------- */
+.edit-profile-modal {
+  width: 680px;
+  max-width: 94vw;
+  max-height: 88vh;
+  padding: 0;
+}
+
+.edit-profile-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+
+.edit-profile-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.edit-profile-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.edit-profile-close:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.edit-profile-body {
+  padding: 18px 24px 24px;
+}
+
+.edit-profile-section {
+  margin-bottom: 20px;
+}
+
+.edit-profile-section + .edit-profile-section {
+  border-top: 1px solid var(--border-light);
+  padding-top: 18px;
+}
+
+.edit-profile-section h3 {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.edit-profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.edit-profile-grid .field-group {
+  margin-bottom: 12px;
+}
+
+.edit-profile-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px;
+  margin: 20px -24px -24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;

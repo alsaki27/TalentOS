@@ -1516,6 +1516,19 @@ function QueueFindingsPanel({ details }: { details: any }) {
             ))}
           </div>
           {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--ink-soft)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
+          {hiringPanel.disposition && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span
+                className={`badge badge-${hiringPanel.disposition === "pursue" ? "success" : hiringPanel.disposition === "review" ? "info" : hiringPanel.disposition === "deprioritize" ? "warning" : "danger"}`}
+                style={{ fontSize: 9, textTransform: "capitalize" }}
+              >
+                {hiringPanel.disposition}
+              </span>
+              {Array.isArray(hiringPanel.dispositionReasons) && hiringPanel.dispositionReasons.length > 0 && (
+                <span style={{ color: "var(--ink-soft)" }}>{hiringPanel.dispositionReasons.join(" · ")}</span>
+              )}
+            </div>
+          )}
           {hiringPanel.requiredEdits?.length > 0 && (
             <div>
               <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
@@ -1535,7 +1548,22 @@ function QueueFindingsPanel({ details }: { details: any }) {
                   {finalPolish.exportReady ? "ready" : "not ready"}
                 </span>
               </div>
-              {finalPolish.unresolvedWarnings?.length > 0 && <div style={{ color: "var(--ink-soft)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>}
+              {Array.isArray(finalPolish.unresolvedWarnings) && finalPolish.unresolvedWarnings.length > 0 && (
+                <div style={{ display: "grid", gap: 3 }}>
+                  {finalPolish.unresolvedWarnings.map((warning: string, i: number) => {
+                    const isEvidenceGap = /candidate evidence gap/i.test(warning);
+                    return (
+                      <div
+                        key={i}
+                        style={{ color: isEvidenceGap ? "var(--ink-soft)" : "var(--warn)", fontStyle: isEvidenceGap ? "italic" : undefined }}
+                      >
+                        {isEvidenceGap ? "↳ " : "⚠ "}
+                        {warning}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
           {(finalPolish?.pageFit || hiringPanel?.pageFit) && (

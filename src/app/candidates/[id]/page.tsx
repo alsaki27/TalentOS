@@ -1558,7 +1558,10 @@ export default function CandidateProfilePage() {
         <EditProfileModal
           candidate={candidate}
           onClose={() => setShowEdit(false)}
-          onSaved={() => { setShowEdit(false); load(); }}
+          onSaved={(updates) => {
+            setShowEdit(false);
+            setCandidate((cur) => (cur ? { ...cur, ...updates } : cur));
+          }}
         />
       )}
       {showAddVariant && (
@@ -1829,7 +1832,10 @@ function ApplicationComments({ applicationId, comments, onCommented }: { applica
   );
 }
 
-function EditProfileModal({ candidate, onClose, onSaved }: { candidate: CandidateDetail; onClose: () => void; onSaved: () => void }) {
+function EditProfileModal({ candidate, onClose, onSaved }: { candidate: CandidateDetail; onClose: () => void; onSaved: (updates: Partial<CandidateDetail>) => void }) {
+  const [name, setName] = useState(candidate.name ?? "");
+  const [email, setEmail] = useState(candidate.email ?? "");
+  const [phone, setPhone] = useState(candidate.phone ?? "");
   const [targetRoles, setTargetRoles] = useState(candidate.target_roles ?? "");
   const [preferredLocations, setPreferredLocations] = useState(candidate.preferred_locations ?? "");
   const [salaryExpectation, setSalaryExpectation] = useState(candidate.salary_expectation ?? "");
@@ -1851,125 +1857,182 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
   const [error, setError] = useState("");
 
   async function submit() {
+    if (!name.trim()) {
+      setError("Name is required.");
+      return;
+    }
     setSaving(true);
     setError("");
+    const payload = {
+      name: name.trim(),
+      email: email.trim() || null,
+      phone: phone.trim() || null,
+      target_roles: targetRoles.trim() || null,
+      preferred_locations: preferredLocations.trim() || null,
+      salary_expectation: salaryExpectation.trim() || null,
+      work_authorization: workAuthorization.trim() || null,
+      linkedin_url: linkedinUrl.trim() || null,
+      github_url: githubUrl.trim() || null,
+      portfolio_url: portfolioUrl.trim() || null,
+      visa_status: visaStatus.trim() || null,
+      target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
+      verified_skills: verifiedSkills ? verifiedSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
+      location_preference: locationPreference.trim() || null,
+      work_mode_preference: workModePreference.trim() || null,
+      available_start_date: availableStartDate || null,
+      eeo_gender: eeoGender.trim() || null,
+      eeo_race: eeoRace.trim() || null,
+      eeo_veteran: eeoVeteran.trim() || null,
+      eeo_disability: eeoDisability.trim() || null,
+    };
     const res = await fetch(`/api/candidates/${candidate.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target_roles: targetRoles || null,
-        preferred_locations: preferredLocations || null,
-        salary_expectation: salaryExpectation || null,
-        work_authorization: workAuthorization || null,
-        linkedin_url: linkedinUrl || null,
-        github_url: githubUrl || null,
-        portfolio_url: portfolioUrl || null,
-        visa_status: visaStatus || null,
-        target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
-        verified_skills: verifiedSkills ? verifiedSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
-        location_preference: locationPreference || null,
-        work_mode_preference: workModePreference || null,
-        available_start_date: availableStartDate || null,
-        eeo_gender: eeoGender || null,
-        eeo_race: eeoRace || null,
-        eeo_veteran: eeoVeteran || null,
-        eeo_disability: eeoDisability || null,
-      }),
+      body: JSON.stringify(payload),
     });
     setSaving(false);
     if (!res.ok) {
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       setError(data.error || "Something went wrong.");
       return;
     }
-    onSaved();
+    onSaved(payload);
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Edit profile</h2>
-        <div className="field-group">
-          <label>Target roles</label>
-          <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Telecom PM" />
-        </div>
-        <div className="field-group">
-          <label>Preferred locations</label>
-          <input value={preferredLocations} onChange={(e) => setPreferredLocations(e.target.value)} placeholder="e.g. Remote, Atlanta GA" />
-        </div>
-        <div className="field-group">
-          <label>Salary expectation</label>
-          <input value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. $90k-$110k" />
-        </div>
-        <div className="field-group">
-          <label>Work authorization</label>
-          <input value={workAuthorization} onChange={(e) => setWorkAuthorization(e.target.value)} placeholder="e.g. US Citizen, H1B" />
-        </div>
-        <div className="field-group">
-          <label>LinkedIn URL</label>
-          <input value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/..." />
-        </div>
-        <div className="field-group">
-          <label>GitHub URL</label>
-          <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder="https://github.com/..." />
-        </div>
-        <div className="field-group">
-          <label>Portfolio URL</label>
-          <input value={portfolioUrl} onChange={(e) => setPortfolioUrl(e.target.value)} placeholder="https://..." />
-        </div>
-        <div className="field-group">
-          <label>Visa status</label>
-          <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H1B, Green Card" />
-        </div>
-        <div className="field-group">
-          <label>Target industries (comma-separated)</label>
-          <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. Telecom, SaaS, Finance" />
-        </div>
-        <div className="field-group">
-          <label>Verified skills (comma-separated)</label>
-          <input value={verifiedSkills} onChange={(e) => setVerifiedSkills(e.target.value)} placeholder="e.g. Vetro FiberMap, Katapult, PE License" />
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
-            Recruiter-confirmed skills the AI resume pipeline can use even if the base resume text doesn't mention them.
-          </p>
-        </div>
-        <div className="field-group">
-          <label>Location preference</label>
-          <input value={locationPreference} onChange={(e) => setLocationPreference(e.target.value)} placeholder="e.g. Remote, NYC" />
-        </div>
-        <div className="field-group">
-          <label>Work mode preference</label>
-          <input value={workModePreference} onChange={(e) => setWorkModePreference(e.target.value)} placeholder="e.g. Remote, Hybrid, Onsite" />
-        </div>
-        <div className="field-group">
-          <label>Available start date</label>
-          <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
-        </div>
-
-        <h3 style={{ marginTop: 24, marginBottom: 12, fontSize: 16 }}>Equal Employment Opportunity (EEO)</h3>
-        <div className="field-group">
-          <label>Gender</label>
-          <input value={eeoGender} onChange={(e) => setEeoGender(e.target.value)} placeholder="e.g. Male, Female, Decline to self-identify" />
-        </div>
-        <div className="field-group">
-          <label>Race / Ethnicity</label>
-          <input value={eeoRace} onChange={(e) => setEeoRace(e.target.value)} placeholder="e.g. Asian, White, Hispanic" />
-        </div>
-        <div className="field-group">
-          <label>Veteran Status</label>
-          <input value={eeoVeteran} onChange={(e) => setEeoVeteran(e.target.value)} placeholder="e.g. Protected Veteran, Not a Veteran" />
-        </div>
-        <div className="field-group">
-          <label>Disability Status</label>
-          <input value={eeoDisability} onChange={(e) => setEeoDisability(e.target.value)} placeholder="e.g. Yes, No, Decline to answer" />
-        </div>
-
-        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
-
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
+      <div className="modal edit-profile-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="edit-profile-head">
+          <div>
+            <h2>Edit Profile</h2>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Contact details and career preferences update instantly across the candidate profile.
+            </p>
+          </div>
+          <button type="button" className="edit-profile-close" onClick={onClose} aria-label="Close">
+            ✕
           </button>
+        </div>
+
+        <div className="edit-profile-body">
+          <div className="edit-profile-section">
+            <h3>Basic Information</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Full name</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Jane Doe" />
+              </div>
+              <div className="field-group">
+                <label>Email</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. jane@example.com" />
+              </div>
+              <div className="field-group">
+                <label>Phone number</label>
+                <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +1 (555) 010-2030" />
+              </div>
+              <div className="field-group">
+                <label>Location preference</label>
+                <input value={locationPreference} onChange={(e) => setLocationPreference(e.target.value)} placeholder="e.g. Remote, NYC" />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Career Preferences</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Target roles</label>
+                <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Telecom PM" />
+              </div>
+              <div className="field-group">
+                <label>Preferred locations</label>
+                <input value={preferredLocations} onChange={(e) => setPreferredLocations(e.target.value)} placeholder="e.g. Remote, Atlanta GA" />
+              </div>
+              <div className="field-group">
+                <label>Salary expectation</label>
+                <input value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. $90k-$110k" />
+              </div>
+              <div className="field-group">
+                <label>Work authorization</label>
+                <input value={workAuthorization} onChange={(e) => setWorkAuthorization(e.target.value)} placeholder="e.g. US Citizen, H1B" />
+              </div>
+              <div className="field-group">
+                <label>Visa status</label>
+                <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H1B, Green Card" />
+              </div>
+              <div className="field-group">
+                <label>Work mode preference</label>
+                <input value={workModePreference} onChange={(e) => setWorkModePreference(e.target.value)} placeholder="e.g. Remote, Hybrid, Onsite" />
+              </div>
+              <div className="field-group">
+                <label>Available start date</label>
+                <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Links & Profiles</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>LinkedIn URL</label>
+                <input value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/..." />
+              </div>
+              <div className="field-group">
+                <label>GitHub URL</label>
+                <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder="https://github.com/..." />
+              </div>
+              <div className="field-group">
+                <label>Portfolio URL</label>
+                <input value={portfolioUrl} onChange={(e) => setPortfolioUrl(e.target.value)} placeholder="https://..." />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Skills & Industries</h3>
+            <div className="field-group">
+              <label>Verified skills (comma-separated)</label>
+              <input value={verifiedSkills} onChange={(e) => setVerifiedSkills(e.target.value)} placeholder="e.g. Vetro FiberMap, Katapult, PE License" />
+              <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                Recruiter-confirmed skills the AI resume pipeline can use even if the base resume text doesn't mention them.
+              </p>
+            </div>
+            <div className="field-group">
+              <label>Target industries (comma-separated)</label>
+              <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. Telecom, SaaS, Finance" />
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Equal Employment Opportunity (EEO)</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Gender</label>
+                <input value={eeoGender} onChange={(e) => setEeoGender(e.target.value)} placeholder="e.g. Male, Female, Decline to self-identify" />
+              </div>
+              <div className="field-group">
+                <label>Race / Ethnicity</label>
+                <input value={eeoRace} onChange={(e) => setEeoRace(e.target.value)} placeholder="e.g. Asian, White, Hispanic" />
+              </div>
+              <div className="field-group">
+                <label>Veteran Status</label>
+                <input value={eeoVeteran} onChange={(e) => setEeoVeteran(e.target.value)} placeholder="e.g. Protected Veteran, Not a Veteran" />
+              </div>
+              <div className="field-group">
+                <label>Disability Status</label>
+                <input value={eeoDisability} onChange={(e) => setEeoDisability(e.target.value)} placeholder="e.g. Yes, No, Decline to answer" />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-actions">
+            {error && <p style={{ color: "var(--danger)", fontSize: 13, margin: 0, marginRight: "auto" }}>{error}</p>}
+            <button onClick={onClose}>Cancel</button>
+            <button className="btn-primary" onClick={submit} disabled={saving}>
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

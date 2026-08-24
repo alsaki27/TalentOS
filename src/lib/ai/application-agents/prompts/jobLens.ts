@@ -1,4 +1,52 @@
-export function buildJobLensPrompt(job: any): string {
+// Job Lens prompt builder.
+// Job Lens now classifies every material JD requirement against the candidate's
+// evidence (base resume, Source of Truth, evidence bank, verified skills), not
+// just extracts the JD. requirementAnalysis is the single structured source of
+// truth every downstream gate consumes.
+
+export interface JobLensCandidateContext {
+  baseResume?: {
+    skills?: string[];
+    experience?: { title: string; company: string; bullets: string[] }[];
+    education?: { degree: string; school: string }[];
+    certifications?: string[];
+    content?: unknown;
+  } | null;
+  evidence?: { title: string; description: string; relatedSkills: string[] }[];
+  sourceOfTruth?: { confirmedSkills: string[] } | null;
+  verifiedSkills?: string[];
+}
+
+export function buildJobLensPrompt(job: any, candidateContext?: JobLensCandidateContext): string {
+  const ctx = candidateContext ?? {};
+
+  const baseSkills: string[] = Array.isArray(ctx.baseResume?.skills)
+    ? ctx.baseResume.skills.filter((s) => typeof s === "string")
+    : [];
+  const baseExperience = Array.isArray(ctx.baseResume?.experience) ? ctx.baseResume.experience : [];
+  const baseEducation = Array.isArray(ctx.baseResume?.education) ? ctx.baseResume.education : [];
+  const baseCertifications = Array.isArray(ctx.baseResume?.certifications)
+    ? ctx.baseResume.certifications.filter((c) => typeof c === "string")
+    : [];
+  const evidence = Array.isArray(ctx.evidence) ? ctx.evidence : [];
+  const sotSkills = Array.isArray(ctx.sourceOfTruth?.confirmedSkills)
+    ? ctx.sourceOfTruth.confirmedSkills.filter((s) => typeof s === "string")
+    : [];
+  const verifiedSkills = Array.isArray(ctx.verifiedSkills)
+    ? ctx.verifiedSkills.filter((s) => typeof s === "string")
+    : [];
+
+  // Compact, factual candidate snapshot — enough for support classification,
+  // never the full base resume JSON.
+  const experienceLines = baseExperience.map((exp, i) => {
+    const bullets = Array.isArray(exp.bullets) ? exp.bullets : [];
+    const bulletText = bullets
+      .map((b) => (typeof b === "string" ? b : (b as any)?.text ?? ""))
+      .filter(Boolean)
+      .join(" | ");
+    return `[${i}] ${exp.title} @ ${exp.company}: ${bulletText.slice(0, 600)}`;
+  }).join("\n");
+
   return `You are Job Lens, an AI that analyzes job descriptions to extract structured requirements.
 Your output is the targeting data for a resume-writing pipeline: downstream agents decide what to
 emphasize, what exact words to use, and what they are FORBIDDEN to claim, based entirely on what
@@ -50,6 +98,53 @@ Analyze this job posting and return a JSON object with the following fields:
 - ambiguities: unclear or missing information in the JD
 - rawSummary: a brief plain-language summary of the role, ending with one sentence naming the
   2-3 things this employer most wants to see on page one of a resume
+- requirementAnalysis: array of classified requirements — THE most important field. Create ONE
+  entry for every material JD requirement: each required skill, required tool, license,
+  certification, security clearance, work-authorization status, and any must-have domain
+  experience. Each entry is:
+  {
+    "requirement": "exact JD phrasing (or close, e.g. 'AutoCAD')",
+    "category": "skill" | "tool" | "cert" | "credential" | "clearance" | "other",
+    "sourceEvidence": ["specific pointers to where the candidate evidence supports this, e.g. 'base.experience[0].bullets[2]', 'sot:Vetro FiberMap', 'evidence:<title>' — leave empty when there is no support"],
+    "status": "supported_by_resume" | "supported_but_not_surfaced" | "unsupported" | "hard_blocker" | "nice_to_have",
+    "safeToAdd": true only for supported_by_resume / supported_but_not_surfaced rows that cite sourceEvidence; false for everything else,
+    "notes": optional short clarification (omit when unnecessary)
+  }
+
+REQUIREMENT CLASSIFICATION RULES (CRITICAL — these statuses drive every downstream gate):
+* supported_by_resume — the requirement already appears in the candidate's base resume,
+  verbatim or close (in skills or experience bullets). Cite the specific base location.
+* supported_but_not_surfaced — the Source of Truth confirmed skills, the evidence bank, or
+  the base resume narrative support it, but it is NOT currently written into any resume
+  bullet or skill entry. Cite the SoT skill name or evidence entry title.
+* unsupported — no evidence anywhere in the candidate material. sourceEvidence stays empty.
+* hard_blocker — a REQUIRED license, certification, security clearance, citizenship, or
+  work-authorization the JD demands as mandatory, and the candidate has zero evidence of it.
+  This is a subset of prohibitedUnsupportedClaims. sourceEvidence stays empty.
+* nice_to_have — preferred/bonus items only (mirrors preferredSkills). sourceEvidence may be
+  cited when support exists.
+
+PRIORITY RULES FOR SUPPORT CLASSIFICATION:
+* Source of Truth confirmed skills carry the SAME authority as the base resume. A skill
+  confirmed in SoT is "supported_but_not_surfaced" (or supported_by_resume if the base resume
+  also mentions it).
+* Verified skills (recruiter-confirmed) are real candidate skills too — treat them like SoT.
+* The evidence bank supports claims the recruiter has already accepted — cite "evidence:<title>".
+* Never classify something as supported unless the provided candidate material actually
+  mentions it. When in doubt between unsupported and supported, choose unsupported.
+
+CANDIDATE MATERIAL (for classification only — never copied into the resume):
+BASE RESUME SKILLS: ${baseSkills.length > 0 ? JSON.stringify(baseSkills) : "(none)"}
+BASE RESUME EXPERIENCE:
+${experienceLines || "(none)"}
+BASE RESUME EDUCATION: ${baseEducation.length > 0 ? JSON.stringify(baseEducation.map((e) => `${e.degree} — ${e.school}`)) : "(none)"}
+BASE RESUME CERTIFICATIONS: ${baseCertifications.length > 0 ? JSON.stringify(baseCertifications) : "(none)"}
+SOURCE OF TRUTH CONFIRMED SKILLS (recruiter-verified, same authority as base resume):
+${sotSkills.length > 0 ? JSON.stringify(sotSkills) : "(none)"}
+VERIFIED SKILLS (additional recruiter-confirmed competencies):
+${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none)"}
+EVIDENCE BANK (recruiter-accepted narrative facts):
+${evidence.length > 0 ? JSON.stringify(evidence.map((e) => ({ title: e.title, description: e.description.slice(0, 300), relatedSkills: e.relatedSkills }))) : "(none)"}
 
 JOB POSTING:
 Title: ${job?.title ?? "Unknown"}

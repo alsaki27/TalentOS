@@ -135,6 +135,7 @@ PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY W
 * EXACT REQUIRED BULLET COUNTS PER ROLE (non-negotiable):
 ${bulletRequirements || "  - Most recent role: minimum 6 bullets, maximum 7 bullets\n  - Second role: minimum 4 bullets, maximum 6 bullets\n  - Older roles: minimum 3 bullets, maximum 4 bullets"}
 * Strategy: Take each EXISTING BULLET from the EXPERIENCE SNAPSHOT below, keep its facts intact, then EXPAND the sentence to be longer (2-3 lines) by adding more detail about tools used, project scale, impact metrics, or methodology. Do NOT invent new facts — expand the existing sentences using information that is already in the base resume, evidence bank, and job analysis.
+* When a supported_but_not_surfaced requirement (per requirementAnalysis) needs surfacing, weave its tool/skill name into the bullet of the role where the candidate actually used it — never attach it to a role that has no basis for it.
 * If a role has fewer existing bullets than the required minimum: write additional bullets from the evidence bank and job analysis.
 * NEVER return a role with fewer bullets than its required minimum above.
 * When trimming for page length: shorten individual bullet sentences. NEVER delete entire bullets.
@@ -143,6 +144,16 @@ Humanity may worship keywords, but credibility still gets the interview.
 
 JOB ANALYSIS:
 ${JSON.stringify(jobAnalysis)}
+
+REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS above is the authority):
+* requirementAnalysis classifies every material JD requirement with a status and safeToAdd flag. You MUST follow it exactly:
+  - supported_by_resume / supported_but_not_surfaced with safeToAdd=true → you MAY include or emphasize this requirement.
+  - supported_* with safeToAdd=false → treat as unsupported. Do NOT add it.
+  - unsupported → the candidate has no evidence for this. NEVER add it to skills, bullets, or anywhere else. NEVER imply it.
+  - hard_blocker (required license/cert/clearance/citizenship with no evidence) → NEVER add, NEVER imply, NEVER soften the gap.
+  - nice_to_have → may include only when the candidate material supports it.
+* For every supported_but_not_surfaced requirement with safeToAdd=true: you MUST surface it BOTH in the skills section AND woven naturally into an existing experience bullet of the most relevant role. Rewrite that bullet to mention the tool/skill WITHOUT inventing outcomes, metrics, employers, or dates — only extend facts already present in the base resume, evidence bank, or Source of Truth.
+* Do NOT copy unsupported JD phrases into bullets just to please an ATS. A keyword the candidate cannot back is worse than a missing one.
 
 BASE RESUME — RAW JSON (authoritative source for dates, titles, companies, education, skills structure):
 ${JSON.stringify(baseContent).slice(0, 12000)}
@@ -167,6 +178,43 @@ RULES FOR USING SOURCE OF TRUTH & NOTES:
 2. Include a confirmed skill when it is relevant to THIS job OR is explicitly named/required in the JD. When the JD names a general or soft skill (office suite, Outlook, email clients, communication, time management, quality processes, SQP-style workflows, etc.) and the candidate has it confirmed in the Source of Truth or the base resume, you MUST include it — never drop it for being "generic", because the JD demand makes it relevant to this application.
 3. Do NOT invent new employers, job titles, or dates based on the notes. Notes inform emphasis and tone only.
 4. Do NOT copy the notes text into any resume output field.
+
+Return ONLY valid JSON. No markdown fences, no explanation.`;
+}
+
+/**
+ * Bounded "supported but missed" retry prompt. Fires at most once per
+ * workflow, and only when the coverage matrix proves a supported requirement
+ * is absent from the draft. The agent must return the SAME full draft JSON
+ * shape (the previous draft is embedded so this is a minimal edit, not a
+ * regeneration), weaving only the named requirements into existing bullets
+ * and the skills section.
+ */
+export function buildResumeForgeMissedRetryPrompt(
+  missedRequirements: string[],
+  previousDraft: unknown
+): string {
+  return `You are Resume Forge. Your previous draft passed validation, but the deterministic
+requirement-coverage check found supported requirements that are NOT surfaced anywhere in the
+resume. Supported material exists for these — they were simply missed. Fix exactly this, nothing else.
+
+MISSED SUPPORTED REQUIREMENTS (weave each one into the resume):
+${missedRequirements.map((name) => `- ${name}`).join("\n")}
+
+HARD RULES FOR THIS CORRECTION PASS:
+* Return the COMPLETE resume JSON again, with the same overall shape as the previous draft.
+* Add each missed requirement BOTH to the most relevant existing skills category AND woven
+  naturally into an existing experience bullet of the role where the candidate actually used
+  it. Extend the bullet's existing facts — NEVER invent outcomes, metrics, employers, titles,
+  or dates.
+* Do not change anything else: keep every company, job title, date, education entry, and
+  non-missing bullet identical to the previous draft.
+* Do NOT add requirements that are marked unsupported or hard_blocker — a missing credential
+  stays missing. Only the named missed requirements above may be added.
+* Keep everything within one page.
+
+PREVIOUS DRAFT (return this exact shape with only the minimal additions):
+${JSON.stringify(previousDraft)}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

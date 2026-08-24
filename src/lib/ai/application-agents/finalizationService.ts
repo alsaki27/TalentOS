@@ -21,6 +21,8 @@ import { auditAndRepairResumeVersionIdentity } from "./postFinalizeIdentityAudit
 import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdapters";
 import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
+import { computeFinalScores, resumeDocumentText } from "./finalResumeScoring";
+import type { JobAnalysisV1 } from "./schemas";
 
 export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
   const artifacts = await listArtifacts(workflowId);
@@ -158,6 +160,47 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   }
   const studioDocument = finalResumeToStudioDocument(safeFinalData, baseContent);
 
+  // ── FINAL SCORE PASS (after ALL agents + integrity guards) ───────────────
+  // Scores persisted here describe the SHIPPED resume, not the mid-pipeline
+  // draft Hiring Panel reviewed. Deterministic, no AI call — the reviewer
+  // scores are priors, then coverage/disposition/chronology evidence adjusts
+  // them (see finalResumeScoring.ts). Falls back to the previous
+  // reviewer-based ATS logic only when Job Lens produced no classified
+  // requirements (older artifacts).
+  const jobLensArtifact = artifacts.find((a) => a.automation_id === "application_job_lens");
+  const jobLensData = jobLensArtifact?.data as JobAnalysisV1 | undefined;
+  const normalizedFinal = normalizeResumeContentForExport(studioDocument);
+  const finalScores = computeFinalScores({
+    finalText: resumeDocumentText(normalizedFinal),
+    requirementAnalysis: jobLensData?.requirementAnalysis ?? null,
+    review: reviewData
+      ? {
+          atsScore: reviewData.atsScore,
+          recruiterScore: reviewData.recruiterScore,
+          roleFitScore: reviewData.roleFitScore,
+          truthfulnessRisk: reviewData.truthfulnessRisk,
+          disposition: (reviewData as any)?.disposition ?? null,
+          passFail: reviewData.passFail,
+        }
+      : null,
+    finalQaScore: finalQa,
+    pageFit: finalPolishPageFit,
+    unresolvedWarningCount: Array.isArray((finalData as any)?.unresolvedWarnings)
+      ? (finalData as any).unresolvedWarnings.length
+      : 0,
+  });
+  // Legacy fallback (older artifacts without requirementAnalysis): reviewer
+  // ATS wins, else final QA. The final score pass already mirrors this inside
+  // computeFinalScores when no classified requirements exist, so this only
+  // keeps the pre-existing behavior visible for the activity log.
+  const legacyAtsScore = panelAts !== null && panelAts > 0 ? panelAts : finalQa ?? panelAts;
+  const finalAtsScore = finalScores.atsScore ?? legacyAtsScore ?? null;
+  const finalTruthScore = finalScores.truthScore ?? truthScore;
+  console.log(
+    `[finalizeWorkflow] FINAL SCORES workflow=${workflowId}:`,
+    JSON.stringify({ ...finalScores, coverage: finalScores.supportedCoverage })
+  );
+
   // ATOMICITY BOUNDARY (critical path): all three operations run inside a single
   // database transaction via Neon's sql.transaction(). If any query fails, the
   // entire transaction rolls back, preventing partial finalization.
@@ -179,12 +222,15 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
       dbSql`WITH inserted AS (
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
-            title, content, source_type, status, ats_score, truth_score, one_page_fit_score, page_fit_metrics, created_at)
+            title, content, source_type, status, ats_score, truth_score, recruiter_score, role_fit_score,
+            one_page_fit_score, page_fit_metrics, created_at)
          VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${realBaseResumeId},
-                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${atsScore}, ${truthScore}, ${onePageFitScore}, ${pageFitMetricsJson}, NOW())
+                 ${title}, ${contentJson}, 'ai_agent', 'draft', ${finalAtsScore}, ${finalTruthScore},
+                 ${finalScores.recruiterScore}, ${finalScores.roleFitScore}, ${onePageFitScore}, ${pageFitMetricsJson}, NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
          DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score,
-                       truth_score = EXCLUDED.truth_score, one_page_fit_score = EXCLUDED.one_page_fit_score,
+                       truth_score = EXCLUDED.truth_score, recruiter_score = EXCLUDED.recruiter_score,
+                       role_fit_score = EXCLUDED.role_fit_score, one_page_fit_score = EXCLUDED.one_page_fit_score,
                        page_fit_metrics = EXCLUDED.page_fit_metrics, updated_at = NOW()
          RETURNING id
        )
@@ -280,7 +326,20 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     entityType: "application",
     entityId: wf.application_id,
     entityName: `Workflow ${workflowId}`,
-    metadata: { workflowId, versionId, artifactCount: artifacts.length, atsScore, exportReady },
+    metadata: {
+      workflowId,
+      versionId,
+      artifactCount: artifacts.length,
+      atsScore: finalAtsScore,
+      finalScores: {
+        atsScore: finalScores.atsScore,
+        recruiterScore: finalScores.recruiterScore,
+        roleFitScore: finalScores.roleFitScore,
+        truthScore: finalScores.truthScore,
+        supportedCoverage: finalScores.supportedCoverage,
+      },
+      exportReady,
+    },
   }).catch((err: any) => {
     console.error("[finalizeWorkflow] Activity log failed (non-critical):", err.message || err);
   });
