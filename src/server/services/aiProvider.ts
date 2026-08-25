@@ -6,6 +6,7 @@
 import { AiProvider } from "@/lib/ai/provider";
 import { callVertexProxy } from "@/lib/ai/googleVertexProxyProvider";
 import { createOpenAiCompatibleProvider } from "@/lib/ai/openAiCompatibleProvider";
+import { createOpenAiResponsesProvider } from "@/lib/ai/openAiResponsesProvider";
 import { PROVIDER_NATIVE_DEFAULTS } from "@/lib/ai/providerPresets";
 import {
   listEnabledAiKeys,
@@ -278,6 +279,18 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       const selectedModel = model || "deepseek-v4-flash";
+      const isGpt56Luna = /^gpt-5\.6-luna$/i.test(selectedModel);
+      if (isGpt56Luna) {
+        return createOpenAiResponsesProvider({
+          apiUrl: baseUrl
+            ? resolveApiUrl(baseUrl, "/responses", baseUrl)
+            : "https://opencode.ai/zen/go/v1/responses",
+          apiKey,
+          model: selectedModel,
+          maxOutputTokens: 8192,
+          errorLabel: "OpenCode API",
+        });
+      }
       const normalizedReasoning = reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : null;
       const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
         ? { thinking: { type: "enabled" }, reasoning_effort: normalizedReasoning || "high" }
