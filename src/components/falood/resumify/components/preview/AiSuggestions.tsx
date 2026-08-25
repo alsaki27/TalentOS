@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Sparkles, Check, X, ArrowRight, Lightbulb, RefreshCw, Send, MessageSquare, Bot, User } from 'lucide-react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
+import { flattenResumeSkills } from '@/lib/falood/skillGapDetector';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -375,6 +376,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     const autoSuggestRanRef = useRef(false);
+    const skillGapTriggeredRef = useRef(false);
 
     // Initial suggestions (empty now, waiting for user input)
     // We no longer need a separate 'suggestions' state for the bottom view if we render them in chat.
@@ -692,6 +694,82 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             })
             .finally(() => setIsTyping(false));
     }, [jobDescription, messages, isTyping, setChatHistory, fetchAiSuggestions]);
+
+    // Deterministic skill-gap suggestions (see docs/FALOOD_COPILOT_SKILL_GAP_SUGGESTIONS_PLAN_2026-08-24.md).
+    // Separate from the general auto-suggest effect above on purpose: which
+    // skills are missing vs. present is exact, checkable data, not something
+    // worth leaving to AI judgment. Fires once per session (guarded by the
+    // 'skill-gap-intro' marker persisting in chatHistory, same pattern the
+    // page already uses for its 'tailor-context' seed message), and reveals
+    // only the first missing skill - the rest queue on the marker message
+    // itself and are revealed one at a time by the effect below as each is
+    // accepted or rejected, never all at once.
+    useEffect(() => {
+        if (skillGapTriggeredRef.current) return;
+        if (messages.some(m => m.id === 'skill-gap-intro')) { skillGapTriggeredRef.current = true; return; }
+        if (!jobDescription || jobDescription.trim().length < 80) return;
+        const currentSkills = flattenResumeSkills(state.resumeData.skills as any);
+        if ((state.resumeData.skills as any)?.categorized?.length === 0) return; // nothing to add skills into yet
+
+        skillGapTriggeredRef.current = true;
+
+        fetch('/api/falood/skill-gap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobDescription, resumeSkills: currentSkills, candidateId: candidateId || undefined }),
+        })
+            .then(res => res.ok ? res.json() : { gaps: [] })
+            .then(({ gaps }: { gaps: string[] }) => {
+                if (!Array.isArray(gaps) || gaps.length === 0) return;
+                const [firstSkill, ...restSkills] = gaps;
+                const firstSuggestion: Suggestion = {
+                    id: `skill-gap-${Date.now()}`,
+                    type: 'skill',
+                    title: `Add missing skill: ${firstSkill}`,
+                    description: 'Found in the job description and/or your base resume, but not yet on this tailored draft.',
+                    suggested: [firstSkill],
+                    status: 'pending',
+                };
+                const introMsg: ChatMessage & { remainingSkillQueue?: string[] } = {
+                    id: 'skill-gap-intro',
+                    role: 'assistant',
+                    content: `I compared this draft against the job description${candidateId ? ", your base resume, and your confirmed skills" : " and your base resume"}, and found ${gaps.length} skill${gaps.length > 1 ? 's' : ''} worth considering. I'll suggest them one at a time - accept or reject each before I show the next.`,
+                    suggestions: [firstSuggestion],
+                    remainingSkillQueue: restSkills,
+                };
+                setChatHistory([...messages, introMsg]);
+            })
+            .catch(() => { /* Non-fatal: the general auto-suggest effect above still runs regardless. */ });
+    }, [jobDescription, messages, state.resumeData.skills, candidateId, setChatHistory]);
+
+    // Advances the skill-gap queue: once the currently-shown skill suggestion
+    // on the 'skill-gap-intro' message is no longer pending, reveal the next
+    // queued skill as a new pending suggestion on that same message. Purely
+    // additive - does not touch handleAccept/handleReject/handleAcceptAll,
+    // so existing accept/reject behavior for every other suggestion type is
+    // completely unchanged.
+    useEffect(() => {
+        const marker = messages.find(m => m.id === 'skill-gap-intro') as (ChatMessage & { remainingSkillQueue?: string[] }) | undefined;
+        if (!marker || !marker.remainingSkillQueue || marker.remainingSkillQueue.length === 0) return;
+        const currentSuggestions = marker.suggestions ?? [];
+        const stillPending = currentSuggestions.some(s => (s.status ?? 'pending') === 'pending');
+        if (stillPending) return;
+
+        const [nextSkill, ...rest] = marker.remainingSkillQueue;
+        const nextSuggestion: Suggestion = {
+            id: `skill-gap-${Date.now()}`,
+            type: 'skill',
+            title: `Add missing skill: ${nextSkill}`,
+            description: 'Found in the job description and/or your base resume, but not yet on this tailored draft.',
+            suggested: [nextSkill],
+            status: 'pending',
+        };
+        setChatHistory(messages.map(m =>
+            m.id === 'skill-gap-intro'
+                ? { ...m, suggestions: [...currentSuggestions, nextSuggestion], remainingSkillQueue: rest }
+                : m
+        ));
+    }, [messages, setChatHistory]);
 
     return (
         <div className="flex flex-col h-full gap-2 relative">

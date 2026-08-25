@@ -20,7 +20,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             j.id AS job_id, j.title AS job_title, j.company AS company_name,
             c.portal_token,
             (SELECT arv.id FROM application_resume_versions arv
-              WHERE arv.candidate_id = ec.candidate_id AND arv.target_job_id = a.job_id
+              WHERE arv.application_id = ec.ai_matched_application_id
               ORDER BY arv.created_at DESC LIMIT 1) AS resume_version_id
        FROM email_communications ec
        JOIN candidates c ON c.id = ec.candidate_id

@@ -11,6 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
 import { execute, queryOne } from "@/server/db/neon";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
+import { resolveJobDescription } from "@/lib/ai/application-agents/prompts/jobLens";
 
 export const dynamic = "force-dynamic";
 
@@ -31,14 +32,19 @@ export async function POST(req: NextRequest) {
     let content: any = null;
     let jobTitle = "";
     let companyName = "";
+    let jobDescriptionText = "";
     let skills: string[] = [];
     let candidateId: string | null = null;
 
     if (source === "application_resume_version") {
-      const row = await queryOne<{ content: any; job_title: string | null; job_company: string | null; candidate_id: string | null }>(
+      const row = await queryOne<{
+        content: any; job_title: string | null; job_company: string | null; candidate_id: string | null;
+        description_text: string | null; description_html: string | null; notes: string | null; raw_source_payload: unknown;
+      }>(
         `SELECT arv.content,
                 j.title AS job_title,
                 j.company AS job_company,
+                j.description_text, j.description_html, j.notes, j.raw_source_payload,
                 COALESCE(arv.candidate_id, a.candidate_id) AS candidate_id
          FROM application_resume_versions arv
          LEFT JOIN applications a ON a.id = arv.application_id
@@ -50,6 +56,14 @@ export async function POST(req: NextRequest) {
       content = row.content;
       jobTitle = row.job_title ?? "";
       companyName = row.job_company ?? "";
+      // Bug fix: this previously stored jobTitle (a few words) as the "job
+      // description" the AI Copilot chat sends on every prompt - confirmed
+      // live against real saved sessions, e.g. job_description: "Drafter".
+      // The Copilot has never actually seen real JD text. Real description
+      // lives on the jobs row across a few possible columns depending on how
+      // the posting was ingested - same resolution jobLens itself uses.
+      const resolved = resolveJobDescription(row);
+      jobDescriptionText = resolved === "No description available" ? "" : resolved;
       candidateId = row.candidate_id;
     } else {
       const row = await queryOne<{ content: any; target_industry: string | null; candidate_id: string | null }>(
@@ -90,6 +104,15 @@ export async function POST(req: NextRequest) {
             WHERE id = $4`,
           [companyName || null, skills, JSON.stringify(resumeData), existing.id]
         );
+      } else {
+        // Content/chat history stay immutable for these sessions (see above),
+        // but job_description is pure context, not user content - backfill
+        // it for existing sessions created before this fix so the Copilot
+        // gets real JD text without needing a brand new session.
+        await execute(
+          `UPDATE falood_saved_applications SET job_description = COALESCE($1, job_description), updated_at = NOW() WHERE id = $2`,
+          [jobDescriptionText || null, existing.id]
+        );
       }
       return NextResponse.json({ id: existing.id, jobTitle, companyName }, { status: 200 });
     }
@@ -99,7 +122,7 @@ export async function POST(req: NextRequest) {
          (name, job_description, company_name, skills, resume_data, chat_history, candidate_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [sourceKey, jobTitle || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([]), candidateId]
+      [sourceKey, jobDescriptionText || null, companyName || null, skills, JSON.stringify(resumeData), JSON.stringify([]), candidateId]
     );
     if (!created) throw new Error("Failed to create falood_saved_applications row");
 

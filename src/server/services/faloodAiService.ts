@@ -104,7 +104,7 @@ Focus on:
 
 Do NOT fabricate experiences, employers, dates, credentials, tools, or metrics.
 Be intent-aware based on the user's latest message:
-- If the user asks to ADD a few skills, use type "skill" and include ONLY the new skills to add. Do NOT use "skill_reorg".
+- If the user asks to ADD a few skills, use type "skill" and include ONLY the new skills to add. Do NOT use "skill_reorg". Output a SEPARATE "skill" suggestion object for EACH individual skill - "suggested" MUST be a one-element array containing exactly that single skill, never multiple skills bundled into one suggestion. The user reviews and accepts skills one at a time, never as a batch.
 - Only use "skill_reorg" if the user explicitly asks to reorganize/rewrite the entire skills section.
 - If the user asks to REMOVE skills, use type "skill_remove" with the skills to remove.
 - If the user asks to change Personal Info (name, title, email, phone, links, location), use type "personal_info" and set targetId to the exact field name.
@@ -145,7 +145,7 @@ Output strictly valid JSON (no markdown fences, no explanation) in the following
             "contextTitle": "The exact name of the section or job role this change applies to (e.g., 'Experience: GIS Analyst', 'Technical Skills', 'Education: Bachelor of Science')",
             "description": "Reasoning for the suggestion",
             "original": "Original text (if applicable, or field name for experience_info)",
-            "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill/skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
+            "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill: a JSON ARRAY containing exactly ONE skill string (one suggestion per skill, never bundled). For skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
             "targetId": "For experience/experience_add/experience_remove/experience_info/experience_block_remove: experience item id. For skill/skill_remove: skill category id. For personal_info: field name."
         }
     ]
