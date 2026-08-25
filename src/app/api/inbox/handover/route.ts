@@ -28,12 +28,13 @@ export async function POST(req: NextRequest) {
 
   const actionItem = await queryOne<{ id: string }>(
     `INSERT INTO action_items (
-      type, title, description, email_communication_id, priority, status, resolution_rule, assigned_to_user_id
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      type, title, description, candidate_id, email_communication_id, priority, status, resolution_rule, assigned_to_user_id
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
     [
       "team_handover",
       `Email handover: ${thread.subject || "(no subject)"}`,
       note || null,
+      thread.candidate_id,
       email_communication_id,
       priority || "normal",
       "open",

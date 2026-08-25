@@ -7,7 +7,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { queryOne } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
+import { CLEARANCE_KEYWORDS, clearanceExclusionSql } from "@/lib/mailClearanceFilter";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +27,7 @@ export async function GET(req: NextRequest) {
   }
   const candidateFilter = candidateId || null;
 
-  const [approvalsRow, mailRow, draftsRow] = await Promise.all([
+  const [approvalsRow, mailRow, draftsRow, categoryRows] = await Promise.all([
     queryOne<{
       pending_approvals: number; urgent_approvals: number; needs_reply: number;
       interviews: number; untracked: number; conflicts: number; escalated: number;
@@ -65,7 +66,24 @@ export async function GET(req: NextRequest) {
        FROM inbox_drafts
        WHERE sent_at IS NULL AND discarded_at IS NULL AND ($1::uuid IS NULL OR candidate_id = $1)`,
       [candidateFilter]
-    )
+    ),
+    // Category breakdown for the clickable category chips - scoped to the
+    // same "clean" default view the mail list itself shows (relevant mail,
+    // federal/clearance jobs excluded), so the counts on each chip match
+    // what clicking it will actually return.
+    query<{ category: string | null; count: number }>(
+      `SELECT ec.ai_category AS category, COUNT(*)::int AS count
+         FROM email_communications ec
+         LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
+         LEFT JOIN jobs j ON j.id = a.job_id
+        WHERE ec.direction = 'inbound'
+          AND ($1::uuid IS NULL OR ec.candidate_id = $1)
+          AND ec.suppression_reason IS NULL AND ec.ai_relevant IS DISTINCT FROM false
+          AND ${clearanceExclusionSql("$2")}
+        GROUP BY ec.ai_category
+        ORDER BY count DESC`,
+      [candidateFilter, CLEARANCE_KEYWORDS]
+    ),
   ]);
 
   return NextResponse.json({
@@ -95,6 +113,9 @@ export async function GET(req: NextRequest) {
     handovers: {
       assignedToMe: approvalsRow?.handovers_assigned_to_me ?? 0,
       overdue: approvalsRow?.handovers_overdue ?? 0,
-    }
+    },
+    categories: (categoryRows ?? [])
+      .filter((r) => r.category)
+      .map((r) => ({ category: r.category as string, count: r.count })),
   });
 }

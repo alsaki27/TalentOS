@@ -1,20 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
+import { CLEARANCE_KEYWORDS, clearanceExclusionSql } from "@/lib/mailClearanceFilter";
 
 export const dynamic = "force-dynamic";
 
 const DIRECTIONS = new Set(["all", "inbox", "sent"]);
-
-// Keyword match against the matched job's title/description - jobs have no
-// structured clearance field, so this is a best-effort text signal for the
-// "federal / clearance-required jobs" inbox filter.
-const CLEARANCE_KEYWORDS = [
-  "%security clearance%", "%secret clearance%", "%top secret%", "%ts/sci%",
-  "%ts-sci%", "%public trust%", "%dod clearance%", "%government clearance%",
-  "%clearance required%", "%clearance eligib%", "%active clearance%",
-  "%federal government%", "%federal agency%", "%u.s. citizen%", "%us citizen%",
-];
 
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -32,7 +23,6 @@ export async function GET(req: NextRequest) {
   const needsReply = url.searchParams.get("needsReply");
   const relevant = url.searchParams.get("relevant");
   const hasOpenTask = url.searchParams.get("hasOpenTask");
-  const clearanceOnly = url.searchParams.get("clearanceOnly") === "true";
   const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(10, Number.parseInt(url.searchParams.get("pageSize") || "25", 10) || 25));
 
@@ -69,12 +59,7 @@ export async function GET(req: NextRequest) {
       predicates.push(`(ec.suppression_reason IS NOT NULL OR ec.ai_relevant = false)`);
     }
   }
-  if (clearanceOnly) {
-    const clearanceParam = add(CLEARANCE_KEYWORDS);
-    predicates.push(
-      `(j.title ILIKE ANY(${clearanceParam}) OR j.description ILIKE ANY(${clearanceParam}))`
-    );
-  }
+  predicates.push(clearanceExclusionSql(add(CLEARANCE_KEYWORDS)));
   if (hasOpenTask) {
     const existsSql = `EXISTS (SELECT 1 FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress'))`;
     predicates.push(hasOpenTask === "true" ? existsSql : `NOT ${existsSql}`);

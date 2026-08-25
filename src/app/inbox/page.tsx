@@ -47,6 +47,7 @@ interface InboxCounts {
   mail: { relevant: number; awaitingReply: number; hidden: number; total: number; lastMessageAt: string | null };
   drafts: { total: number };
   handovers: { assigned: number; overdue: number };
+  categories: { category: string; count: number }[];
 }
 
 const CATEGORIES = ["interview_invite", "scheduling", "offer", "recruiter_reply", "application_invite", "application_confirmation", "rejection", "other"];
@@ -77,7 +78,6 @@ export default function InboxPage() {
   const [category, setCategory] = useState("");
   const [needsReply, setNeedsReply] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
-  const [clearanceOnly, setClearanceOnly] = useState(false);
   const [threads, setThreads] = useState<MailThread[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -131,7 +131,6 @@ export default function InboxPage() {
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
     if (!showHidden) params.set("relevant", "true");
-    if (clearanceOnly) params.set("clearanceOnly", "true");
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       const data = await response.json();
@@ -145,7 +144,7 @@ export default function InboxPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, search, candidateId, category, needsReply, showHidden, clearanceOnly, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, showHidden, activeTab]);
 
   const loadDraftsData = useCallback(async () => {
     if (activeTab !== "drafts") return;
@@ -179,7 +178,6 @@ export default function InboxPage() {
     if (category) params.set("category", category);
     if (needsReply) params.set("needsReply", "true");
     if (!showHidden) params.set("relevant", "true");
-    if (clearanceOnly) params.set("clearanceOnly", "true");
     try {
       const response = await fetch(`/api/gmail-communications?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) return;
@@ -195,7 +193,7 @@ export default function InboxPage() {
       setTotal(Number(data.total || 0));
       setTotalPages(Number(data.totalPages || 1));
     } catch {}
-  }, [direction, search, candidateId, category, needsReply, showHidden, clearanceOnly, page, loading, activeTab]);
+  }, [direction, search, candidateId, category, needsReply, showHidden, page, loading, activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -361,7 +359,7 @@ export default function InboxPage() {
   }
 
   return (
-    <div className="page" style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 20px 48px" }}>
+    <div className="page inbox-page" style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 20px 48px" }}>
       <div style={{ marginBottom: 20 }}>
         <div style={{ color: "var(--accent)", fontSize: 12, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase" }}>Communication intelligence</div>
         <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
@@ -485,19 +483,46 @@ export default function InboxPage() {
               {syncing ? "Syncing…" : "↻ Sync Gmail"}
             </button>
             <input className="input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sender, subject, body, or Thread ID…" style={{ flex: 1, minWidth: 240 }} />
-            <select className="input" value={category} onChange={(event) => setCategory(event.target.value)}>
-              <option value="">All categories</option>
-              {CATEGORIES.map((value) => <option key={value} value={value}>{categoryLabel(value)}</option>)}
-            </select>
             <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }}>
               <input type="checkbox" checked={needsReply} onChange={(event) => setNeedsReply(event.target.checked)} /> Needs reply
             </label>
             <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }} title="Include mail filtered out by the AI">
               <input type="checkbox" checked={showHidden} onChange={(event) => setShowHidden(event.target.checked)} /> Show hidden
             </label>
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center", whiteSpace: "nowrap", fontSize: 13 }} title="Only mail matched to a federal job or one requiring security clearance">
-              <input type="checkbox" checked={clearanceOnly} onChange={(event) => setClearanceOnly(event.target.checked)} /> Federal / clearance jobs
-            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            {(() => {
+              const totalRelevant = (counts?.categories ?? []).reduce((sum, c) => sum + c.count, 0);
+              const chipStyle = (active: boolean) => ({
+                display: "inline-flex", alignItems: "center", gap: 6,
+                padding: "6px 12px", borderRadius: 999, fontSize: 12.5, cursor: "pointer",
+                border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
+                background: active ? "var(--accent-soft)" : "var(--surface)",
+                color: active ? "var(--accent)" : "var(--ink)",
+                fontWeight: active ? 700 : 500,
+              });
+              return (
+                <>
+                  <button type="button" style={chipStyle(category === "")} onClick={() => setCategory("")}>
+                    All categories <span style={{ opacity: 0.7 }}>({totalRelevant})</span>
+                  </button>
+                  {CATEGORIES.map((value) => {
+                    const count = counts?.categories.find((c) => c.category === value)?.count ?? 0;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        style={chipStyle(category === value)}
+                        onClick={() => setCategory(category === value ? "" : value)}
+                      >
+                        {categoryLabel(value)} <span style={{ opacity: 0.7 }}>({count})</span>
+                      </button>
+                    );
+                  })}
+                </>
+              );
+            })()}
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -513,7 +538,28 @@ export default function InboxPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {threads.map((thread) => (
                   <div key={thread.id} onClick={() => setSelectedThread(thread)} style={{ width: "100%", textAlign: "left", padding: "16px", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, cursor: "pointer", transition: "all 0.2s" }} className="hover:border-[var(--accent)] hover:shadow-sm">
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                    <div className="inbox-thread-row" style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+                      <input
+                        type="checkbox"
+                        checked={!thread.suppression_reason && thread.ai_relevant !== false}
+                        onClick={(event) => event.stopPropagation()}
+                        onChange={async (event) => {
+                          const nextShown = event.target.checked;
+                          setThreads((prev) => prev.map((t) => t.id === thread.id
+                            ? { ...t, suppression_reason: nextShown ? null : "manager_feedback", ai_relevant: nextShown }
+                            : t));
+                          try {
+                            await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ kind: nextShown ? "relevant" : "noise" }),
+                            });
+                            loadCounts();
+                          } catch {}
+                        }}
+                        title={thread.suppression_reason || thread.ai_relevant === false ? "Hidden — click to show" : "Shown — click to hide"}
+                        style={{ marginTop: 4, width: 16, height: 16, flexShrink: 0, cursor: "pointer" }}
+                      />
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
                           {thread.gmail_is_unread && <span style={{ width: 8, height: 8, borderRadius: 99, background: "var(--accent)" }} />}
@@ -530,7 +576,7 @@ export default function InboxPage() {
                           {thread.suppression_reason && <span className="badge">Hidden by filters</span>}
                         </div>
                       </div>
-                      <time style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{formatDate(thread.sent_at)}</time>
+                      <time className="inbox-thread-time" style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{formatDate(thread.sent_at)}</time>
                     </div>
                   </div>
                 ))}

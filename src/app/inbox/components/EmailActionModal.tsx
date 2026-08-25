@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import ApprovalCard from "./ApprovalCard";
-import { openFaloodStudio } from "@/lib/falood/openStudio";
+import { resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 
 // Using any for some types to avoid duplicating large interfaces
 export interface EmailActionModalProps {
@@ -248,28 +248,45 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
   const markNotImportant = async () => {
     try {
-      await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
+      const res = await fetch(`/api/gmail-communications/${thread.id}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kind: "noise" }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to mark as not important");
+        return;
+      }
       onUpdated();
       onClose();
-    } catch (e) {}
+    } catch (e: any) {
+      setError(e?.message || "Failed to mark as not important");
+    }
   };
 
   const markUrgent = async () => {
     if (!detail) return;
     const task = detail.actionItems.find((a: any) => a.type === "needs_reply" && a.status !== "done");
-    if (!task) return;
+    if (!task) {
+      setError("No open reply task on this thread to mark urgent.");
+      return;
+    }
     try {
-      await fetch(`/api/action-items/${task.id}`, {
+      const res = await fetch(`/api/action-items/${task.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ priority: "urgent" }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to mark urgent");
+        return;
+      }
       onUpdated();
-    } catch (e) {}
+    } catch (e: any) {
+      setError(e?.message || "Failed to mark urgent");
+    }
   };
 
   const pendingProposal = detail?.actionItems.find((a: any) => a.type === "status_change_approval" && !a.decision);
@@ -280,7 +297,7 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
   return createPortal(
     <div className="modal-overlay" onClick={onClose} style={{ zIndex: 100, backgroundColor: "rgba(0, 0, 0, 0.75)" }}>
-      <div className="modal-content" style={{ width: "95vw", maxWidth: 1200, maxHeight: "90vh", padding: 0, display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-content" style={{ width: "98vw", maxWidth: 1680, height: "95vh", maxHeight: "95vh", padding: 0, display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
         
         {/* Header */}
         <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -341,31 +358,34 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                 <div style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)" }}>
                   <div style={{ marginBottom: 8 }}>
                     <strong>Linked application: </strong>
-                    <Link href={`/applications/${detail.message.ai_matched_application_id}`} target="_blank" className="link">
-                      {thread.job_title} at {thread.company_name} ↗
-                    </Link>
+                    {detail.message.job_id ? (
+                      <Link href={`/jobs/${detail.message.job_id}`} target="_blank" className="link">
+                        {thread.job_title} at {thread.company_name} ↗
+                      </Link>
+                    ) : (
+                      <span style={{ color: "var(--muted)" }}>Job link not found</span>
+                    )}
                   </div>
-                  <div style={{ marginBottom: 8 }}>
+                  <div>
                     <strong>Tailored resume: </strong>
                     {detail.message.resume_version_id ? (
                       <button
                         type="button"
                         className="link"
                         style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
-                        onClick={() => openFaloodStudio("application_resume_version", detail.message.resume_version_id)}
+                        onClick={async () => {
+                          try {
+                            const url = await resolveFaloodStudioUrl("application_resume_version", detail.message.resume_version_id);
+                            window.open(url, "_blank");
+                          } catch {
+                            alert("Tailored resume link not found");
+                          }
+                        }}
                       >
                         View →
                       </button>
                     ) : (
-                      <span style={{ color: "var(--muted)" }}>No tailored resume for this application</span>
-                    )}
-                  </div>
-                  <div>
-                    <strong>Portal shows: </strong> {detail.message.proposed_status || "Applied"}
-                    {detail.message.portal_token && (
-                      <Link href={`/portal/${detail.message.portal_token}`} target="_blank" className="link" style={{ marginLeft: 12 }}>
-                        [View candidate portal →]
-                      </Link>
+                      <span style={{ color: "var(--muted)" }}>Tailored resume link not found</span>
                     )}
                   </div>
                 </div>
@@ -400,15 +420,15 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                 </pre>
               </details>
 
-              <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: 400, display: "flex", flexDirection: "column" }}>
+              <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "55vh", display: "flex", flexDirection: "column" }}>
                 {detail?.message?.body_text ? (
                   <div style={{
-                    padding: 24,
+                    padding: 28,
                     color: "#e5e7eb",
                     backgroundColor: "#111",
                     fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                    fontSize: 14,
-                    lineHeight: 1.6,
+                    fontSize: 15,
+                    lineHeight: 1.7,
                     whiteSpace: "pre-wrap",
                     wordWrap: "break-word",
                     flex: 1,

@@ -27,6 +27,7 @@ export interface ApprovalItem {
   gmail_thread_id?: string | null;
   ai_summary?: string | null;
   application_current_status?: string | null;
+  job_id?: string | null;
   job_title?: string | null;
   company_name?: string | null;
 }
@@ -105,8 +106,8 @@ export default function ApprovalCard({
             </Link>
             {(item.job_title || item.company_name) && (
               <div className="text-muted-foreground" style={{ fontSize: 12 }}>
-                {item.application_id ? (
-                  <Link href={`/applications/${item.application_id}`} target="_blank" className="link" style={{ textDecoration: "none", color: "inherit" }}>
+                {item.job_id ? (
+                  <Link href={`/jobs/${item.job_id}`} target="_blank" className="link" style={{ textDecoration: "none", color: "inherit" }}>
                     {item.job_title}{item.job_title && item.company_name ? " at " : ""}{item.company_name} ↗
                   </Link>
                 ) : (
@@ -150,7 +151,7 @@ export default function ApprovalCard({
             {(item.decision === "approved" || item.decision === "auto_approved") && (
               <div style={{ fontSize: 13, color: "var(--success, #16a34a)", display: "flex", alignItems: "center", gap: 6 }}>
                 ✓ Status updated
-                <Link href={`/candidates/${item.candidate_id}#application-${item.application_id}`} className="link" style={{ fontSize: 12, textDecoration: "underline" }}>
+                <Link href={`/candidates/${item.candidate_id}`} className="link" style={{ fontSize: 12, textDecoration: "underline" }}>
                   View dashboard
                 </Link>
               </div>

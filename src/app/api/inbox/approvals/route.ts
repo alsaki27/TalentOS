@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
             ec.id AS email_id, ec.subject, ec.from_email, ec.snippet, ec.sent_at,
             ec.gmail_thread_id, ec.ai_summary, ec.ai_category,
             a.status AS application_current_status,
-            j.title AS job_title, j.company AS company_name
+            j.id AS job_id, j.title AS job_title, j.company AS company_name
        FROM action_items ai
        JOIN candidates c ON c.id = ai.candidate_id
        LEFT JOIN email_communications ec ON ec.id = ai.email_communication_id

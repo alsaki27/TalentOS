@@ -153,16 +153,57 @@ function decodeBase64Url(data: string): string {
   }
 }
 
+const HTML_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'",
+  ndash: "–", mdash: "—", hellip: "…", rsquo: "’", lsquo: "‘", rdquo: "”", ldquo: "“",
+};
+
+function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+\d*);/gi, (match, code) => {
+    if (code[0] === "#") {
+      const codePoint = code[1]?.toLowerCase() === "x" ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+      if (!Number.isNaN(codePoint)) {
+        try { return String.fromCodePoint(codePoint); } catch { return match; }
+      }
+      return match;
+    }
+    return HTML_ENTITIES[code.toLowerCase()] ?? match;
+  });
+}
+
+// Marketing/transactional HTML mail is riddled with <style>/<script> blocks
+// whose text CONTENT (raw CSS/JS) survives a plain tag-stripping regex, since
+// only the angle-bracket tags themselves get removed - confirmed live on a
+// real Workday confirmation email whose rendered "body" was just its CSS
+// reset rules. Block-level tags are converted to newlines first so the
+// output keeps paragraph/line structure instead of becoming one run-on line.
+function htmlToPlainText(html: string): string {
+  return decodeHtmlEntities(
+    html
+      .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<(br|\/p|\/div|\/tr|\/li|\/h[1-6])\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+  )
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function extractBodyText(payload: any): string {
   if (!payload) return "";
   if (payload.mimeType === "text/plain" && payload.body?.data) {
     return decodeBase64Url(payload.body.data);
   }
+  if (payload.mimeType === "text/html" && payload.body?.data) {
+    return htmlToPlainText(decodeBase64Url(payload.body.data));
+  }
   if (payload.parts) {
     const plain = payload.parts.find((p: any) => p.mimeType === "text/plain" && p.body?.data);
     if (plain) return decodeBase64Url(plain.body.data);
     const htmlPart = payload.parts.find((p: any) => p.mimeType === "text/html" && p.body?.data);
-    if (htmlPart) return decodeBase64Url(htmlPart.body.data).replace(/<[^>]+>/g, " ");
+    if (htmlPart) return htmlToPlainText(decodeBase64Url(htmlPart.body.data));
     for (const part of payload.parts) {
       const nested = extractBodyText(part);
       if (nested) return nested;

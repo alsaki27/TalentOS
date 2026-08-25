@@ -283,9 +283,9 @@ export async function triggerAiWorkflowForApplication(
   const sot = await getSourceOfTruth(appRow.candidate_id);
   const sourceOfTruth: SourceOfTruthData | null = sot
     ? {
-        confirmedSkills: sot.confirmedSkills,
-        notesContext: sot.notes ?? null,
-      }
+      confirmedSkills: sot.confirmedSkills,
+      notesContext: sot.notes ?? null,
+    }
     : null;
 
   const { workflowId } = await startWorkflow({
@@ -419,9 +419,9 @@ export async function regenerateAiWorkflowForApplication(
   const sot = await getSourceOfTruth(appRow.candidate_id);
   const sourceOfTruth: SourceOfTruthData | null = sot
     ? {
-        confirmedSkills: sot.confirmedSkills,
-        notesContext: sot.notes ?? null,
-      }
+      confirmedSkills: sot.confirmedSkills,
+      notesContext: sot.notes ?? null,
+    }
     : null;
 
   const { workflowId } = await startWorkflow({
@@ -519,9 +519,9 @@ async function syncWorkflowToApplication(
 ): Promise<void> {
   let genStatus: string;
   switch (status) {
-    case "queued":   genStatus = "queued"; break;
-    case "waiting":  genStatus = "human_review"; break;
-    case "failed":   genStatus = "failed"; break;
+    case "queued": genStatus = "queued"; break;
+    case "waiting": genStatus = "human_review"; break;
+    case "failed": genStatus = "failed"; break;
     case "cancelled": genStatus = "cancelled"; break;
     case "completed": genStatus = "ready"; break;
     case "running": {
@@ -679,23 +679,38 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         // pipeline move on, record a clear timeout error, and retry/fail
         // cleanly instead of hanging past the claim TTL with no diagnostic.
         const timeoutMs = agentOptions.timeout_ms ?? 300_000;
+        // ROOT CAUSE #1 FIX: fire the heartbeat at 1/4 of the agent timeout so
+        // the claim lease is refreshed multiple times during a slow provider call,
+        // regardless of which agent is running or what timeout is configured in
+        // ai_agent_configs. When the primary key (Opencode) is health-blocked the
+        // routing layer waits the full agent timeout before switching to fallback
+        // keys (e.g. Gemini 2.5 Pro / Flash). With the old fixed 60 s interval a
+        // 120 s Job Lens timeout produced only one heartbeat window — if the claim
+        // TTL happened to expire before that heartbeat fired the cron dispatcher
+        // reclaimed the workflow as orphaned, incremented recovery_count, and
+        // after 3 such reclaims permanently marked it "failed" even though Gemini
+        // would have succeeded on attempt #2. At timeout/4 the lease is refreshed
+        // at least 3× during the provider wait, ensuring the fallback chain always
+        // gets a clean shot. No hardcoded constant — scales with whatever
+        // timeout_ms is set in ai_agent_configs or AGENT_CONFIG_DEFAULTS.
+        const heartbeatIntervalMs = Math.max(15_000, Math.floor(timeoutMs / 4));
         const heartbeatTimer = setInterval(() => {
           void updateWorkflowHeartbeat(workflowId).catch(err =>
             console.warn(`[Workflow ${workflowId}] heartbeat refresh failed`, err)
           );
-        }, 60_000);
+        }, heartbeatIntervalMs);
         let callResult;
         try {
           callResult = await Promise.race([
             callWithUsageTracking(
-            agentId,
-            callCtx,
-            async (provider: AiProvider) => {
-              const agentFn = getAgentFn(agentId);
-              return agentFn(agentOptions, provider, ctx);
-            },
-            failedKeyIds.size > 0 ? failedKeyIds : undefined,
-          ),
+              agentId,
+              callCtx,
+              async (provider: AiProvider) => {
+                const agentFn = getAgentFn(agentId);
+                return agentFn(agentOptions, provider, ctx);
+              },
+              failedKeyIds.size > 0 ? failedKeyIds : undefined,
+            ),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error(`Agent call timed out after ${timeoutMs}ms`)), timeoutMs)
             ),
@@ -877,7 +892,7 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
       // failure look identical to "no error ever recorded." Persist it in
       // both places so it's visible wherever someone's looking.
       const message = `Workflow failed after ${wf.recovery_count} recovery attempts at stage ${wf.current_stage} - each claim orphaned without completing or erroring cleanly`;
-      await updateWorkflowStatus(wf.id, "failed", { last_error: message } as any).catch(() => {});
+      await updateWorkflowStatus(wf.id, "failed", { last_error: message } as any).catch(() => { });
       await syncWorkflowToApplication(wf.id, 'failed', undefined, message);
       continue;
     }
@@ -897,7 +912,7 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
       // makes the next stall debuggable via GET .../ai-workflow.
       const message = err?.message ?? String(err);
       console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
-      await updateWorkflowStatus(wf.id, "running", { last_error: message } as any).catch(() => {});
+      await updateWorkflowStatus(wf.id, "running", { last_error: message } as any).catch(() => { });
     }
   }
 

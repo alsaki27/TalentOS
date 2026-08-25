@@ -254,6 +254,26 @@ body::before {
   padding-right: 16px;
 }
 
+/* Candidate Inbox needs room for the thread list, category chips, and the
+   full-width action modal - same full-bleed treatment as Application Queue
+   and the AI Control Center rather than the default 1100px content shell. */
+.page:has(.inbox-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+@media (max-width: 560px) {
+  .inbox-page .inbox-thread-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 8px;
+  }
+  .inbox-page .inbox-thread-time {
+    align-self: flex-end;
+  }
+}
+
 .page-header {
   display: flex;
   align-items: center;

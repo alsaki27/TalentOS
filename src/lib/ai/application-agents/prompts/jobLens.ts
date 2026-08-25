@@ -168,7 +168,7 @@ Return ONLY valid JSON. No markdown fences, no explanation.`;
 // Lens to analyze nothing - confirmed live for a COIL posting during
 // pipeline stress-testing (empty atsKeywords/requiredSkills, hard-failed the
 // Hiring Panel quality gate on ATS score 0).
-function resolveJobDescription(job: any): string {
+export function resolveJobDescription(job: any): string {
   if (job?.description_text) return job.description_text;
   if (job?.notes) return job.notes;
   if (job?.raw_source_payload?.description) return String(job.raw_source_payload.description);
