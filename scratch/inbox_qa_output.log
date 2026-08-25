@@ -1,0 +1,101 @@
+
+=== Login ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\01_login_filled.png
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\02_post_login.png
+  landed on: https://talent.skarion.com/jobs
+  OK
+
+=== Navigate to /inbox ===
+  FAILED: page.goto: Timeout 30000ms exceeded.
+Call log:
+[2m  - navigating to "https://talent.skarion.com/inbox", waiting until "networkidle"[22m
+
+
+=== Section 1: Candidate selector dropdown contents ===
+  candidate <select> option count: 1
+  first 15 options: ["Select client candidate…"]
+  options mentioning "connected" or 🟢: 0
+  OK
+
+=== Section 1: Select a real candidate with connected Gmail if one exists ===
+  No candidate showed as connected in the dropdown text - selecting option 1 instead.
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\03_candidate_selected_inbox_tab.png
+  OK
+
+=== Section 1: Click through Inbox/Approvals/Drafts/My Handovers tabs ===
+  tab "Approvals" visible: false
+  tab "Drafts" visible: true
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\04_tab_Drafts.png
+  tab "My Handovers" visible: true
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\05_tab_My_Handovers.png
+  tab "Inbox" visible: false
+  OK
+
+=== Section 7: Drafts tab label text (checking for [object Object] bug) ===
+  page contains literal "[object Object]": false
+  Drafts label as rendered: "Drafts"
+  OK
+
+=== Section 7: My Handovers tab loads without a DB relation error ===
+  DB/relation error text present: false
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\06_handovers_tab_detail.png
+  OK
+
+=== Section 2: Inbox tab - approval-required emails should not appear; Show hidden toggle ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\07_inbox_tab_default_hidden_off.png
+  'Show hidden' control not found.
+  OK
+
+=== Section 3+4: Approvals tab -> Show Details -> modal body rendering ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\08_approvals_tab_list.png
+  No 'Show Details' button found (likely no pending approvals for this candidate/global view).
+  OK
+
+=== Section 5: Candidate Name / Job Title links in an approval card (inspect only, no click-through navigation away) ===
+  (informational only - see screenshots for link presence/labels)
+  OK
+
+=== Section 6: Jobs-style pagination on Inbox tab ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\09_inbox_pagination_area.png
+  Page '2' button not visible (may not have enough rows, or selector needs adjustment).
+  Page-jump input not found.
+  OK
+
+=== Section 6: Jobs-style pagination on Approvals tab ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots\10_approvals_pagination_area.png
+  OK
+
+
+================ CONSOLE ERRORS CAPTURED ================
+[
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "Failed to load resource: the server responded with a status of 403 ()"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "Failed to load resource: the server responded with a status of 403 ()"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12592\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12342\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12442\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/inbox",
+    "text": "Failed to load resource: the server responded with a status of 400 ()"
+  },
+  {
+    "url": "https://talent.skarion.com/inbox",
+    "text": "Failed to load resource: the server responded with a status of 405 ()"
+  }
+]
+
+Total console errors: 7
