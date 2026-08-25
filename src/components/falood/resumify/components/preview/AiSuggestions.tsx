@@ -736,10 +736,16 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     // skills are missing vs. present is exact, checkable data, not something
     // worth leaving to AI judgment. Fires once per session (guarded by the
     // 'skill-gap-intro' marker persisting in chatHistory, same pattern the
-    // page already uses for its 'tailor-context' seed message), and reveals
-    // only the first missing skill - the rest queue on the marker message
-    // itself and are revealed one at a time by the effect below as each is
-    // accepted or rejected, never all at once.
+    // page already uses for its 'tailor-context' seed message).
+    //
+    // Renders every missing skill as its own separate card, all at once -
+    // per explicit user request 2026-08-25 ("provide me all the skills one
+    // by one... so I can scroll down and accept or reject"). Each card is
+    // still its own independent accept/reject action (never bundled into
+    // one suggestion), just no longer gated behind resolving the previous
+    // one first. (Previously queued them one-at-a-time via a
+    // 'remainingSkillQueue' field revealed by a second effect as each prior
+    // suggestion was resolved - removed since nothing queues anymore.)
     useEffect(() => {
         if (skillGapTriggeredRef.current) return;
         if (messages.some(m => m.id === 'skill-gap-intro')) { skillGapTriggeredRef.current = true; return; }
@@ -757,39 +763,16 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             .then(res => res.ok ? res.json() : { gaps: [] })
             .then(({ gaps }: { gaps: SkillGapItem[] }) => {
                 if (!Array.isArray(gaps) || gaps.length === 0) return;
-                const [first, ...rest] = gaps;
-                const introMsg: ChatMessage & { remainingSkillQueue?: SkillGapItem[] } = {
+                const introMsg: ChatMessage = {
                     id: 'skill-gap-intro',
                     role: 'assistant',
-                    content: `I compared this draft against the job description${candidateId ? ", your base resume, and your confirmed skills" : " and your base resume"}, and found ${gaps.length} skill${gaps.length > 1 ? 's' : ''} worth considering. I'll suggest them one at a time - accept or reject each before I show the next.`,
-                    suggestions: [buildSkillGapSuggestion(first)],
-                    remainingSkillQueue: rest,
+                    content: `I compared this draft against the job description${candidateId ? ", your base resume, and your confirmed skills" : " and your base resume"}, and found ${gaps.length} skill${gaps.length > 1 ? 's' : ''} worth considering. Each is its own card below - scroll through and accept or reject them individually, in any order.`,
+                    suggestions: gaps.map(buildSkillGapSuggestion),
                 };
                 setChatHistory([...messages, introMsg]);
             })
             .catch(() => { /* Non-fatal: the general auto-suggest effect above still runs regardless. */ });
     }, [jobDescription, messages, state.resumeData.skills, candidateId, setChatHistory]);
-
-    // Advances the skill-gap queue: once the currently-shown skill suggestion
-    // on the 'skill-gap-intro' message is no longer pending, reveal the next
-    // queued skill as a new pending suggestion on that same message. Purely
-    // additive - does not touch handleAccept/handleReject/handleAcceptAll,
-    // so existing accept/reject behavior for every other suggestion type is
-    // completely unchanged.
-    useEffect(() => {
-        const marker = messages.find(m => m.id === 'skill-gap-intro') as (ChatMessage & { remainingSkillQueue?: SkillGapItem[] }) | undefined;
-        if (!marker || !marker.remainingSkillQueue || marker.remainingSkillQueue.length === 0) return;
-        const currentSuggestions = marker.suggestions ?? [];
-        const stillPending = currentSuggestions.some(s => (s.status ?? 'pending') === 'pending');
-        if (stillPending) return;
-
-        const [next, ...rest] = marker.remainingSkillQueue;
-        setChatHistory(messages.map(m =>
-            m.id === 'skill-gap-intro'
-                ? { ...m, suggestions: [...currentSuggestions, buildSkillGapSuggestion(next)], remainingSkillQueue: rest }
-                : m
-        ));
-    }, [messages, setChatHistory]);
 
     return (
         <div className="flex flex-col h-full gap-2 relative">
