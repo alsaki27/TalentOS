@@ -54,6 +54,41 @@ describe("detectSkillGaps", () => {
     });
     expect(gaps.filter((g) => g.skill.toLowerCase() === "python")).toHaveLength(1);
   });
+
+  it("ranks JD-required skills above merely-preferred/related skills, even with equal corroboration", () => {
+    const gaps = detectSkillGaps({
+      resumeSkills: [],
+      jdSkills: ["AutoCAD", "Revit"],
+      baseResumeSkills: [],
+      sourceOfTruthSkills: [],
+      requiredJdSkills: ["AutoCAD"], // Revit is JD-mentioned but only "preferred"
+    });
+    expect(gaps[0].skill).toBe("AutoCAD");
+    expect(gaps[0].isRequiredByJob).toBe(true);
+    expect(gaps[1].skill).toBe("Revit");
+    expect(gaps[1].isRequiredByJob).toBe(false);
+  });
+
+  it("required-skill ranking outranks corroboration count", () => {
+    const gaps = detectSkillGaps({
+      resumeSkills: [],
+      jdSkills: ["AutoCAD", "Revit"],
+      baseResumeSkills: ["Revit"], // Revit corroborated by 2 sources (JD + base)...
+      sourceOfTruthSkills: ["Revit"], // ...+ SoT = 3 sources total
+      requiredJdSkills: ["AutoCAD"], // ...but AutoCAD is the JD's actual requirement
+    });
+    expect(gaps[0].skill).toBe("AutoCAD");
+  });
+
+  it("defaults every JD skill to required when requiredJdSkills is omitted (backward compatible)", () => {
+    const gaps = detectSkillGaps({
+      resumeSkills: [],
+      jdSkills: ["AutoCAD"],
+      baseResumeSkills: [],
+      sourceOfTruthSkills: [],
+    });
+    expect(gaps[0].isRequiredByJob).toBe(true);
+  });
 });
 
 describe("jdCoverageScore", () => {

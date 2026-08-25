@@ -12,6 +12,8 @@ export interface SkillGapCandidate {
   inJobDescription: boolean;
   inBaseResume: boolean;
   inSourceOfTruth: boolean;
+  /** True when the JD treats this as a required (not merely preferred) skill - see extractSkillsFromJobDescription. */
+  isRequiredByJob: boolean;
 }
 
 function normalizeSkill(skill: string): string {
@@ -32,21 +34,25 @@ function dedupePreserveCase(skills: string[]): string[] {
 /**
  * Skills present in the JD, the candidate's base resumes, or their
  * Source-of-Truth confirmed skills, but missing from the tailored resume's
- * current skill list. Ordered most-corroborated first (JD + base + SoT
- * together outrank a skill only one source mentions), then by first
- * appearance in the JD skill list (the JD's own priority order, since
- * extractSkillsFromJobDescription already returns it most-critical-first).
+ * current skill list. Ordered: JD-required skills first (these are what the
+ * posting explicitly demands, not just related terms), then by corroboration
+ * count (JD + base + SoT together outrank a skill only one source mentions),
+ * then by first appearance in the JD skill list (the JD's own priority
+ * order, since extractSkillsFromJobDescription returns it most-critical-first).
  */
 export function detectSkillGaps(opts: {
   resumeSkills: string[];
   jdSkills: string[];
   baseResumeSkills: string[];
   sourceOfTruthSkills: string[];
+  /** JD skills the posting treats as must-haves (subset of jdSkills) - ranked above merely-preferred/related skills. Optional for backward compatibility; defaults to jdSkills itself. */
+  requiredJdSkills?: string[];
 }): SkillGapCandidate[] {
   const resumeSet = new Set(opts.resumeSkills.map(normalizeSkill));
   const jdSet = new Set(opts.jdSkills.map(normalizeSkill));
   const baseSet = new Set(opts.baseResumeSkills.map(normalizeSkill));
   const sotSet = new Set(opts.sourceOfTruthSkills.map(normalizeSkill));
+  const requiredSet = new Set((opts.requiredJdSkills ?? opts.jdSkills).map(normalizeSkill));
 
   const allCandidates = dedupePreserveCase([
     ...opts.jdSkills,
@@ -65,6 +71,7 @@ export function detectSkillGaps(opts: {
         inJobDescription: jdSet.has(key),
         inBaseResume: baseSet.has(key),
         inSourceOfTruth: sotSet.has(key),
+        isRequiredByJob: requiredSet.has(key),
       };
     });
 
@@ -72,6 +79,8 @@ export function detectSkillGaps(opts: {
     Number(c.inJobDescription) + Number(c.inBaseResume) + Number(c.inSourceOfTruth);
 
   return gaps.sort((a, b) => {
+    const requiredDiff = Number(b.isRequiredByJob) - Number(a.isRequiredByJob);
+    if (requiredDiff !== 0) return requiredDiff;
     const corrobDiff = corroborationCount(b) - corroborationCount(a);
     if (corrobDiff !== 0) return corrobDiff;
     const aOrder = jdOrder.get(normalizeSkill(a.skill)) ?? Number.MAX_SAFE_INTEGER;

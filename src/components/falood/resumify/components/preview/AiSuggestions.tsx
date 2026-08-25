@@ -370,12 +370,31 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
         return resumeData;
 };
 
+interface SkillGapItem {
+    skill: string;
+    isRequiredByJob: boolean;
+}
+
+/** Builds a one-skill Suggestion card for the skill-gap queue, wording the reason by whether the JD names it as a required skill vs. a related/preferred one. */
+function buildSkillGapSuggestion(item: SkillGapItem): Suggestion {
+    return {
+        id: `skill-gap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'skill',
+        title: `Add missing skill: ${item.skill}`,
+        description: item.isRequiredByJob
+            ? 'Required by this job description, and not yet on this tailored draft.'
+            : 'Related to this job description and supported by your background, but not yet on this tailored draft.',
+        suggested: [item.skill],
+        status: 'pending',
+    };
+}
+
 export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candidateId }) => {
     const { state, importResumeData, setChatHistory, setJobDescription, setPreviewSuggestion } = useResume();
     const { chatHistory: messages, jobDescription } = state;
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
-    const autoSuggestRanRef = useRef(false);
+    // const autoSuggestRanRef = useRef(false); // only used by the disabled general auto-suggest effect below
     const skillGapTriggeredRef = useRef(false);
 
     // Initial suggestions (empty now, waiting for user input)
@@ -644,56 +663,73 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         }
     };
 
-    useEffect(() => {
-        const hasSuggestions = messages.some(m => Array.isArray(m.suggestions) && m.suggestions.length > 0);
-        const hasUserMessage = messages.some(m => m.role === 'user' && m.content?.trim());
-
-        if (autoSuggestRanRef.current) return;
-        if (isTyping) return;
-        if (hasSuggestions) return;
-        if (hasUserMessage) return;
-        if (!jobDescription || jobDescription.trim().length < 80) return;
-
-        autoSuggestRanRef.current = true;
-        setIsTyping(true);
-
-        const seedInstruction = [
-            "Please generate initial, high-impact resume improvements against the provided job description.",
-            "Return suggestions that are safe to accept/reject (no destructive overwrites).",
-            "no need to add a section by default if that section is empty. only add if asked",
-            "If adding skills, only propose the NEW skills to add; do not reorganize the whole skills section unless explicitly requested.",
-            "If a personal info change is relevant, propose it as a personal_info suggestion (e.g., fullName).",
-        ].join("\n");
-
-        const apiMessages = [
-            ...messages.map(m => ({ role: m.role, content: m.content })),
-            { role: "user", content: seedInstruction }
-        ];
-
-        fetchAiSuggestions(apiMessages, jobDescription)
-            .then(({ suggestions: newSuggestions, reply }) => {
-                const aiMsg: ChatMessage = {
-                    id: (Date.now() + 1).toString(),
-                    role: 'assistant',
-                    content: reply
-                        ? reply
-                        : newSuggestions.length > 0
-                            ? 'Here are some initial suggestions based on your resume and the job description.'
-                            : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
-                    suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
-                };
-                setChatHistory([...messages, aiMsg]);
-            })
-            .catch(() => {
-                const errorMsg: ChatMessage = {
-                    id: (Date.now() + 1).toString(),
-                    role: 'assistant',
-                    content: 'Sorry, I could not generate initial suggestions. Try sending a message like “suggest improvements for this JD”.'
-                };
-                setChatHistory([...messages, errorMsg]);
-            })
-            .finally(() => setIsTyping(false));
-    }, [jobDescription, messages, isTyping, setChatHistory, fetchAiSuggestions]);
+    // Disabled 2026-08-25 per explicit user request - this general "generate
+    // initial improvements" auto-trigger was the actual source of two
+    // confirmed complaints, even after the skill-gap flow below shipped:
+    // (1) it let the AI return a bulk "skill_reorg"-shaped suggestion
+    //     bundling many skills into one accept/reject action ("14 pending" +
+    //     "Accept all"), not the one-at-a-time review this feature exists
+    //     for; (2) it proposed experience-bullet rewrites the user never
+    //     asked for. The dedicated skill-gap effect further below already
+    //     covers "give me skill suggestions automatically, one at a time"
+    //     correctly (verified live). Manual, explicit chat requests (typed
+    //     into the input and sent) are a completely separate code path
+    //     (handleSend) and are NOT affected by this being commented out -
+    //     only the unsolicited auto-fire on session load is disabled.
+    // To re-enable: uncomment this block. Consider constraining the seed
+    // instruction to forbid experience-type suggestions and skill_reorg
+    // bundling before doing so, per the reasons above.
+    //
+    // useEffect(() => {
+    //     const hasSuggestions = messages.some(m => Array.isArray(m.suggestions) && m.suggestions.length > 0);
+    //     const hasUserMessage = messages.some(m => m.role === 'user' && m.content?.trim());
+    //
+    //     if (autoSuggestRanRef.current) return;
+    //     if (isTyping) return;
+    //     if (hasSuggestions) return;
+    //     if (hasUserMessage) return;
+    //     if (!jobDescription || jobDescription.trim().length < 80) return;
+    //
+    //     autoSuggestRanRef.current = true;
+    //     setIsTyping(true);
+    //
+    //     const seedInstruction = [
+    //         "Please generate initial, high-impact resume improvements against the provided job description.",
+    //         "Return suggestions that are safe to accept/reject (no destructive overwrites).",
+    //         "no need to add a section by default if that section is empty. only add if asked",
+    //         "If adding skills, only propose the NEW skills to add; do not reorganize the whole skills section unless explicitly requested.",
+    //         "If a personal info change is relevant, propose it as a personal_info suggestion (e.g., fullName).",
+    //     ].join("\n");
+    //
+    //     const apiMessages = [
+    //         ...messages.map(m => ({ role: m.role, content: m.content })),
+    //         { role: "user", content: seedInstruction }
+    //     ];
+    //
+    //     fetchAiSuggestions(apiMessages, jobDescription)
+    //         .then(({ suggestions: newSuggestions, reply }) => {
+    //             const aiMsg: ChatMessage = {
+    //                 id: (Date.now() + 1).toString(),
+    //                 role: 'assistant',
+    //                 content: reply
+    //                     ? reply
+    //                     : newSuggestions.length > 0
+    //                         ? 'Here are some initial suggestions based on your resume and the job description.'
+    //                         : 'I loaded the job description. Ask me what you want to improve, and I’ll propose changes you can accept or reject.',
+    //                 suggestions: newSuggestions.map(s => ({ ...s, status: 'pending' }))
+    //             };
+    //             setChatHistory([...messages, aiMsg]);
+    //         })
+    //         .catch(() => {
+    //             const errorMsg: ChatMessage = {
+    //                 id: (Date.now() + 1).toString(),
+    //                 role: 'assistant',
+    //                 content: 'Sorry, I could not generate initial suggestions. Try sending a message like “suggest improvements for this JD”.'
+    //             };
+    //             setChatHistory([...messages, errorMsg]);
+    //         })
+    //         .finally(() => setIsTyping(false));
+    // }, [jobDescription, messages, isTyping, setChatHistory, fetchAiSuggestions]);
 
     // Deterministic skill-gap suggestions (see docs/FALOOD_COPILOT_SKILL_GAP_SUGGESTIONS_PLAN_2026-08-24.md).
     // Separate from the general auto-suggest effect above on purpose: which
@@ -719,23 +755,15 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             body: JSON.stringify({ jobDescription, resumeSkills: currentSkills, candidateId: candidateId || undefined }),
         })
             .then(res => res.ok ? res.json() : { gaps: [] })
-            .then(({ gaps }: { gaps: string[] }) => {
+            .then(({ gaps }: { gaps: SkillGapItem[] }) => {
                 if (!Array.isArray(gaps) || gaps.length === 0) return;
-                const [firstSkill, ...restSkills] = gaps;
-                const firstSuggestion: Suggestion = {
-                    id: `skill-gap-${Date.now()}`,
-                    type: 'skill',
-                    title: `Add missing skill: ${firstSkill}`,
-                    description: 'Found in the job description and/or your base resume, but not yet on this tailored draft.',
-                    suggested: [firstSkill],
-                    status: 'pending',
-                };
-                const introMsg: ChatMessage & { remainingSkillQueue?: string[] } = {
+                const [first, ...rest] = gaps;
+                const introMsg: ChatMessage & { remainingSkillQueue?: SkillGapItem[] } = {
                     id: 'skill-gap-intro',
                     role: 'assistant',
                     content: `I compared this draft against the job description${candidateId ? ", your base resume, and your confirmed skills" : " and your base resume"}, and found ${gaps.length} skill${gaps.length > 1 ? 's' : ''} worth considering. I'll suggest them one at a time - accept or reject each before I show the next.`,
-                    suggestions: [firstSuggestion],
-                    remainingSkillQueue: restSkills,
+                    suggestions: [buildSkillGapSuggestion(first)],
+                    remainingSkillQueue: rest,
                 };
                 setChatHistory([...messages, introMsg]);
             })
@@ -749,24 +777,16 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     // so existing accept/reject behavior for every other suggestion type is
     // completely unchanged.
     useEffect(() => {
-        const marker = messages.find(m => m.id === 'skill-gap-intro') as (ChatMessage & { remainingSkillQueue?: string[] }) | undefined;
+        const marker = messages.find(m => m.id === 'skill-gap-intro') as (ChatMessage & { remainingSkillQueue?: SkillGapItem[] }) | undefined;
         if (!marker || !marker.remainingSkillQueue || marker.remainingSkillQueue.length === 0) return;
         const currentSuggestions = marker.suggestions ?? [];
         const stillPending = currentSuggestions.some(s => (s.status ?? 'pending') === 'pending');
         if (stillPending) return;
 
-        const [nextSkill, ...rest] = marker.remainingSkillQueue;
-        const nextSuggestion: Suggestion = {
-            id: `skill-gap-${Date.now()}`,
-            type: 'skill',
-            title: `Add missing skill: ${nextSkill}`,
-            description: 'Found in the job description and/or your base resume, but not yet on this tailored draft.',
-            suggested: [nextSkill],
-            status: 'pending',
-        };
+        const [next, ...rest] = marker.remainingSkillQueue;
         setChatHistory(messages.map(m =>
             m.id === 'skill-gap-intro'
-                ? { ...m, suggestions: [...currentSuggestions, nextSuggestion], remainingSkillQueue: rest }
+                ? { ...m, suggestions: [...currentSuggestions, buildSkillGapSuggestion(next)], remainingSkillQueue: rest }
                 : m
         ));
     }, [messages, setChatHistory]);

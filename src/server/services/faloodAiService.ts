@@ -193,19 +193,35 @@ ${jobDescription || "Not provided yet, infer from chat context."}${candidateCont
   return parseSuggestionsResponse(textOf(response.content));
 }
 
-const EXTRACT_SKILLS_SYSTEM_PROMPT = `You are an expert at extracting information from job descriptions.
-Your goal is to extract the explicitly required or preferred skills as an array of concise strings (e.g., "Python", "React"), AND to extract the name of the hiring company. If the company name is not found, return null.
+// Precision rules mirror buildJobLensPrompt (src/lib/ai/application-agents/prompts/jobLens.ts)
+// deliberately - that prompt is the proven, battle-tested extraction logic
+// already relied on by the 4-agent pipeline. Reused here rather than
+// re-derived, so the Falood Copilot's skill-gap suggestions hold the same
+// precision bar: real, named technical requirements only, not generic filler.
+const EXTRACT_SKILLS_SYSTEM_PROMPT = `You are an expert at extracting skill requirements from job descriptions, for a resume-tailoring tool. Precision matters: every skill you return may be suggested to a candidate as something to add to their resume, so accuracy directly affects whether that suggestion is actually useful.
+
+Extract:
+- requiredSkills: technical skills, tools, platforms, certifications, and methodologies the posting treats as must-haves - repeated multiple times, listed first, or marked "required"/"must have". Use the JD's EXACT product names and casing (e.g., "Vetro FiberMap" not "Vetro", "AutoCAD" not "autocad") - matching against a resume is verbatim. When the JD uses both an acronym and its spelled-out form (or clearly means both), include BOTH as separate entries (e.g., "OSP" and "Outside Plant", "GIS" and "Geographic Information Systems") - candidates and resumes are inconsistent about which form they use.
+- preferredSkills: skills explicitly marked "preferred", "a plus", "bonus", or "nice to have". Never mix these into requiredSkills.
+- companyName: the hiring company's name, or null if not stated.
+
+Rules:
+- Only extract concrete, checkable technical requirements - specific tools, languages, platforms, certifications, licenses, methodologies, or named systems. Do NOT extract generic soft skills ("communication", "teamwork", "problem-solving") or vague filler phrases unless the JD names them as an explicit, specific requirement (e.g., "Excellent written communication for client-facing documentation" is still too generic to extract; a named certification or a specific required tool is not).
+- Do NOT invent or infer a skill the JD does not actually name, even if it seems implied by the role.
+- Keep entries short (1-4 words) - a skill name or tool name, never a full sentence or JD excerpt.
+- Deduplicate: each skill appears once, in whichever list (required or preferred) it most belongs to.
 
 Output strictly valid JSON (no markdown fences, no explanation) in the following format:
 {
     "companyName": "Company Name",
-    "skills": ["Skill 1", "Skill 2"]
+    "requiredSkills": ["Skill 1", "Skill 2"],
+    "preferredSkills": ["Skill 3"]
 }`;
 
 export async function extractSkillsFromJobDescription(
   jobDescription: string,
   userId?: string
-): Promise<{ companyName: string | null; skills: string[] }> {
+): Promise<{ companyName: string | null; skills: string[]; requiredSkills: string[]; preferredSkills: string[] }> {
   const { result: response } = await callWithUsageTracking("falood_ai", { userId }, async (provider) => {
     return provider.send({
       system: EXTRACT_SKILLS_SYSTEM_PROMPT,
@@ -217,8 +233,15 @@ export async function extractSkillsFromJobDescription(
   // Same defensive handling as the suggestions path: a non-JSON reply must
   // degrade to an empty result, not throw and 500 the request.
   const parsed = safeJsonParse(stripFences(textOf(response.content)));
+  const requiredSkills = Array.isArray(parsed?.requiredSkills) ? parsed.requiredSkills.filter((s: unknown) => typeof s === "string") : [];
+  const preferredSkills = Array.isArray(parsed?.preferredSkills) ? parsed.preferredSkills.filter((s: unknown) => typeof s === "string") : [];
+  // Legacy shape some existing callers (falood/builder) still read directly -
+  // required-first union, kept so nothing that reads `.skills` needs to change.
+  const legacySkills = Array.isArray(parsed?.skills) ? parsed.skills.filter((s: unknown) => typeof s === "string") : [];
   return {
     companyName: typeof parsed?.companyName === "string" ? parsed.companyName : null,
-    skills: Array.isArray(parsed?.skills) ? parsed.skills.filter((s: unknown) => typeof s === "string") : [],
+    skills: requiredSkills.length > 0 || preferredSkills.length > 0 ? [...requiredSkills, ...preferredSkills] : legacySkills,
+    requiredSkills,
+    preferredSkills,
   };
 }

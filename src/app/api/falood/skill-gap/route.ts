@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const [{ skills: jdSkills }, baseResumeSkills, sot] = await Promise.all([
+    const [{ skills: jdSkills, requiredSkills: requiredJdSkills }, baseResumeSkills, sot] = await Promise.all([
       extractSkillsFromJobDescription(jobDescription, currentUser.profile.user_id),
       candidateId ? getBaseResumeSkills(candidateId) : Promise.resolve<string[]>([]),
       candidateId ? getSourceOfTruth(candidateId) : Promise.resolve(null),
@@ -69,10 +69,13 @@ export async function POST(req: NextRequest) {
       jdSkills,
       baseResumeSkills,
       sourceOfTruthSkills: sot?.confirmedSkills ?? [],
+      requiredJdSkills,
     });
     const filtered = filterSkillGapsForScoreIncrease(gaps, resumeSkills, jdSkills);
 
-    return NextResponse.json({ gaps: filtered.map((g) => g.skill) });
+    return NextResponse.json({
+      gaps: filtered.map((g) => ({ skill: g.skill, isRequiredByJob: g.isRequiredByJob })),
+    });
   } catch (e: any) {
     return NextResponse.json({ error: sanitizeApiError(e) }, { status: 500 });
   }
