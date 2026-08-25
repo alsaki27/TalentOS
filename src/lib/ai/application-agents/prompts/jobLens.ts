@@ -173,5 +173,7 @@ export function resolveJobDescription(job: any): string {
   if (job?.notes) return job.notes;
   if (job?.raw_source_payload?.description) return String(job.raw_source_payload.description);
   if (job?.description_html) return String(job.description_html).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (job?.description) return job.description;
+  if (job?.rawDescription) return job.rawDescription;
   return "No description available";
 }
