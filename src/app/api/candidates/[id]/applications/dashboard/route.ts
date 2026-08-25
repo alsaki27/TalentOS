@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, ALL_USER_ROLES } from "@/lib/auth";
 import { query } from "@/server/db/neon";
+import { DISPLAY_GROUPS, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
 
 export const dynamic = "force-dynamic";
-
-var DISPLAY_GROUPS: Record<string, string> = {
-  applied: "Applied",
-  replied: "Screening",
-  interview: "Interview",
-  offer: "Offer",
-  rejected: "Rejected",
-  withdrawn: "Rejected",
-  assigned: "Applied",
-  stacked: "Applied",
-  in_progress: "Applied",
-};
 
 interface DashboardRow {
   application_id: string;
@@ -113,7 +102,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     );
 
     // Compute status counts from display groups
-    var statusCounts: Record<string, number> = { Applied: 0, Screening: 0, Interview: 0, Offer: 0, Rejected: 0 };
+    var statusCounts: Record<string, number> = emptyStatusCounts();
     var sourceCounts: Record<string, number> = {};
 
     for (var i = 0; i < allRows.length; i++) {

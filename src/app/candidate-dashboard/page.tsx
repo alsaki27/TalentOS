@@ -66,7 +66,7 @@ var DISPLAY_GROUPS: Record<string, string> = {
   assigned: "Applied", stacked: "Applied", in_progress: "Applied",
 };
 
-var STATUS_ICONS: Record<string, string> = { Applied: "✅", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
+var STATUS_ICONS: Record<string, string> = { Applied: "✅", "In Progress": "⏳", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
 
 function CandidateDashboardInner() {
   var router = useRouter();
@@ -150,7 +150,7 @@ function CandidateDashboardInner() {
   var sourceCounts = data?.sourceCounts ?? {};
   var candidates = data?.candidates ?? [];
 
-  var statusChartData = ["Applied", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
+  var statusChartData = ["Applied", "In Progress", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
   var sourceChartData = Object.keys(sourceCounts).sort().map(function (k) { return { label: k === "company_site" ? "Company Site" : k.charAt(0).toUpperCase() + k.slice(1), count: sourceCounts[k] }; });
 
   if (error) return <div style={{ color: "var(--danger)", padding: 20, background: "rgba(244,63,94,0.08)", borderRadius: 10, fontSize: 13, border: "1px solid var(--danger-soft, rgba(244,63,94,0.25))" }}>Failed to load dashboard: {error}. <button onClick={fetchData} style={{ color: "var(--danger)", textDecoration: "underline", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>Retry</button></div>;
@@ -221,6 +221,7 @@ function CandidateDashboardInner() {
         {[
           { label: "Total", value: String(data?.total ?? 0), group: "" },
           { label: "Applied", value: String(statusCounts["Applied"] || 0), group: "Applied" },
+          { label: "In Progress", value: String(statusCounts["In Progress"] || 0), group: "In Progress" },
           { label: "Screening", value: String(statusCounts["Screening"] || 0), group: "Screening" },
           { label: "Interview", value: String(statusCounts["Interview"] || 0), group: "Interview" },
           { label: "Offer", value: String(statusCounts["Offer"] || 0), group: "Offer" },

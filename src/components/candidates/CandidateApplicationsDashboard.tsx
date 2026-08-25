@@ -40,7 +40,7 @@ interface DashboardData {
   sourceCounts: Record<string, number>;
 }
 
-var STATUS_ICONS: Record<string, string> = { Applied: "✅", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
+var STATUS_ICONS: Record<string, string> = { Applied: "✅", "In Progress": "⏳", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
 
 export default function CandidateApplicationsDashboard({ candidateId }: { candidateId: string }) {
   var router = useRouter();
@@ -106,7 +106,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
   var statusCounts = data?.statusCounts ?? {};
   var sourceCounts = data?.sourceCounts ?? {};
 
-  var statusChartData = ["Applied", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
+  var statusChartData = ["Applied", "In Progress", "Screening", "Interview", "Offer", "Rejected"].map(function (l) { return { label: l, count: statusCounts[l] || 0 }; });
   var sourceChartData = Object.keys(sourceCounts).sort().map(function (k) { return { label: k === "company_site" ? "Company Site" : k.charAt(0).toUpperCase() + k.slice(1), count: sourceCounts[k] }; });
 
   if (error) return <div style={{ color: "var(--danger)", padding: 16, background: "rgba(244,63,94,0.08)", borderRadius: 10, fontSize: 13, border: "1px solid rgba(244,63,94,0.25)" }}>Failed to load: {error}</div>;
@@ -118,6 +118,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
         {[
           { label: "Total", value: String(data?.total ?? 0), group: "" },
           { label: "Applied", value: String(statusCounts["Applied"] || 0), group: "Applied" },
+          { label: "In Progress", value: String(statusCounts["In Progress"] || 0), group: "In Progress" },
           { label: "Screening", value: String(statusCounts["Screening"] || 0), group: "Screening" },
           { label: "Interview", value: String(statusCounts["Interview"] || 0), group: "Interview" },
           { label: "Offer", value: String(statusCounts["Offer"] || 0), group: "Offer" },

@@ -1,34 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, ALL_USER_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
+import { DISPLAY_GROUPS, STATUSES_BY_GROUP, STATUS_EXPR, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
 
 export const dynamic = "force-dynamic";
-
-var DISPLAY_GROUPS: Record<string, string> = {
-  applied: "Applied", replied: "Screening", interview: "Interview",
-  offer: "Offer", rejected: "Rejected", withdrawn: "Rejected",
-  assigned: "Applied", stacked: "Applied", in_progress: "Applied",
-};
-
-// Inverse of DISPLAY_GROUPS: display group -> raw status/ae_stage values that
-// belong to it, so a "statusGroup" filter can be pushed down into SQL.
-var STATUSES_BY_GROUP: Record<string, string[]> = {};
-for (var rawStatusKey in DISPLAY_GROUPS) {
-  var groupName = DISPLAY_GROUPS[rawStatusKey];
-  if (!STATUSES_BY_GROUP[groupName]) STATUSES_BY_GROUP[groupName] = [];
-  STATUSES_BY_GROUP[groupName].push(rawStatusKey);
-}
-
-// The computed "display status" every filter/sort/count query must agree on:
-// applications marked applied via ae_stage collapse to the raw "applied"
-// status regardless of the legacy a.status value underneath - but only while
-// the AE pipeline itself is what set ae_stage='applied'. Without the
-// "AND a.status IN (...)" guard, an application the AI email-triage pipeline
-// later moved to e.g. 'interview' (see applicationStatusService.ts) would
-// still display as "Applied" forever, since ae_stage stays 'applied' from
-// the original AE hand-off and this expression would keep masking the real
-// status underneath it.
-var STATUS_EXPR = "(CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END)";
 
 // Escapes ILIKE wildcard/escape characters in free-text search input so a
 // literal "%", "_", or "\" the user typed is matched literally, not as a
@@ -139,7 +114,7 @@ export async function GET(req: NextRequest) {
       candidateParams
     );
 
-    var statusCounts: Record<string, number> = { Applied: 0, Screening: 0, Interview: 0, Offer: 0, Rejected: 0 };
+    var statusCounts: Record<string, number> = emptyStatusCounts();
     for (var sRow of statusCountRows) {
       var group = DISPLAY_GROUPS[sRow.raw_status] || sRow.raw_status;
       statusCounts[group] = (statusCounts[group] || 0) + sRow.n;
