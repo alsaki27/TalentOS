@@ -245,3 +245,58 @@ export async function extractSkillsFromJobDescription(
     preferredSkills,
   };
 }
+
+// Mirrors how Resume Forge places skills (prompts/resumeForge.ts: "Use the
+// base resume's own category names ... as the guide") - a skill-gap
+// suggestion must land in the category it actually belongs to (e.g.
+// "wastewater" under an OSP/civil-design category, not dumped into whichever
+// category happens to be listed first), never a fixed position.
+const CATEGORIZE_SKILLS_SYSTEM_PROMPT = `You are placing newly-suggested resume skills into the correct existing skill category on a candidate's resume.
+
+You will receive a list of skills to place and a list of the resume's existing skill category names.
+
+Rules:
+- For each skill, choose the single existing category name it most naturally belongs to, based on what the category groups together (e.g. a CAD tool belongs with other design software, a documentation practice belongs with other documentation/QC skills).
+- You MUST choose from the exact category names given - never invent a new one, never rename one.
+- If a skill genuinely fits none of the categories well, choose the closest reasonable match rather than omitting it.
+
+Output strictly valid JSON (no markdown fences, no explanation):
+{
+    "assignments": [{ "skill": "Skill 1", "category": "Exact Category Name" }]
+}`;
+
+/**
+ * Maps each skill to the best-matching existing resume category name (not id -
+ * the caller resolves that, since ids are React-side and category names are
+ * duplicated between studio sessions). Skips the AI call entirely when there
+ * is nothing to categorize or only one category exists (unambiguous).
+ */
+export async function categorizeSkillsIntoCategories(
+  skills: string[],
+  categoryNames: string[],
+  userId?: string
+): Promise<Record<string, string>> {
+  if (skills.length === 0 || categoryNames.length === 0) return {};
+  if (categoryNames.length === 1) {
+    return Object.fromEntries(skills.map((s) => [s, categoryNames[0]]));
+  }
+
+  const { result: response } = await callWithUsageTracking("falood_ai", { userId }, async (provider) => {
+    return provider.send({
+      system: CATEGORIZE_SKILLS_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: [{ type: "text", text: JSON.stringify({ skills, categories: categoryNames }) }] }],
+      tools: [],
+    });
+  });
+
+  const parsed = safeJsonParse(stripFences(textOf(response.content)));
+  const map: Record<string, string> = {};
+  if (Array.isArray(parsed?.assignments)) {
+    for (const a of parsed.assignments) {
+      if (a && typeof a.skill === "string" && typeof a.category === "string") {
+        map[a.skill] = a.category;
+      }
+    }
+  }
+  return map;
+}

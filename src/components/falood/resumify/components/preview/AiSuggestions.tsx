@@ -373,9 +373,11 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
 interface SkillGapItem {
     skill: string;
     isRequiredByJob: boolean;
+    /** Which existing skill category (by id) this skill belongs to, per the server's AI classification against the resume's actual category names. Undefined falls back to the first category (applySuggestionToResumeData's existing behavior). */
+    categoryId?: string;
 }
 
-/** Builds a one-skill Suggestion card for the skill-gap queue, wording the reason by whether the JD names it as a required skill vs. a related/preferred one. */
+/** Builds a one-skill Suggestion card for the skill-gap queue, wording the reason by whether the JD names it as a required skill vs. a related/preferred one. targetId routes the accept action to the matching skill category instead of always landing in the first one. */
 function buildSkillGapSuggestion(item: SkillGapItem): Suggestion {
     return {
         id: `skill-gap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -385,6 +387,7 @@ function buildSkillGapSuggestion(item: SkillGapItem): Suggestion {
             ? 'Required by this job description, and not yet on this tailored draft.'
             : 'Related to this job description and supported by your background, but not yet on this tailored draft.',
         suggested: [item.skill],
+        targetId: item.categoryId,
         status: 'pending',
     };
 }
@@ -751,14 +754,20 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
         if (messages.some(m => m.id === 'skill-gap-intro')) { skillGapTriggeredRef.current = true; return; }
         if (!jobDescription || jobDescription.trim().length < 80) return;
         const currentSkills = flattenResumeSkills(state.resumeData.skills as any);
-        if ((state.resumeData.skills as any)?.categorized?.length === 0) return; // nothing to add skills into yet
+        const skillCategories = (state.resumeData.skills as any)?.categorized ?? [];
+        if (skillCategories.length === 0) return; // nothing to add skills into yet
 
         skillGapTriggeredRef.current = true;
 
         fetch('/api/falood/skill-gap', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobDescription, resumeSkills: currentSkills, candidateId: candidateId || undefined }),
+            body: JSON.stringify({
+                jobDescription,
+                resumeSkills: currentSkills,
+                skillCategories: skillCategories.map((c: SkillCategory) => ({ id: c.id, name: c.name })),
+                candidateId: candidateId || undefined,
+            }),
         })
             .then(res => res.ok ? res.json() : { gaps: [] })
             .then(({ gaps }: { gaps: SkillGapItem[] }) => {
