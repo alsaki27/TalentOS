@@ -86,9 +86,7 @@ enabled = true
 #   GET /api/cron/ai-usage-rollup    — AI usage aggregation (0 4 * * *)
 #
 # If you upgrade to a paid Cloudflare Workers plan ($5/month), add:
-[triggers]
-crons = ["0 7 * * *", "0 6 * * *", "0 5 * * *", "0 8 * * *", "0 4 * * *", "* * * * *"]
-#
-# Since this project uses OpenNext (@opennextjs/cloudflare), Cloudflare 
-# scheduled events are automatically routed to the Vercel crons defined 
-# in vercel.json. No custom handler is needed!
+# Scheduled execution is owned by .github/workflows/scheduled-jobs.yml.
+# OpenNext does not export a Cloudflare scheduled() handler for these routes;
+# leaving [triggers] enabled causes every Cloudflare cron invocation to fail
+# with "Handler does not export a scheduled() function".
