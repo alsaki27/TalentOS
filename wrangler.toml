@@ -3,7 +3,7 @@
 # Limits: 128MB memory, 10,000 subrequests/invocation (default).
 name = "skarion-talent-os"
 account_id = "7595fba95de8cc0c74a379329c18fd29"
-main = ".worker-next/index.mjs"
+main = "worker-entry.mjs"
 compatibility_date = "2025-06-20"
 # nodejs_compat enables some Node.js APIs (e.g., Buffer)
 compatibility_flags = ["nodejs_compat"]
