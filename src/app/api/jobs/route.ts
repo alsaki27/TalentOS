@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
   const employmentType = url.searchParams.get("employmentType") || "";
   const category = url.searchParams.get("category") || "";
   const workAuthorization = url.searchParams.get("workAuthorization") || "";
+  const workMode = url.searchParams.get("workMode") || "";
   const dateStart = url.searchParams.get("dateStart") || "";
   const dateEnd = url.searchParams.get("dateEnd") || "";
   const scoreStr = url.searchParams.get("score") || "";
@@ -98,6 +99,7 @@ export async function GET(req: NextRequest) {
       AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
       AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
       AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+      AND ($18 = '' OR j.work_mode = $18)
       AND j.created_at >= '2026-07-10'
     ORDER BY
       CASE WHEN $15 = 'posted_asc' THEN j.posted_at END ASC NULLS LAST,
@@ -122,17 +124,18 @@ export async function GET(req: NextRequest) {
       AND ($11 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_by_user_id::text = $11 OR a.assigned_by = $11)))
       AND ($12 = '' OR EXISTS (SELECT 1 FROM applications a WHERE a.job_id = j.id AND (a.assigned_to_user_id::text = $12 OR a.assigned_to = $12)))
       AND ($13 = -1 OR (j.category_relevance_score >= $13::int AND j.category_relevance_score <= $14::int))
+      AND ($15 = '' OR j.work_mode = $15)
       AND j.created_at >= '2026-07-10'
   `;
 
   try {
     const jobs = await query<Record<string, any>>(dataSql, [
       searchParam, source, roleTier, active, employmentType, category, workAuthorization,
-      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax, sort, offset, pageSize,
+      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax, sort, offset, pageSize, workMode,
     ]);
     const countRow = await queryOne<{ total: number }>(countSql, [
       searchParam, source, roleTier, active, employmentType, category, workAuthorization,
-      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax,
+      dateStart, dateEnd, candidate, assignedBy, owner, scoreMin, scoreMax, workMode,
     ]);
 
     const shaped = (jobs ?? []).map((job: any) => ({

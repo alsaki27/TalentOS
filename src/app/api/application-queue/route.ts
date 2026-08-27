@@ -21,6 +21,7 @@ export async function GET(req: NextRequest) {
   const review = url.searchParams.get("review") || "";
   const view = url.searchParams.get("view") || "all";
   const candidateId = url.searchParams.get("candidate_id") || "";
+  const workMode = url.searchParams.get("work_mode") || "";
   const timeWindow = url.searchParams.get("time_window") || "";
   const timeWindowHours = ({ "12h": 12, "24h": 24, "3d": 72, "7d": 168 } as Record<string, number>)[timeWindow] ?? null;
   const requestedSort = url.searchParams.get("sort");
@@ -38,6 +39,7 @@ export async function GET(req: NextRequest) {
       priority,
       review,
       view: view as "all" | "mine" | "ae_review" | "ae_application",
+      workMode,
       userId: context!.profile.user_id,
       userEmail: context!.profile.email ?? null,
       userDisplayName: context!.profile.display_name ?? null,

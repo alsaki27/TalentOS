@@ -157,6 +157,8 @@ export interface ListApplicationsQuery {
   timeWindowHours?: number | null;
   sort?: "due" | "final_score" | "average_score";
   sortDirection?: "asc" | "desc";
+  /** Filters on jobs.work_mode: "remote" | "hybrid" | "onsite". Empty/omitted = no filter. */
+  workMode?: string;
 }
 
 export interface PaginatedApplicationsResult {
@@ -468,6 +470,7 @@ export async function listApplicationQueue(
   const priority = queryParams.priority || "";
   const review = queryParams.review || "";
   const view = queryParams.view || "all";
+  const workMode = queryParams.workMode || "";
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
@@ -549,7 +552,7 @@ export async function listApplicationQueue(
       -- the array. Renumbered end-to-end after dropping the old role-restriction
       -- params instead of leaving gaps.
       AND (($2 = '' AND $15::int IS NULL)
-        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
+        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
         OR ($15::int IS NOT NULL AND (
           ($16 = 'any' AND (a.app_number = $15 OR c.candidate_number = $15 OR j.job_number = $15))
           OR ($16 = 'app' AND a.app_number = $15)
@@ -568,6 +571,7 @@ export async function listApplicationQueue(
       AND ($13 = '' OR a.ae_stage = $13)
       AND ($17 = '' OR a.status = $17)
       AND ($14::int IS NULL OR a.created_at >= NOW() - ($14::int * INTERVAL '1 hour'))
+      AND ($18 = '' OR j.work_mode = $18)
     ORDER BY ${orderBy}
     OFFSET $10 LIMIT $11
   `;
@@ -589,6 +593,7 @@ export async function listApplicationQueue(
     idSearchNumber,
     idSearchKind,
     statusStageFilter,
+    workMode,
   ]);
 
   const countSql = `
@@ -598,7 +603,7 @@ export async function listApplicationQueue(
     LEFT JOIN jobs j ON a.job_id = j.id
     WHERE NOT (a.status = ANY($1))
       AND (($2 = '' AND $13::int IS NULL)
-        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3))
+        OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
         OR ($13::int IS NOT NULL AND (
           ($14 = 'any' AND (a.app_number = $13 OR c.candidate_number = $13 OR j.job_number = $13))
           OR ($14 = 'app' AND a.app_number = $13)
@@ -617,6 +622,7 @@ export async function listApplicationQueue(
       AND ($11 = '' OR a.ae_stage = $11)
       AND ($15 = '' OR a.status = $15)
       AND ($12::int IS NULL OR a.created_at >= NOW() - ($12::int * INTERVAL '1 hour'))
+      AND ($16 = '' OR j.work_mode = $16)
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     excludeStatuses,
@@ -634,6 +640,7 @@ export async function listApplicationQueue(
     idSearchNumber,
     idSearchKind,
     statusStageFilter,
+    workMode,
   ]);
 
   const stats = await buildQueueStats(queryParams);

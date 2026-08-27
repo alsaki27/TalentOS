@@ -245,6 +245,7 @@ export default function ApplicationQueuePage() {
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
+  const [workModeFilter, setWorkModeFilter] = useState("");
   const [viewFilter, setViewFilter] = useState<TabView>("all");
   const [candidateFilter, setCandidateFilter] = useState("");
   const [timeWindow, setTimeWindow] = useState("");
@@ -308,6 +309,7 @@ export default function ApplicationQueuePage() {
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
     if (reviewFilter) p.set("review", reviewFilter);
+    if (workModeFilter) p.set("work_mode", workModeFilter);
     if (viewFilter !== "all") p.set("view", viewFilter);
     if (timeWindow) p.set("time_window", timeWindow);
     if (sort !== "due") {
@@ -389,7 +391,7 @@ export default function ApplicationQueuePage() {
     } catch {}
   }
 
-  var hasActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || timeWindow);
+  var hasActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter || timeWindow);
 
   function clearFilters() {
     setSearchInput("");
@@ -399,6 +401,7 @@ export default function ApplicationQueuePage() {
     setOwnerFilter("");
     setPriorityFilter("");
     setReviewFilter("");
+    setWorkModeFilter("");
     setTimeWindow("");
   }
 
@@ -425,7 +428,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -1002,7 +1005,7 @@ export default function ApplicationQueuePage() {
         <div className="filter-group">
           <div className="filter-field">
             <span className="filter-label">🔍 Search</span>
-            <input className="input" placeholder="Name, job, company, or ID (C#10057, A#17395, J#19767)..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+            <input className="input" placeholder="Name, job, company, location, or ID (C#10057, A#17395, J#19767)..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
           </div>
           <div className="filter-field">
             <span className="filter-label">Candidate</span>
@@ -1045,6 +1048,15 @@ export default function ApplicationQueuePage() {
               <option value="pending">Pending</option>
               <option value="approved">Approved</option>
               <option value="changes_requested">Changes requested</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Work Mode</span>
+            <select className="input" value={workModeFilter} onChange={e => setWorkModeFilter(e.target.value)}>
+              <option value="">All modes</option>
+              <option value="remote">Remote</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="onsite">Onsite</option>
             </select>
           </div>
           <div className="filter-field">

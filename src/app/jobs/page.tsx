@@ -84,6 +84,7 @@ interface SavedJobSearch {
     employmentType?: string;
     category?: string;
     workAuthorization?: string;
+    workMode?: string;
     dateStart?: string;
     dateEnd?: string;
     candidate?: string;
@@ -283,6 +284,7 @@ export default function JobsPage() {
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [workAuthFilter, setWorkAuthFilter] = useState("");
+  const [workModeFilter, setWorkModeFilter] = useState("");
   const [dateStart, setDateStart] = useState("");
   const [dateEnd, setDateEnd] = useState("");
   const [candidateFilter, setCandidateFilter] = useState("");
@@ -344,6 +346,7 @@ export default function JobsPage() {
     if (employmentTypeFilter) params.set("employmentType", employmentTypeFilter);
     if (categoryFilter) params.set("category", categoryFilter);
     if (workAuthFilter) params.set("workAuthorization", workAuthFilter);
+    if (workModeFilter) params.set("workMode", workModeFilter);
     if (dateStart) params.set("dateStart", dateStart);
     if (dateEnd) params.set("dateEnd", dateEnd);
     if (candidateFilter) params.set("candidate", candidateFilter);
@@ -372,7 +375,7 @@ export default function JobsPage() {
   }
 
   // Any filter/search/sort change re-queries the server from page 1.
-  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, postedSort, dateStart, dateEnd, candidateFilter, assignedByFilter, ownerFilter, scoreFilter]);
+  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, workModeFilter, postedSort, dateStart, dateEnd, candidateFilter, assignedByFilter, ownerFilter, scoreFilter]);
 
   // Drains the pending-categorization queue in small sequential batches, called right
   // after any import/create action and once on page load (in case a backlog already
@@ -561,7 +564,7 @@ export default function JobsPage() {
 
   const filtersActive =
     search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter ||
-    workAuthFilter || postedSort || dateStart || dateEnd || candidateFilter || assignedByFilter || ownerFilter ||
+    workAuthFilter || workModeFilter || postedSort || dateStart || dateEnd || candidateFilter || assignedByFilter || ownerFilter ||
     scoreFilter[0] > 0 || scoreFilter[1] < 100;
 
   function currentSavedFilters() {
@@ -573,6 +576,7 @@ export default function JobsPage() {
     if (employmentTypeFilter) filters.employmentType = employmentTypeFilter;
     if (categoryFilter) filters.category = categoryFilter;
     if (workAuthFilter) filters.workAuthorization = workAuthFilter;
+    if (workModeFilter) filters.workMode = workModeFilter;
     if (dateStart) filters.dateStart = dateStart;
     if (dateEnd) filters.dateEnd = dateEnd;
     if (candidateFilter) filters.candidate = candidateFilter;
@@ -592,6 +596,7 @@ export default function JobsPage() {
     setEmploymentTypeFilter("");
     setCategoryFilter("");
     setWorkAuthFilter("");
+    setWorkModeFilter("");
     setDateStart("");
     setDateEnd("");
     setCandidateFilter("");
@@ -618,6 +623,7 @@ export default function JobsPage() {
     setEmploymentTypeFilter(filters.employmentType ?? "");
     setCategoryFilter(filters.category ?? "");
     setWorkAuthFilter(filters.workAuthorization ?? "");
+    setWorkModeFilter(filters.workMode ?? "");
     setDateStart(filters.dateStart ?? "");
     setDateEnd(filters.dateEnd ?? "");
     setCandidateFilter(filters.candidate ?? "");
@@ -879,6 +885,15 @@ export default function JobsPage() {
             <option value="no_sponsorship">No sponsorship</option>
             <option value="sponsorship_available">Sponsorship available</option>
             <option value="us_citizen_required">US citizen required</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Work Mode</span>
+          <select value={workModeFilter} onChange={(e) => setWorkModeFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="remote">Remote</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="onsite">Onsite</option>
           </select>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
