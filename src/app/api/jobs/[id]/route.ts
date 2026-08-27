@@ -20,6 +20,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
             jsonb_build_object(
               'id', a.id,
               'status', a.status,
+              'tailored_resume_version_id', a.tailored_resume_version_id,
               'candidates', jsonb_build_object('id', c.id, 'name', c.name)
             )
           ) FROM applications a LEFT JOIN candidates c ON a.candidate_id = c.id WHERE a.job_id = j.id),
@@ -38,6 +39,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
         candidate_id: a.candidates?.id,
         name: a.candidates?.name,
         status: a.status,
+        tailored_resume_version_id: a.tailored_resume_version_id ?? null,
       })),
     });
   } catch (error: any) {

@@ -5,12 +5,14 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { TailorResumeModal } from "@/components/TailorResumeModal";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
 interface Applicant {
   application_id: string;
   candidate_id: string;
   name: string;
   status: string;
+  tailored_resume_version_id: string | null;
 }
 
 interface JobDetail {
@@ -19,6 +21,7 @@ interface JobDetail {
   title: string;
   company: string | null;
   location: string | null;
+  work_mode: "remote" | "hybrid" | "onsite" | null;
   source: string;
   role_tier: string | null;
   salary_range: string | null;
@@ -214,6 +217,15 @@ export default function JobDetailPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 12, color: "var(--ink-soft)", fontSize: "0.95rem" }}>
                {job.company && <span style={{ fontWeight: 600, color: "var(--accent)" }}>{job.company}</span>}
                {job.location && <span style={{ display: "flex", alignItems: "center", gap: 4 }}><svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path strokeLinecap="round" strokeLinejoin="round" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg> {job.location}</span>}
+               {job.work_mode && (
+                 <span className="badge" style={{
+                   background: job.work_mode === "remote" ? "rgba(16,185,129,0.15)" : job.work_mode === "hybrid" ? "rgba(245,158,11,0.15)" : "rgba(99,102,241,0.15)",
+                   color: job.work_mode === "remote" ? "#10b981" : job.work_mode === "hybrid" ? "#f59e0b" : "var(--accent)",
+                   padding: "2px 8px", textTransform: "capitalize",
+                 }}>
+                   {job.work_mode}
+                 </span>
+               )}
                {job.is_active ? <span className="badge badge-success" style={{ background: "var(--success)", color: "white", padding: "2px 8px" }}>Active</span> : <span className="badge badge-danger">Inactive</span>}
             </div>
           </div>
@@ -475,6 +487,7 @@ export default function JobDetailPage() {
             <tr>
               <th>Candidate</th>
               <th>Status</th>
+              <th>Tailored Resume</th>
               <th></th>
             </tr>
           </thead>
@@ -484,8 +497,21 @@ export default function JobDetailPage() {
                 <td>{a.name}</td>
                 <td><span className={`badge badge-${a.status}`}>{a.status}</span></td>
                 <td>
+                  {a.tailored_resume_version_id ? (
+                    <button
+                      onClick={() => openFaloodStudio("application_resume_version", a.tailored_resume_version_id!)}
+                      title="Open the tailored resume already generated for this application"
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 5, fontSize: 12, fontWeight: 700, background: "rgba(99,102,241,0.12)", color: "var(--accent)", border: "1px solid rgba(99,102,241,0.3)", cursor: "pointer" }}
+                    >
+                      📄 Studio
+                    </button>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>None yet</span>
+                  )}
+                </td>
+                <td>
                   <button onClick={() => setTailorContext({ candidateId: a.candidate_id, applicationId: a.application_id })}>
-                    Tailor resume
+                    {a.tailored_resume_version_id ? "Re-tailor" : "Tailor resume"}
                   </button>
                 </td>
               </tr>
