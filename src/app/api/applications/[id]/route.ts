@@ -120,6 +120,13 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // The reviewer identity is captured separately and persists even after the
   // ticket moves on to "applied", so whoever applies can see who reviewed it.
   if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+    if (updates.ae_stage === "in_ai_pipeline" && currentApplication?.resume_generation_status === "ready") {
+      return NextResponse.json(
+        { error: "Cannot move back to AI Pipeline when a resume is already generated. Please use 'Regenerate' if you need a new draft." },
+        { status: 400 }
+      );
+    }
+
     updates.application_stage = updates.ae_stage;
     updates.ae_stage_updated_at = new Date().toISOString();
     updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;

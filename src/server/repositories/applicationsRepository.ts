@@ -219,6 +219,7 @@ export async function createApplications(
     app_number: input.app_number ?? appNumbers[i] ?? null,
     status: input.status ?? "applied",
     application_stage: input.status === "applied" ? "applied" : input.status === "rejected" ? "rejected" : input.status === "withdrawn" ? "withdrawn" : input.status === "in_progress" || input.status === "assigned" || input.status === "stacked" ? "ready_for_review" : "in_ai_pipeline",
+    ae_stage: input.status === "applied" ? "applied" : input.status === "rejected" ? "rejected" : input.status === "withdrawn" ? "withdrawn" : input.status === "in_progress" || input.status === "assigned" || input.status === "stacked" ? "ready_for_review" : "in_ai_pipeline",
     resume_url: input.resume_url ?? null,
     resume_filename: input.resume_filename ?? null,
     resume_id: input.resume_id ?? null,
@@ -567,6 +568,7 @@ export async function listApplicationQueue(
       AND ($7 <> 'review' OR a.review_status = 'pending')
       AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
       AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
+      AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
       AND ($12 = '' OR a.candidate_id::text = $12)
       AND ($13 = '' OR a.ae_stage = $13)
       AND ($17 = '' OR a.status = $17)
@@ -618,6 +620,7 @@ export async function listApplicationQueue(
       AND ($7 <> 'review' OR a.review_status = 'pending')
       AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
       AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
+      AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
       AND ($10 = '' OR a.candidate_id::text = $10)
       AND ($11 = '' OR a.ae_stage = $11)
       AND ($15 = '' OR a.status = $15)
