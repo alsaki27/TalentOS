@@ -52,6 +52,7 @@ export interface ApplicationRow {
   ae_applied_by_user_id: string | null;
   ae_applied_by_name: string | null;
   ae_applied_at: string | null;
+  resume_generation_status?: string | null;
 }
 
 export interface ApplicationEventRow {

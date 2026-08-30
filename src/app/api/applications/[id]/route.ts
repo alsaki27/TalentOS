@@ -106,7 +106,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
   let previousAeStage: string | null = null;
-  let currentApplication: { applied_at: string | null; completed_at: string | null; status: string; review_status: string | null; ae_stage: string } | null = null;
+  let currentApplication: Awaited<ReturnType<typeof findApplicationById>> = null;
+  
   if ("status" in updates || "ae_stage" in updates) {
     currentApplication = await findApplicationById(params.id);
     previousStatus = currentApplication?.status ?? null;
