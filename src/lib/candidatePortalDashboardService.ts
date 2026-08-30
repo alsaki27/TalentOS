@@ -479,29 +479,29 @@ function buildFilters(options: CandidatePortalDashboardOptions) {
 
   if (options.search?.trim()) {
     params.push(`%${options.search.trim()}%`);
-    const placeholder = `$${params.length + 2}`;
+    const placeholder = `$${params.length + 1}`;
     conditions.push(`(job_title ILIKE ${placeholder} OR company_name ILIKE ${placeholder} OR location ILIKE ${placeholder})`);
   }
 
   const status = options.status as CandidatePortalStatus | undefined;
   if (status && STATUS_TO_DB_VALUES[status]) {
     params.push(STATUS_TO_DB_VALUES[status]);
-    conditions.push(`public_status_key = ANY($${params.length + 2}::text[])`);
+    conditions.push(`public_status_key = ANY($${params.length + 1}::text[])`);
   }
 
   if (options.source?.trim()) {
     params.push(options.source.trim());
-    conditions.push(`LOWER(COALESCE(source, 'unknown')) = LOWER($${params.length + 2})`);
+    conditions.push(`LOWER(COALESCE(source, 'unknown')) = LOWER($${params.length + 1})`);
   }
 
   if (options.resumeStatus && options.resumeStatus !== "all") {
     params.push(options.resumeStatus);
-    conditions.push(`resume_status = $${params.length + 2}`);
+    conditions.push(`resume_status = $${params.length + 1}`);
   }
 
   if (options.interviewStatus && options.interviewStatus !== "all") {
     params.push(options.interviewStatus);
-    conditions.push(`interview_status = $${params.length + 2}`);
+    conditions.push(`interview_status = $${params.length + 1}`);
   }
 
   if (options.needsAttention) conditions.push("needs_attention = TRUE");
@@ -512,11 +512,11 @@ function buildFilters(options: CandidatePortalDashboardOptions) {
   if (range === "custom") {
     if (options.dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(options.dateFrom)) {
       params.push(`${options.dateFrom}T00:00:00.000Z`);
-      conditions.push(`submitted_at >= $${params.length + 2}::timestamptz`);
+      conditions.push(`submitted_at >= $${params.length + 1}::timestamptz`);
     }
     if (options.dateTo && /^\d{4}-\d{2}-\d{2}$/.test(options.dateTo)) {
       params.push(`${options.dateTo}T23:59:59.999Z`);
-      conditions.push(`submitted_at <= $${params.length + 2}::timestamptz`);
+      conditions.push(`submitted_at <= $${params.length + 1}::timestamptz`);
     }
   } else if (range !== "all") {
     const interval = range === "24h" ? "24 hours" : range === "7d" ? "7 days" : range === "30d" ? "30 days" : "90 days";

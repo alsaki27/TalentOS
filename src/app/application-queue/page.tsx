@@ -109,7 +109,7 @@ const AE_STAGE_LABELS: Record<string, string> = {
 
 const STAGE_FILTER_LABELS: Record<string, string> = {
   ...AE_STAGE_LABELS,
-  screening: "📞 Screening",
+  replied: "📞 Screening",
   interview: "💬 Interview",
   offer: "🎉 Offer",
   rejected: "❌ Rejected",
@@ -1739,7 +1739,25 @@ function PipelineActions({
 
   // Completed (no resume — shouldn't happen but handle gracefully)
   if (wfStatus === "completed") {
-    return <span className="badge badge-success">✅ Completed</span>;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="badge badge-success">✅ Completed</span>
+        <span style={{ fontSize: 11 }} className="text-danger">
+          Resume link missing
+        </span>
+        <button className="btn-compact btn-sm"
+          onClick={() => onRegenerate(item)}
+          disabled={actionLoading === `${item.id}:regenerate`}
+          title="Restart the full AI pipeline from scratch to fix the missing resume">
+          {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
+        </button>
+        {item.workflow_id && (
+          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+            {expandedWorkflow === item.workflow_id ? "▲ Hide details" : "▼ Details"}
+          </button>
+        )}
+      </div>
+    );
   }
 
   // Not started — show Generate button

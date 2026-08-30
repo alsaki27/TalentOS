@@ -460,7 +460,7 @@ export async function listApplicationQueue(
     "applied",
   ]).has(requestedStage) ? requestedStage : "";
   const statusStageFilter = new Set([
-    "screening",
+    "replied",
     "interview",
     "offer",
     "rejected",

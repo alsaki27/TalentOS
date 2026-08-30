@@ -32,7 +32,7 @@ describe("candidate portal read model", () => {
     const listSql = sqlCalls.find((sql) => sql.includes("SELECT * FROM candidate_apps"));
     expect(listSql).toContain("a.candidate_id = $1");
     expect(listSql).toContain("NOT IN ('assigned', 'stacked', 'in_progress')");
-    expect(listSql).toContain("interview_status = $4");
+    expect(listSql).toContain("interview_status = $3");
     expect(listSql).toContain("needs_attention = TRUE");
 
     const listCall = (query as any).mock.calls.find((call: any[]) => String(call[0]).includes("SELECT * FROM candidate_apps"));
