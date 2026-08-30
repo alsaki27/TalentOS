@@ -599,14 +599,53 @@ export async function callWithUsageTracking<T>(
   });
 }
 
+/**
+ * Classifies a provider error into a retriable error category.
+ *
+ * Strategy (ordered by specificity):
+ *  1. Error.name — catches fetch AbortError and DOMException reliably without
+ *     touching the message string at all.
+ *  2. Error.code — catches Node.js network errors (ECONNRESET, ECONNREFUSED,
+ *     ETIMEDOUT) by their structured code property, not by text parsing.
+ *  3. Embedded HTTP status code — all providers in this codebase produce error
+ *     messages in the form "Provider API error (STATUS): body". Extracting the
+ *     status code as a number is more reliable than substring-matching the body
+ *     text, which changes per provider and per locale.
+ *  4. Keyword fallback — last resort for any provider that deviates from the
+ *     standard pattern above.
+ */
 function classifyErrorCode(err: any): string | null {
+  const name: string = err?.name ?? "";
+  const code: string = err?.code ?? "";
   const msg: string = (err?.message ?? "").toLowerCase();
-  if (msg.includes("unauthorized") || msg.includes("401") || msg.includes("invalid api key") || msg.includes("auth")) return "auth_error";
-  if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) return "rate_limit";
-  if (msg.includes("timeout") || msg.includes("408") || msg.includes("timed out")) return "timeout";
-  if (msg.includes("not found") || msg.includes("404")) return "not_found";
-  if ((msg.includes("model") && msg.includes("not available")) || msg.includes("permission_error") || msg.includes("400") || msg.includes("403")) return "configuration_error";
-  if (msg.includes("server error") || msg.includes("500") || msg.includes("502") || msg.includes("503")) return "server_error";
+
+  // ── 1. Structured error name ────────────────────────────────────────────────
+  if (name === "AbortError" || name === "TimeoutError") return "timeout";
+
+  // ── 2. Node.js network error codes ─────────────────────────────────────────
+  if (code === "ECONNRESET" || code === "ECONNREFUSED" || code === "ENOTFOUND") return "server_error";
+  if (code === "ETIMEDOUT" || code === "ESOCKETTIMEDOUT") return "timeout";
+
+  // ── 3. Extract embedded HTTP status code from provider error messages ───────
+  // All providers throw: `new Error("Label error (STATUS): body")`
+  const httpStatusMatch = err?.message?.match(/\((\d{3})\)/);
+  if (httpStatusMatch) {
+    const status = Number(httpStatusMatch[1]);
+    if (status === 401 || status === 403) return "auth_error";
+    if (status === 429) return "rate_limit";
+    if (status === 404) return "not_found";
+    if (status === 400 || status === 422) return "configuration_error";
+    if (status === 408) return "timeout";
+    if (status >= 500) return "server_error";
+  }
+
+  // ── 4. Keyword fallback for non-standard error shapes ───────────────────────
+  if (msg.includes("aborted") || msg.includes("timed out") || msg.includes("timeout")) return "timeout";
+  if (msg.includes("unauthorized") || msg.includes("invalid api key")) return "auth_error";
+  if (msg.includes("rate limit") || msg.includes("quota")) return "rate_limit";
+  if (msg.includes("not found")) return "not_found";
+  if (msg.includes("server error") || msg.includes("service unavailable")) return "server_error";
+
   return null;
 }
 
