@@ -804,7 +804,43 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
         await syncWorkflowToApplication(workflowId, "cancelled");
         return;
       }
-      await finalizeWorkflow(workflowId);
+      // finalizeWorkflow() runs a SQL transaction that both inserts the resume
+      // version row AND marks the workflow/application as completed atomically.
+      // However, post-transaction steps (SharePoint archiving, identity audit,
+      // activity logging) can throw AFTER the core commit has already landed.
+      // If we let that exception bubble out to the outer catch block it would
+      // overwrite resume_generation_status back to 'failed' even though the
+      // resume was successfully written and the workflow row says 'completed'.
+      // Guard: if finalizeWorkflow() throws, re-read the application to see
+      // whether the resume actually made it to the DB. If it did, absorb the
+      // error (log only) and return cleanly — the completed state is correct.
+      // Only re-throw if the resume was NOT committed, so the outer catch can
+      // apply the normal retry/fail logic without blowing away a valid resume.
+      try {
+        await finalizeWorkflow(workflowId);
+      } catch (finalizeErr: any) {
+        console.error(`[Workflow ${workflowId}] finalizeWorkflow threw:`, finalizeErr?.message ?? finalizeErr);
+        // Check whether the core transaction committed despite the exception.
+        const appCheck = await queryOne<{
+          resume_generation_status: string | null;
+          tailored_resume_version_id: string | null;
+        }>(
+          "SELECT resume_generation_status, tailored_resume_version_id FROM applications WHERE id = $1",
+          [wf.application_id]
+        );
+        if (appCheck?.resume_generation_status === "ready" && appCheck.tailored_resume_version_id) {
+          // Resume committed successfully — the exception came from a
+          // post-commit step (SharePoint, audit, activity log). The workflow
+          // row was already set to 'completed' inside the transaction.
+          // Do NOT re-throw; returning here prevents the outer catch from
+          // overwriting the correct 'ready' status with 'failed'.
+          console.warn(`[Workflow ${workflowId}] finalizeWorkflow error absorbed — resume version ${appCheck.tailored_resume_version_id} is committed and status is already 'ready'. Error was: ${finalizeErr?.message ?? finalizeErr}`);
+          return;
+        }
+        // Resume was NOT committed — re-throw so the outer catch can handle
+        // retry/fail normally.
+        throw finalizeErr;
+      }
       return;
     }
 
