@@ -39,11 +39,11 @@ interface ColumnDef {
 // "Queued" means status === "queued", regardless of which stage it's queued
 // for - not "stage 0", which is also what a *running* Job Lens looks like.
 const COLUMNS: ColumnDef[] = [
-  { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status === "queued" },
-  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => w.status === "running" && w.current_stage === 0 },
-  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.status === "running" && w.current_stage === 1 },
-  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.status === "running" && w.current_stage === 2 },
-  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.status === "running" && w.current_stage === 3 },
+  { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status === "queued" && (w.current_stage === 0 || w.current_stage == null) },
+  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => (w.current_stage === 0 && w.status !== "queued") && w.status !== "completed" && w.status !== "failed" },
+  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.current_stage === 1 && w.status !== "completed" && w.status !== "failed" },
+  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.current_stage === 2 && w.status !== "completed" && w.status !== "failed" },
+  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.current_stage === 3 && w.status !== "completed" && w.status !== "failed" },
   { id: "completed", label: "Completed", color: "var(--success)", getStage: (w) => w.status === "completed" },
   { id: "failed", label: "Failed", color: "var(--danger)", getStage: (w) => w.status === "failed" },
 ];
@@ -208,11 +208,11 @@ export default function ResumeParsingStatusPage() {
   }
 
   return (
-    <div style={{ padding: "16px 12px", maxWidth: 1600, margin: "0 auto" }}>
-      <div className="page-header" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div className="resume-parsing-status-page" style={{ padding: "12px", width: "100%" }}>
+      <div className="page-header" style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <h1 style={{ fontSize: 20, margin: 0 }}>AI Resume Parsing Status</h1>
-          <span className="muted" style={{ fontSize: 13 }}>Kanban board — drag cards to manually override stage · auto-refresh every 6s</span>
+          <h1 style={{ fontSize: 24, margin: 0, fontWeight: 700 }}>AI Resume Parsing Status</h1>
+          <span className="muted" style={{ fontSize: 14, display: "inline-block", marginTop: 4 }}>Kanban board — drag cards to manually override stage · auto-refresh every 6s</span>
         </div>
       </div>
 
@@ -234,10 +234,10 @@ export default function ResumeParsingStatusPage() {
               onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverCol(null); }}
               onDrop={() => handleDrop(col.id)}
               style={{
-                flex: "0 0 230px",
+                flex: "0 0 280px",
                 minHeight: 200,
                 background: "var(--surface-1)",
-                borderRadius: 8,
+                borderRadius: 12,
                 border: `1px solid ${dragOverCol === col.id ? col.color : "var(--border)"}`,
                 boxShadow: dragOverCol === col.id ? `0 0 0 2px ${col.color}33` : "none",
                 display: "flex",
@@ -251,14 +251,14 @@ export default function ResumeParsingStatusPage() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
-                borderRadius: "8px 8px 0 0",
+                borderRadius: "12px 12px 0 0",
               }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: col.color }}>{col.label}</span>
-                <span className="badge" style={{ fontSize: 10, background: "var(--surface-3)" }}>{colCards.length}</span>
+                <span style={{ fontSize: 15, fontWeight: 600, color: col.color }}>{col.label}</span>
+                <span className="badge" style={{ fontSize: 12, background: "var(--surface-3)", padding: "2px 8px" }}>{colCards.length}</span>
               </div>
-              <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", flex: 1, maxHeight: "calc(100vh - 220px)" }}>
+              <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12, overflowY: "auto", flex: 1, maxHeight: "calc(100vh - 220px)" }}>
                 {colCards.length === 0 && (
-                  <div className="muted" style={{ fontSize: 11, textAlign: "center", padding: "20px 0" }}>Empty</div>
+                  <div className="muted" style={{ fontSize: 13, textAlign: "center", padding: "30px 0" }}>Empty</div>
                 )}
                 {colCards.map((wf) => (
                   <BoardCard
@@ -308,46 +308,47 @@ const BoardCard = memo(function BoardCard({
       }}
       onDragEnd={onDragEnd}
       style={{
-        padding: 10,
-        borderRadius: 6,
+        padding: 14,
+        borderRadius: 8,
         background: "var(--surface-2)",
         border: "1px solid var(--border)",
         cursor: isMoving ? "wait" : "grab",
         opacity: isDragging ? 0.4 : isMoving ? 0.6 : 1,
-        borderLeft: wf.status === "failed" ? "3px solid var(--danger)" : wf.status === "completed" ? "3px solid var(--success)" : wf.status === "running" ? "3px solid var(--info)" : "3px solid transparent",
+        borderLeft: wf.status === "failed" ? "4px solid var(--danger)" : wf.status === "completed" ? "4px solid var(--success)" : wf.status === "running" ? "4px solid var(--info)" : "4px solid transparent",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.05)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+        <div style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: 2 }}>
             {wf.candidate_name ?? `WF ${wf.id.slice(0, 8)}`}
           </div>
-          <div className="muted" style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div className="muted" style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {wf.job_title ?? "—"} {wf.job_company ? ` · ${wf.job_company}` : ""}
           </div>
         </div>
         <StatusBadge status={wf.status} />
       </div>
 
-      <div className="muted" style={{ fontSize: 10, marginBottom: 4 }} title={new Date(wf.updated_at).toISOString()}>
+      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }} title={new Date(wf.updated_at).toISOString()}>
         {wf.status === "completed" ? "Completed" : wf.status === "failed" ? "Failed" : "Entered stage"} {formatCardTime(wf.updated_at)}
       </div>
 
       {wf.match_reason && (
-        <div className="muted" style={{ fontSize: 10, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div className="muted" style={{ fontSize: 11, marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {wf.match_score != null ? `Score ${wf.match_score}: ` : ""}{wf.match_reason}
         </div>
       )}
 
       {(wf.ats_score != null || wf.role_fit_score != null) && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
           {wf.ats_score != null && (
-            <span className={`badge badge-${scoreBadgeColor(wf.ats_score)}`} style={{ fontSize: 9 }}>
+            <span className={`badge badge-${scoreBadgeColor(wf.ats_score)}`} style={{ fontSize: 11, padding: "2px 6px" }}>
               ATS {wf.ats_score}/10
             </span>
           )}
           {wf.role_fit_score != null && (
-            <span className={`badge badge-${scoreBadgeColor(wf.role_fit_score)}`} style={{ fontSize: 9 }}>
+            <span className={`badge badge-${scoreBadgeColor(wf.role_fit_score)}`} style={{ fontSize: 11, padding: "2px 6px" }}>
               Fit {wf.role_fit_score}/10
             </span>
           )}
@@ -355,24 +356,24 @@ const BoardCard = memo(function BoardCard({
       )}
 
       {wf.last_error && (
-        <div style={{ padding: "4px 6px", borderRadius: 4, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 10, marginBottom: 4, lineHeight: 1.3 }}>
+        <div style={{ padding: "6px 8px", borderRadius: 6, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
           {wf.last_error}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-        <button className="btn-compact btn-sm" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => onToggleExpand(wf.id)}>
-          {isExpanded ? "▼" : "▶"}
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        <button className="btn" style={{ fontSize: 12, padding: "4px 10px", minHeight: 28 }} onClick={() => onToggleExpand(wf.id)}>
+          {isExpanded ? "▼ Details" : "▶ Details"}
         </button>
         {(wf.current_stage ?? 0) >= 3 && (
-          <button className="btn-compact btn-sm" style={{ fontSize: 10, padding: "2px 6px" }} onClick={() => onToggleFindings(wf.id)}>
+          <button className="btn" style={{ fontSize: 12, padding: "4px 10px", minHeight: 28 }} onClick={() => onToggleFindings(wf.id)}>
             Findings
           </button>
         )}
         {wf.status === "completed" && wf.tailored_resume_version_id && (
           <button
-            className="btn-compact btn-sm"
-            style={{ fontSize: 10, padding: "2px 6px" }}
+            className="btn btn-primary"
+            style={{ fontSize: 12, padding: "4px 12px", minHeight: 28 }}
             onClick={() => openFaloodStudio("application_resume_version", wf.tailored_resume_version_id!)}
           >
             Studio
@@ -383,7 +384,7 @@ const BoardCard = memo(function BoardCard({
       {isFindingsOpen && <FindingsPanel details={detail} />}
 
       {isExpanded && detail && (
-        <div style={{ marginTop: 8, padding: 6, background: "var(--surface-3)", borderRadius: 4, fontSize: 11 }}>
+        <div style={{ marginTop: 12, padding: 10, background: "var(--surface-3)", borderRadius: 6, fontSize: 12 }}>
           {(detail.stages || []).length === 0 && <div className="muted">No stage runs yet.</div>}
           {(() => {
             const stages = detail.stages || [];
@@ -398,9 +399,9 @@ const BoardCard = memo(function BoardCard({
               const meta = APPLICATION_AGENT_METAS[s.automation_id as keyof typeof APPLICATION_AGENT_METAS];
               const label = meta?.displayName ?? `Stage ${s.sequence_number}`;
               return (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
-                  <span>{label}{s.attempt_number > 1 ? ` (${s.attempt_number})` : ""}</span>
-                  <span style={{ color: s.status === "success" ? "var(--success)" : s.status === "failed" ? "var(--danger)" : "var(--muted)" }}>{s.status}</span>
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: i < deduped.size - 1 ? "1px solid var(--border)" : "none" }}>
+                  <span style={{ fontWeight: 500 }}>{label}{s.attempt_number > 1 ? ` (${s.attempt_number})` : ""}</span>
+                  <span style={{ fontWeight: 600, color: s.status === "success" ? "var(--success)" : s.status === "failed" ? "var(--danger)" : "var(--muted)" }}>{s.status}</span>
                 </div>
               );
             });
@@ -417,55 +418,55 @@ function FindingsPanel({ details }: { details: any }) {
   const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
 
   return (
-    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
+    <div style={{ marginTop: 10, padding: 12, background: "var(--surface-3)", borderRadius: 6, fontSize: 12, display: "grid", gap: 10 }}>
       {!details ? (
         <div className="muted">Loading…</div>
       ) : !hiringPanel ? (
         <div className="muted">Hiring Panel hasn't run yet.</div>
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--muted)" }}>ATS</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.atsScore}/10</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+            <div style={{ textAlign: "center", background: "var(--surface-2)", padding: "6px 0", borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>ATS</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{hiringPanel.atsScore}/10</div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--muted)" }}>Recruiter</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.recruiterScore}/10</div>
+            <div style={{ textAlign: "center", background: "var(--surface-2)", padding: "6px 0", borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Recruiter</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{hiringPanel.recruiterScore}/10</div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--muted)" }}>Role fit</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{hiringPanel.roleFitScore}/10</div>
+            <div style={{ textAlign: "center", background: "var(--surface-2)", padding: "6px 0", borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Role fit</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{hiringPanel.roleFitScore}/10</div>
             </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 9, color: "var(--muted)" }}>Truth</div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>{typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : 0}/10</div>
+            <div style={{ textAlign: "center", background: "var(--surface-2)", padding: "6px 0", borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Truth</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>{typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : 0}/10</div>
             </div>
           </div>
           {hiringPanel.overallComment && (
-            <div style={{ fontStyle: "italic", color: "var(--muted)" }}>"{hiringPanel.overallComment}"</div>
+            <div style={{ fontStyle: "italic", color: "var(--muted)", padding: "8px", background: "var(--surface-1)", borderRadius: 6, borderLeft: "3px solid var(--border)" }}>"{hiringPanel.overallComment}"</div>
           )}
           {hiringPanel.requiredEdits?.length > 0 && (
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
+            <div style={{ marginTop: 4 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Required edits</div>
               {hiringPanel.requiredEdits.map((e: any, i: number) => (
-                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
-                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
-                  <span>{e.description}</span>
+                <div key={i} style={{ display: "flex", gap: 6, alignItems: "baseline", padding: "4px 0", borderBottom: "1px dashed var(--border)" }}>
+                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 9, padding: "2px 6px" }}>{e.severity}</span>
+                  <span style={{ lineHeight: 1.4 }}>{e.description}</span>
                 </div>
               ))}
             </div>
           )}
           {finalPolish && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
-              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10, marginTop: 4 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
                 Final Polish
-                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
+                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ fontSize: 10, padding: "2px 8px" }}>
                   {finalPolish.exportReady ? "ready" : "not ready"}
                 </span>
               </div>
               {finalPolish.unresolvedWarnings?.length > 0 && (
-                <div style={{ color: "var(--muted)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>
+                <div style={{ color: "var(--muted)", background: "rgba(245, 158, 11, 0.1)", padding: "6px 8px", borderRadius: 4, borderLeft: "3px solid var(--warning)" }}>Unresolved: {finalPolish.unresolvedWarnings.join(", ")}</div>
               )}
             </div>
           )}
