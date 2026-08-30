@@ -1656,13 +1656,6 @@ function PipelineActions({
             View error
           </button>
         )}
-        {/* startWorkflow sets actionLoading to `${item.id}:workflow`, not the
-            bare item.id these two checks used to compare against - so the
-            button never disabled and never showed "Retrying...". Confirmed
-            live: three application_ai_workflows rows for the same
-            application_id created 1 second apart (11:01:22/23/24), racing
-            each other for the same stage claim and failing with "each claim
-            orphaned without completing or erroring cleanly". */}
         <button className="btn-primary btn-sm"
           onClick={() => onStartWorkflow(item)}
           disabled={actionLoading === `${item.id}:workflow`}>
