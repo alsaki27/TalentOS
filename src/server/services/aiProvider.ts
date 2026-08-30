@@ -116,35 +116,76 @@ export function buildProviderFromDbKey(
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
       return {
-        async send({ system, messages, temperature, maxTokens }) {
-          const res = await fetch(apiUrl, {
-            method: "POST",
-            headers: {
-              "x-api-key": apiKey,
-              "anthropic-version": ANTHROPIC_VERSION,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({
-              model: model || DEFAULT_MODEL,
-              max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-              temperature,
-              system,
-              messages: messages.map((m) => ({
-                role: m.role,
-                content: m.content.filter((b) => b.type === "text").map((b) => ({ type: "text", text: (b as { text: string }).text })),
-              })),
-            }),
-          });
-          if (!res.ok) {
-            const body = await res.text();
-            throw new Error(`Anthropic API error (${res.status}): ${body}`);
+        async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+          const controller = new AbortController();
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          if (timeoutMs && timeoutMs > 0) {
+            timer = setTimeout(() => controller.abort(), timeoutMs);
           }
-          const data = await res.json();
-          return {
-            content: (data.content ?? []).map((block: any) => ({ type: "text", text: block.text ?? "" })),
-            stopReason: data.stop_reason ?? "end_turn",
-            usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
-          };
+
+          try {
+            const res = await fetch(apiUrl, {
+              signal: controller.signal,
+              method: "POST",
+              headers: {
+                "x-api-key": apiKey,
+                "anthropic-version": ANTHROPIC_VERSION,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                model: model || DEFAULT_MODEL,
+                max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+                temperature,
+                system,
+                messages: messages.map((m) => ({
+                  role: m.role,
+                  content: m.content.map((block) => {
+                    if (block.type === "text") return { type: "text", text: block.text };
+                    if (block.type === "tool_use") {
+                      return { type: "tool_use", id: block.id, name: block.name, input: block.input };
+                    }
+                    return {
+                      type: "tool_result",
+                      tool_use_id: block.toolUseId,
+                      content: block.content,
+                      is_error: block.isError ?? false,
+                    };
+                  }),
+                })),
+                tools: tools.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  input_schema: tool.inputSchema,
+                })),
+              }),
+            });
+            if (!res.ok) {
+              const body = await res.text();
+              throw new Error(`Anthropic API error (${res.status}): ${body}`);
+            }
+            const data = await res.json();
+            return {
+              content: (data.content ?? []).map((block: any) => ({
+                type: block.type === "tool_use" ? "tool_use" : "text",
+                ...(block.type === "tool_use"
+                  ? { id: block.id, name: block.name, input: block.input }
+                  : { text: block.text ?? "" }),
+              })),
+              stopReason: data.stop_reason ?? "end_turn",
+              usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
+            };
+          } catch (error: any) {
+            if (controller.signal.aborted) {
+              throw new Error(
+                timeoutMs
+                  ? `Anthropic request timed out after ${timeoutMs}ms`
+                  : "Anthropic request timed out",
+              );
+            }
+            throw error;
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
         },
       };
     }
