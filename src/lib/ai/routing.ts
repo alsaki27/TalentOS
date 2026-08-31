@@ -320,7 +320,7 @@ export async function getProviderForAutomation(
   // environment-provider loop here: provider keys outside the Control Center
   // would make production routing impossible to inspect or reproduce.
   // Last resort: the remaining enabled Neon key pool.
-  const dbFallback = await getActiveProviderWithFallback();
+  const dbFallback = await getActiveProviderWithFallback(excludeKeyIds);
   if (dbFallback && !excludeProviderNames?.has(dbFallback.name)) {
     await recordUsageEvent({
       automationId,

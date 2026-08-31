@@ -426,9 +426,10 @@ export async function getEnabledAiKeys(): Promise<AiApiKeyMetadata[]> {
 /**
  * Get the first usable provider from the Neon-managed key pool.
  */
-export async function getActiveProviderWithFallback(): Promise<ActiveProvider | null> {
+export async function getActiveProviderWithFallback(excludeKeyIds?: Set<string>): Promise<ActiveProvider | null> {
   const dbKeys = await listEnabledAiKeys();
   for (const key of dbKeys) {
+    if (excludeKeyIds?.has(key.id)) continue;
     if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(key.status as any)) continue;
     if (["rate_limited", "quota_exhausted"].includes(key.status as any)) {
       const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
