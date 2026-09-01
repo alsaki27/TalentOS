@@ -90,6 +90,7 @@ export default function InboxPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageKind, setMessageKind] = useState<"success" | "error">("success");
   
   // Tasks state
   const [tasks, setTasks] = useState<EmailTask[]>([]);
@@ -272,9 +273,11 @@ export default function InboxPage() {
       const response = await fetch("/api/candidate-dashboard/force-sync", { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Gmail sync failed.");
+      setMessageKind("success");
       setMessage("Gmail sync completed.");
       await Promise.all([loadThreads(1), loadCounts(), loadTasks()]);
     } catch (error) {
+      setMessageKind("error");
       setMessage(error instanceof Error ? error.message : "Gmail sync failed.");
     } finally {
       setSyncing(false);
@@ -439,7 +442,7 @@ export default function InboxPage() {
         </button>
       </div>
 
-      {message && <div className="alert success" style={{ marginBottom: 20 }}>{message}<button className="alert-close" onClick={() => setMessage("")}>×</button></div>}
+      {message && <div className={`alert ${messageKind}`} style={{ marginBottom: 20 }}>{message}<button className="alert-close" onClick={() => setMessage("")}>×</button></div>}
 
       {/* INBOX TAB */}
       {activeTab === "inbox" && (

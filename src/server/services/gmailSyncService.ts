@@ -123,16 +123,28 @@ async function mapWithConcurrency<T, R>(items: T[], concurrency: number, fn: (it
   return results;
 }
 
+// Durable, table-based claim (not pg_try_advisory_lock - this app's Neon
+// access is HTTP-based, one stateless request per query(), so a session-scoped
+// advisory lock releases itself before the caller can use it; confirmed this
+// made concurrent-run protection a no-op). 5 minutes comfortably covers a
+// single account's SYNC_TIME_BUDGET_MS-bounded run with headroom, so a run
+// that dies mid-flight (matching the "orphaned claim" pattern already seen
+// in the AI workflow pipeline) self-clears instead of wedging the account.
+const ACCOUNT_LOCK_DURATION_MS = 5 * 60_000;
+
 async function tryAccountLock(accountId: string): Promise<boolean> {
-  const row = await queryOne<{ locked: boolean }>(
-    "SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS locked",
-    [`gmail-sync:${accountId}`],
+  const row = await queryOne<{ id: string }>(
+    `UPDATE integration_accounts
+     SET sync_locked_until = NOW() + make_interval(secs => $2)
+     WHERE id = $1 AND (sync_locked_until IS NULL OR sync_locked_until < NOW())
+     RETURNING id`,
+    [accountId, ACCOUNT_LOCK_DURATION_MS / 1000],
   );
-  return Boolean(row?.locked);
+  return Boolean(row);
 }
 
 async function releaseAccountLock(accountId: string) {
-  await execute("SELECT pg_advisory_unlock(hashtextextended($1, 0))", [`gmail-sync:${accountId}`]);
+  await execute("UPDATE integration_accounts SET sync_locked_until = NULL WHERE id = $1", [accountId]);
 }
 
 async function getCandidateApplicationContext(candidateId: string): Promise<TriageCandidateContext[]> {
@@ -777,11 +789,19 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
     outcomes.push(outcome);
   }
 
-  await escalateOverdueActionItems();
-  await cleanKnownNonActionableTasks();
-  await enforceEmailRetention();
-  await drainRecruitingContactSync(25);
-  const followUpsEnqueued = await enqueueOverdueFollowUps();
+  // Every account above already replicated (or cleanly errored) independently
+  // of these housekeeping steps - a transient failure here must not turn a
+  // real mailbox sync into a reported failure. Confirmed as the root cause of
+  // the "Sync Gmail" button appearing broken: these four ran unguarded, so
+  // any one of them throwing (a Neon hiccup, a bad row) failed this whole
+  // function's promise even though every account's mail had already landed
+  // in email_communications moments earlier in the loop above.
+  let followUpsEnqueued = 0;
+  try { await escalateOverdueActionItems(); } catch (err: any) { console.warn(`[Gmail sync] escalateOverdueActionItems failed (non-fatal): ${err?.message || err}`); }
+  try { await cleanKnownNonActionableTasks(); } catch (err: any) { console.warn(`[Gmail sync] cleanKnownNonActionableTasks failed (non-fatal): ${err?.message || err}`); }
+  try { await enforceEmailRetention(); } catch (err: any) { console.warn(`[Gmail sync] enforceEmailRetention failed (non-fatal): ${err?.message || err}`); }
+  try { await drainRecruitingContactSync(25); } catch (err: any) { console.warn(`[Gmail sync] drainRecruitingContactSync failed (non-fatal): ${err?.message || err}`); }
+  try { followUpsEnqueued = await enqueueOverdueFollowUps(); } catch (err: any) { console.warn(`[Gmail sync] enqueueOverdueFollowUps failed (non-fatal): ${err?.message || err}`); }
   return { accounts: outcomes, followUpsEnqueued };
 }
 

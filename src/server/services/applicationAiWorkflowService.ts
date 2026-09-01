@@ -9,6 +9,8 @@ import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-age
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
 import { runJobLens } from "@/lib/ai/application-agents/jobLens";
+import { resolveJobDescription } from "@/lib/ai/application-agents/prompts/jobLens";
+import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
@@ -176,6 +178,48 @@ export type TriggerWorkflowResult =
   | { started: false; reason: string };
 
 /**
+ * Starting a fresh workflow right after a failure that was actually a data
+ * problem (no job description on file, no target_job link) just reproduces
+ * the identical failure - the pipeline logic hasn't changed, only re-running
+ * it does nothing until the underlying data does. Re-checks the SAME
+ * preconditions the pipeline itself enforces (resolveJobDescription from
+ * jobLens.ts, the target_jobs lookup finalizationService.ts uses) against
+ * current data rather than trusting the frozen error text, so a job that's
+ * since had its description added is never blocked by a stale reason.
+ * Returns a human-readable block reason, or null if it's fine to proceed
+ * (including when the most recent attempt failed for an unrelated,
+ * transient reason - those are always retriable).
+ */
+async function checkWorkflowRetryBlocked(
+  applicationId: string,
+  candidateId: string,
+  jobId: string,
+  job: any,
+): Promise<string | null> {
+  const lastAttempt = await queryOne<{ last_error: string | null }>(
+    `SELECT last_error FROM application_ai_workflows WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [applicationId]
+  );
+  const classification = classifyWorkflowFailure(lastAttempt?.last_error);
+  if (!classification) return null;
+
+  if (classification.category === "missing_job_description") {
+    const description = resolveJobDescription(job);
+    return (!description || description === "No description available") ? classification.reason : null;
+  }
+
+  if (classification.category === "missing_target_job") {
+    const tj = await queryOne<{ id: string }>(
+      `SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2 ORDER BY created_at DESC LIMIT 1`,
+      [candidateId, jobId]
+    );
+    return tj ? null : classification.reason;
+  }
+
+  return null;
+}
+
+/**
  * Resolves the candidate's base resume for this application's job, starts a
  * workflow, and dispatches the first stage. Shared by the manual "Generate"
  * endpoint (POST /api/applications/[id]/ai-workflow) and automatic
@@ -207,6 +251,11 @@ export async function triggerAiWorkflowForApplication(
 
   const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
   const job: any = jobRow ?? {};
+
+  const blockReason = await checkWorkflowRetryBlocked(applicationId, appRow.candidate_id, appRow.job_id, job);
+  if (blockReason) {
+    return { started: false, reason: blockReason };
+  }
 
   // Prioritise the resume linked to the target_job for this application's
   // job, falling back to domain-matched base resume, then the candidate's
@@ -367,6 +416,11 @@ export async function regenerateAiWorkflowForApplication(
 
   const jobRow = await queryOne<any>("SELECT * FROM jobs WHERE id = $1", [appRow.job_id]);
   const job: any = jobRow ?? {};
+
+  const blockReason = await checkWorkflowRetryBlocked(applicationId, appRow.candidate_id, appRow.job_id, job);
+  if (blockReason) {
+    return { started: false, reason: blockReason };
+  }
 
   // Prioritise the resume linked to the target_job for this application's
   // job (e.g. user manually assigned one), falling back to domain-matched base resume.

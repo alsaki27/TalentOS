@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useCallback, memo } from "react";
 import Link from "next/link";
 import { APPLICATION_AGENT_METAS } from "@/lib/ai/application-agents/types";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
+import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 
 interface WorkflowCard {
   id: string;
@@ -355,11 +356,17 @@ const BoardCard = memo(function BoardCard({
         </div>
       )}
 
-      {wf.last_error && (
-        <div style={{ padding: "6px 8px", borderRadius: 6, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
-          {wf.last_error}
-        </div>
-      )}
+      {wf.last_error && (() => {
+        const classification = classifyWorkflowFailure(wf.last_error);
+        return (
+          <div style={{ padding: "6px 8px", borderRadius: 6, background: "rgba(211, 38, 30, 0.08)", color: "var(--danger)", fontSize: 11, marginBottom: 8, lineHeight: 1.4 }}>
+            <div><strong>Why:</strong> {classification?.reason ?? wf.last_error}</div>
+            {classification && classification.category !== "other" && (
+              <div style={{ marginTop: 4, opacity: 0.75, fontSize: 10 }}>{wf.last_error}</div>
+            )}
+          </div>
+        );
+      })()}
 
       <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         <button className="btn" style={{ fontSize: 12, padding: "4px 10px", minHeight: 28 }} onClick={() => onToggleExpand(wf.id)}>

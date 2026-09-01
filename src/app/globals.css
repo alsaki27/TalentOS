@@ -1100,12 +1100,12 @@ label {
   justify-content: space-between;
   gap: 10px;
 }
-.alert-error {
+.alert-error, .alert.error {
   border-color: rgba(var(--danger-rgb), 0.4);
   background: rgba(var(--danger-rgb), 0.10);
   color: var(--danger);
 }
-.alert-success {
+.alert-success, .alert.success {
   border-color: rgba(var(--accent-rgb), 0.4);
   background: rgba(var(--accent-rgb), 0.10);
 }

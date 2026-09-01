@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
+import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -1290,11 +1291,21 @@ export default function ApplicationQueuePage() {
                     />
                     {expandedWorkflow === item.workflow_id && item.workflow_id && (
                       <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
-                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (
-                          <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
-                            <strong>Error:</strong> {workflowDetails[item.workflow_id].workflow.last_error}
-                          </div>
-                        )}
+                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (() => {
+                          const lastError: string = workflowDetails[item.workflow_id].workflow.last_error;
+                          const classification = classifyWorkflowFailure(lastError);
+                          return (
+                            <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
+                              <strong>Why this failed:</strong> {classification?.reason ?? lastError}
+                              {classification && classification.category !== "other" && (
+                                <details style={{ marginTop: 6 }}>
+                                  <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>Technical details</summary>
+                                  <div style={{ fontSize: 11, marginTop: 4, opacity: 0.85 }}>{lastError}</div>
+                                </details>
+                              )}
+                            </div>
+                          );
+                        })()}
                         {(item.workflow_stage ?? 0) >= 2 && (
                           <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
                         )}

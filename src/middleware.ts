@@ -31,6 +31,7 @@ function isPublicPath(pathname: string) {
   return (
     pathname === "/login" ||
     pathname === "/signup" ||
+    pathname === "/privacy" ||
     isPortalAuthPublicPath(pathname) ||
     isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||
@@ -38,6 +39,7 @@ function isPublicPath(pathname: string) {
     pathname === "/api/skarion-ai" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||
+    pathname === "/api/webhooks/gmail" ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
