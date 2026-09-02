@@ -10,12 +10,18 @@ export interface AiRuntimeConfig {
   updated_at: string | null;
 }
 
+// workflow_claim_ttl_seconds: 720s (12min), sized to a flat retry budget of
+// up to 4 attempts at OpenCode's real observed tail latency (p99 up to 157s,
+// max 179s in ai_usage_events - see migration 089_lease_heartbeat_retune.sql
+// for the full rationale). Not a guess: the old 900s value existed to cover
+// a nested-retry worst case that no longer exists after collapsing the
+// double retry loop in applicationAiWorkflowService.ts / routing.ts.
 const DEFAULTS: AiRuntimeConfig = {
   active_routing_state_id: null,
   active_routing_state_name: null,
   allow_unrouted_fallback: false,
   workflow_max_concurrency: 5,
-  workflow_claim_ttl_seconds: 420,
+  workflow_claim_ttl_seconds: 720,
   updated_by: null,
   updated_at: null,
 };

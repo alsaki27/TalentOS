@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchNextQueuedWorkflow } from "@/server/services/applicationAiWorkflowService";
 import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
+import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +11,18 @@ export const dynamic = "force-dynamic";
  * Safe to call repeatedly (idempotent via SKIP LOCKED).
  * Can be triggered by admin-authenticated calls (no CRON_SECRET required).
  */
-export async function POST(_req: NextRequest) {
+export async function POST(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET;
+  const isAuthorizedServerCall = Boolean(
+    cronSecret && req.headers.get("authorization") === `Bearer ${cronSecret}`
+  );
+  if (!isAuthorizedServerCall) {
+    // Browser-triggered dispatches remain staff-session-gated. Server-side
+    // self-dispatches are allowed only with the same CRON_SECRET that the
+    // middleware and GET handler validate.
+    const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
+    if (response) return response;
+  }
   try {
     console.log(`[Dispatch Chain] POST /api/application-ai-workflows/dispatch received`);
     const result = await dispatchNextQueuedWorkflow();

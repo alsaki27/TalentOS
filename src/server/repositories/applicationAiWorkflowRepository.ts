@@ -21,6 +21,7 @@ export interface WorkflowRow {
   claim_expires_at: string | null;
   claimed_by: string | null;
   heartbeat_at: string | null;
+  next_retry_at: string | null;
   lock_version: number;
   recovery_count: number;
 }
@@ -110,7 +111,12 @@ export async function findActiveWorkflowByApplicationId(applicationId: string): 
 
 // ── Update status ──
 
-export async function updateWorkflowStatus(id: string, status: WorkflowStatus, extra?: Record<string, unknown>): Promise<void> {
+export async function updateWorkflowStatus(
+  id: string,
+  status: WorkflowStatus,
+  extra?: Record<string, unknown>,
+  expectedLockVersion?: number,
+): Promise<boolean> {
   const fields: string[] = ["status = $1", "updated_at = NOW()"];
   const values: (string | number | boolean | null | Date)[] = [status];
   let idx = 2;
@@ -127,6 +133,13 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
     fields.push(`cancelled_at = $${idx++}`);
     values.push(new Date().toISOString());
   }
+  if (status === "queued") {
+    // A deliberate retry is a new recovery window. Without resetting this
+    // counter, a workflow that previously exhausted stale-claim recovery is
+    // requeued and immediately terminal-fails on its next claim, even when
+    // the underlying provider/orchestration issue has been fixed.
+    fields.push("recovery_count = 0");
+  }
   if (extra?.current_stage !== undefined) {
     fields.push(`current_stage = $${idx++}`);
     values.push(extra.current_stage as number);
@@ -135,15 +148,25 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
     fields.push(`last_error = $${idx++}`);
     values.push(extra.last_error as string);
   }
+  if (extra?.next_retry_at !== undefined) {
+    fields.push(`next_retry_at = $${idx++}`);
+    values.push(extra.next_retry_at as string | null);
+  }
   if (status !== "running") {
     fields.push("claimed_at = NULL", "claim_expires_at = NULL", "claimed_by = NULL", "heartbeat_at = NULL");
   }
 
   values.push(id);
-  await execute(
-    `UPDATE application_ai_workflows SET ${fields.join(", ")} WHERE id = $${idx}`,
+  let where = `WHERE id = $${idx}`;
+  if (expectedLockVersion !== undefined) {
+    values.push(expectedLockVersion);
+    where += ` AND lock_version = $${idx + 1}`;
+  }
+  const result = await execute(
+    `UPDATE application_ai_workflows SET ${fields.join(", ")} ${where}`,
     values
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // Caps how many workflows can be genuinely in-flight (actively claimed,
@@ -158,31 +181,51 @@ export async function updateWorkflowStatus(id: string, status: WorkflowStatus, e
 
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
-// RECOVERY: also reclaims running workflows whose claim lease has expired
-// (claim_expires_at IS NULL or claim_expires_at < NOW()). These are workflows
-// abandoned by a crashed or dead dispatcher. After 3 recoveries the workflow
-// is moved to 'failed' to prevent infinite retry loops on persistently broken stages.
-// 2-minute claim TTL, not 5: the immediate in-process next-stage dispatch
-// (nested ctx.waitUntil chaining in dispatchWorkflowById) has been observed
-// live to sometimes die silently mid-stage without completing or erroring -
-// a 5-minute TTL meant an orphaned stage sat unrecoverable for up to 5
-// minutes even with the cron loop polling every ~15s. Every observed real
-// stage latency (job_lens ~5s, resume_forge ~5-25s, hiring_panel ~3s,
-// final_polish similar) is well under 2 minutes, so this still comfortably
-// avoids reclaiming a call that's genuinely still in flight.
+// RECOVERY: also reclaims running workflows whose claim lease has expired or
+// whose heartbeat has been stale for STALE_HEARTBEAT_INTERVAL. These are
+// workflows abandoned by a crashed or dead dispatcher.
+//
+// Retuned 2026-09 against real ai_usage_events latency data (not a guess):
+// successful OpenCode calls run up to ~180s at the tail (p99 69-157s, max
+// 179s observed) - a short timeout here would cut off calls that were going
+// to succeed, which is worse than the problem this is fixing. The claim TTL
+// (ai_runtime_config.workflow_claim_ttl_seconds) was retuned separately to
+// ~720s to cover a full flat retry budget of up to 4 attempts at that real
+// tail latency, replacing the old 900s value that existed only to compensate
+// for a since-removed *nested* retry loop (routing.ts MAX_RETRIES was itself
+// wrapped in a second outer retry loop in applicationAiWorkflowService.ts,
+// multiplying worst-case attempts and therefore worst-case wall time).
+//
+// STALE_HEARTBEAT_INTERVAL tightens from the old 5 minutes to 90 seconds - a
+// live stage still refreshes its heartbeat every 20-45s, so 90s already
+// tolerates 2-4 missed beats before assuming the dispatcher died, without
+// leaving a genuinely dead Worker undetected for minutes.
+//
+// recovery_count threshold dropped from 3 to 1: a *second* stale claim on
+// the same workflow means something is structurally broken (not a transient
+// dispatcher blip), so it should surface as a failure immediately rather
+// than silently eating up to an hour of retries before anyone notices.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
-    `WITH config AS (
+    `WITH config AS MATERIALIZED (
+      -- Serialize concurrent dispatchers on the singleton config row. A
+      -- plain active_count snapshot lets parallel runners all pass the cap.
       SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
-      FROM ai_runtime_config WHERE singleton = true
+      FROM ai_runtime_config WHERE singleton = true FOR UPDATE
     ), active_count AS (
       SELECT COUNT(*)::int AS n FROM application_ai_workflows
-      WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+      WHERE status = 'running'
+        AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
     ),
     next_workflow AS (
       SELECT id FROM application_ai_workflows
-      WHERE (status = 'running' AND (claim_expires_at IS NULL OR claim_expires_at < NOW()))
-         OR (status = 'queued' AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
+      WHERE (status = 'running' AND (
+               claim_expires_at IS NULL OR claim_expires_at < NOW()
+               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '90 seconds'
+             ))
+         OR (status = 'queued'
+             AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+             AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
       ORDER BY
         CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
         created_at ASC
@@ -190,14 +233,17 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       FOR UPDATE SKIP LOCKED
     )
     UPDATE application_ai_workflows w
-    SET status = CASE WHEN w.recovery_count >= 3 AND w.status = 'running'
+    SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
                       THEN 'failed'
                       ELSE 'running'
                  END,
-        claimed_at = NOW(),
-        claim_expires_at = NOW() + make_interval(secs => (SELECT workflow_claim_ttl_seconds FROM config)),
-        claimed_by = 'dispatcher',
-        heartbeat_at = NOW(),
+        claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+        claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
+                                THEN NULL
+                                ELSE NOW() + make_interval(secs => (SELECT workflow_claim_ttl_seconds FROM config))
+                           END,
+        claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
+        heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
         updated_at = NOW(),
         lock_version = lock_version + 1,
         recovery_count = CASE WHEN w.status = 'running'
@@ -212,16 +258,46 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   return rows[0] ?? null;
 }
 
-export async function updateWorkflowHeartbeat(workflowId: string): Promise<void> {
-  await execute(
+export async function assertWorkflowClaim(workflowId: string, lockVersion: number): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM application_ai_workflows
+     WHERE id = $1 AND status = 'running' AND lock_version = $2
+       AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()`,
+    [workflowId, lockVersion]
+  );
+  return Boolean(row);
+}
+
+// Extends the claim by a small fixed increment per heartbeat rather than
+// granting a full fresh workflow_claim_ttl_seconds every 20-45s. The old
+// full-reset behavior meant a hung process (heartbeat still firing, but the
+// underlying provider call genuinely stuck forever) could hold its claim
+// indefinitely - every heartbeat re-armed a brand new 15-minute window
+// before the previous one ever had a chance to run out. A small increment
+// still comfortably outpaces normal progress (heartbeat every 20-45s,
+// +60s per beat) but bounds how far a hung stage can push its own deadline
+// out: the increment is capped so claim_expires_at can never run further
+// ahead than a single fresh TTL grant from right now.
+export async function updateWorkflowHeartbeat(workflowId: string, lockVersion?: number): Promise<boolean> {
+  const params: (string | number)[] = [workflowId];
+  let ownership = "";
+  if (lockVersion !== undefined) {
+    params.push(lockVersion);
+    ownership = " AND w.lock_version = $2";
+  }
+  const result = await execute(
     `UPDATE application_ai_workflows w
      SET heartbeat_at = NOW(),
-         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
+         claim_expires_at = LEAST(
+           GREATEST(w.claim_expires_at, NOW()) + INTERVAL '60 seconds',
+           NOW() + make_interval(secs => c.workflow_claim_ttl_seconds)
+         ),
          updated_at = NOW()
      FROM ai_runtime_config c
-     WHERE w.id = $1 AND c.singleton = true AND w.status = 'running'`,
-    [workflowId]
+     WHERE w.id = $1 AND c.singleton = true AND w.status = 'running'${ownership}`,
+    params
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // ── Stage runs ──
@@ -242,16 +318,33 @@ export async function createStageRun(input: {
   return rows[0];
 }
 
-export async function updateStageRun(id: string, updates: Partial<StageRunRow>): Promise<void> {
+export async function updateStageRun(
+  id: string,
+  updates: Partial<StageRunRow>,
+  ownership?: { workflowId: string; lockVersion: number },
+): Promise<boolean> {
   const keys = Object.keys(updates).filter((k) => updates[k as keyof StageRunRow] !== undefined);
-  if (keys.length === 0) return;
+  if (keys.length === 0) return false;
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
   const values = keys.map((k) => updates[k as keyof StageRunRow]);
   values.push(id);
-  await execute(
-    `UPDATE application_ai_stage_runs SET ${setClause} WHERE id = $${keys.length + 1}`,
+  let where = `WHERE id = $${keys.length + 1}`;
+  if (ownership) {
+    values.push(ownership.workflowId, ownership.lockVersion);
+    where += ` AND EXISTS (
+      SELECT 1 FROM application_ai_workflows w
+      WHERE w.id = $${keys.length + 2}
+        AND w.id = application_ai_stage_runs.workflow_id
+        AND w.status = 'running'
+        AND w.lock_version = $${keys.length + 3}
+        AND w.claim_expires_at IS NOT NULL AND w.claim_expires_at >= NOW()
+    )`;
+  }
+  const result = await execute(
+    `UPDATE application_ai_stage_runs SET ${setClause} ${where}`,
     values
   );
+  return (result.rowCount ?? 0) > 0;
 }
 
 export async function listStageRuns(workflowId: string): Promise<StageRunRow[]> {
@@ -259,6 +352,34 @@ export async function listStageRuns(workflowId: string): Promise<StageRunRow[]> 
     "SELECT * FROM application_ai_stage_runs WHERE workflow_id = $1 ORDER BY sequence_number, attempt_number",
     [workflowId]
   );
+}
+
+/**
+ * Close stage rows left behind by a dead Worker invocation. These rows are
+ * retained as audit history; they must not remain "running" after their
+ * workflow was retried or their claim/heartbeat became stale.
+ */
+export async function closeOrphanedStageRuns(workflowId?: string): Promise<number> {
+  const result = await execute(
+    `UPDATE application_ai_stage_runs sr
+     SET status = 'failed',
+         error_code = 'orphaned_run',
+         error_message = 'Stage invocation superseded after its workflow claim became stale',
+         completed_at = COALESCE(completed_at, NOW())
+     FROM application_ai_workflows w
+     WHERE sr.workflow_id = w.id
+       AND sr.status = 'running'
+       AND sr.started_at < NOW() - INTERVAL '120 seconds'
+       AND ($1::uuid IS NULL OR sr.workflow_id = $1::uuid)
+       AND (
+         w.status <> 'running'
+         OR w.heartbeat_at IS NULL
+       OR w.heartbeat_at < NOW() - INTERVAL '90 seconds'
+         OR (w.claimed_at IS NOT NULL AND sr.started_at < w.claimed_at)
+       )`,
+    [workflowId ?? null]
+  );
+  return result.rowCount ?? 0;
 }
 
 // ── Artifacts ──

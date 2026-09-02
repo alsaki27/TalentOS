@@ -44,9 +44,91 @@ const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
   "google_vertex_proxy",
 ]);
 
-function isKeyHealthBlocked(keyRow: { status: AiKeyStatus; last_failure_at?: string | null }): boolean {
+// A provider credential can serve several model overrides.  Key-level health
+// alone is therefore too coarse: one unavailable OpenCode model must not
+// suppress a healthy Luna route on the same credential.  Keep this breaker
+// scoped to provider + model + automation and let the route recover
+// automatically after a short cooldown.
+const ROUTE_HEALTH_WINDOW_MINUTES = 15;
+
+type RouteHealthRow = {
+  recent_failures: number | string | null;
+  recent_not_found: number | string | null;
+  recent_auth_errors: number | string | null;
+  recent_timeouts: number | string | null;
+  recent_invalid_outputs: number | string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+};
+
+async function checkRouteHealth(
+  automationId: string,
+  provider: string,
+  model: string | null | undefined,
+): Promise<{ blocked: boolean; reason?: string }> {
+  // This is intentionally limited to OpenCode. Vertex is the configured
+  // safety net and must remain available even when it has a transient error;
+  // blocking the only fallback would turn a recoverable provider incident
+  // into a hard pipeline failure.
+  if (provider !== "opencode" || !model) return { blocked: false };
+
+  try {
+    const health = await queryOne<RouteHealthRow>(
+      `SELECT
+         COUNT(*) FILTER (WHERE outcome IN ('failure', 'timeout'))::int AS recent_failures,
+         COUNT(*) FILTER (WHERE error_code = 'not_found')::int AS recent_not_found,
+         COUNT(*) FILTER (WHERE error_code = 'auth_error')::int AS recent_auth_errors,
+         COUNT(*) FILTER (WHERE error_code = 'timeout')::int AS recent_timeouts,
+         COUNT(*) FILTER (WHERE error_code = 'invalid_output')::int AS recent_invalid_outputs,
+         MAX(created_at) FILTER (WHERE outcome = 'success') AS last_success_at,
+         MAX(created_at) FILTER (WHERE outcome IN ('failure', 'timeout')) AS last_failure_at
+       FROM ai_usage_events
+       WHERE automation_id = $1
+         AND provider = $2
+         AND model = $3
+         AND created_at >= NOW() - make_interval(mins => $4)`,
+      [automationId, provider, model, ROUTE_HEALTH_WINDOW_MINUTES]
+    );
+    if (!health) return { blocked: false };
+
+    const lastFailure = health.last_failure_at ? Date.parse(health.last_failure_at) : Number.NaN;
+    const lastSuccess = health.last_success_at ? Date.parse(health.last_success_at) : Number.NaN;
+    // A later success re-opens the route immediately; transient failures must
+    // not keep a recovered model in cooldown.
+    if (!Number.isFinite(lastFailure) || (Number.isFinite(lastSuccess) && lastSuccess >= lastFailure)) {
+      return { blocked: false };
+    }
+
+    const notFound = Number(health.recent_not_found ?? 0);
+    const authErrors = Number(health.recent_auth_errors ?? 0);
+    const timeouts = Number(health.recent_timeouts ?? 0);
+    const invalidOutputs = Number(health.recent_invalid_outputs ?? 0);
+    const failures = Number(health.recent_failures ?? 0);
+
+    if (authErrors >= 1) return { blocked: true, reason: "route_auth_cooldown" };
+    if (notFound >= 2) return { blocked: true, reason: "route_not_found_cooldown" };
+    if (timeouts >= 2) return { blocked: true, reason: "route_timeout_cooldown" };
+    if (invalidOutputs >= 3) return { blocked: true, reason: "route_output_cooldown" };
+    if (failures >= 3) return { blocked: true, reason: "route_failure_cooldown" };
+  } catch (error) {
+    // Health telemetry is advisory. A schema/index issue must never disable
+    // all AI routing; the normal provider fallback remains authoritative.
+    console.warn(`[routing] route health check unavailable for ${provider}/${model}; continuing`, error);
+  }
+
+  return { blocked: false };
+}
+
+function isKeyHealthBlocked(
+  keyRow: { provider?: string | null; status: AiKeyStatus; last_failure_at?: string | null },
+): boolean {
   if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
   if (keyRow.status !== "rate_limited" && keyRow.status !== "quota_exhausted") return false;
+  // A transient status on the explicitly configured Vertex route must not
+  // make the safety net disappear. The provider call is the source of truth;
+  // its rate-limit result is persisted as next_retry_at and keeps workflows
+  // queued with backoff instead of turning them into terminal failures.
+  if (keyRow.provider === "google_vertex_proxy") return false;
   const failedAt = keyRow.last_failure_at ? Date.parse(keyRow.last_failure_at) : Number.NaN;
   // Provider-side throttles are not permanent circuit breakers. Retry after a
   // cooling window; database request/budget limits remain independently enforced.
@@ -240,6 +322,28 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
+        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel);
+        if (routeHealth.blocked) {
+          limitSkipped = true;
+          await recordUsageEvent({
+            automationId,
+            aiKeyId: keyRow.id,
+            provider: keyRow.provider,
+            model: effectiveModel ?? null,
+            outcome: "skipped",
+            latencyMs: 0,
+            inputTokens: null,
+            outputTokens: null,
+            errorMessage: null,
+            errorCode: routeHealth.reason ?? "route_health_cooldown",
+            userId: null,
+            workflowId: null,
+            applicationId: null,
+            attemptNumber: null,
+            routeRank: route.rank,
+          });
+          continue;
+        }
         const provider = route.reasoning_effort
           ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
           : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
@@ -291,6 +395,28 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
+        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel);
+        if (routeHealth.blocked) {
+          limitSkipped = true;
+          await recordUsageEvent({
+            automationId,
+            aiKeyId: keyRow.id,
+            provider: keyRow.provider,
+            model: effectiveModel ?? null,
+            outcome: "skipped",
+            latencyMs: 0,
+            inputTokens: null,
+            outputTokens: null,
+            errorMessage: null,
+            errorCode: routeHealth.reason ?? "route_health_cooldown",
+            userId: null,
+            workflowId: null,
+            applicationId: null,
+            attemptNumber: null,
+            routeRank: route.rank,
+          });
+          continue;
+        }
         const dbProvider = route.reasoning_effort
           ? buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config, route.reasoning_effort)
           : buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, effectiveModel, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);
@@ -531,8 +657,11 @@ export async function callWithUsageTracking<T>(
       lastError = err;
       const latencyMs = Date.now() - start;
       errorMessage = err.message ?? "Unknown error";
-      outcome = latencyMs > 60000 ? "timeout" : "failure";
       errorCode = classifyErrorCode(err);
+      // A slow malformed response is still an output failure, not a provider
+      // timeout. Keeping this distinction makes the dashboard actionable and
+      // lets the fallback policy handle bad model output consistently.
+      outcome = errorCode === "timeout" ? "timeout" : "failure";
 
       if (capturedUsage) {
         const u: { input_tokens: number; output_tokens: number } = capturedUsage;
@@ -559,8 +688,18 @@ export async function callWithUsageTracking<T>(
       });
       if (resolved.aiKeyId) await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
 
-      // On rate-limit / quota errors, exclude this provider and retry.
-      const isRetriable = ["rate_limit", "auth_error", "timeout", "server_error", "not_found", "configuration_error"].includes(errorCode ?? "");
+      // Provider transport failures and invalid model output are retryable.
+      // Invalid output must advance the route: a model can be reachable and
+      // still fail to produce the structured payload the pipeline requires.
+      const isRetriable = [
+        "rate_limit",
+        "auth_error",
+        "timeout",
+        "server_error",
+        "not_found",
+        "configuration_error",
+        "invalid_output",
+      ].includes(errorCode ?? "");
 
       if (isRetriable && attempt < MAX_RETRIES) {
         if (errorCode === "auth_error") {
@@ -615,7 +754,7 @@ export async function callWithUsageTracking<T>(
  *  4. Keyword fallback — last resort for any provider that deviates from the
  *     standard pattern above.
  */
-function classifyErrorCode(err: any): string | null {
+export function classifyAiErrorCode(err: any): string | null {
   const name: string = err?.name ?? "";
   const code: string = err?.code ?? "";
   const msg: string = (err?.message ?? "").toLowerCase();
@@ -646,9 +785,29 @@ function classifyErrorCode(err: any): string | null {
   if (msg.includes("rate limit") || msg.includes("quota")) return "rate_limit";
   if (msg.includes("not found")) return "not_found";
   if (msg.includes("server error") || msg.includes("service unavailable")) return "server_error";
-
+  if (
+    msg.includes("fetch failed") ||
+    msg.includes("bad gateway") ||
+    msg.includes("gateway timeout") ||
+    msg.includes("connection reset") ||
+    msg.includes("econn")
+  ) return "server_error";
+  if (
+    err?.name === "SyntaxError" ||
+    err?.name === "ZodError" ||
+    msg.includes("unexpected end of json") ||
+    msg.includes("unterminated string") ||
+    msg.includes("invalid json") ||
+    msg.includes("invalid model output") ||
+    msg.includes("output validation") ||
+    msg.includes("schema validation")
+  ) return "invalid_output";
   return null;
 }
+
+// Keep the internal call sites concise while exposing the classifier for a
+// small regression test without exposing routing internals.
+const classifyErrorCode = classifyAiErrorCode;
 
 interface UsageEventInput {
   automationId: string;

@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/server/db/neon";
 import { retryWorkflow } from "@/server/services/applicationAiWorkflowService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -95,7 +96,7 @@ export async function POST(req: NextRequest) {
   // the caller wait for it.
   if (workflowsRetried > 0) {
     await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST" }).catch((err) => {
+      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST", headers: getWorkflowDispatchHeaders() }).catch((err) => {
         console.error("[retry-failed-since] Dispatch kick failed:", err);
       })
     );

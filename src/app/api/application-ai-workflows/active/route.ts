@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { query as neonQuery } from "@/server/db/neon";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 // Every other route in this family (dispatch, [id], overview, review) sets
 // this explicitly - this was the one exception. Without it, Next.js/OpenNext
@@ -82,7 +83,7 @@ export async function GET(request: NextRequest) {
     if (hasQueuedOrStalledWork) {
       const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
       await backgroundDispatch(
-        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST" }).catch((err) => {
+        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST", headers: getWorkflowDispatchHeaders() }).catch((err) => {
           console.error("[active-workflows-poll] Opportunistic dispatch fetch failed:", err);
         })
       );
