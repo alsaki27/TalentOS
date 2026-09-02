@@ -249,11 +249,25 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0, skipped: 0 };
 
+  // The Matchmaker agent is also the manual control for candidate assignment.
+  // When it is disabled in the AI Control Centre, keep ingesting/logging jobs but
+  // do not load candidates, call an AI model, store outreach drafts, or create
+  // candidate-match activity. A config-read failure fails closed for assignment
+  // safety; a missing config preserves the historical enabled default.
+  let candidateMatchingEnabled = true;
+  try {
+    const matchmakerConfig = await findAgentConfigByAutomationId("job_ceo_matchmaker");
+    candidateMatchingEnabled = matchmakerConfig?.is_active !== false;
+  } catch (err) {
+    candidateMatchingEnabled = false;
+    console.error("[Job CEO] Matchmaker config could not be read; candidate matching disabled for safety:", (err as Error).message ?? String(err));
+  }
+
   // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
   // Previously listAllJobsForFuzzyDedupe was inside the inner loop; now it runs once.
   const [existingJobs, candidates] = await Promise.all([
     listAllJobsForFuzzyDedupe(),
-    loadCandidateSummaries(50),
+    candidateMatchingEnabled ? loadCandidateSummaries(50) : Promise.resolve([]),
   ]);
 
   const existingTitles = new Set<string>();
@@ -281,15 +295,16 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
       const companyKey = company.toLowerCase().trim();
       const isDuplicate = existingTitles.has(titleKey) && existingCompanies.has(companyKey);
 
-      var result = await callAgent("job_ceo_matchmaker", ctx, async (provider) => {
-        var opts: AgentOptions = {
-          temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_matchmaker.temperature,
-          max_output_tokens: 4096,
-          timeout_ms: 8000,
-        };
-        return runMatchmaker(opts, provider, ctx);
-      });
-      const matchResult = result.result as { matches: { candidateId: string; score: number; reasons: string[]; outreachDraft: string }[] };
+      const matchResult = candidateMatchingEnabled
+        ? (await callAgent("job_ceo_matchmaker", ctx, async (provider) => {
+            var opts: AgentOptions = {
+              temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_matchmaker.temperature,
+              max_output_tokens: 4096,
+              timeout_ms: 8000,
+            };
+            return runMatchmaker(opts, provider, ctx);
+          })).result as { matches: { candidateId: string; score: number; reasons: string[]; outreachDraft: string }[] }
+        : { matches: [] };
       const highMatches = matchResult.matches.filter((m) => m.score >= 90);
 
       if (!isDuplicate) {
