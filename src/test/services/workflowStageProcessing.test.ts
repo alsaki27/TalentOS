@@ -21,12 +21,14 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   findWorkflowById: vi.fn(),
   updateWorkflowStatus: vi.fn().mockResolvedValue(undefined),
   createStageRun: vi.fn().mockResolvedValue({ id: "stage-run-1" }),
-  updateStageRun: vi.fn().mockResolvedValue(undefined),
+  updateStageRun: vi.fn().mockResolvedValue(true),
   createArtifact: vi.fn().mockResolvedValue({ id: "artifact-1" }),
   listStageRuns: vi.fn().mockResolvedValue([]),
   listArtifacts: vi.fn().mockResolvedValue([]),
   claimNextPendingWorkflow: vi.fn().mockResolvedValue(null),
-  updateWorkflowHeartbeat: vi.fn().mockResolvedValue(undefined),
+  updateWorkflowHeartbeat: vi.fn().mockResolvedValue(true),
+  assertWorkflowClaim: vi.fn().mockResolvedValue(true),
+  closeOrphanedStageRuns: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock("@/server/repositories/aiAgentConfigRepository", () => ({

@@ -15,7 +15,7 @@ const DEFAULTS: AiRuntimeConfig = {
   active_routing_state_name: null,
   allow_unrouted_fallback: false,
   workflow_max_concurrency: 5,
-  workflow_claim_ttl_seconds: 420,
+  workflow_claim_ttl_seconds: 900,
   updated_by: null,
   updated_at: null,
 };

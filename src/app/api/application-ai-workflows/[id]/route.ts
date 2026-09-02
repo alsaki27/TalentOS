@@ -4,6 +4,7 @@ import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatc
 import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } from "@/server/repositories/applicationAiWorkflowRepository";
 import { advanceAeStageAfterAiCompletion } from "@/server/repositories/applicationsRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +71,8 @@ export async function POST(
       const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
       await backgroundDispatch(
         fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST'
+          method: 'POST',
+          headers: getWorkflowDispatchHeaders()
         }).catch((err) => {
           console.error(`[Workflow ${workflowId}] Retry dispatch fetch failed:`, err);
         })
@@ -86,7 +88,8 @@ export async function POST(
       const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
       await backgroundDispatch(
         fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST'
+          method: 'POST',
+          headers: getWorkflowDispatchHeaders()
         }).catch((err) => {
           console.error(`[Workflow ${workflowId}] Restart dispatch fetch failed:`, err);
         })
@@ -104,7 +107,8 @@ export async function POST(
       const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
       await backgroundDispatch(
         fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST'
+          method: 'POST',
+          headers: getWorkflowDispatchHeaders()
         }).catch((err) => {
           console.error(`[Workflow ${workflowId}] Rerun dispatch fetch failed:`, err);
         })

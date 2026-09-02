@@ -131,6 +131,9 @@ function isCrawlerAuthorized(req: NextRequest, pathname: string) {
 const OPEN_JOB_DATA_STYLE_PATHS = new Set([
   "/api/job-agent/openjobdata-ingest",
   "/api/admin/retry-failed-since",
+  // Workflow dispatch is also called by the Worker itself and by the
+  // scheduled GitHub dispatcher without a browser session.
+  "/api/application-ai-workflows/dispatch",
   // match-score's own handler has no auth check of its own (relies entirely
   // on this middleware gate) - only bypass its normal session requirement
   // for the CRON_SECRET-bearing server-to-server call retry-failed-since

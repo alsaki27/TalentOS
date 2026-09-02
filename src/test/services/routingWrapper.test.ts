@@ -105,6 +105,16 @@ describe("callWithUsageTracking error paths", () => {
     expect(sql).toContain("ai_usage_events");
   });
 
+  it("classifies malformed or schema-invalid model output as retryable output failure", async () => {
+    const { classifyAiErrorCode } = await import("@/lib/ai/routing");
+
+    expect(classifyAiErrorCode(new SyntaxError("Unterminated string in JSON"))).toBe("invalid_output");
+    expect(classifyAiErrorCode({ name: "ZodError", message: "output schema validation failed" })).toBe("invalid_output");
+    expect(classifyAiErrorCode(new Error("429 rate limit"))).toBe("rate_limit");
+    expect(classifyAiErrorCode(new Error("The operation was aborted"))).toBe("timeout");
+    expect(classifyAiErrorCode(new Error("OpenCode API error (530): tunnel unavailable"))).toBe("server_error");
+  });
+
   it("passes a named route's model override to the provider and usage metadata", async () => {
     const routedProvider = { send: vi.fn() };
     mockQuery.mockResolvedValueOnce([{
