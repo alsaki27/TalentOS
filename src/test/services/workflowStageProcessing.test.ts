@@ -58,9 +58,12 @@ vi.mock("@/lib/ai/routing", async () => {
 import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
 import {
   findWorkflowById,
+  createStageRun,
+  listStageRuns,
+  updateStageRun,
   updateWorkflowStatus,
 } from "@/server/repositories/applicationAiWorkflowRepository";
-import { callWithUsageTracking } from "@/lib/ai/routing";
+import { callWithUsageTracking, AiRouteCallError } from "@/lib/ai/routing";
 
 function hiringPanelWorkflow() {
   return {
@@ -87,6 +90,14 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (findWorkflowById as any).mockResolvedValue(hiringPanelWorkflow());
+    (listStageRuns as any).mockResolvedValue([]);
+    (callWithUsageTracking as any).mockResolvedValue(mockCallResult({
+      atsScore: 9,
+      recruiterScore: 9,
+      roleFitScore: 9,
+      truthfulnessRisk: 1,
+      passFail: "pass",
+    }));
   });
 
   it("hard-fail-grade score does NOT stop the pipeline — still reaches Final Polish", async () => {
@@ -163,5 +174,57 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       (c: any[]) => c[1] === "failed"
     );
     expect(failedCall).toBeFalsy();
+  });
+
+  it("allocates a new stage-run identity after a stale attempt already exists", async () => {
+    (listStageRuns as any).mockResolvedValue([{
+      automation_id: "application_hiring_panel",
+      sequence_number: 3,
+      attempt_number: 1,
+    }]);
+
+    await processWorkflowStage("wf-1");
+
+    expect(createStageRun).toHaveBeenCalledWith(expect.objectContaining({
+      workflowId: "wf-1",
+      sequenceNumber: 3,
+      attemptNumber: 2,
+    }));
+  });
+
+  it("advances the stage-run identity when two dispatchers race on INSERT", async () => {
+    (createStageRun as any)
+      .mockRejectedValueOnce({
+        code: "23505",
+        constraint: "application_ai_stage_runs_workflow_id_sequence_number_attem_key",
+      })
+      .mockResolvedValueOnce({ id: "stage-run-2" });
+
+    await processWorkflowStage("wf-1");
+
+    expect((createStageRun as any).mock.calls.slice(-2)).toEqual([
+      [expect.objectContaining({ attemptNumber: 1 })],
+      [expect.objectContaining({ attemptNumber: 2 })],
+    ]);
+  });
+
+  it("persists the normalized invalid_output code for malformed provider output", async () => {
+    (callWithUsageTracking as any).mockRejectedValue(new AiRouteCallError(
+      "Provider returned malformed JSON",
+      {
+        aiKeyId: null,
+        provider: "google_vertex_proxy",
+        model: "gemini-2.5-flash-lite",
+        routeRank: 1,
+        errorCode: "invalid_output",
+      },
+    ));
+
+    await processWorkflowStage("wf-1");
+
+    const failedStageCall = (updateStageRun as any).mock.calls.find(
+      (c: any[]) => c[1]?.status === "failed",
+    );
+    expect(failedStageCall?.[1]?.error_code).toBe("invalid_output");
   });
 });

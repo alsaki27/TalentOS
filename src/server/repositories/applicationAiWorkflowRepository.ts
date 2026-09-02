@@ -3,6 +3,11 @@
 import { query, queryOne, execute } from "@/server/db/neon";
 import type { WorkflowStatus, StageRunStatus, ApplicationAgentId, ProviderSnapshot } from "@/lib/ai/application-agents/types";
 
+// Provider calls can legitimately take a few minutes across fallback routes.
+// Keep stale recovery conservative enough to avoid reclaiming a live call,
+// while still recovering a genuinely abandoned Worker invocation.
+const STALE_HEARTBEAT_SECONDS = 300;
+
 export interface WorkflowRow {
   id: string;
   application_id: string;
@@ -196,10 +201,10 @@ export async function updateWorkflowStatus(
 // wrapped in a second outer retry loop in applicationAiWorkflowService.ts,
 // multiplying worst-case attempts and therefore worst-case wall time).
 //
-// STALE_HEARTBEAT_INTERVAL tightens from the old 5 minutes to 90 seconds - a
-// live stage still refreshes its heartbeat every 20-45s, so 90s already
-// tolerates 2-4 missed beats before assuming the dispatcher died, without
-// leaving a genuinely dead Worker undetected for minutes.
+// STALE_HEARTBEAT_INTERVAL is deliberately five minutes. A live stage can
+// spend several minutes traversing provider fallback routes, and heartbeat
+// timers are not guaranteed to run during a serverless pause. Reclaiming at
+// 90 seconds caused healthy slow calls to be treated as orphaned.
 //
 // recovery_count threshold dropped from 3 to 1: a *second* stale claim on
 // the same workflow means something is structurally broken (not a transient
@@ -221,7 +226,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       SELECT id FROM application_ai_workflows
       WHERE (status = 'running' AND (
                claim_expires_at IS NULL OR claim_expires_at < NOW()
-               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '90 seconds'
+               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds'
              ))
          OR (status = 'queued'
              AND (next_retry_at IS NULL OR next_retry_at <= NOW())
@@ -369,12 +374,12 @@ export async function closeOrphanedStageRuns(workflowId?: string): Promise<numbe
      FROM application_ai_workflows w
      WHERE sr.workflow_id = w.id
        AND sr.status = 'running'
-       AND sr.started_at < NOW() - INTERVAL '120 seconds'
+       AND sr.started_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds'
        AND ($1::uuid IS NULL OR sr.workflow_id = $1::uuid)
        AND (
          w.status <> 'running'
          OR w.heartbeat_at IS NULL
-       OR w.heartbeat_at < NOW() - INTERVAL '90 seconds'
+         OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds'
          OR (w.claimed_at IS NOT NULL AND sr.started_at < w.claimed_at)
        )`,
     [workflowId ?? null]

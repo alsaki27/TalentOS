@@ -3,7 +3,7 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import { callWithUsageTracking, AiRouteCallError, type CallContext } from "@/lib/ai/routing";
+import { callWithUsageTracking, AiRouteCallError, classifyAiErrorCode, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
@@ -710,20 +710,46 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   const previousArtifacts = await listArtifacts(workflowId);
   const priorStageAttempts = previousRuns.filter(
     (r) => r.automation_id === agentId && r.sequence_number === currentIdx + 1
-  ).length;
+  );
+  const priorStageAttemptNumbers = priorStageAttempts
+    .map((r) => Number(r.attempt_number))
+    .filter(Number.isFinite);
+  const nextStageAttemptNumber = (priorStageAttemptNumbers.length > 0
+    ? Math.max(...priorStageAttemptNumbers)
+    : 0) + 1;
   // A deliberate retry clears last_error and starts a fresh attempt budget.
   // Historical stage rows remain immutable audit history, but must not make a
   // repaired provider fail immediately because the lifetime count is already
   // above ai_agent_configs.max_attempts. Automatic retries retain last_error,
   // so they continue counting within the current retry cycle.
-  const attemptNumber = wf.last_error == null ? 1 : priorStageAttempts + 1;
+  const retryAttemptNumber = wf.last_error == null ? 1 : nextStageAttemptNumber;
 
-  const stageRun = await createStageRun({
-    workflowId,
-    automationId: agentId,
-    sequenceNumber: currentIdx + 1,
-    attemptNumber,
-  });
+  // attempt_number is also the unique audit identity for a workflow/stage.
+  // Never reuse attempt 1 after a stale claim left an old row behind. A
+  // second dispatcher can still race between listStageRuns and INSERT, so
+  // advance to the next identity if Postgres reports that exact unique-key
+  // conflict. The retry budget remains separate from this identity.
+  let stageAttemptNumber = nextStageAttemptNumber;
+  let stageRun: Awaited<ReturnType<typeof createStageRun>> | null = null;
+  for (let allocationAttempt = 0; allocationAttempt < 3; allocationAttempt++) {
+    try {
+      stageRun = await createStageRun({
+        workflowId,
+        automationId: agentId,
+        sequenceNumber: currentIdx + 1,
+        attemptNumber: stageAttemptNumber,
+      });
+      break;
+    } catch (allocationError: any) {
+      const isAttemptConflict = allocationError?.code === "23505"
+        && String(allocationError?.constraint ?? allocationError?.message ?? "")
+          .includes("application_ai_stage_runs_workflow_id_sequence_number_attem");
+      if (!isAttemptConflict || allocationAttempt === 2) throw allocationError;
+      stageAttemptNumber += 1;
+    }
+  }
+
+  if (!stageRun) throw new Error("Could not allocate a unique AI stage attempt");
 
   const ownedStageUpdate = async (updates: Parameters<typeof updateStageRun>[1]): Promise<void> => {
     const updated = await updateStageRun(stageRun.id, updates, { workflowId, lockVersion });
@@ -761,7 +787,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         userId: wf.started_by ?? undefined,
         workflowId,
         applicationId: wf.application_id,
-        attemptNumber,
+        attemptNumber: stageAttemptNumber,
       };
       // Each production provider enforces AgentOptions.timeout_ms with its
       // own AbortController. Let that error reach callWithUsageTracking so it
@@ -918,6 +944,9 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     }
     await ownedStageUpdate({
       status: "failed",
+      error_code: err instanceof AiRouteCallError
+        ? (err.errorCode ?? classifyAiErrorCode(err) ?? "stage_error")
+        : (classifyAiErrorCode(err) ?? "stage_error"),
       error_message: err.message ?? "Unknown error",
       completed_at: new Date().toISOString(),
     });
@@ -928,7 +957,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     // max_attempts budget was already consumed, leave the stage queued behind
     // a cooldown instead of converting a temporary 429 into a terminal
     // workflow failure.
-    if (isProviderCooldown || attemptNumber < maxAttempts) {
+    if (isProviderCooldown || retryAttemptNumber < maxAttempts) {
       await updateWorkflowStatus(workflowId, "queued", {
         current_stage: currentIdx,
         last_error: err.message,
@@ -1024,7 +1053,14 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
       // makes the next stall debuggable via GET .../ai-workflow.
       const message = err?.message ?? String(err);
       console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
-      await updateWorkflowStatus(wf.id, "running", { last_error: message } as any).catch(() => { });
+      const requeued = await updateWorkflowStatus(wf.id, "queued", {
+        current_stage: wf.current_stage,
+        last_error: `Dispatcher error: ${message}`,
+        next_retry_at: new Date(Date.now() + 60_000).toISOString(),
+      } as any, wf.lock_version).catch(() => false);
+      if (requeued) {
+        await syncWorkflowToApplication(wf.id, "queued").catch(() => { });
+      }
     }
   }
 
@@ -1089,8 +1125,17 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   // stage_runs indefinitely after auto-trigger, even with the waitUntil fix
   // (ef4e182) in place - because that fix wrapped the outer dispatch call,
   // not this inner one.
-  await processWorkflowStage(workflowId, claimed.lock_version).catch(err => {
+  await processWorkflowStage(workflowId, claimed.lock_version).catch(async err => {
     console.error(`[Dispatch] Workflow ${workflowId} dispatch failed:`, err);
+    const latest = await findWorkflowById(workflowId).catch(() => null);
+    const requeued = await updateWorkflowStatus(workflowId, "queued", {
+      current_stage: latest?.current_stage ?? wf.current_stage,
+      last_error: `Dispatcher error: ${err?.message ?? String(err)}`,
+      next_retry_at: new Date(Date.now() + 60_000).toISOString(),
+    }, claimed.lock_version).catch(() => false);
+    if (requeued) {
+      await syncWorkflowToApplication(workflowId, "queued").catch(() => { });
+    }
   });
 
   return { dispatched: true, workflowId, stage: wf.current_stage, count: 1 };
