@@ -182,12 +182,29 @@ export async function updateWorkflowStatus(
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
 // RECOVERY: also reclaims running workflows whose claim lease has expired or
-// whose heartbeat has been stale for five minutes. These are workflows
-// abandoned by a crashed or dead dispatcher. After 3 recoveries the workflow
-// is moved to 'failed' to prevent infinite retry loops on persistently broken stages.
-// A live stage refreshes its heartbeat every 20 seconds, while configured
-// provider timeouts are 120-180 seconds. Five minutes therefore leaves room
-// for a slow provider call while recovering a genuinely dead Worker quickly.
+// whose heartbeat has been stale for STALE_HEARTBEAT_INTERVAL. These are
+// workflows abandoned by a crashed or dead dispatcher.
+//
+// Retuned 2026-09 against real ai_usage_events latency data (not a guess):
+// successful OpenCode calls run up to ~180s at the tail (p99 69-157s, max
+// 179s observed) - a short timeout here would cut off calls that were going
+// to succeed, which is worse than the problem this is fixing. The claim TTL
+// (ai_runtime_config.workflow_claim_ttl_seconds) was retuned separately to
+// ~720s to cover a full flat retry budget of up to 4 attempts at that real
+// tail latency, replacing the old 900s value that existed only to compensate
+// for a since-removed *nested* retry loop (routing.ts MAX_RETRIES was itself
+// wrapped in a second outer retry loop in applicationAiWorkflowService.ts,
+// multiplying worst-case attempts and therefore worst-case wall time).
+//
+// STALE_HEARTBEAT_INTERVAL tightens from the old 5 minutes to 90 seconds - a
+// live stage still refreshes its heartbeat every 20-45s, so 90s already
+// tolerates 2-4 missed beats before assuming the dispatcher died, without
+// leaving a genuinely dead Worker undetected for minutes.
+//
+// recovery_count threshold dropped from 3 to 1: a *second* stale claim on
+// the same workflow means something is structurally broken (not a transient
+// dispatcher blip), so it should surface as a failure immediately rather
+// than silently eating up to an hour of retries before anyone notices.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   const rows = await query<WorkflowRow>(
     `WITH config AS MATERIALIZED (
@@ -204,7 +221,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       SELECT id FROM application_ai_workflows
       WHERE (status = 'running' AND (
                claim_expires_at IS NULL OR claim_expires_at < NOW()
-               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '5 minutes'
+               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '90 seconds'
              ))
          OR (status = 'queued'
              AND (next_retry_at IS NULL OR next_retry_at <= NOW())
@@ -216,7 +233,7 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
       FOR UPDATE SKIP LOCKED
     )
     UPDATE application_ai_workflows w
-    SET status = CASE WHEN w.recovery_count >= 3 AND w.status = 'running'
+    SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
                       THEN 'failed'
                       ELSE 'running'
                  END,
@@ -248,6 +265,16 @@ export async function assertWorkflowClaim(workflowId: string, lockVersion: numbe
   return Boolean(row);
 }
 
+// Extends the claim by a small fixed increment per heartbeat rather than
+// granting a full fresh workflow_claim_ttl_seconds every 20-45s. The old
+// full-reset behavior meant a hung process (heartbeat still firing, but the
+// underlying provider call genuinely stuck forever) could hold its claim
+// indefinitely - every heartbeat re-armed a brand new 15-minute window
+// before the previous one ever had a chance to run out. A small increment
+// still comfortably outpaces normal progress (heartbeat every 20-45s,
+// +60s per beat) but bounds how far a hung stage can push its own deadline
+// out: the increment is capped so claim_expires_at can never run further
+// ahead than a single fresh TTL grant from right now.
 export async function updateWorkflowHeartbeat(workflowId: string, lockVersion?: number): Promise<boolean> {
   const params: (string | number)[] = [workflowId];
   let ownership = "";
@@ -258,7 +285,10 @@ export async function updateWorkflowHeartbeat(workflowId: string, lockVersion?: 
   const result = await execute(
     `UPDATE application_ai_workflows w
      SET heartbeat_at = NOW(),
-         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
+         claim_expires_at = LEAST(
+           GREATEST(w.claim_expires_at, NOW()) + INTERVAL '60 seconds',
+           NOW() + make_interval(secs => c.workflow_claim_ttl_seconds)
+         ),
          updated_at = NOW()
      FROM ai_runtime_config c
      WHERE w.id = $1 AND c.singleton = true AND w.status = 'running'${ownership}`,
@@ -336,12 +366,12 @@ export async function closeOrphanedStageRuns(workflowId?: string): Promise<numbe
      FROM application_ai_workflows w
      WHERE sr.workflow_id = w.id
        AND sr.status = 'running'
-       AND sr.started_at < NOW() - INTERVAL '5 minutes'
+       AND sr.started_at < NOW() - INTERVAL '120 seconds'
        AND ($1::uuid IS NULL OR sr.workflow_id = $1::uuid)
        AND (
          w.status <> 'running'
          OR w.heartbeat_at IS NULL
-       OR w.heartbeat_at < NOW() - INTERVAL '5 minutes'
+       OR w.heartbeat_at < NOW() - INTERVAL '90 seconds'
          OR (w.claimed_at IS NOT NULL AND sr.started_at < w.claimed_at)
        )`,
     [workflowId ?? null]

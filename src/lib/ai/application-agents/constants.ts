@@ -1,11 +1,25 @@
 // Agent constants and configuration defaults.
+//
+// timeoutMs retuned 2026-09 against real ai_usage_events latency for
+// *successful* calls (trailing 7 days, outcome = 'success'). The prior
+// values left almost no margin above observed real-world max latency
+// (job_lens/hiring_panel max ~119.3-119.7s against a 120s timeout;
+// final_polish max ~179.2s against a 180s timeout - under 1s of headroom),
+// meaning a real, successful-but-slow call could be aborted right at the
+// finish line and counted as a timeout failure. New values add real margin
+// above the observed max, not just the p99, so a genuinely successful call
+// is never cut off:
+//   job_lens:      p99 106s / max 120s  -> 150s (was 120s)
+//   resume_forge:  p99  75s / max 115s  -> unchanged, 180s already generous
+//   hiring_panel:  p99 103s / max 119s  -> 150s (was 120s)
+//   final_polish:  p99 157s / max 179s  -> 220s (was 180s)
 
 export const AGENT_CONFIG_DEFAULTS = {
   application_job_lens: {
     displayName: "Job Lens",
     temperature: 0.2,
     maxOutputTokens: 32768,
-    timeoutMs: 120_000,
+    timeoutMs: 150_000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
@@ -23,7 +37,7 @@ export const AGENT_CONFIG_DEFAULTS = {
     displayName: "Hiring Panel",
     temperature: 0.1,
     maxOutputTokens: 32768,
-    timeoutMs: 120_000,
+    timeoutMs: 150_000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 6.0,
@@ -32,7 +46,7 @@ export const AGENT_CONFIG_DEFAULTS = {
     displayName: "Final Polish",
     temperature: 0.2,
     maxOutputTokens: 32768,
-    timeoutMs: 180_000,
+    timeoutMs: 220_000,
     maxAttempts: 2,
     approvalPolicy: "auto" as const,
     minimumScore: 0,
