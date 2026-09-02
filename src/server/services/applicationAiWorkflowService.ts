@@ -565,7 +565,10 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
  * Returns the new stage number.
  */
 async function continueToNextStage(workflowId: string, nextStage: number, lockVersion?: number): Promise<number> {
-  const updated = await updateWorkflowStatus(workflowId, "queued", { current_stage: nextStage }, lockVersion);
+  const updated = await updateWorkflowStatus(workflowId, "queued", {
+    current_stage: nextStage,
+    stage_retry_count: 0,
+  }, lockVersion);
   if (lockVersion !== undefined && !updated) {
     throw new Error("Workflow claim lost before advancing to the next stage");
   }
@@ -717,12 +720,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   const nextStageAttemptNumber = (priorStageAttemptNumbers.length > 0
     ? Math.max(...priorStageAttemptNumbers)
     : 0) + 1;
-  // A deliberate retry clears last_error and starts a fresh attempt budget.
-  // Historical stage rows remain immutable audit history, but must not make a
-  // repaired provider fail immediately because the lifetime count is already
-  // above ai_agent_configs.max_attempts. Automatic retries retain last_error,
-  // so they continue counting within the current retry cycle.
-  const retryAttemptNumber = wf.last_error == null ? 1 : nextStageAttemptNumber;
+  // The workflow stores the retry budget separately from stage-run identity.
+  // A deliberate retry resets stage_retry_count, while ordinary failures
+  // increment it. Historical stage rows therefore remain immutable audit
+  // history without making a repaired provider fail immediately.
+  const retryAttemptNumber = (wf.stage_retry_count ?? 0) + 1;
 
   // attempt_number is also the unique audit identity for a workflow/stage.
   // Never reuse attempt 1 after a stale claim left an old row behind. A
@@ -961,6 +963,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       await updateWorkflowStatus(workflowId, "queued", {
         current_stage: currentIdx,
         last_error: err.message,
+        stage_retry_count: isProviderCooldown ? (wf.stage_retry_count ?? 0) : retryAttemptNumber,
         next_retry_at: isProviderCooldown
           ? new Date(Date.now() + 15 * 60_000).toISOString()
           : null,
@@ -1228,7 +1231,11 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
   // freshly re-queued, not-yet-processed workflow displayed a stale
   // "All configured routes failed" error from before the retry, reading
   // as a brand-new failure when it wasn't one.
-  await updateWorkflowStatus(workflowId, "queued", { last_error: null, next_retry_at: null });
+  await updateWorkflowStatus(workflowId, "queued", {
+    last_error: null,
+    next_retry_at: null,
+    stage_retry_count: 0,
+  });
   await syncWorkflowToApplication(workflowId, "queued");
 }
 
@@ -1246,7 +1253,12 @@ export async function restartWorkflow(workflowId: string): Promise<void> {
     "DELETE FROM application_ai_artifacts WHERE workflow_id = $1",
     [workflowId]
   );
-  await updateWorkflowStatus(workflowId, "queued", { current_stage: 0, last_error: null, next_retry_at: null });
+  await updateWorkflowStatus(workflowId, "queued", {
+    current_stage: 0,
+    last_error: null,
+    next_retry_at: null,
+    stage_retry_count: 0,
+  });
   await syncWorkflowToApplication(workflowId, "queued");
 }
 
@@ -1255,6 +1267,11 @@ export async function rerunFromStage(workflowId: string, stage: number): Promise
   if (!wf) return;
   await closeOrphanedStageRuns(workflowId);
   await refreshWorkflowBaseResume(workflowId, wf);
-  await updateWorkflowStatus(workflowId, "queued", { current_stage: Math.max(0, stage), last_error: null, next_retry_at: null });
+  await updateWorkflowStatus(workflowId, "queued", {
+    current_stage: Math.max(0, stage),
+    last_error: null,
+    next_retry_at: null,
+    stage_retry_count: 0,
+  });
   await syncWorkflowToApplication(workflowId, "queued");
 }

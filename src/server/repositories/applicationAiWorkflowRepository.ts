@@ -27,6 +27,7 @@ export interface WorkflowRow {
   claimed_by: string | null;
   heartbeat_at: string | null;
   next_retry_at: string | null;
+  stage_retry_count: number;
   lock_version: number;
   recovery_count: number;
 }
@@ -144,6 +145,10 @@ export async function updateWorkflowStatus(
     // requeued and immediately terminal-fails on its next claim, even when
     // the underlying provider/orchestration issue has been fixed.
     fields.push("recovery_count = 0");
+  }
+  if (extra?.stage_retry_count !== undefined) {
+    fields.push(`stage_retry_count = $${idx++}`);
+    values.push(extra.stage_retry_count as number);
   }
   if (extra?.current_stage !== undefined) {
     fields.push(`current_stage = $${idx++}`);
