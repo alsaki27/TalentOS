@@ -149,6 +149,14 @@ export interface AgentJobData {
   employmentType: string | null;
   seniorityLevel: string | null;
   salaryRange: string | null;
+  // Job Lens's cached job-only analysis (093_job_analysis_cache.sql) - named
+  // to match the real jobs table columns, since ctx.job is actually the raw
+  // DB row (snake_case) at runtime despite this interface's otherwise-
+  // camelCase fields; every consumer already treats ctx.job as `any` rather
+  // than trusting this shape, so matching the real column names here is more
+  // useful than staying consistent with the rest of the interface.
+  job_analysis?: unknown;
+  job_analysis_schema_version?: string | null;
 }
 
 export interface AgentResumeData {

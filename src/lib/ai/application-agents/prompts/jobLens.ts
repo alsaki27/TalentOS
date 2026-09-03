@@ -1,8 +1,23 @@
-// Job Lens prompt builder.
-// Job Lens now classifies every material JD requirement against the candidate's
-// evidence (base resume, Source of Truth, evidence bank, verified skills), not
-// just extracts the JD. requirementAnalysis is the single structured source of
-// truth every downstream gate consumes.
+// Job Lens prompt builders.
+//
+// Split in two: buildJobOnlyLensPrompt() extracts everything that depends
+// only on the job posting (title, skills, tools, ATS keywords, etc.) - this
+// is what jobs.job_analysis caches once per job (093_job_analysis_cache.sql).
+// buildRequirementAnalysisPrompt() classifies those requirements against one
+// candidate's evidence (base resume, Source of Truth, evidence bank,
+// verified skills) and produces ONLY requirementAnalysis, the per-candidate
+// part that still runs on every application and is never cached. Both are
+// shared with jobCategorization.ts, which requests the same job-only fields
+// in its own single categorization call so the two never drift on what
+// counts as "job-only" data.
+//
+// Kept as two separate functions (not one prompt with an optional
+// candidateContext) specifically so jobCategorization.ts - which has no
+// candidate context at all - can share the exact same job-only instructions
+// byte-for-byte instead of a second, hand-copied near-duplicate.
+
+import { mergeSkillSources } from "./mergeSkillSources";
+import type { JobOnlyAnalysisV1 } from "../schemas";
 
 export interface JobLensCandidateContext {
   baseResume?: {
@@ -17,36 +32,13 @@ export interface JobLensCandidateContext {
   verifiedSkills?: string[];
 }
 
-export function buildJobLensPrompt(job: any, candidateContext?: JobLensCandidateContext): string {
-  const ctx = candidateContext ?? {};
-
-  const baseSkills: string[] = Array.isArray(ctx.baseResume?.skills)
-    ? ctx.baseResume.skills.filter((s) => typeof s === "string")
-    : [];
-  const baseExperience = Array.isArray(ctx.baseResume?.experience) ? ctx.baseResume.experience : [];
-  const baseEducation = Array.isArray(ctx.baseResume?.education) ? ctx.baseResume.education : [];
-  const baseCertifications = Array.isArray(ctx.baseResume?.certifications)
-    ? ctx.baseResume.certifications.filter((c) => typeof c === "string")
-    : [];
-  const evidence = Array.isArray(ctx.evidence) ? ctx.evidence : [];
-  const sotSkills = Array.isArray(ctx.sourceOfTruth?.confirmedSkills)
-    ? ctx.sourceOfTruth.confirmedSkills.filter((s) => typeof s === "string")
-    : [];
-  const verifiedSkills = Array.isArray(ctx.verifiedSkills)
-    ? ctx.verifiedSkills.filter((s) => typeof s === "string")
-    : [];
-
-  // Compact, factual candidate snapshot — enough for support classification,
-  // never the full base resume JSON.
-  const experienceLines = baseExperience.map((exp, i) => {
-    const bullets = Array.isArray(exp.bullets) ? exp.bullets : [];
-    const bulletText = bullets
-      .map((b) => (typeof b === "string" ? b : (b as any)?.text ?? ""))
-      .filter(Boolean)
-      .join(" | ");
-    return `[${i}] ${exp.title} @ ${exp.company}: ${bulletText.slice(0, 600)}`;
-  }).join("\n");
-
+/**
+ * Job-only extraction: everything a job posting itself determines, with no
+ * candidate context at all. Shared verbatim by jobCategorization.ts's single
+ * categorization call, so the field definitions below are the one place
+ * this wording lives.
+ */
+export function buildJobOnlyLensPrompt(job: any): string {
   return `You are Job Lens, an AI that analyzes job descriptions to extract structured requirements.
 Your output is the targeting data for a resume-writing pipeline: downstream agents decide what to
 emphasize, what exact words to use, and what they are FORBIDDEN to claim, based entirely on what
@@ -98,10 +90,98 @@ Analyze this job posting and return a JSON object with the following fields:
 - ambiguities: unclear or missing information in the JD
 - rawSummary: a brief plain-language summary of the role, ending with one sentence naming the
   2-3 things this employer most wants to see on page one of a resume
+
+JOB POSTING:
+Title: ${job?.title ?? "Unknown"}
+Company: ${job?.company ?? "Unknown"}
+Location: ${job?.location ?? "Not specified"}
+Description: ${resolveJobDescription(job).slice(0, 8000)}
+Employment Type: ${job?.employment_type ?? "Not specified"}
+Seniority: ${job?.seniority_level ?? "Not specified"}
+Salary: ${job?.salary_range ?? "Not specified"}
+
+Return ONLY valid JSON. No markdown fences, no explanation.`;
+}
+
+/**
+ * Per-candidate classification: takes the job-only analysis (fresh or from
+ * the jobs.job_analysis cache - identical either way, since it's the same
+ * shape either way) and classifies every material requirement against one
+ * candidate's evidence. Produces ONLY requirementAnalysis - every downstream
+ * consumer (resumeForge.ts, hiringPanel.ts, finalPolish.ts,
+ * requirementCoverage.ts, disposition.ts) reads the merged JobAnalysisV1
+ * shape jobLens.ts's runner assembles from this plus the job-only analysis,
+ * so none of them need to change for this split.
+ */
+export function buildRequirementAnalysisPrompt(
+  jobOnlyAnalysis: JobOnlyAnalysisV1,
+  candidateContext?: JobLensCandidateContext
+): string {
+  const ctx = candidateContext ?? {};
+
+  const baseSkills: string[] = Array.isArray(ctx.baseResume?.skills)
+    ? ctx.baseResume.skills.filter((s) => typeof s === "string")
+    : [];
+  const baseExperience = Array.isArray(ctx.baseResume?.experience) ? ctx.baseResume.experience : [];
+  const baseEducation = Array.isArray(ctx.baseResume?.education) ? ctx.baseResume.education : [];
+  const baseCertifications = Array.isArray(ctx.baseResume?.certifications)
+    ? ctx.baseResume.certifications.filter((c) => typeof c === "string")
+    : [];
+  const evidence = Array.isArray(ctx.evidence) ? ctx.evidence : [];
+  const sotSkills = Array.isArray(ctx.sourceOfTruth?.confirmedSkills)
+    ? ctx.sourceOfTruth.confirmedSkills.filter((s) => typeof s === "string")
+    : [];
+  const verifiedSkills = Array.isArray(ctx.verifiedSkills)
+    ? ctx.verifiedSkills.filter((s) => typeof s === "string")
+    : [];
+  // Two separate DB sources (candidates.verified_skills vs
+  // candidate_source_of_truth.confirmed_skills) that can overlap - merged
+  // into one deduplicated, provenance-tagged list rather than sent as two
+  // un-deduplicated arrays.
+  const confirmedOrVerifiedSkills = mergeSkillSources(sotSkills, verifiedSkills);
+
+  const experienceLines = baseExperience.map((exp, i) => {
+    const bullets = Array.isArray(exp.bullets) ? exp.bullets : [];
+    const bulletText = bullets
+      .map((b) => (typeof b === "string" ? b : (b as any)?.text ?? ""))
+      .filter(Boolean)
+      .join(" | ");
+    return `[${i}] ${exp.title} @ ${exp.company}: ${bulletText.slice(0, 600)}`;
+  }).join("\n");
+
+  // The requirements to classify come from the job-only analysis, already
+  // extracted and prioritized - not re-parsed from raw JD text, which is
+  // both cheaper and (per the plan) more consistent than re-deriving the
+  // same list from scratch on every application.
+  const requirementSources = [
+    ...jobOnlyAnalysis.requiredSkills.map((r) => ({ requirement: r, hint: "required" as const })),
+    ...jobOnlyAnalysis.tools.map((r) => ({ requirement: r, hint: "required" as const })),
+    ...jobOnlyAnalysis.certifications.map((r) => ({ requirement: r, hint: "required" as const })),
+    ...jobOnlyAnalysis.preferredSkills.map((r) => ({ requirement: r, hint: "nice_to_have" as const })),
+  ];
+
+  return `You are Job Lens, an AI that classifies a job posting's requirements against one
+candidate's evidence. The job posting itself has already been analyzed (below) - your only job
+here is per-candidate: for each requirement, decide whether THIS candidate's material supports it.
+Your output is the targeting data for a resume-writing pipeline: downstream agents decide what to
+emphasize and what they are FORBIDDEN to claim, based entirely on your classification. Precision
+here decides whether the final resume beats the ATS filter and survives a recruiter's 6-second scan.
+
+JOB POSTING (already analyzed - job-only fields, not candidate-specific):
+Title: ${jobOnlyAnalysis.title}
+Company: ${jobOnlyAnalysis.company}
+Domain: ${jobOnlyAnalysis.domain ?? "Not specified"}
+Seniority: ${jobOnlyAnalysis.seniority ?? "Not specified"}
+Summary: ${jobOnlyAnalysis.rawSummary}
+Requirements to classify (required unless marked nice_to_have below): ${JSON.stringify(requirementSources)}
+Certifications/credentials named in the posting: ${JSON.stringify(jobOnlyAnalysis.certifications)}
+Explicit prohibited-unless-evidenced claims from the posting: ${JSON.stringify(jobOnlyAnalysis.prohibitedUnsupportedClaims)}
+
+Return a JSON object with:
 - requirementAnalysis: array of classified requirements — THE most important field. Create ONE
-  entry for every material JD requirement: each required skill, required tool, license,
-  certification, security clearance, work-authorization status, and any must-have domain
-  experience. Each entry is:
+  entry for every material JD requirement listed above: each required skill, required tool,
+  license, certification, security clearance, work-authorization status, and any must-have
+  domain experience. Each entry is:
   {
     "requirement": "exact JD phrasing (or close, e.g. 'AutoCAD')",
     "category": "skill" | "tool" | "cert" | "credential" | "clearance" | "other",
@@ -125,10 +205,9 @@ REQUIREMENT CLASSIFICATION RULES (CRITICAL — these statuses drive every downst
   cited when support exists.
 
 PRIORITY RULES FOR SUPPORT CLASSIFICATION:
-* Source of Truth confirmed skills carry the SAME authority as the base resume. A skill
-  confirmed in SoT is "supported_but_not_surfaced" (or supported_by_resume if the base resume
-  also mentions it).
-* Verified skills (recruiter-confirmed) are real candidate skills too — treat them like SoT.
+* Every skill in CONFIRMED/VERIFIED SKILLS carries the SAME authority as the base resume,
+  regardless of which source(s) named it. A skill from that list is "supported_but_not_surfaced"
+  (or supported_by_resume if the base resume also mentions it).
 * The evidence bank supports claims the recruiter has already accepted — cite "evidence:<title>".
 * Never classify something as supported unless the provided candidate material actually
   mentions it. When in doubt between unsupported and supported, choose unsupported.
@@ -139,21 +218,10 @@ BASE RESUME EXPERIENCE:
 ${experienceLines || "(none)"}
 BASE RESUME EDUCATION: ${baseEducation.length > 0 ? JSON.stringify(baseEducation.map((e) => `${e.degree} — ${e.school}`)) : "(none)"}
 BASE RESUME CERTIFICATIONS: ${baseCertifications.length > 0 ? JSON.stringify(baseCertifications) : "(none)"}
-SOURCE OF TRUTH CONFIRMED SKILLS (recruiter-verified, same authority as base resume):
-${sotSkills.length > 0 ? JSON.stringify(sotSkills) : "(none)"}
-VERIFIED SKILLS (additional recruiter-confirmed competencies):
-${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none)"}
+CONFIRMED/VERIFIED SKILLS (recruiter-confirmed, same authority as base resume; each is tagged with which source(s) named it - "(verified)", "(confirmed)", or both - purely informational, both sources are equally trustworthy):
+${confirmedOrVerifiedSkills.length > 0 ? JSON.stringify(confirmedOrVerifiedSkills) : "(none)"}
 EVIDENCE BANK (recruiter-accepted narrative facts):
 ${evidence.length > 0 ? JSON.stringify(evidence.map((e) => ({ title: e.title, description: e.description.slice(0, 300), relatedSkills: e.relatedSkills }))) : "(none)"}
-
-JOB POSTING:
-Title: ${job?.title ?? "Unknown"}
-Company: ${job?.company ?? "Unknown"}
-Location: ${job?.location ?? "Not specified"}
-Description: ${resolveJobDescription(job).slice(0, 8000)}
-Employment Type: ${job?.employment_type ?? "Not specified"}
-Seniority: ${job?.seniority_level ?? "Not specified"}
-Salary: ${job?.salary_range ?? "Not specified"}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

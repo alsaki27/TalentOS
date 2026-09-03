@@ -127,6 +127,13 @@ export const AGENT_CONFIG_DEFAULTS = {
 
 export const SCHEMA_VERSIONS = {
   jobAnalysis: "JobAnalysisV1",
+  // Distinct from jobAnalysis above: this versions jobs.job_analysis's cached
+  // shape (JobOnlyAnalysisV1 - job-only fields, no requirementAnalysis), not
+  // the full per-application JobAnalysisV1 runJobLens returns. A future
+  // change to the job-only field set bumps this independently, so a stale
+  // cache entry is detected and re-extracted rather than silently merged
+  // with a shape it no longer matches.
+  jobOnlyAnalysis: "JobOnlyAnalysisV1",
   resumeDraft: "ResumeDraftV1",
   reviewScore: "ReviewScoreV1",
   finalResume: "FinalResumeV1",

@@ -53,6 +53,16 @@ export interface RequirementAnalysisEntry {
   notes?: string;
 }
 
+/**
+ * The job-only subset of JobAnalysisV1 - every field that depends only on
+ * the job posting, never on which candidate is applying. This is what gets
+ * cached once per job in jobs.job_analysis (see 093_job_analysis_cache.sql)
+ * instead of being re-extracted by every application against that job.
+ * requirementAnalysis is deliberately excluded: it classifies requirements
+ * against a specific candidate's evidence and must stay per-application.
+ */
+export type JobOnlyAnalysisV1 = Omit<JobAnalysisV1, "requirementAnalysis">;
+
 export interface JobAnalysisV1 {
   title: string;
   company: string;
@@ -310,6 +320,17 @@ export interface PageFitV1 {
 
 // ── ReviewScoreV1 ──
 
+// ── EvidenceAuditV1 ──
+// Never authored by the LLM, same reason as PageFitV1: ReviewScoreSchema
+// always parses this to null from raw model JSON, and runHiringPanel
+// overwrites it after validation using the real evidence-bank ids from the
+// draft it's grading (see evidenceAudit.ts's validateEvidenceCitations).
+
+export interface EvidenceAuditV1 {
+  citedCount: number;
+  danglingCount: number;
+}
+
 export interface ReviewScoreV1 {
   atsScore: number;
   recruiterScore: number;
@@ -323,6 +344,7 @@ export interface ReviewScoreV1 {
   dispositionReasons: string[];
   overallComment: string;
   pageFit: PageFitV1 | null;
+  evidenceAudit: EvidenceAuditV1 | null;
 }
 
 export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
@@ -375,6 +397,7 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
       dispositionReasons: expectStringArray(input.dispositionReasons, "dispositionReasons") ?? [],
       overallComment: expectString(input.overallComment, "overallComment") ?? "",
       pageFit: null,
+      evidenceAudit: null,
     };
   },
 };
