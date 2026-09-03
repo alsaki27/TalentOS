@@ -59,6 +59,11 @@ export interface StudioDocumentLike {
     description?: string;
     bullets?: { text?: string }[] | string[];
   }[];
+  customSections?: {
+    id?: string;
+    title?: string;
+    bullets?: { text?: string }[] | string[];
+  }[];
 }
 
 function bulletTexts(bullets: { text?: string }[] | string[] | undefined): string[] {
@@ -201,7 +206,28 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     skills: asArray<string>(g?.skills),
   }));
 
-  const customSections: ResumeData["customSections"] = [];
+  // Custom sections (Awards, Languages, Publications, etc.) arrive here in
+  // the canonical { id, title, bullets: [{text}] } shape - the same shape
+  // finalResumeToStudioDocument.ts now produces for application_resume_versions.
+  // Convert each into the Resumify-native { content: string, type, visible,
+  // order } shape this function's return type expects (mirrors the synthetic
+  // Certifications block below, and buildCustomSectionsForBuilder() in
+  // /falood/studio/base/[baseResumeId]/page.tsx, which already does this
+  // conversion correctly for that page - this was the one converter in the
+  // app that dropped custom sections entirely instead of just missing this
+  // one field, so real ones vanished going through the "Open in studio"
+  // bridge even though the base editor itself showed them fine).
+  const customSections: ResumeData["customSections"] = asArray<NonNullable<StudioDocumentLike["customSections"]>[number]>(d.customSections)
+    .filter((cs) => cs && (cs.title || (Array.isArray(cs.bullets) && cs.bullets.length > 0)))
+    .map((cs, idx) => ({
+      id: cs.id || uid("cs"),
+      title: cs.title?.trim() || "Additional Information",
+      content: bulletTexts(cs.bullets).join("\n"),
+      type: "bullets" as const,
+      visible: true,
+      order: DEFAULT_SECTIONS.length + 1 + idx,
+    }))
+    .filter((cs) => cs.content.trim().length > 0);
   const certifications = asArray<NonNullable<StudioDocumentLike["certifications"]>[number]>(d.certifications);
   if (certifications.length > 0) {
     customSections.push({
@@ -210,7 +236,7 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
       content: certifications.map((c) => [c?.name, c?.issuer, c?.date].filter(Boolean).join(" — ")).join("\n"),
       type: "bullets",
       visible: true,
-      order: DEFAULT_SECTIONS.length + 1,
+      order: DEFAULT_SECTIONS.length + 1 + customSections.length,
     });
   }
 
