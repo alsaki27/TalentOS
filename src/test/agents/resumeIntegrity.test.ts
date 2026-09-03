@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { enforceExperienceIntegrity } from "@/lib/ai/application-agents/resumeIntegrity";
+import { enforceExperienceIntegrity, flagDuplicateRoleIdentity } from "@/lib/ai/application-agents/resumeIntegrity";
+
+function exp(overrides: Partial<{ title: string; company: string; location: string | null; startDate: string | null; endDate: string | null; bullets: string[]; evidenceIds: string[] }> = {}) {
+  return {
+    title: "Role", company: "Acme", location: null, startDate: null, endDate: null,
+    bullets: [], evidenceIds: [],
+    ...overrides,
+  };
+}
 
 describe("enforceExperienceIntegrity — date sanitization", () => {
   it("drops a chronologically impossible end date (confirmed live bug: endDate before startDate)", () => {
@@ -59,5 +67,56 @@ describe("enforceExperienceIntegrity — date sanitization", () => {
     expect(result[0].company).toBe("SWOT Technologies");
     expect(result[0].startDate).toBe("May 2024");
     expect(result[0].endDate).toBe("Dec 2025");
+  });
+});
+
+describe("flagDuplicateRoleIdentity", () => {
+  it("flags a same-title-same-company pair whose bullets are highly similar (a likely data-entry duplicate)", () => {
+    const bullets = [
+      "Managed 500+ spatial records using ArcGIS Pro and FME for a regional infrastructure project",
+      "Produced 40+ maps and dashboards for stakeholder review using ArcGIS Online",
+    ];
+    const result = flagDuplicateRoleIdentity([
+      exp({ title: "GIS Technician", company: "Acme Corp", bullets }),
+      exp({ title: "GIS Technician", company: "Acme Corp", bullets: [...bullets] }),
+    ]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatch(/GIS Technician/);
+    expect(result[0]).toMatch(/Acme Corp/);
+  });
+
+  it("does not flag the same title+company when the bullets describe clearly different work (a plausible rehire)", () => {
+    const result = flagDuplicateRoleIdentity([
+      exp({
+        title: "Project Manager", company: "Acme Corp",
+        bullets: ["Led a team of 5 engineers delivering a $2M fiber buildout across three counties"],
+      }),
+      exp({
+        title: "Project Manager", company: "Acme Corp",
+        bullets: ["Directed vendor negotiations and budget planning for a facilities renovation program"],
+      }),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it("does not flag two different roles at the same company", () => {
+    const result = flagDuplicateRoleIdentity([
+      exp({ title: "GIS Technician", company: "Acme Corp", bullets: ["Did GIS work"] }),
+      exp({ title: "GIS Analyst", company: "Acme Corp", bullets: ["Did GIS work"] }),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it("does not flag the same title at two different companies", () => {
+    const result = flagDuplicateRoleIdentity([
+      exp({ title: "GIS Technician", company: "Acme Corp", bullets: ["Did GIS work"] }),
+      exp({ title: "GIS Technician", company: "Other Corp", bullets: ["Did GIS work"] }),
+    ]);
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns no warnings for a single-role or empty experience list", () => {
+    expect(flagDuplicateRoleIdentity([])).toEqual([]);
+    expect(flagDuplicateRoleIdentity([exp()])).toEqual([]);
   });
 });

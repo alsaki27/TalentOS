@@ -62,7 +62,9 @@ describe("runJobLens", () => {
     const result = await runJobLens({}, provider, makeContext());
     expect(result.title).toBe("Senior Engineer");
     expect(result.requiredSkills).toContain("Go");
-    expect(provider.send).toHaveBeenCalledOnce();
+    // Cache miss (the mock job has no job_analysis) -> job-only extraction
+    // call, then the always-fresh per-candidate requirement-analysis call.
+    expect(provider.send).toHaveBeenCalledTimes(2);
   });
 
   it("throws on invalid JSON from AI", async () => {
@@ -78,6 +80,79 @@ describe("runJobLens", () => {
       title: "Engineer",
       company: "Acme",
     });
+  });
+
+  it("cache HIT: makes only one provider.send call (requirement analysis) when jobs.job_analysis is present and current", async () => {
+    const requirementAnalysisOnly = {
+      requirementAnalysis: [
+        { requirement: "Go", category: "skill", sourceEvidence: ["sot:Go"], status: "supported_but_not_surfaced", safeToAdd: true },
+      ],
+    };
+    const provider = mockProvider(JSON.stringify(requirementAnalysisOnly));
+    const cachedJobOnly = {
+      title: "Senior Engineer", company: "Acme Corp", location: "Remote",
+      requiredSkills: ["Go"], preferredSkills: [], tools: [], methodologies: [], certifications: [],
+      seniority: "Senior", domain: "Infrastructure", atsKeywords: ["Go"], responsibilities: [],
+      evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "Senior infra role",
+    };
+    const ctx = makeContext({
+      job: { ...makeContext().job, job_analysis: cachedJobOnly, job_analysis_schema_version: "JobOnlyAnalysisV1" } as any,
+    });
+
+    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
+    const result = await runJobLens({}, provider, ctx);
+
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    // The cached job-only fields survive untouched into the merged result.
+    expect(result.title).toBe("Senior Engineer");
+    expect(result.atsKeywords).toEqual(["Go"]);
+    expect(result.requirementAnalysis).toHaveLength(1);
+    expect(result.requirementAnalysis[0].requirement).toBe("Go");
+  });
+
+  it("cache MISS due to a schema-version mismatch: re-extracts job-only analysis instead of trusting a stale cache shape", async () => {
+    const validAnalysis = {
+      title: "Senior Engineer", company: "Acme Corp", location: "Remote",
+      requiredSkills: ["Go"], preferredSkills: [], tools: [], methodologies: [], certifications: [],
+      seniority: "Senior", domain: "Infrastructure", atsKeywords: ["Go"], responsibilities: [],
+      evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "Senior infra role",
+    };
+    const provider = mockProvider(JSON.stringify(validAnalysis));
+    const ctx = makeContext({
+      job: { ...makeContext().job, job_analysis: { title: "Stale" }, job_analysis_schema_version: "JobOnlyAnalysisV0-old" } as any,
+    });
+
+    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
+    await runJobLens({}, provider, ctx);
+    expect(provider.send).toHaveBeenCalledTimes(2);
+  });
+
+  it("shape-equivalence: the merged result is structurally identical whether job-only data came from cache or a fresh extraction", async () => {
+    const jobOnlyFields = {
+      title: "Senior Engineer", company: "Acme Corp", location: "Remote",
+      requiredSkills: ["Go"], preferredSkills: [], tools: [], methodologies: [], certifications: [],
+      seniority: "Senior", domain: "Infrastructure", atsKeywords: ["Go"], responsibilities: [],
+      evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "Senior infra role",
+    };
+    const reqOnly = { requirementAnalysis: [] };
+
+    // Fresh path (cache miss): both calls return the same combined shape the
+    // mock always serves, exactly like the older single-call runJobLens did.
+    const freshProvider = mockProvider(JSON.stringify({ ...jobOnlyFields, ...reqOnly }));
+    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
+    const freshResult = await runJobLens({}, freshProvider, makeContext());
+
+    // Cached path: same job-only fields served from jobs.job_analysis, only
+    // the requirement-analysis call actually reaches the provider.
+    const cachedProvider = mockProvider(JSON.stringify(reqOnly));
+    const cachedCtx = makeContext({
+      job: { ...makeContext().job, job_analysis: jobOnlyFields, job_analysis_schema_version: "JobOnlyAnalysisV1" } as any,
+    });
+    const cachedResult = await runJobLens({}, cachedProvider, cachedCtx);
+
+    expect(Object.keys(freshResult).sort()).toEqual(Object.keys(cachedResult).sort());
+    expect(freshResult).toMatchObject(jobOnlyFields);
+    expect(cachedResult).toMatchObject(jobOnlyFields);
   });
 });
 
@@ -186,6 +261,103 @@ describe("runResumeForge", () => {
     const result = await runResumeForge({}, provider, makeContext());
     expect(result.summary).toBeNull();
   });
+
+  it("strips personalInfo.email/phone, experience dates, AND experience bullets from the raw-JSON block (dates/contact are force-overwritten regardless of the model's output, and bullets are fully duplicated by the EXPERIENCE SNAPSHOT), while both still reach the model via the snapshot section", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: {
+          personalInfo: { fullName: "Jane Doe", email: "jane.doe@example.com", phone: "555-0100-secret" },
+          experience: [{ title: "GIS Technician", company: "Acme", startDate: "2024-06-DATEMARK", endDate: "Present", bullets: [{ text: "Did UNIQUEBULLETMARKER GIS work" }] }],
+        },
+      } as any,
+    });
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, ctx);
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    // "EXPERIENCE SNAPSHOT —" (with the dash) matches only the real section
+    // header, not the raw-JSON heading's own inline mention of it.
+    const rawJsonSection = sentText.slice(sentText.indexOf("BASE RESUME — RAW JSON"), sentText.indexOf("EXPERIENCE SNAPSHOT —"));
+    expect(rawJsonSection).not.toMatch(/jane\.doe@example\.com/);
+    expect(rawJsonSection).not.toMatch(/555-0100-secret/);
+    expect(rawJsonSection).not.toMatch(/2024-06-DATEMARK/);
+    expect(rawJsonSection).not.toMatch(/UNIQUEBULLETMARKER/);
+    expect(rawJsonSection).toMatch(/GIS Technician/); // title/company still present
+    // The date and the bullet are still available to the model, just via the
+    // snapshot instead of duplicated in raw JSON.
+    expect(sentText).toMatch(/2024-06-DATEMARK/);
+    expect(sentText).toMatch(/UNIQUEBULLETMARKER/);
+  });
+
+  it("preserves full bullet fidelity via the EXPERIENCE SNAPSHOT even when a large base resume would have truncated the 12,000-char raw-JSON block under the old behavior (bullets are no longer duplicated into that block at all, so truncation can no longer garble them)", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    // Many roles with long bullets - large enough that the raw-JSON block's
+    // 12,000-char slice would have cut into the bullets under the old
+    // (bullets-included) behavior.
+    const manyRoles = Array.from({ length: 8 }, (_, i) => ({
+      title: `Role ${i}`,
+      company: `Company ${i}`,
+      startDate: `202${i}-01`,
+      endDate: "Present",
+      bullets: Array.from({ length: 6 }, (_, j) => ({ text: `TAILEND-MARKER-${i}-${j} ` + "Delivered a large, detailed accomplishment description ".repeat(6) })),
+    }));
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
+        content: { personalInfo: { fullName: "Jane Doe" }, experience: manyRoles },
+      } as any,
+    });
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, ctx);
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    // The very last role's very last bullet - the one most likely to have
+    // been cut off by truncation if bullets still lived in the raw-JSON
+    // block - must still reach the model intact via the snapshot.
+    expect(sentText).toMatch(/TAILEND-MARKER-7-5/);
+  });
+
+  it("sends verifiedSkills and Source of Truth confirmedSkills as one merged, provenance-tagged list instead of two separate arrays", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const ctx = makeContext({
+      verifiedSkills: ["AutoCAD", "Excel"],
+      sourceOfTruth: { confirmedSkills: ["AutoCAD", "ArcGIS Pro"], notesContext: null },
+    });
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, ctx);
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    expect(sentText).toMatch(/CONFIRMED\/VERIFIED SKILLS/);
+    expect(sentText).toMatch(/AutoCAD \(verified, confirmed\)/);
+    expect(sentText).toMatch(/ArcGIS Pro \(confirmed\)/);
+    expect(sentText).toMatch(/Excel \(verified\)/);
+    // AutoCAD must appear exactly once as a skill entry, not once per source.
+    expect((sentText.match(/"AutoCAD \(/g) ?? []).length).toBe(1);
+  });
+
+  it("sends the JSON-output instruction exactly once, not the redundant mid-prompt copy", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: null, skills: [], experience: [], education: [],
+      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+    }));
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, makeContext());
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    expect(sentText).not.toMatch(/Output only the final resume in valid JSON format/);
+    expect(sentText).toMatch(/Return ONLY valid JSON\. No markdown fences, no explanation\./);
+  });
 });
 
 describe("runHiringPanel", () => {
@@ -221,6 +393,49 @@ describe("runHiringPanel", () => {
     }));
     const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
     await expect(runHiringPanel({}, provider, makeContext())).rejects.toThrow("must be 0-10");
+  });
+
+  it("computes evidenceAudit deterministically from the draft's evidenceIds, never trusting the model's own JSON for it", async () => {
+    const provider = mockProvider(JSON.stringify({
+      atsScore: 8, recruiterScore: 7, roleFitScore: 6, truthfulnessRisk: 2,
+      formattingIssues: [], requiredEdits: [], optionalEdits: [],
+      passFail: "pass", overallComment: "Good",
+      // A model claiming its own evidenceAudit must never survive - the
+      // field is always overwritten post-hoc, same as pageFit.
+      evidenceAudit: { citedCount: 999, danglingCount: 999 },
+    }));
+    const ctx = makeContext({
+      evidence: [{ id: "ev-1", title: "Led migration", description: "", relatedSkills: [], confidenceScore: 1, source: "resume" }],
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
+        application_resume_forge: {
+          id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def",
+          data: { experience: [{ title: "Engineer", company: "Acme", evidenceIds: ["ev-1", "ev-fake"] }], changeLog: [] },
+          createdAt: "",
+        },
+      },
+    });
+    const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
+    const result = await runHiringPanel({}, provider, ctx);
+    expect(result.evidenceAudit).toEqual({ citedCount: 1, danglingCount: 1 });
+  });
+
+  it("interpolates the real PAGE QA METRICS block into the prompt instead of computing it and never sending it", async () => {
+    const provider = mockProvider(JSON.stringify({
+      atsScore: 8, recruiterScore: 7, roleFitScore: 6, truthfulnessRisk: 2,
+      formattingIssues: [], requiredEdits: [], optionalEdits: [],
+      passFail: "pass", overallComment: "Good",
+    }));
+    const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
+    await runHiringPanel({}, provider, makeContext());
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    // Either the real measured block or the explicit "unavailable" fallback
+    // must appear - what must NOT happen is the computed block being built
+    // and then silently dropped, which is what line 69's own instruction
+    // ("use the PAGE QA METRICS below") was previously pointing at nothing.
+    expect(sentText).toMatch(/PAGE QA METRICS/);
+    expect(sentText).not.toMatch(/SKILL_CATEGORY_MAP/);
   });
 });
 
@@ -312,5 +527,27 @@ describe("runFinalPolish", () => {
       appliedIssueIds: [], rejectedIssueIds: [], unresolvedWarnings: [], finalQaScore: 15, exportReady: false,
     });
     expect(result).toEqual(expect.objectContaining({ error: expect.stringContaining("finalQaScore") }));
+  });
+
+  it("never sends the dead SKILL_CATEGORY_MAP reference", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: "Final", skills: [{ title: "Languages", skills: ["Go"] }], experience: [], education: [],
+      certifications: [], projects: [], appliedIssueIds: ["r1"],
+      rejectedIssueIds: [], unresolvedWarnings: [],
+      finalQaScore: 9, exportReady: true,
+    }));
+    const ctx = makeContext({
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+      },
+    });
+    const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
+    await runFinalPolish({}, provider, ctx);
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    expect(sentText).not.toMatch(/SKILL_CATEGORY_MAP/);
+    expect(sentText).toMatch(/rules 5-7 above/);
   });
 });
