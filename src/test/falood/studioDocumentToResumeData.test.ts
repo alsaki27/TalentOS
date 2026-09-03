@@ -20,6 +20,26 @@ describe("studioDocumentToResumeData - custom sections (header-shaped / studio-d
     expect(languages!.visible).toBe(true);
   });
 
+  it("carries customSections through when the shape is MIXED - canonical header but Resumify-native content:string custom sections (what applications/route.ts's PATCH sync-back actually writes to base_resumes.content)", () => {
+    const doc = {
+      header: { fullName: "Jane Doe" },
+      summary: { text: "Summary" },
+      customSections: [
+        { id: "cs1", title: "Publications", content: "Paper One\nPaper Two", type: "paragraph", visible: true, order: 9, placement: "left" },
+      ],
+    };
+    const result = studioDocumentToResumeData(doc as any);
+    expect(result.customSections).toHaveLength(1);
+    expect(result.customSections[0]).toMatchObject({
+      title: "Publications",
+      content: "Paper One\nPaper Two",
+      type: "paragraph",
+      visible: true,
+      order: 9,
+      placement: "left",
+    });
+  });
+
   it("still synthesizes a Certifications section from certifications, alongside real custom sections", () => {
     const doc = {
       header: { fullName: "Jane Doe" },

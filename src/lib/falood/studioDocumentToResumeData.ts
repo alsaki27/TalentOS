@@ -63,6 +63,21 @@ export interface StudioDocumentLike {
     id?: string;
     title?: string;
     bullets?: { text?: string }[] | string[];
+    // A base_resumes row can carry a MIXED shape: canonical `header` at the
+    // top level (this function's own dispatch condition), but Resumify-native
+    // customSections - the applications/route.ts PATCH handler's sync-back
+    // deliberately writes customSections straight from the Tailor Studio's
+    // raw resumeData (content:string, not bullets[]) to avoid losing
+    // type/visible/order/placement, while everything else it writes stays
+    // canonical. Without reading these too, a section saved while editing a
+    // base resume through "Open in studio" survives that save (the Tailor
+    // Studio session itself is untouched) but silently vanishes on the next
+    // "Open in studio" click, because this function only looked for bullets.
+    content?: string;
+    type?: "paragraph" | "bullets";
+    visible?: boolean;
+    order?: number;
+    placement?: "left" | "right";
   }[];
 }
 
@@ -206,26 +221,36 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
     skills: asArray<string>(g?.skills),
   }));
 
-  // Custom sections (Awards, Languages, Publications, etc.) arrive here in
-  // the canonical { id, title, bullets: [{text}] } shape - the same shape
-  // finalResumeToStudioDocument.ts now produces for application_resume_versions.
-  // Convert each into the Resumify-native { content: string, type, visible,
-  // order } shape this function's return type expects (mirrors the synthetic
-  // Certifications block below, and buildCustomSectionsForBuilder() in
-  // /falood/studio/base/[baseResumeId]/page.tsx, which already does this
-  // conversion correctly for that page - this was the one converter in the
-  // app that dropped custom sections entirely instead of just missing this
-  // one field, so real ones vanished going through the "Open in studio"
-  // bridge even though the base editor itself showed them fine).
+  // Custom sections (Awards, Languages, Publications, etc.) can arrive here
+  // in two shapes: the canonical { id, title, bullets: [{text}] } shape
+  // finalResumeToStudioDocument.ts produces for application_resume_versions,
+  // OR - for a base_resumes row specifically - the raw Resumify-native
+  // { content: string, type, visible, order, placement } shape, because
+  // applications/route.ts's PATCH sync-back deliberately writes
+  // customSections straight from the Tailor Studio's own resumeData (to
+  // avoid losing type/visible/order/placement - see that route's comment),
+  // while leaving `header` and everything else canonical. Reading only
+  // `bullets` here meant a section saved while editing a base resume
+  // through "Open in studio" survived that save (the Tailor Studio session
+  // itself was untouched) but silently vanished on the very next "Open in
+  // studio" click, because this function's own dispatch condition
+  // (`d.personalInfo` absent -> this branch) is exactly what that mixed
+  // shape hits. Prefer bullets when present (canonical source), else fall
+  // back to the raw content string, and preserve the original
+  // type/visible/order/placement rather than re-defaulting them, mirroring
+  // buildCustomSectionsForBuilder() in
+  // /falood/studio/base/[baseResumeId]/page.tsx, which already tolerates
+  // both shapes for the same reason.
   const customSections: ResumeData["customSections"] = asArray<NonNullable<StudioDocumentLike["customSections"]>[number]>(d.customSections)
-    .filter((cs) => cs && (cs.title || (Array.isArray(cs.bullets) && cs.bullets.length > 0)))
+    .filter((cs) => cs && (cs.title || (Array.isArray(cs.bullets) && cs.bullets.length > 0) || (typeof cs.content === "string" && cs.content.trim().length > 0)))
     .map((cs, idx) => ({
       id: cs.id || uid("cs"),
       title: cs.title?.trim() || "Additional Information",
-      content: bulletTexts(cs.bullets).join("\n"),
-      type: "bullets" as const,
-      visible: true,
-      order: DEFAULT_SECTIONS.length + 1 + idx,
+      content: Array.isArray(cs.bullets) ? bulletTexts(cs.bullets).join("\n") : asString(cs.content),
+      type: cs.type === "paragraph" ? "paragraph" as const : "bullets" as const,
+      visible: cs.visible !== false,
+      order: typeof cs.order === "number" ? cs.order : DEFAULT_SECTIONS.length + 1 + idx,
+      placement: cs.placement === "left" || cs.placement === "right" ? cs.placement : undefined,
     }))
     .filter((cs) => cs.content.trim().length > 0);
   const certifications = asArray<NonNullable<StudioDocumentLike["certifications"]>[number]>(d.certifications);
