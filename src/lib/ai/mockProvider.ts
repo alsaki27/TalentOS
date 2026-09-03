@@ -111,6 +111,7 @@ const MOCK_REVIEW_SCORE: ReviewScoreV1 = {
   dispositionReasons: ["Strong TypeScript and React evidence matches the role"],
   overallComment: "Strong candidate with excellent TypeScript and React experience. Resume is well-structured and ATS-friendly.",
   pageFit: null,
+  evidenceAudit: null,
 };
 
 const MOCK_FINAL_RESUME: FinalResumeV1 = {

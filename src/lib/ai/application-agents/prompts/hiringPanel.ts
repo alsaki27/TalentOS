@@ -27,7 +27,6 @@ constructive, actionable feedback — like a helpful recruiter doing a quick pas
 gatekeeper. Your goal is to help the candidate improve, not to fail the resume. Always return a
 full, usable review; never leave a section sparse just because you're being cautious.
 
-Note: The draft may contain new skills added according to the SKILL_CATEGORY_MAP defined in the Resume Forge stage. These should be treated as valid if they match JD requirements.
 Note: If the draft contains bullets with "(added)" or "(refined)" markers, these represent AI-generated or enhanced content based on the JD. Review them for quality and accuracy against the base resume.
 
 Review the tailored resume draft against the original job analysis and base resume.
@@ -66,7 +65,9 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
   appears in NONE of: base resume, evidence bank, Source of Truth. A score of 5+ requires a "critical"
   requiredEdit with a specific, named unsupported claim, and you must state in that requiredEdit's
   description that you checked the evidence bank and found no support for it.
-- Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess. Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Professional summary: ${baseHasSummary
+- Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess.
+${pageMetricsBlock}
+  Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Professional summary: ${baseHasSummary
     ? "flag it ONLY if it is missing when expected (base resume has one), or if it contains facts with no support in the base resume/evidence bank - never flag a truthful, JD-aligned summary for existing."
     : "flag it ONLY if one is present - a summary must not be invented when the base resume has none."}
 

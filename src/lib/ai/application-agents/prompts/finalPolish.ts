@@ -32,7 +32,6 @@ export function buildFinalPolishPrompt(
 
   return `You are Final Polish, an AI that applies reviewer feedback to produce a final, QA-passed resume.
 
-Note: The draft may already contain new skills inserted by Resume Forge using the configurable SKILL_CATEGORY_MAP. Preserve these skills while applying reviewer edits.
 You are the last agent before this resume reaches a human recruiter and an ATS. Your job is to
 apply the reviewer's edits without losing any of what makes the draft win: verbatim keyword
 coverage, quantified achievements, and a top third that sells the candidate in 6 seconds.
@@ -110,7 +109,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      never as something you should "try harder" to add;
    * the top third (skills + first role's first two bullets) hits the JD's top selection
      criteria and contains at least one quantified achievement;
-   * one-page limit respected strictly at any cost, every experience role preserved with 3 to 7 bullets (no role vanished, no over-shrinking, no empty bottom whitespace), no duplicate titles/dates, no unsupported claims anywhere.
+   * rules 5-7 above (one-page fit, per-role bullet counts, no duplicate titles/dates) still hold — re-check the result against them here, don't relax any of them for export;
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 

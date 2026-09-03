@@ -3,6 +3,7 @@
 // and the job analysis. No hardcoded category maps. The AI decides where skills belong.
 
 import { readBaseSummary } from "../resumeIntegrity";
+import { mergeSkillSources } from "./mergeSkillSources";
 
 /**
  * Normalise a single bullet that may be stored as a plain string or as a { text: string }
@@ -69,6 +70,45 @@ function buildExperienceSnapshot(experiences: any[]): string {
   }).join("\n\n");
 }
 
+/**
+ * Removes two categories of redundant data from the base-resume JSON before
+ * it goes into the raw-JSON block:
+ *
+ * 1. Fields the model's output can never actually influence: applyForgeGuards()
+ *    (resumeForge.ts, the runner) unconditionally overwrites personalInfo
+ *    wholesale from the real base resume, and enforceExperienceIntegrity()
+ *    (resumeIntegrity.ts) takes every experience entry's startDate/endDate
+ *    exclusively from the base resume, discarding whatever the model
+ *    returned. The model still has employment timeframes via the EXPERIENCE
+ *    SNAPSHOT section below, which is what its bullet-writing actually needs.
+ *
+ * 2. experience[].bullets, which the EXPERIENCE SNAPSHOT below already sends
+ *    in full and labeled per-role - this file's own original comment on that
+ *    snapshot explains it exists specifically because this 12,000-char raw
+ *    JSON block can get truncated on a large base resume, silently losing or
+ *    garbling whichever bullets happened to fall past the cut. Sending
+ *    bullets in the raw JSON *too* was pure duplication of a section that
+ *    already exists purely to be the reliable, untruncated copy - dropping
+ *    them here doesn't touch the cap's protective role for everything else
+ *    still in this block (titles, dates aside, education, skills structure).
+ */
+function stripRedundantRawJsonFields(baseContent: any): any {
+  if (!baseContent || typeof baseContent !== "object") return baseContent;
+  const stripped: any = { ...baseContent };
+  if (stripped.personalInfo && typeof stripped.personalInfo === "object" && !Array.isArray(stripped.personalInfo)) {
+    const { email, phone, ...restPersonalInfo } = stripped.personalInfo;
+    stripped.personalInfo = restPersonalInfo;
+  }
+  if (Array.isArray(stripped.experience)) {
+    stripped.experience = stripped.experience.map((exp: any) => {
+      if (!exp || typeof exp !== "object") return exp;
+      const { startDate, endDate, bullets, bulletPoints, ...rest } = exp;
+      return rest;
+    });
+  }
+  return stripped;
+}
+
 /** Build the prompt for the Resume Forge agent. */
 export function buildResumeForgePrompt(
   job: any,
@@ -85,8 +125,11 @@ export function buildResumeForgePrompt(
   const bulletRequirements = buildBulletRequirements(baseExperience);
   const experienceSnapshot = buildExperienceSnapshot(baseExperience);
 
-  // Collect all SoT confirmed skills + recruiter verified skills into one deduplicated list
-  const sotSkills = sourceOfTruth?.confirmedSkills ?? [];
+  // Merge SoT confirmed skills + recruiter verified skills into one deduplicated
+  // list (candidates.verified_skills and candidate_source_of_truth.confirmed_skills
+  // are separate DB sources that can overlap - sending them as two un-deduplicated
+  // arrays wasted tokens and gave the model no signal when a skill was named twice).
+  const mergedSkills = mergeSkillSources(sourceOfTruth?.confirmedSkills ?? [], verifiedSkills);
 
   // Professional summary: the tailored resume carries a summary only when the
   // base resume already has one - rewritten toward this job, never invented.
@@ -107,7 +150,6 @@ Rules:
 * Keep technical skills concise and grouped by relevance (an array of { name: string, skills: string[] } groups, never a flat list).
 * Keep everything readable and within one page strictly at any cost.
 * Verify date consistency, degree accuracy, experience duration, location, and formatting before finalizing.
-* Output only the final resume in valid JSON format, not explanations.
 
 PROFESSIONAL SUMMARY RULES (CRITICAL):
 ${baseSummary
@@ -115,11 +157,11 @@ ${baseSummary
   : `* The base resume has NO professional summary. Output "summary": null. Never invent a summary from scratch.`}
 
 SKILLS SECTION RULES (CRITICAL):
-* DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) Source of Truth confirmed skills listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).
+* DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) the CONFIRMED/VERIFIED SKILLS listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies.
 * DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
-* Start from the base resume's EXISTING skill categories — expand each one using Source of Truth skills and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories (a single concise "General" group is permitted ONLY when the JD explicitly demands general skills that don't fit any existing category).
-* From the Source of Truth confirmed skills list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the 'name' property) as the guide.
+* Start from the base resume's EXISTING skill categories — expand each one using the CONFIRMED/VERIFIED SKILLS and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories (a single concise "General" group is permitted ONLY when the JD explicitly demands general skills that don't fit any existing category).
+* From the CONFIRMED/VERIFIED SKILLS list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the 'name' property) as the guide.
 * Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
 * Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
 * Office-suite skills ("Microsoft Office", "MS Office", "Office 365", "Outlook", "Word", "PowerPoint") are normally dropped from the tailored resume to save space — EXCEPT when this job's JD explicitly names or requires one of them: in that case the requirement makes it a real differentiator, so include it as a concise entry (keep it in its own group or the most fitting existing category). Excel is always kept as its own entry when the base resume/evidence supports it, never folded into a generic "Microsoft Office" bucket.
@@ -156,8 +198,8 @@ REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS abo
 * For every supported_but_not_surfaced requirement with safeToAdd=true: you MUST surface it BOTH in the skills section AND woven naturally into an existing experience bullet of the most relevant role. Rewrite that bullet to mention the tool/skill WITHOUT inventing outcomes, metrics, employers, or dates — only extend facts already present in the base resume, evidence bank, or Source of Truth.
 * Do NOT copy unsupported JD phrases into bullets just to please an ATS. A keyword the candidate cannot back is worse than a missing one.
 
-BASE RESUME — RAW JSON (authoritative source for dates, titles, companies, education, skills structure):
-${JSON.stringify(baseContent).slice(0, 12000)}
+BASE RESUME — RAW JSON (authoritative source for titles, companies, education, skills structure — contact info and employment dates are fixed automatically after you respond, using the real base resume, so they are omitted here to save space; each experience entry's existing bullets are omitted here too, only because the EXPERIENCE SNAPSHOT below is the complete, reliable copy of them - use that section for bullet content and timeframes, this one for everything else):
+${JSON.stringify(stripRedundantRawJsonFields(baseContent)).slice(0, 12000)}
 
 EXPERIENCE SNAPSHOT — EXISTING BULLETS (use these as the starting point for each role's bullet points; rewrite and expand them to match the job, do NOT ignore or discard them):
 ${experienceSnapshot}
@@ -165,20 +207,45 @@ ${experienceSnapshot}
 EVIDENCE BANK:
 ${JSON.stringify(evidence).slice(0, 8000)}
 
-SOURCE OF TRUTH — CONFIRMED SKILLS (these are skills the recruiter has personally verified this candidate has, extracted from their base resumes and accepted suggestions; treat them with the same authority as skills already in the base resume):
-${JSON.stringify(sotSkills)}
-
-VERIFIED SKILLS (additional recruiter-confirmed competencies):
-${verifiedSkills.length > 0 ? JSON.stringify(verifiedSkills) : "(none)"}
+CONFIRMED/VERIFIED SKILLS (recruiter-confirmed real candidate skills, same authority as skills already in the base resume; each is tagged with which source(s) named it - "(verified)", "(confirmed)", or both when both agree - purely informational, both sources are equally trustworthy):
+${mergedSkills.length > 0 ? JSON.stringify(mergedSkills) : "(none)"}
 
 CANDIDATE NOTES & CAVEATS (internal recruiter context — use this to understand the candidate's background, specialisations, and preferences when deciding what to emphasise; NEVER copy this text verbatim into the resume output; NEVER invent employers, dates, or credentials from these notes):
 ${sourceOfTruth?.notesContext ?? "(none)"}
 
-RULES FOR USING SOURCE OF TRUTH & NOTES:
-1. Source of Truth confirmed skills are the candidate's real verified skillset — you MUST consider all of them when expanding the skills section. Pick the ones most relevant to THIS job's JD and place them into the correct existing category from the base resume.
-2. Include a confirmed skill when it is relevant to THIS job OR is explicitly named/required in the JD. When the JD names a general or soft skill (office suite, Outlook, email clients, communication, time management, quality processes, SQP-style workflows, etc.) and the candidate has it confirmed in the Source of Truth or the base resume, you MUST include it — never drop it for being "generic", because the JD demand makes it relevant to this application.
+RULES FOR USING CONFIRMED/VERIFIED SKILLS & NOTES:
+1. The CONFIRMED/VERIFIED SKILLS above are the candidate's real skillset — you MUST consider all of them when expanding the skills section. Pick the ones most relevant to THIS job's JD and place them into the correct existing category from the base resume.
+2. Include a skill from that list when it is relevant to THIS job OR is explicitly named/required in the JD. When the JD names a general or soft skill (office suite, Outlook, email clients, communication, time management, quality processes, SQP-style workflows, etc.) and the candidate has it in that list or the base resume, you MUST include it — never drop it for being "generic", because the JD demand makes it relevant to this application.
 3. Do NOT invent new employers, job titles, or dates based on the notes. Notes inform emphasis and tone only.
 4. Do NOT copy the notes text into any resume output field.
+
+EVIDENCE-ID CITATION RULES (CRITICAL):
+* Every entry in the EVIDENCE BANK above has a real "id" field. Whenever a bullet, change, or
+  claim in your output is grounded in a specific evidence-bank entry, cite that entry's exact
+  "id" string — never invent one, never paraphrase it, never cite a base-resume fact that has
+  no evidence-bank entry.
+* For each experience entry's "evidenceIds": list the id(s) of every evidence-bank entry that
+  materially supports that role's bullets (metrics, tools, scope). Leave it as an empty array
+  when no evidence-bank entry applies to that role — an empty array is correct and expected far
+  more often than a populated one; never cite an id just to fill the field.
+* For each "changeLog" entry: set "evidenceId" to the id of the evidence-bank entry that
+  justifies that specific change, or null when the change is a rewrite/reprioritization of
+  existing base-resume content with no separate evidence-bank backing.
+* A dangling or fabricated id (one that does not exactly match an "id" in the EVIDENCE BANK
+  above) is worse than no citation — the system checks every id you cite and strips ones that
+  don't match, so a wrong id provides no benefit and only wastes your output.
+
+Return a JSON object with:
+- summary: final professional summary per the summary rule above, or null
+- skills: array of { title: string, skills: string[] } category groups (see SKILLS SECTION RULES) — NOT a flat array of strings
+- experience: final experience entries, each with title, company, location, startDate, endDate, bullets, and evidenceIds (see EVIDENCE-ID CITATION RULES above)
+- education: final education entries (degree, school, field, graduationDate)
+- certifications: final certifications list
+- projects: final projects list
+- changeLog: array of { change: string, reason: string, evidenceId: string | null } describing every meaningful edit you made and why (see EVIDENCE-ID CITATION RULES above)
+- missingRequirements: JD requirements the candidate has no support for, left out of the resume
+- excludedKeywords: JD keywords deliberately not used because the candidate cannot truthfully claim them
+- truthRisks: array of { risk: string, severity: "low" | "medium" | "high" } for anything that could read as unsupported, even if you judged it safe to include
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

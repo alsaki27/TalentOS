@@ -3,6 +3,7 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
 import { FinalResumeSchema, type FinalResumeV1 } from "./schemas";
+import { FINAL_RESUME_JSON_SCHEMA } from "./jsonSchemas";
 import { buildFinalPolishPrompt } from "./prompts/finalPolish";
 import { textOf } from "@/lib/ai/provider";
 import {
@@ -11,6 +12,7 @@ import {
   normalizeResumeBullet,
   readBaseSummary,
   validateEmploymentChronology,
+  flagDuplicateRoleIdentity,
 } from "./resumeIntegrity";
 import { finalResumeToStudioDocument, type RenderableResumeContent } from "./finalResumeToStudioDocument";
 import { renderResumePdfWithMetrics, type ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
@@ -150,6 +152,8 @@ export async function runFinalPolish(
     temperature: options.temperature,
     maxTokens: options.max_output_tokens,
     timeoutMs: options.timeout_ms,
+    responseSchema: FINAL_RESUME_JSON_SCHEMA,
+    responseMimeType: "application/json",
   });
 
   const raw = textOf(response.content);
@@ -351,6 +355,13 @@ export async function runFinalPolish(
     validated.unresolvedWarnings = [...validated.unresolvedWarnings, ...chronologyWarnings];
     console.warn(
       `[Agent:FinalPolish] CHRONOLOGY FLAGS (${chronologyWarnings.length}): ${chronologyWarnings.join(" | ")}`
+    );
+  }
+  const duplicateRoleWarnings = flagDuplicateRoleIdentity(validated.experience);
+  if (duplicateRoleWarnings.length > 0) {
+    validated.unresolvedWarnings = [...validated.unresolvedWarnings, ...duplicateRoleWarnings];
+    console.warn(
+      `[Agent:FinalPolish] DUPLICATE ROLE FLAGS (${duplicateRoleWarnings.length}): ${duplicateRoleWarnings.join(" | ")}`
     );
   }
   // ───────────────────────────────────────────────────────────────

@@ -308,3 +308,57 @@ export function validateEmploymentChronology(
 
   return warnings;
 }
+
+/** Fraction of the smaller bullet set's significant words also present in the larger set - a rough but effective "these describe the same work" signal, deliberately simpler than requirementCoverage.ts's tokenizer since this only ever compares two roles' own bullets against each other, not a JD requirement against a resume. */
+function bulletWordOverlap(bulletsA: string[], bulletsB: string[]): number {
+  const wordsOf = (bullets: string[]): Set<string> =>
+    new Set((bullets.join(" ").toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3));
+  const setA = wordsOf(bulletsA);
+  const setB = wordsOf(bulletsB);
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let intersection = 0;
+  for (const w of setA) if (setB.has(w)) intersection += 1;
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+const DUPLICATE_ROLE_BULLET_OVERLAP_THRESHOLD = 0.6;
+
+/**
+ * enforceExperienceIntegrity already structurally prevents the AI from
+ * *introducing* a duplicate role (it reconciles 1:1 against base-resume
+ * entries). The residual case this catches is different: a base resume that
+ * itself already lists the same title+company twice - which could be a real
+ * rehire (a second, later employment period) or could be the base resume's
+ * own data-entry duplicate carried straight through. Title+company matching
+ * alone can't tell those apart (a rehire legitimately has the same
+ * title+company), so this only flags when the bullets are ALSO highly
+ * similar - a real rehire describes a different stretch of work and should
+ * read differently even in the same role, while a data-entry duplicate
+ * describes the literal same work twice. Never blocks export - always a
+ * warning for the AE to confirm, never treated as proof of an error.
+ */
+export function flagDuplicateRoleIdentity(experience: ExperienceEntry[]): string[] {
+  const warnings: string[] = [];
+  const normalize = (s: string) => s.trim().toLocaleLowerCase("en-US").replace(/\s+/g, " ");
+
+  for (let i = 0; i < experience.length; i += 1) {
+    for (let j = i + 1; j < experience.length; j += 1) {
+      const a = experience[i];
+      const b = experience[j];
+      const title = normalize(a.title);
+      const company = normalize(a.company);
+      if (!title || !company) continue;
+      if (title !== normalize(b.title) || company !== normalize(b.company)) continue;
+
+      const overlap = bulletWordOverlap(a.bullets ?? [], b.bullets ?? []);
+      if (overlap >= DUPLICATE_ROLE_BULLET_OVERLAP_THRESHOLD) {
+        warnings.push(
+          `Possible duplicate role: "${a.title}" at "${a.company}" appears twice with highly similar bullets (~${Math.round(overlap * 100)}% word overlap) — verify this isn't the same employment period listed twice on the base resume, or confirm it's a genuine rehire with distinct responsibilities.`
+        );
+      }
+    }
+  }
+
+  return warnings;
+}

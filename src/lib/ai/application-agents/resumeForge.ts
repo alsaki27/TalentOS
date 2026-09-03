@@ -3,6 +3,7 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
 import { ResumeDraftSchema, type ResumeDraftV1 } from "./schemas";
+import { RESUME_DRAFT_JSON_SCHEMA } from "./jsonSchemas";
 import {
   buildResumeForgePrompt,
   buildResumeForgeMissedRetryPrompt,
@@ -18,6 +19,7 @@ import {
   buildRequirementCoverage,
   listMissedSupported,
 } from "./requirementCoverage";
+import { validateEvidenceCitations } from "./evidenceAudit";
 
 /** Strip markdown fences and parse raw model text into JSON. */
 function parseRawJson(raw: string): unknown {
@@ -176,6 +178,8 @@ export async function runResumeForge(
     temperature: options.temperature,
     maxTokens: options.max_output_tokens,
     timeoutMs: options.timeout_ms,
+    responseSchema: RESUME_DRAFT_JSON_SCHEMA,
+    responseMimeType: "application/json",
   });
 
   const parsed = parseRawJson(textOf(response.content));
@@ -228,6 +232,8 @@ export async function runResumeForge(
         temperature: options.temperature,
         maxTokens: options.max_output_tokens,
         timeoutMs: options.timeout_ms,
+        responseSchema: RESUME_DRAFT_JSON_SCHEMA,
+        responseMimeType: "application/json",
       });
       const retryParsed = parseRawJson(textOf(retryResponse.content));
       const retryValidated = ResumeDraftSchema.parse(retryParsed);
@@ -255,6 +261,17 @@ export async function runResumeForge(
     validated.missingRequirements = Array.from(existing);
     console.warn(
       `[Agent:ResumeForge] COVERAGE: still missing after retry (surfaced for Final Polish gate): ${stillMissed.map((r) => r.requirement).join(", ")}`
+    );
+  }
+
+  // ── EVIDENCE-ID AUDIT ─────────────────────────────────────────────────────
+  // Strips any evidenceId that doesn't match a real evidence-bank entry
+  // (fabricated/hallucinated), run on the final validated draft so it covers
+  // whichever of the first draft or the coverage-retry draft actually won.
+  const evidenceAudit = validateEvidenceCitations(validated, ctx.evidence ?? []);
+  if (evidenceAudit.danglingCount > 0) {
+    console.warn(
+      `[Agent:ResumeForge] EVIDENCE AUDIT: stripped ${evidenceAudit.danglingCount} dangling evidence citation(s), kept ${evidenceAudit.citedCount} real one(s)`
     );
   }
 
