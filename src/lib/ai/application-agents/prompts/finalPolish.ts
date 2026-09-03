@@ -51,9 +51,12 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    trimming for length feels like it "loses" something. Missing-but-honest beats
    present-but-fabricated every time. Never introduce a new number, scope, or seniority claim
    at this stage — polish rephrases, it does not add facts.
-4. Maintain professional formatting throughout: every bullet opens with a strong action verb
-   (past tense for past roles, present for the current one), one to two lines, grammatically
-   complete, no first-person pronouns, no filler ("passionate", "results-driven", "dynamic").
+4. Maintain professional formatting throughout: every bullet opens with a strong action verb in
+   strict past tense (e.g. "Managed", "Designed", "Led" — never "Manage", "Leading", or any
+   future-tense phrasing like "will", "shall", "going to", "would"), for every role including the
+   current/most recent one, one to two lines, grammatically complete, no first-person pronouns,
+   no filler ("passionate", "results-driven", "dynamic"). If a bullet you're editing is in present
+   or future tense, rewrite it to past tense as part of this pass — do not leave it as-is.
    Keep tense and punctuation consistent within each role.
 5. The final output MUST fit on a single page strictly at any cost — use the PAGE QA METRICS below
    (measured from an actual rendered PDF, not a word-count guess) as the real signal for this, not an

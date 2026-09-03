@@ -99,6 +99,7 @@ Rules:
 * Never invent experience, years, permits, agencies, software, certifications, metrics, or responsibilities.
 * Prioritize the job's most important skills and responsibilities.
 * Rewrite existing experience to show direct relevance using strong action verbs and measurable results.
+* EVERY experience bullet, for every role including the candidate's current/most recent role, MUST be written in strict past tense (e.g. "Managed", "Designed", "Led", "Delivered" — never "Manage", "Leading", or "Will manage"). Never use future tense or future-oriented phrasing anywhere in a bullet ("will", "shall", "going to", "would", "plan to", "expect to" are all forbidden). A bullet describes work that was done, period — not work that is planned or ongoing in a future sense.
 * Keep the strongest metrics, project scale, tools, and technical deliverables.
 * Do not copy full sentences from the job description or insert unsupported keywords.
 * Remove weak, repetitive, irrelevant, and generic content.
