@@ -28,6 +28,7 @@ interface ResumeDocument {
   education: { id: string; degree: string; school: string; graduationDate?: string }[];
   certifications?: { id: string; name: string; issuer?: string; date?: string }[];
   projects?: { id: string; title: string; description?: string; bullets: { id: string; text: string }[] }[];
+  customSections?: { id: string; title: string; bullets: { id: string; text: string }[] }[];
 }
 
 interface KeywordHighlight {
@@ -321,6 +322,24 @@ export default function A4Preview({
               </div>
             </div>
           )}
+
+          {/* ─── CUSTOM SECTIONS ─── */}
+          {(content.customSections ?? []).map((section) => (
+            <div
+              key={section.id}
+              className={`a4-section a4-custom-section ${isActive(`customSections:${section.id}`) ? "a4-section-active" : ""}`}
+              onClick={() => onSectionClick?.(`customSections:${section.id}`)}
+            >
+              <h2 className="a4-section-title">{section.title}</h2>
+              <ul className="a4-bullets">
+                {section.bullets.map((b) => (
+                  <li key={b.id} className="a4-bullet">
+                    {highlightText(b.text, highlights)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       </div>
 

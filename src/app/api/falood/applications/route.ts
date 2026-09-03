@@ -227,10 +227,20 @@ export async function PATCH(req: NextRequest) {
             const converted = resumifyResumeDataToExportDocument(body.resumeData);
             // Merge onto the existing content rather than replacing it
             // wholesale: the resumify editor has no concept of
-            // certifications or the base resume's presentation
-            // "formatting" (styleId/margins/etc.) at all, so a full
-            // overwrite would silently delete them. Only the fields the
-            // Tailor Studio can actually edit are synced.
+            // certifications, custom sections, or the base resume's
+            // presentation "formatting" (styleId/margins/etc.) at all, so a
+            // full overwrite would silently delete/corrupt them. Only the
+            // fields the Tailor Studio can actually edit are synced.
+            // customSections is deliberately excluded even though
+            // resumifyResumeDataToExportDocument() computes one: the Tailor
+            // Studio's editor (A4Preview/SectionSidebar) has no custom-section
+            // UI at all, so body.resumeData.customSections is never something
+            // the user actually touched here - syncing it back would
+            // overwrite the base editor's richer Resumify-native shape
+            // (content/visible/type/order/placement) with a lossy
+            // bullets-only reshape, silently hiding those sections next time
+            // the base editor loads (its preview templates filter on
+            // `visible`, which the reshape drops).
             const existingContent =
               baseRow.content && typeof baseRow.content === "object" && !Array.isArray(baseRow.content)
                 ? baseRow.content
@@ -243,7 +253,6 @@ export async function PATCH(req: NextRequest) {
               experience: converted.experience,
               education: converted.education,
               projects: converted.projects,
-              customSections: converted.customSections,
             };
             await execute(
               "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",

@@ -54,6 +54,11 @@ export interface ResumeDocument {
     description?: string;
     bullets: { id: string; text: string }[];
   }[];
+  customSections?: {
+    id: string;
+    title: string;
+    bullets: { id: string; text: string }[];
+  }[];
 }
 
 let idCounter = 0;
@@ -145,6 +150,36 @@ function mapCertifications(certs: any[], baseContent: any) {
   return out;
 }
 
+// Custom sections (certifications-style extras like Awards, Languages,
+// Publications) are candidate-level facts, not job-tailored content - none of
+// the 4 pipeline stages ever see or rewrite them, so they pass straight
+// through from the base resume the same way readHeader() does. The base
+// resume's editor stores them as either the older Resumify-native shape
+// ({ content: string, type, visible }) or the canonical { bullets } shape
+// depending on which editor last touched the row - handle both so a
+// section written by either editor still renders here.
+function mapCustomSections(baseContent: any): { id: string; title: string; bullets: { id: string; text: string }[] }[] {
+  const raw: any[] = Array.isArray(baseContent?.customSections) ? baseContent.customSections : [];
+  return raw
+    .filter((s) => s && typeof s === "object" && s.visible !== false)
+    .map((s) => {
+      let bullets: { id: string; text: string }[];
+      if (Array.isArray(s.bullets) && s.bullets.length > 0) {
+        bullets = s.bullets
+          .map((b: any) => ({ id: uid("cs"), text: typeof b === "string" ? b : String(b?.text ?? "").trim() }))
+          .filter((b: { id: string; text: string }) => b.text.length > 0);
+      } else if (typeof s.content === "string" && s.content.trim()) {
+        bullets = s.type === "paragraph"
+          ? [{ id: uid("cs"), text: s.content.trim() }]
+          : s.content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean).map((text: string) => ({ id: uid("cs"), text }));
+      } else {
+        bullets = [];
+      }
+      return { id: uid("cs"), title: String(s.title ?? "").trim() || "Additional Information", bullets };
+    })
+    .filter((s) => s.bullets.length > 0);
+}
+
 function mapProjects(projects: FinalResumeV1["projects"]) {
   return projects
     .filter((p) => p && typeof p.name === "string")
@@ -181,5 +216,6 @@ export function finalResumeToStudioDocument(final: RenderableResumeContent, base
     education: mapEducation(final.education),
     certifications: mapCertifications(final.certifications, base),
     projects: mapProjects(final.projects),
+    customSections: mapCustomSections(base),
   };
 }
