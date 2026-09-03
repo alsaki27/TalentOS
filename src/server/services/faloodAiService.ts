@@ -115,6 +115,9 @@ Be intent-aware based on the user's latest message:
 - If the user asks to ADD a whole new experience/job block, use type "experience_block_add". Set "suggested" to a JSON object: {"jobTitle": "...", "company": "...", "location": "...", "startDate": "...", "endDate": "...", "description": "...", "bulletPoints": ["..."]}.
 - If the user asks to REMOVE an entire experience/job block, use type "experience_block_remove". Set targetId to the experience item id.
 - If the user asks to add education (e.g. "pull education from her base resume", "add her degree"), use type "education_add". Pull the actual degree/institution/graduationYear from the CANDIDATE'S BASE RESUMES context if provided below - never invent a degree or school that isn't present there or already in the current resume. If no matching education data exists in either the current resume or the base-resume context, say so in your chat reply instead of fabricating a suggestion.
+- CUSTOM SECTIONS: the resume JSON's "customSections" array holds user-defined sections beyond the standard ones (e.g. Languages, Awards, Publications, Volunteer Experience - any title the user chose). Treat each entry there exactly like any other real section - never say a custom section "doesn't exist" or can't be edited just because its title isn't one of the standard ones above.
+  - If the user asks to CHANGE/REWRITE the content of an EXISTING custom section (match by its "title" in the customSections array, e.g. "update my Languages section" or "add Spanish to my Awards section"), use type "custom_section_edit". Set targetId to that section's "id" from the customSections array, set contextTitle to its exact "title", set "original" to its current "content", and set "suggested" to a JSON object: {"content": "the full new content text"}.
+  - If the user asks to ADD a brand-new custom section that does not already exist in customSections (e.g. "add a Languages section", "add a Volunteer Experience section"), use type "custom_section_add". Set "suggested" to a JSON object: {"title": "the new section's title", "content": "the section content", "type": "bullets" or "paragraph"}. Use "bullets" when the content is naturally a list (one item per line) and "paragraph" for a single flowing block of text. Never add a custom section that already exists (by title, case-insensitive) - use custom_section_edit instead for those.
 
 CRITICAL HISTORY RULE:
 - ONLY address the user's LATEST message in the conversation history.
@@ -140,13 +143,13 @@ Output strictly valid JSON (no markdown fences, no explanation) in the following
     "suggestions": [
         {
             "id": "unique_id",
-            "type": "experience" | "experience_info" | "experience_block_add" | "experience_block_remove" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add",
+            "type": "experience" | "experience_info" | "experience_block_add" | "experience_block_remove" | "experience_add" | "experience_remove" | "skill" | "skill_remove" | "summary" | "skill_reorg" | "personal_info" | "education_add" | "custom_section_edit" | "custom_section_add",
             "title": "Short title of suggestion",
-            "contextTitle": "The exact name of the section or job role this change applies to (e.g., 'Experience: GIS Analyst', 'Technical Skills', 'Education: Bachelor of Science')",
+            "contextTitle": "The exact name of the section or job role this change applies to (e.g., 'Experience: GIS Analyst', 'Technical Skills', 'Education: Bachelor of Science', or the exact title of a custom section e.g. 'Languages')",
             "description": "Reasoning for the suggestion",
-            "original": "Original text (if applicable, or field name for experience_info)",
-            "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill: a JSON ARRAY containing exactly ONE skill string (one suggestion per skill, never bundled). For skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object.",
-            "targetId": "For experience/experience_add/experience_remove/experience_info/experience_block_remove: experience item id. For skill/skill_remove: skill category id. For personal_info: field name."
+            "original": "Original text (if applicable, or field name for experience_info, or the custom section's current content for custom_section_edit)",
+            "suggested": "For summary/experience/personal_info/experience_add/experience_info: a plain string. For skill: a JSON ARRAY containing exactly ONE skill string (one suggestion per skill, never bundled). For skill_remove: a JSON ARRAY of strings. For skill_reorg: an array of objects. For education_add: a JSON ARRAY of objects. For experience_block_add: a JSON object. For custom_section_edit: a JSON object {\"content\": \"...\"}. For custom_section_add: a JSON object {\"title\": \"...\", \"content\": \"...\", \"type\": \"bullets\"|\"paragraph\"}.",
+            "targetId": "For experience/experience_add/experience_remove/experience_info/experience_block_remove: experience item id. For skill/skill_remove: skill category id. For personal_info: field name. For custom_section_edit: that section's id from customSections."
         }
     ]
 }`;

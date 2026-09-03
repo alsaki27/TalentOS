@@ -227,24 +227,33 @@ export async function PATCH(req: NextRequest) {
             const converted = resumifyResumeDataToExportDocument(body.resumeData);
             // Merge onto the existing content rather than replacing it
             // wholesale: the resumify editor has no concept of
-            // certifications, custom sections, or the base resume's
-            // presentation "formatting" (styleId/margins/etc.) at all, so a
-            // full overwrite would silently delete/corrupt them. Only the
-            // fields the Tailor Studio can actually edit are synced.
-            // customSections is deliberately excluded even though
-            // resumifyResumeDataToExportDocument() computes one: the Tailor
-            // Studio's editor (A4Preview/SectionSidebar) has no custom-section
-            // UI at all, so body.resumeData.customSections is never something
-            // the user actually touched here - syncing it back would
-            // overwrite the base editor's richer Resumify-native shape
-            // (content/visible/type/order/placement) with a lossy
-            // bullets-only reshape, silently hiding those sections next time
-            // the base editor loads (its preview templates filter on
-            // `visible`, which the reshape drops).
+            // certifications or the base resume's presentation "formatting"
+            // (styleId/margins/etc.) at all, so a full overwrite would
+            // silently delete them. Only the fields the Tailor Studio can
+            // actually edit are synced.
+            //
+            // customSections is a genuine, actively-edited field here (this
+            // route IS the save path for /falood/studio/tailor/[id], which
+            // renders the real ResumeForm/CustomSectionsForm editor - a prior
+            // version of this comment incorrectly assumed the caller was the
+            // A4Preview/SectionSidebar stack, which has no custom-section UI
+            // and, it turns out, doesn't even save through this route).
+            // resumifyResumeDataToExportDocument() reshapes customSections
+            // into the canonical { bullets } shape for the AI-pipeline
+            // consumers, which drops the Resumify-native fields
+            // (content/visible/type/order/placement) that CustomSectionsForm
+            // and the base editor's own preview templates depend on
+            // (templates filter on `visible`). Use body.resumeData's raw,
+            // untouched customSections array instead of the converted one so
+            // the round-trip back into base_resumes.content is lossless -
+            // exactly what the base editor itself will read back later.
             const existingContent =
               baseRow.content && typeof baseRow.content === "object" && !Array.isArray(baseRow.content)
                 ? baseRow.content
                 : {};
+            const rawCustomSections = Array.isArray((body.resumeData as any)?.customSections)
+              ? (body.resumeData as any).customSections
+              : converted.customSections;
             const mergedContent = {
               ...existingContent,
               header: converted.header,
@@ -253,6 +262,7 @@ export async function PATCH(req: NextRequest) {
               experience: converted.experience,
               education: converted.education,
               projects: converted.projects,
+              customSections: rawCustomSections,
             };
             await execute(
               "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
