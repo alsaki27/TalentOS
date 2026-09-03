@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { ResumeData } from '@/components/falood/resumify/types/resume';
-import { applySuggestionToResumeData, type Suggestion } from '@/lib/falood/applySuggestionToResumeData';
+import { applySuggestionToResumeData, getSuggestionApplyResult, type Suggestion } from '@/lib/falood/applySuggestionToResumeData';
 
 // Re-exported so existing `import { applySuggestionToResumeData } from
 // '.../AiSuggestions'` call sites (e.g. ResumePreview.tsx) keep working
@@ -156,12 +156,12 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
 
     const handleAccept = (suggestion: Suggestion, messageId: string) => {
-        const nextResumeData = applySuggestionToResumeData(state.resumeData, suggestion);
-        // applySuggestionToResumeData returns the input unchanged (same
-        // content, new top-level object) whenever it can't find a match -
-        // detect that instead of always marking the suggestion "accepted",
-        // which previously hid every failed match from the user entirely.
-        const applied = JSON.stringify(nextResumeData) !== JSON.stringify(state.resumeData);
+        // getSuggestionApplyResult reports whether anything actually changed
+        // AND a specific reason when it didn't (e.g. "already on the resume"
+        // vs. "couldn't find that text") - previously every failure showed
+        // the same generic "couldn't find this exact text" message even when
+        // that wasn't actually why it failed.
+        const { resumeData: nextResumeData, applied, reason } = getSuggestionApplyResult(state.resumeData, suggestion);
 
         if (applied) {
             importResumeData(nextResumeData);
@@ -172,7 +172,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             return {
                 ...msg,
                 suggestions: msg.suggestions.map((s: Suggestion) =>
-                    s.id === suggestion.id ? { ...s, status: applied ? 'accepted' : 'failed' } : s
+                    s.id === suggestion.id ? { ...s, status: applied ? 'accepted' : 'failed', failureReason: applied ? undefined : reason } : s
                 )
             };
         }));
@@ -190,12 +190,11 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
         if (pending.length === 0) return;
 
-        const resultStatus = new Map<string, 'accepted' | 'failed'>();
+        const resultStatus = new Map<string, { status: 'accepted' | 'failed'; reason?: string }>();
         let acc = state.resumeData;
         for (const { suggestion } of pending) {
-            const next = applySuggestionToResumeData(acc, suggestion);
-            const applied = JSON.stringify(next) !== JSON.stringify(acc);
-            resultStatus.set(suggestion.id, applied ? 'accepted' : 'failed');
+            const { resumeData: next, applied, reason } = getSuggestionApplyResult(acc, suggestion);
+            resultStatus.set(suggestion.id, applied ? { status: 'accepted' } : { status: 'failed', reason });
             if (applied) acc = next;
         }
 
@@ -205,9 +204,10 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
             if (!msg.suggestions) return msg;
             return {
                 ...msg,
-                suggestions: msg.suggestions.map((s: Suggestion) =>
-                    resultStatus.has(s.id) ? { ...s, status: resultStatus.get(s.id)! } : s
-                ),
+                suggestions: msg.suggestions.map((s: Suggestion) => {
+                    const result = resultStatus.get(s.id);
+                    return result ? { ...s, status: result.status, failureReason: result.reason } : s;
+                }),
             };
         }));
     };
@@ -548,6 +548,9 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                                     };
 
                                                                     const renderContent = (s: any, idx: number) => {
+                                                                        if (s === null || s === undefined || s === '') {
+                                                                            return <span key={idx} className="text-muted-foreground italic">(no content provided)</span>;
+                                                                        }
                                                                         // Unwrap {categorized, simple, mode} shape from skill_reorg
                                                                         if (s && typeof s === 'object' && 'categorized' in s && Array.isArray(s.categorized)) {
                                                                             return (
@@ -592,8 +595,27 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                                                                                     </div>
                                                                                 );
                                                                             }
+                                                                            // custom_section_edit -> {content}, custom_section_add ->
+                                                                            // {title, content, type}. Neither shape matched any case
+                                                                            // above (no "bullets"/"skills"/"degree" key), so it fell
+                                                                            // through to a blank box - this was the actual bug: the
+                                                                            // suggestion applied fine (or would have), but its own
+                                                                            // preview text never rendered.
+                                                                            if (typeof s.content === 'string') {
+                                                                                return (
+                                                                                    <div key={idx} className="flex flex-col gap-1">
+                                                                                        {typeof s.title === 'string' && s.title.trim() && (
+                                                                                            <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">{s.title}</span>
+                                                                                        )}
+                                                                                        <span className="whitespace-pre-wrap">{s.content || <em className="text-muted-foreground">(empty)</em>}</span>
+                                                                                    </div>
+                                                                                );
+                                                                            }
                                                                         }
-                                                                        return null;
+                                                                        // Nothing above matched this shape - show the raw value
+                                                                        // rather than silently rendering an empty box, so a future
+                                                                        // suggestion type is at least visible instead of invisible.
+                                                                        return <span key={idx} className="text-muted-foreground italic">{JSON.stringify(s)}</span>;
                                                                     };
 
                                                                     const parsed = parseSuggested(suggestion.suggested);
@@ -614,7 +636,7 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
 
                                                     {suggestion.status === 'failed' && (
                                                         <p className="px-3 pb-2 text-[11px] text-amber-700">
-                                                            Couldn&apos;t find this exact text in the resume (it may have already changed). You can retry, reject, or edit it manually.
+                                                            {suggestion.failureReason || "Couldn't apply this change."} You can retry, reject, or edit it manually.
                                                         </p>
                                                     )}
 

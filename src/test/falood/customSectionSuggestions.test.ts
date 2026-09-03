@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applySuggestionToResumeData, type Suggestion } from "@/lib/falood/applySuggestionToResumeData";
+import { applySuggestionToResumeData, getSuggestionApplyResult, type Suggestion } from "@/lib/falood/applySuggestionToResumeData";
 import type { ResumeData } from "@/components/falood/resumify/types/resume";
 
 function baseResumeData(customSections: ResumeData["customSections"] = []): ResumeData {
@@ -101,5 +101,70 @@ describe("applySuggestionToResumeData - custom sections", () => {
     };
     const result = applySuggestionToResumeData(resumeData, suggestion);
     expect(result).toBe(resumeData);
+  });
+});
+
+describe("getSuggestionApplyResult - accurate failure reasons", () => {
+  it("reports the specific 'already exists' reason for a duplicate custom_section_add, not a generic message", () => {
+    const resumeData = baseResumeData([
+      { id: "cs1", title: "Languages", content: "English", type: "bullets", visible: true, order: 1 },
+    ]);
+    const suggestion: Suggestion = {
+      id: "s1",
+      type: "custom_section_add",
+      title: "Add Languages section",
+      description: "",
+      suggested: { title: "Languages", content: "Spanish" },
+    };
+    const result = getSuggestionApplyResult(resumeData, suggestion);
+    expect(result.applied).toBe(false);
+    expect(result.reason).toMatch(/already exists/i);
+  });
+
+  it("reports a duplicate-skill reason instead of a generic one, case/whitespace-insensitively", () => {
+    const resumeData = baseResumeData();
+    resumeData.skills = { mode: "categorized", simple: [], categorized: [{ id: "cat1", name: "Tech", skills: ["React"] }] } as any;
+    const suggestion: Suggestion = {
+      id: "s2",
+      type: "skill",
+      title: "Add skill",
+      description: "",
+      suggested: ["  react  "],
+    };
+    const result = getSuggestionApplyResult(resumeData, suggestion);
+    expect(result.applied).toBe(false);
+    expect(result.reason).toMatch(/already on the resume/i);
+  });
+
+  it("still adds a genuinely new skill and reports applied:true with no reason", () => {
+    const resumeData = baseResumeData();
+    resumeData.skills = { mode: "categorized", simple: [], categorized: [{ id: "cat1", name: "Tech", skills: ["React"] }] } as any;
+    const suggestion: Suggestion = {
+      id: "s3",
+      type: "skill",
+      title: "Add skill",
+      description: "",
+      suggested: ["Node.js"],
+    };
+    const result = getSuggestionApplyResult(resumeData, suggestion);
+    expect(result.applied).toBe(true);
+    expect(result.reason).toBeUndefined();
+    expect(result.resumeData.skills.categorized[0].skills).toContain("Node.js");
+  });
+
+  it("reports a 'couldn't find' reason (not 'already exists') when an experience edit's original text doesn't match anything", () => {
+    const resumeData = baseResumeData();
+    resumeData.experience = [{ id: "exp1", jobTitle: "Engineer", company: "Acme", location: "", startDate: "", endDate: "", current: false, description: "", bulletPoints: ["Did a thing"] }] as any;
+    const suggestion: Suggestion = {
+      id: "s4",
+      type: "experience",
+      title: "Rewrite bullet",
+      description: "",
+      original: "This text is not on the resume at all",
+      suggested: "New bullet text",
+    };
+    const result = getSuggestionApplyResult(resumeData, suggestion);
+    expect(result.applied).toBe(false);
+    expect(result.reason).toMatch(/couldn't find/i);
   });
 });

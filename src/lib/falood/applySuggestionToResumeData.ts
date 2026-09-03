@@ -38,16 +38,39 @@ export interface Suggestion {
   targetId?: string; // ID of the experience item, skill category, or custom section
   subId?: string; // ID of the specific skill category if needed
   status?: "accepted" | "rejected" | "pending" | "failed";
+  /** Set by the UI when a suggestion can't be applied, with a specific, human-readable reason (see getSuggestionApplyResult). */
+  failureReason?: string;
 }
 
-export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: Suggestion): ResumeData => {
+/** A suggestion couldn't change anything, and why - distinct reasons so the UI can tell "already on the resume" apart from "couldn't locate the original text" instead of one generic message for every case. */
+export interface SuggestionApplyResult {
+  resumeData: ResumeData;
+  applied: boolean;
+  reason?: string;
+}
+
+const unchanged = (resumeData: ResumeData, reason: string): SuggestionApplyResult => ({ resumeData, applied: false, reason });
+const changed = (resumeData: ResumeData): SuggestionApplyResult => ({ resumeData, applied: true });
+
+/**
+ * Applies a suggestion to resumeData and reports whether it actually changed
+ * anything, with a specific reason when it didn't. This is the single
+ * implementation both applySuggestionToResumeData (kept for existing
+ * callers - live preview-on-hover, and every prior test, none of which need
+ * the reason) and getSuggestionApplyResult (used by Accept/Accept All to
+ * show an accurate "why didn't this apply" message) delegate to, so a future
+ * suggestion type only needs one new branch here to get correct application
+ * AND correct messaging - never two places to keep in sync.
+ */
+function applySuggestion(resumeData: ResumeData, suggestion: Suggestion): SuggestionApplyResult {
   const normalize = (s?: string | null) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
 
   if (suggestion.type === "summary") {
-    return { ...resumeData, summary: (suggestion.suggested as string) ?? "" };
+    return changed({ ...resumeData, summary: (suggestion.suggested as string) ?? "" });
   }
 
-  if (suggestion.type === "personal_info" && suggestion.targetId) {
+  if (suggestion.type === "personal_info") {
+    if (!suggestion.targetId) return unchanged(resumeData, "No field was specified to update.");
     const allowed: Record<string, boolean> = {
       fullName: true,
       jobTitle: true,
@@ -60,15 +83,15 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       birthDate: true,
     };
 
-    if (!allowed[suggestion.targetId]) return resumeData;
+    if (!allowed[suggestion.targetId]) return unchanged(resumeData, "That field can't be edited this way.");
 
-    return {
+    return changed({
       ...resumeData,
       personalInfo: {
         ...resumeData.personalInfo,
         [suggestion.targetId]: (suggestion.suggested as string) ?? "",
       } as ResumeData["personalInfo"],
-    };
+    });
   }
 
   // The AI is asked (see SUGGESTIONS_SYSTEM_PROMPT in faloodAiService.ts)
@@ -84,7 +107,7 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
   // works without it.
   if (suggestion.type === "experience") {
     const newText = (suggestion.suggested as string) ?? "";
-    if (!newText) return resumeData;
+    if (!newText) return unchanged(resumeData, "No replacement text was provided.");
 
     const byTargetId = suggestion.targetId
       ? resumeData.experience.find((exp) => exp.id === suggestion.targetId)
@@ -127,7 +150,7 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       }
     }
 
-    if (matchedExpId === null) return resumeData;
+    if (matchedExpId === null) return unchanged(resumeData, "Couldn't find that exact text on the resume - it may have already changed.");
 
     const updatedExperience = resumeData.experience.map((exp) => {
       if (exp.id !== matchedExpId) return exp;
@@ -152,33 +175,33 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       return exp;
     });
 
-    return { ...resumeData, experience: updatedExperience };
+    return changed({ ...resumeData, experience: updatedExperience });
   }
 
   if (suggestion.type === "experience_info") {
     const field = suggestion.original as keyof Experience | undefined;
     const newText = (suggestion.suggested as string) ?? "";
-    if (!field || !newText) return resumeData;
+    if (!field || !newText) return unchanged(resumeData, "Missing the field or the new value to set.");
 
     const target = suggestion.targetId
       ? resumeData.experience.find((exp) => exp.id === suggestion.targetId)
       : resumeData.experience[0]; // fallback to most recent if no targetId
 
-    if (!target) return resumeData;
+    if (!target) return unchanged(resumeData, "Couldn't find a matching experience entry.");
     const allowedFields = ["jobTitle", "company", "location", "startDate", "endDate"];
-    if (!allowedFields.includes(field)) return resumeData;
+    if (!allowedFields.includes(field)) return unchanged(resumeData, "That field can't be edited this way.");
 
     const updatedExperience = resumeData.experience.map((exp) => {
       if (exp.id !== target.id) return exp;
       return { ...exp, [field]: newText };
     });
 
-    return { ...resumeData, experience: updatedExperience };
+    return changed({ ...resumeData, experience: updatedExperience });
   }
 
   if (suggestion.type === "experience_block_add") {
     const newBlock = suggestion.suggested as any;
-    if (!newBlock || typeof newBlock !== "object") return resumeData;
+    if (!newBlock || typeof newBlock !== "object") return unchanged(resumeData, "No job details were provided.");
 
     const newExperience: Experience = {
       id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -192,20 +215,22 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       bulletPoints: Array.isArray(newBlock.bulletPoints) ? newBlock.bulletPoints : [],
     };
 
-    return { ...resumeData, experience: [newExperience, ...resumeData.experience] };
+    return changed({ ...resumeData, experience: [newExperience, ...resumeData.experience] });
   }
 
   if (suggestion.type === "experience_block_remove") {
-    if (!suggestion.targetId) return resumeData;
+    if (!suggestion.targetId) return unchanged(resumeData, "No experience entry was specified.");
     const updatedExperience = resumeData.experience.filter((exp) => exp.id !== suggestion.targetId);
-    if (updatedExperience.length === resumeData.experience.length) return resumeData; // no match
+    if (updatedExperience.length === resumeData.experience.length) {
+      return unchanged(resumeData, "Couldn't find that experience entry - it may have already been removed.");
+    }
 
-    return { ...resumeData, experience: updatedExperience };
+    return changed({ ...resumeData, experience: updatedExperience });
   }
 
   if (suggestion.type === "experience_add") {
     const newBullet = (suggestion.suggested as string)?.trim();
-    if (!newBullet) return resumeData;
+    if (!newBullet) return unchanged(resumeData, "No bullet text was provided.");
 
     // No original text to locate against for a brand-new bullet - fall
     // back to the most recent (first) role, which is what a tailoring
@@ -213,7 +238,13 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
     const target = (suggestion.targetId
       ? resumeData.experience.find((exp) => exp.id === suggestion.targetId)
       : undefined) ?? resumeData.experience[0];
-    if (!target) return resumeData;
+    if (!target) return unchanged(resumeData, "Couldn't find a matching experience entry to add this to.");
+
+    // Tracks what actually happened inside the map below, so the reason
+    // reported when nothing changes matches what was actually tried - a
+    // modify-via-original attempt that found no match is a different
+    // situation from the bullet simply already being present.
+    let outcome: "modified" | "already_present" | "added" | "none" = "none";
 
     const updatedExperience = resumeData.experience.map((exp) => {
       if (exp.id !== target.id) return exp;
@@ -230,16 +261,18 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
           if (idx !== -1) {
             const updated = [...exp.bulletPoints];
             updated[idx] = newBullet;
+            outcome = "modified";
             return { ...exp, bulletPoints: updated };
           }
 
           // Try dates as well, just in case they used experience_add for a date change
-          if (normalize(exp.startDate) === normOrig) return { ...exp, startDate: newBullet };
-          if (normalize(exp.endDate) === normOrig) return { ...exp, endDate: newBullet };
+          if (normalize(exp.startDate) === normOrig) { outcome = "modified"; return { ...exp, startDate: newBullet }; }
+          if (normalize(exp.endDate) === normOrig) { outcome = "modified"; return { ...exp, endDate: newBullet }; }
 
           const combinedDate = `${exp.startDate || ""} - ${exp.endDate || ""}`;
           if (normalize(combinedDate) === normOrig || normalize(combinedDate).includes(normOrig)) {
             const parts = newBullet.split(/\s*[-–—]\s*/);
+            outcome = "modified";
             if (parts.length >= 2) {
               return { ...exp, startDate: parts[0].trim(), endDate: parts.slice(1).join(" - ").trim() };
             } else {
@@ -249,16 +282,24 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
         }
       }
 
-      if (exp.bulletPoints.includes(newBullet)) return exp;
+      if (exp.bulletPoints.includes(newBullet)) {
+        outcome = "already_present";
+        return exp;
+      }
+
+      outcome = "added";
       return { ...exp, bulletPoints: [...exp.bulletPoints, newBullet] };
     });
 
-    return { ...resumeData, experience: updatedExperience };
+    if (outcome === "none") return unchanged(resumeData, "Couldn't find that exact text on the resume to update.");
+    if (outcome === "already_present") return unchanged(resumeData, "That bullet is already on this experience entry.");
+
+    return changed({ ...resumeData, experience: updatedExperience });
   }
 
   if (suggestion.type === "experience_remove") {
     const original = suggestion.original || (typeof suggestion.suggested === "string" ? suggestion.suggested : "");
-    if (!original) return resumeData;
+    if (!original) return unchanged(resumeData, "No text was specified to remove.");
     const normalizedOriginal = normalize(original);
 
     const byTargetId = suggestion.targetId
@@ -266,46 +307,54 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       : undefined;
     const hasMatch = (byTargetId ? [byTargetId] : resumeData.experience)
       .some((exp) => exp.bulletPoints.some((bp) => normalize(bp) === normalizedOriginal));
-    if (!hasMatch) return resumeData;
+    if (!hasMatch) return unchanged(resumeData, "Couldn't find that exact bullet on the resume - it may have already changed.");
 
     const updatedExperience = resumeData.experience.map((exp) => {
       if (byTargetId && exp.id !== byTargetId.id) return exp;
       return { ...exp, bulletPoints: exp.bulletPoints.filter((bp) => normalize(bp) !== normalizedOriginal) };
     });
 
-    return { ...resumeData, experience: updatedExperience };
+    return changed({ ...resumeData, experience: updatedExperience });
   }
 
   if (suggestion.type === "skill") {
     const newSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
-    if (newSkills.length === 0) return resumeData;
+    if (newSkills.length === 0) return unchanged(resumeData, "No skill was specified.");
 
     const categories = resumeData.skills.categorized;
-    if (categories.length === 0) return resumeData;
+    if (categories.length === 0) return unchanged(resumeData, "This resume has no skill categories to add to yet.");
 
     const targetCatId = (suggestion.targetId && categories.some((c) => c.id === suggestion.targetId))
       ? suggestion.targetId
       : categories[0].id;
 
+    const onResumeAlready = (s: string) => categories.some((cat) => cat.skills.some((existing) => normalize(existing) === normalize(s)));
+    if (newSkills.every(onResumeAlready)) {
+      return unchanged(resumeData, newSkills.length === 1 ? `"${newSkills[0]}" is already on the resume.` : "These skills are already on the resume.");
+    }
+
     const updatedCategories = categories.map((cat) => {
       if (cat.id !== targetCatId) return cat;
-      const uniqueNewSkills = newSkills.filter((s) => !cat.skills.includes(s));
+      const uniqueNewSkills = newSkills.filter((s) => !cat.skills.some((existing) => normalize(existing) === normalize(s)));
       return { ...cat, skills: [...cat.skills, ...uniqueNewSkills] };
     });
 
-    return {
+    return changed({
       ...resumeData,
       skills: {
         ...resumeData.skills,
         categorized: updatedCategories,
       },
-    };
+    });
   }
 
   if (suggestion.type === "skill_remove") {
     const removeSkills = Array.isArray(suggestion.suggested) ? (suggestion.suggested as string[]) : [];
     const removeSet = new Set(removeSkills.map((s) => s.trim().toLowerCase()).filter(Boolean));
-    if (removeSet.size === 0) return resumeData;
+    if (removeSet.size === 0) return unchanged(resumeData, "No skill was specified to remove.");
+
+    const existed = resumeData.skills.categorized.some((cat) => cat.skills.some((s) => removeSet.has(s.trim().toLowerCase())));
+    if (!existed) return unchanged(resumeData, "That skill isn't currently on the resume.");
 
     // Removal is unambiguous without targetId - just strip matching
     // skill names from whichever category actually contains them.
@@ -314,22 +363,24 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       skills: cat.skills.filter((s) => !removeSet.has(s.trim().toLowerCase())),
     }));
 
-    return {
+    return changed({
       ...resumeData,
       skills: {
         ...resumeData.skills,
         categorized: updatedCategories,
       },
-    };
+    });
   }
 
   if (suggestion.type === "education_add") {
     const newEntries = Array.isArray(suggestion.suggested) ? (suggestion.suggested as EducationEntry[]) : [];
-    if (newEntries.length === 0) return resumeData;
+    if (newEntries.length === 0) return unchanged(resumeData, "No education details were provided.");
+
+    const validEntries = newEntries.filter((e) => e && e.degree && e.institution);
+    if (validEntries.length === 0) return unchanged(resumeData, "That entry is missing a degree or institution.");
 
     const existingKeys = new Set(resumeData.education.map((e) => `${e.degree}|${e.institution}`.toLowerCase()));
-    const toAdd = newEntries
-      .filter((e) => e && e.degree && e.institution)
+    const toAdd = validEntries
       .filter((e) => !existingKeys.has(`${e.degree}|${e.institution}`.toLowerCase()))
       .map((e) => ({
         id: e.id || `edu-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -339,8 +390,8 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
         graduationYear: e.graduationYear || "",
       }));
 
-    if (toAdd.length === 0) return resumeData;
-    return { ...resumeData, education: [...resumeData.education, ...toAdd] };
+    if (toAdd.length === 0) return unchanged(resumeData, "This education entry is already on the resume.");
+    return changed({ ...resumeData, education: [...resumeData.education, ...toAdd] });
   }
 
   // Same targetId-as-hint resilience as the experience/skill branches
@@ -354,7 +405,7 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
   if (suggestion.type === "custom_section_edit") {
     const newContent = ((suggestion.suggested as CustomSectionSuggestionPayload)?.content
       ?? (typeof suggestion.suggested === "string" ? suggestion.suggested : "")) || "";
-    if (!newContent.trim()) return resumeData;
+    if (!newContent.trim()) return unchanged(resumeData, "No content was provided.");
 
     const byTargetId = suggestion.targetId
       ? resumeData.customSections.find((cs) => cs.id === suggestion.targetId)
@@ -366,14 +417,18 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       ? resumeData.customSections.find((cs) => normalize(cs.content) === normalize(suggestion.original))
       : undefined;
     const match = byTargetId || byTitle || byOriginal;
-    if (!match) return resumeData;
+    if (!match) return unchanged(resumeData, "Couldn't find that custom section on the resume - it may have already changed.");
 
-    return {
+    if (normalize(match.content) === normalize(newContent)) {
+      return unchanged(resumeData, "This content is already on the resume.");
+    }
+
+    return changed({
       ...resumeData,
       customSections: resumeData.customSections.map((cs) =>
         cs.id === match.id ? { ...cs, content: newContent } : cs
       ),
-    };
+    });
   }
 
   if (suggestion.type === "custom_section_add") {
@@ -382,10 +437,10 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       : undefined);
     const title = (payload?.title || suggestion.contextTitle || "").trim();
     const content = (payload?.content || "").trim();
-    if (!title || !content) return resumeData;
+    if (!title || !content) return unchanged(resumeData, "Missing a section title or content.");
 
     const alreadyExists = resumeData.customSections.some((cs) => normalize(cs.title) === normalize(title));
-    if (alreadyExists) return resumeData;
+    if (alreadyExists) return unchanged(resumeData, `A "${title}" section already exists on the resume.`);
 
     const newSection = {
       id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -395,12 +450,12 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       visible: true,
       order: resumeData.customSections.length + 1,
     };
-    return { ...resumeData, customSections: [...resumeData.customSections, newSection] };
+    return changed({ ...resumeData, customSections: [...resumeData.customSections, newSection] });
   }
 
   if (suggestion.type === "skill_reorg") {
     const newCategories = suggestion.suggested as SkillCategory[];
-    if (!Array.isArray(newCategories)) return resumeData;
+    if (!Array.isArray(newCategories)) return unchanged(resumeData, "No valid skill categories were provided.");
 
     // Ensure all categories have a unique ID, otherwise React state bleeds across categories
     const categoriesWithIds = newCategories.map((cat, idx) => ({
@@ -408,14 +463,22 @@ export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: 
       id: cat.id || `ai-cat-${Date.now()}-${idx}`,
     }));
 
-    return {
+    return changed({
       ...resumeData,
       skills: {
         ...resumeData.skills,
         categorized: categoriesWithIds,
       },
-    };
+    });
   }
 
-  return resumeData;
-};
+  return unchanged(resumeData, "This suggestion type isn't recognized.");
+}
+
+/** Applies a suggestion and returns the resulting resumeData - unchanged (same reference) if it couldn't be applied. Used for live preview-on-hover, where only the resulting data matters. */
+export const applySuggestionToResumeData = (resumeData: ResumeData, suggestion: Suggestion): ResumeData =>
+  applySuggestion(resumeData, suggestion).resumeData;
+
+/** Applies a suggestion and reports whether it actually changed anything, with a specific reason when it didn't - used by Accept/Accept All so the UI can show an accurate "why didn't this apply" message instead of one generic reason for every case. */
+export const getSuggestionApplyResult = (resumeData: ResumeData, suggestion: Suggestion): SuggestionApplyResult =>
+  applySuggestion(resumeData, suggestion);
