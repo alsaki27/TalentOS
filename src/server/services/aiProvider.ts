@@ -338,6 +338,13 @@ export function buildProviderFromDbKey(
         : normalizedReasoning
           ? { reasoning_effort: normalizedReasoning }
           : undefined;
+      // Console Go's Kimi K2.7 Code endpoint rejects every temperature except
+      // exactly 1. The application agents intentionally use lower temperatures
+      // for deterministic JSON, so force the provider-specific value at the
+      // transport boundary instead of changing every agent configuration.
+      const kimiK27Body = /^kimi-k2\.7-code$/i.test(selectedModel)
+        ? { temperature: 1 }
+        : undefined;
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
@@ -347,7 +354,10 @@ export function buildProviderFromDbKey(
         errorLabel: "OpenCode API",
         maxTokens: 8192,
         temperature: 0.3,
-        extraBody: deepSeekV4ProBody,
+        extraBody: {
+          ...(deepSeekV4ProBody ?? {}),
+          ...(kimiK27Body ?? {}),
+        },
         extraHeaders: {},
       });
     }

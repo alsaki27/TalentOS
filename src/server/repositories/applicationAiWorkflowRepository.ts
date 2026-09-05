@@ -30,6 +30,8 @@ export interface WorkflowRow {
   stage_retry_count: number;
   lock_version: number;
   recovery_count: number;
+  routing_state_id: string | null;
+  route_snapshot: unknown;
 }
 
 export interface StageRunRow {
@@ -76,11 +78,13 @@ export async function createWorkflow(input: {
   startedBy?: string;
   matchScore?: number;
   matchReason?: string;
+  routingStateId?: string | null;
+  routeSnapshot?: unknown;
 }): Promise<WorkflowRow> {
   const rows = await query<WorkflowRow>(
     `INSERT INTO application_ai_workflows
-      (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, match_score, match_reason, started_at)
-     VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, NOW())
+      (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, match_score, match_reason, routing_state_id, route_snapshot, next_retry_at, stage_retry_count, started_at)
+     VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $8, $9, NULL, 0, NOW())
      RETURNING *`,
     [
       input.applicationId,
@@ -90,6 +94,8 @@ export async function createWorkflow(input: {
       input.startedBy ?? null,
       input.matchScore ?? null,
       input.matchReason ?? null,
+      input.routingStateId ?? null,
+      input.routeSnapshot ?? {},
     ]
   );
   return rows[0];
@@ -268,6 +274,43 @@ export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
   return rows[0] ?? null;
 }
 
+/** Claim one explicitly requested workflow through the same atomic path as
+ * the scheduled dispatcher. Manual retries must not bypass backoff or the
+ * concurrency cap. */
+export async function claimWorkflowById(workflowId: string): Promise<WorkflowRow | null> {
+  const rows = await query<WorkflowRow>(
+    `WITH config AS MATERIALIZED (
+       SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
+       FROM ai_runtime_config WHERE singleton = true FOR UPDATE
+     ), active_count AS (
+       SELECT COUNT(*)::int AS n FROM application_ai_workflows
+       WHERE status = 'running'
+         AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+     )
+     UPDATE application_ai_workflows w
+        SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN 'failed' ELSE 'running' END,
+            claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+            claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL
+                                    ELSE NOW() + make_interval(secs => c.workflow_claim_ttl_seconds) END,
+            claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
+            heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+            updated_at = NOW(),
+            lock_version = lock_version + 1,
+            recovery_count = CASE WHEN w.status = 'running' THEN recovery_count + 1 ELSE recovery_count END
+       FROM config c, active_count ac
+      WHERE w.id = $1
+        AND ((w.status = 'queued'
+              AND (w.next_retry_at IS NULL OR w.next_retry_at <= NOW())
+              AND (SELECT n FROM active_count) < c.workflow_max_concurrency)
+          OR (w.status = 'running'
+              AND (w.claim_expires_at IS NULL OR w.claim_expires_at < NOW())
+              AND (w.heartbeat_at IS NULL OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')))
+      RETURNING w.*`,
+    [workflowId],
+  );
+  return rows[0] ?? null;
+}
+
 export async function assertWorkflowClaim(workflowId: string, lockVersion: number): Promise<boolean> {
   const row = await queryOne<{ id: string }>(
     `SELECT id FROM application_ai_workflows
@@ -317,14 +360,23 @@ export async function createStageRun(input: {
   automationId: string;
   sequenceNumber: number;
   attemptNumber?: number;
+  expectedLockVersion?: number;
 }): Promise<StageRunRow> {
+  const params: (string | number)[] = [input.workflowId, input.automationId, input.sequenceNumber, input.attemptNumber ?? 1];
+  const claimClause = typeof input.expectedLockVersion === "number"
+    ? " AND w.lock_version = $5 AND w.claimed_by = 'dispatcher'"
+    : "";
+  if (typeof input.expectedLockVersion === "number") params.push(input.expectedLockVersion);
   const rows = await query<StageRunRow>(
     `INSERT INTO application_ai_stage_runs
       (workflow_id, automation_id, sequence_number, attempt_number, status)
-     VALUES ($1, $2, $3, $4, 'pending')
+     SELECT $1, $2, $3, $4, 'pending'
+       FROM application_ai_workflows w
+      WHERE w.id = $1 AND w.status = 'running'${claimClause}
      RETURNING *`,
-    [input.workflowId, input.automationId, input.sequenceNumber, input.attemptNumber ?? 1]
+    params,
   );
+  if (!rows[0]) throw new Error(`Workflow claim lost before creating stage run for ${input.workflowId}`);
   return rows[0];
 }
 

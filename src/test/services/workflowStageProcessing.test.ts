@@ -25,6 +25,17 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   createArtifact: vi.fn().mockResolvedValue({ id: "artifact-1" }),
   listStageRuns: vi.fn().mockResolvedValue([]),
   listArtifacts: vi.fn().mockResolvedValue([]),
+  claimWorkflowById: vi.fn().mockResolvedValue({
+    id: "wf-1",
+    application_id: "app-1",
+    status: "running",
+    current_stage: 2,
+    config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [], routingStateId: "state-1" },
+    started_by: null,
+    claimed_by: "dispatcher",
+    lock_version: 1,
+    stage_retry_count: 0,
+  }),
   claimNextPendingWorkflow: vi.fn().mockResolvedValue(null),
   updateWorkflowHeartbeat: vi.fn().mockResolvedValue(true),
   assertWorkflowClaim: vi.fn().mockResolvedValue(true),
@@ -71,7 +82,7 @@ function hiringPanelWorkflow() {
     application_id: "app-1",
     status: "queued",
     current_stage: 2, // index 2 = application_hiring_panel
-    config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [] },
+    config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [], routingStateId: "state-1" },
     started_by: null,
   } as any;
 }

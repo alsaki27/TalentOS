@@ -241,6 +241,7 @@ export async function getProviderForAutomation(
   excludeKeyIds?: Set<string>,
   excludeProviderNames?: Set<string>,
   excludeRouteIds?: Set<string>,
+  routingStateId?: string | null,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -255,7 +256,8 @@ export async function getProviderForAutomation(
   }
 
   const runtime = await getAiRuntimeConfig();
-  let routes = runtime.active_routing_state_id
+  const selectedRoutingStateId = routingStateId ?? runtime.active_routing_state_id;
+  let routes = selectedRoutingStateId
     ? await query<AutomationRouteRow>(
         `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
                 automation_id, ai_key_id, provider, rank, is_enabled, model_override,
@@ -263,7 +265,7 @@ export async function getProviderForAutomation(
          FROM ai_routing_state_routes
          WHERE state_id = $1 AND automation_id = $2 AND is_enabled = true
          ORDER BY rank ASC`,
-        [runtime.active_routing_state_id, automationId]
+        [selectedRoutingStateId, automationId]
       )
     : [];
   if (routes.length === 0) {
@@ -521,6 +523,8 @@ export interface CallContext {
   workflowId?: string;
   applicationId?: string;
   attemptNumber?: number;
+  routingStateId?: string;
+  maxProviderAttempts?: number;
 }
 
 /**
@@ -541,7 +545,7 @@ export async function callWithUsageTracking<T>(
   excludeKeyIds?: Set<string>,
 ): Promise<CallWithUsageTrackingResult<T>> {
 
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = Math.max(0, (ctx?.maxProviderAttempts ?? 4) - 1);
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
   const excludedRouteIds = new Set<string>();
@@ -557,6 +561,7 @@ export async function callWithUsageTracking<T>(
         excludedKeyIds,
         attempt > 0 ? excludedProviders : undefined,
         excludedRouteIds,
+        ctx?.routingStateId,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.

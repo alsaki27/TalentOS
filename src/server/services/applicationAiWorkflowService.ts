@@ -27,6 +27,7 @@ import {
   createArtifact,
   listStageRuns,
   listArtifacts,
+  claimWorkflowById,
   claimNextPendingWorkflow,
   updateWorkflowHeartbeat,
   assertWorkflowClaim,
@@ -34,6 +35,7 @@ import {
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
+import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { selectBestBaseResume } from "@/lib/ai/selectBestBaseResume";
 import { query, queryOne, execute } from "@/server/db/neon";
@@ -48,6 +50,16 @@ function sha256(input: string): string {
     hash |= 0;
   }
   return Math.abs(hash).toString(16).padStart(8, "0");
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
@@ -84,6 +96,17 @@ export async function startWorkflow(input: {
   matchScore?: number;
   matchReason?: string;
 }): Promise<{ workflowId: string }> {
+  const runtime = await getAiRuntimeConfig();
+  const routingStateId = runtime.active_routing_state_id ?? null;
+  const routeSnapshot = routingStateId
+    ? await query(
+        `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
+           FROM ai_routing_state_routes
+          WHERE state_id = $1 AND is_enabled = true
+          ORDER BY automation_id, rank`,
+        [routingStateId],
+      )
+    : [];
   // Config snapshot bundles all inputs needed by agents
   const configSnapshot = {
     candidateId: input.candidateId,
@@ -92,6 +115,8 @@ export async function startWorkflow(input: {
     evidence: input.evidence,
     verifiedSkills: input.verifiedSkills ?? [],
     sourceOfTruth: input.sourceOfTruth ?? null,
+    routingStateId,
+    routeSnapshot,
   };
 
   const wf = await createWorkflow({
@@ -102,6 +127,8 @@ export async function startWorkflow(input: {
     startedBy: input.startedBy,
     matchScore: input.matchScore,
     matchReason: input.matchReason,
+    routingStateId,
+    routeSnapshot,
   });
   return { workflowId: wf.id };
 }
@@ -632,13 +659,19 @@ async function syncWorkflowToApplication(
  * - Checks for cancellation before and after the provider call.
  */
 export async function processWorkflowStage(workflowId: string, expectedLockVersion?: number): Promise<void> {
-  const wf = await findWorkflowById(workflowId);
+  let wf = await findWorkflowById(workflowId);
   if (!wf) {
     console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} not found.`);
     return;
   }
 
   console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} status=${wf.status}, stage=${wf.current_stage}`);
+
+  if (wf.status === "queued" && expectedLockVersion === undefined) {
+    const claimed = await claimWorkflowById(workflowId);
+    if (!claimed) return;
+    wf = claimed;
+  }
 
   const lockVersion = expectedLockVersion ?? wf.lock_version;
   if (expectedLockVersion !== undefined && !(await assertWorkflowClaim(workflowId, lockVersion))) {
@@ -654,6 +687,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   if (wf.status === "queued") {
     const updated = await updateWorkflowStatus(workflowId, "running", { current_stage: wf.current_stage, last_error: null } as any, expectedLockVersion);
     if (expectedLockVersion !== undefined && !updated) return;
+    wf = { ...wf, status: "running" };
     await syncWorkflowToApplication(workflowId, "running", wf.current_stage);
     if (wf.current_stage === 0) {
       await query("UPDATE applications SET ai_workflow_id = $1, resume_generation_started_at = NOW() WHERE id = $2",
@@ -661,11 +695,37 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     }
   }
 
+  // Legacy workflows created before routing snapshots existed are pinned once
+  // on their first claim. Retries then use the same state even if the active
+  // Control Center configuration changes mid-workflow.
+  const snapshot = (wf.config_snapshot ?? {}) as Record<string, any>;
+  if (typeof snapshot.routingStateId !== "string") {
+    const runtime = await getAiRuntimeConfig();
+    if (runtime.active_routing_state_id) {
+      snapshot.routingStateId = runtime.active_routing_state_id;
+      const routeSnapshot = await query(
+        `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
+           FROM ai_routing_state_routes
+          WHERE state_id = $1 AND is_enabled = true
+          ORDER BY automation_id, rank`,
+        [runtime.active_routing_state_id],
+      );
+      await execute(
+        `UPDATE application_ai_workflows
+            SET routing_state_id = $1, route_snapshot = $2::jsonb,
+                config_snapshot = $3::jsonb, updated_at = NOW()
+          WHERE id = $4 AND lock_version = $5 AND claimed_by = 'dispatcher'`,
+        [runtime.active_routing_state_id, JSON.stringify(routeSnapshot), JSON.stringify(snapshot), workflowId, lockVersion],
+      );
+      wf = { ...wf, config_snapshot: snapshot, routing_state_id: runtime.active_routing_state_id, route_snapshot: routeSnapshot };
+    }
+  }
+
   const agentOrder = APPLICATION_AGENT_IDS;
   const currentIdx = wf.current_stage;
 
   if (currentIdx >= agentOrder.length) {
-    await finalizeWorkflow(workflowId);
+    await finalizeWorkflow(workflowId, lockVersion);
     return;
   }
 
@@ -679,6 +739,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       automationId: agentId,
       sequenceNumber: currentIdx + 1,
       attemptNumber: 1,
+      expectedLockVersion: lockVersion,
     });
     await updateStageRun(stageRun.id, {
       status: "failed",
@@ -740,6 +801,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         automationId: agentId,
         sequenceNumber: currentIdx + 1,
         attemptNumber: stageAttemptNumber,
+        expectedLockVersion: lockVersion,
       });
       break;
     } catch (allocationError: any) {
@@ -775,6 +837,27 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();
 
+    // Persist the exact stage input/options before spending a provider call.
+    // This makes every future run replayable and explains failures without
+    // depending on mutable base-resume or routing state.
+    const inputPayload = {
+      kind: "agent_input",
+      automationId: agentId,
+      sequenceNumber: currentIdx + 1,
+      attemptNumber: stageAttemptNumber,
+      agentOptions,
+      context: ctx,
+    };
+    const inputArtifact = await createArtifact({
+      workflowId,
+      automationId: `${agentId}:input`,
+      sequenceNumber: currentIdx + 1,
+      schemaVersion: `${getSchemaVersion(agentId)}InputV1`,
+      contentHash: sha256(JSON.stringify(inputPayload)),
+      data: inputPayload,
+    });
+    await ownedStageUpdate({ input_artifact_id: inputArtifact.id });
+
     // callWithUsageTracking owns the provider fallback chain. Keep the stage
     // itself to one routing call: wrapping it in another retry loop caused a
     // timeout to repeat the same OpenCode route instead of advancing to
@@ -790,6 +873,10 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         workflowId,
         applicationId: wf.application_id,
         attemptNumber: stageAttemptNumber,
+        routingStateId: typeof (wf.config_snapshot as any)?.routingStateId === "string"
+          ? (wf.config_snapshot as any).routingStateId
+          : undefined,
+        maxProviderAttempts: 2,
       };
       // Each production provider enforces AgentOptions.timeout_ms with its
       // own AbortController. Let that error reach callWithUsageTracking so it
@@ -805,13 +892,18 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       }, 20_000);
        let callResult;
        try {
-        callResult = await callWithUsageTracking(
-          agentId,
-          callCtx,
-          async (provider: AiProvider) => {
-            const agentFn = getAgentFn(agentId);
-            return agentFn(agentOptions, provider, ctx);
-          },
+        const timeoutMs = agentOptions.timeout_ms ?? 300_000;
+        callResult = await withTimeout(
+          callWithUsageTracking(
+            agentId,
+            callCtx,
+            async (provider: AiProvider) => {
+              const agentFn = getAgentFn(agentId);
+              return agentFn(agentOptions, provider, ctx);
+            },
+          ),
+          timeoutMs * 2 + 5_000,
+          `Agent stage timed out after ${timeoutMs * 2 + 5_000}ms`,
         );
       } finally {
         clearInterval(heartbeatTimer);
