@@ -3,7 +3,7 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import { callWithUsageTracking, AiRouteCallError, type CallContext } from "@/lib/ai/routing";
+import { callWithUsageTracking, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
@@ -15,18 +15,21 @@ import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
+import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 import {
   createWorkflow,
   findWorkflowById,
   findActiveWorkflowByApplicationId,
   updateWorkflowStatus,
   createStageRun,
-  updateStageRun,
   createArtifact,
   listStageRuns,
   listArtifacts,
   claimNextPendingWorkflow,
+  claimWorkflowById,
+  markOrphanedStageRuns,
   updateWorkflowHeartbeat,
+  updateStageRunForClaim,
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -43,6 +46,20 @@ function sha256(input: string): string {
     hash |= 0;
   }
   return Math.abs(hash).toString(16).padStart(8, "0");
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
@@ -79,6 +96,18 @@ export async function startWorkflow(input: {
   matchScore?: number;
   matchReason?: string;
 }): Promise<{ workflowId: string }> {
+  const runtime = await getAiRuntimeConfig();
+  const routingStateId = runtime.active_routing_state_id ?? null;
+  const routeSnapshot = routingStateId
+    ? await query(
+        `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
+         FROM ai_routing_state_routes
+         WHERE state_id = $1 AND is_enabled = true
+         ORDER BY automation_id, rank`,
+        [routingStateId],
+      )
+    : [];
+
   // Config snapshot bundles all inputs needed by agents
   const configSnapshot = {
     candidateId: input.candidateId,
@@ -87,6 +116,8 @@ export async function startWorkflow(input: {
     evidence: input.evidence,
     verifiedSkills: input.verifiedSkills ?? [],
     sourceOfTruth: input.sourceOfTruth ?? null,
+    routingStateId,
+    routeSnapshot,
   };
 
   const wf = await createWorkflow({
@@ -97,6 +128,8 @@ export async function startWorkflow(input: {
     startedBy: input.startedBy,
     matchScore: input.matchScore,
     matchReason: input.matchReason,
+    routingStateId,
+    routeSnapshot,
   });
   return { workflowId: wf.id };
 }
@@ -489,17 +522,6 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
 }
 
 /**
- * Advance workflow to the next stage and re-queue.
- * Called after each successful stage completion.
- * Returns the new stage number.
- */
-async function continueToNextStage(workflowId: string, nextStage: number): Promise<number> {
-  await updateWorkflowStatus(workflowId, "queued", { current_stage: nextStage });
-  await updateWorkflowHeartbeat(workflowId);
-  return nextStage;
-}
-
-/**
  * Sync workflow status to the application's resume_generation_status column.
  * Ensures every workflow status transition is reflected on the application record.
  *
@@ -548,15 +570,15 @@ async function syncWorkflowToApplication(
 /**
  * Process exactly one stage for a workflow.
  * - Transitions from 'queued' → 'running' automatically.
- * - After successful stage, re-queues for the next stage via continueToNextStage().
+ * - After successful stage, re-queues for the next stage.
  * - Retries on failure up to configured max_attempts.
  * - On final failure, marks workflow as failed.
- * - Implements runtime provider fallback (up to 3 distinct route attempts).
+ * - Implements runtime provider fallback through the routing layer.
  * - Does NOT recurse — the dispatcher picks up the next stage.
  * - Checks for cancellation before and after the provider call.
  */
 export async function processWorkflowStage(workflowId: string, _routeAttempt: number = 1): Promise<void> {
-  const wf = await findWorkflowById(workflowId);
+  let wf = await findWorkflowById(workflowId);
   if (!wf) {
     console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} not found.`);
     return;
@@ -564,17 +586,47 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
 
   console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} status=${wf.status}, stage=${wf.current_stage}`);
 
-  if (wf.status !== "queued" && wf.status !== "running") {
+  if (wf.status === "queued") {
+    // Every entry point must pass through the same atomic claim path. This
+    // prevents manual retries from bypassing concurrency and backoff checks.
+    const claimed = await claimWorkflowById(workflowId);
+    if (!claimed) return;
+    wf = claimed;
+  }
+
+  if (wf.status !== "running" || wf.claimed_by !== "dispatcher") {
     console.log(`[Dispatch Chain] processWorkflowStage: workflow ${workflowId} skipped (status is ${wf.status}, not queued/running).`);
     return;
   }
 
-  if (wf.status === "queued") {
-    await updateWorkflowStatus(workflowId, "running", { current_stage: wf.current_stage, last_error: null } as any);
-    await syncWorkflowToApplication(workflowId, "running", wf.current_stage);
-    if (wf.current_stage === 0) {
-      await query("UPDATE applications SET ai_workflow_id = $1, resume_generation_started_at = NOW() WHERE id = $2",
-        [workflowId, wf.application_id]);
+  const claimVersion = wf.lock_version;
+  await updateWorkflowStatus(workflowId, "running", {
+    current_stage: wf.current_stage,
+    last_error: null,
+    expected_lock_version: claimVersion,
+    expected_claimed_by: "dispatcher",
+  });
+  await syncWorkflowToApplication(workflowId, "running", wf.current_stage);
+  if (wf.current_stage === 0) {
+    await query("UPDATE applications SET ai_workflow_id = $1, resume_generation_started_at = NOW() WHERE id = $2",
+      [workflowId, wf.application_id]);
+  }
+
+  // Pin legacy workflows the first time they are claimed. New workflows are
+  // already pinned by startWorkflow; this closes the retry-time state drift
+  // window without changing the selected production state.
+  const snapshot = (wf.config_snapshot ?? {}) as Record<string, any>;
+  if (typeof snapshot.routingStateId !== "string") {
+    const runtime = await getAiRuntimeConfig();
+    if (runtime.active_routing_state_id) {
+      snapshot.routingStateId = runtime.active_routing_state_id;
+      await query(
+        `UPDATE application_ai_workflows
+         SET routing_state_id = $1, config_snapshot = $2::jsonb, updated_at = NOW()
+         WHERE id = $3 AND lock_version = $4 AND claimed_by = 'dispatcher'`,
+        [runtime.active_routing_state_id, JSON.stringify(snapshot), workflowId, claimVersion],
+      );
+      wf = { ...wf, config_snapshot: snapshot, routing_state_id: runtime.active_routing_state_id };
     }
   }
 
@@ -582,7 +634,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
   const currentIdx = wf.current_stage;
 
   if (currentIdx >= agentOrder.length) {
-    await finalizeWorkflow(workflowId);
+    await finalizeWorkflow(workflowId, claimVersion);
     return;
   }
 
@@ -596,13 +648,18 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       automationId: agentId,
       sequenceNumber: currentIdx + 1,
       attemptNumber: 1,
+      expectedLockVersion: claimVersion,
     });
-    await updateStageRun(stageRun.id, {
+    await updateStageRunForClaim(stageRun.id, workflowId, claimVersion, {
       status: "failed",
       error_message: `Agent "${agentId}" is disabled via ai_agent_configs.is_active`,
       completed_at: new Date().toISOString(),
     });
-    await updateWorkflowStatus(workflowId, "failed", { last_error: `Agent "${agentId}" is disabled` });
+    await updateWorkflowStatus(workflowId, "failed", {
+      last_error: `Agent "${agentId}" is disabled`,
+      expected_lock_version: claimVersion,
+      expected_claimed_by: "dispatcher",
+    });
     return;
   }
 
@@ -637,16 +694,24 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     automationId: agentId,
     sequenceNumber: currentIdx + 1,
     attemptNumber,
+    expectedLockVersion: claimVersion,
   });
 
+  const updateCurrentStage = (updates: Partial<import("@/server/repositories/applicationAiWorkflowRepository").StageRunRow>) =>
+    updateStageRunForClaim(stageRun.id, workflowId, claimVersion, updates);
+
   try {
-    await updateStageRun(stageRun.id, { status: "running", started_at: new Date().toISOString() });
-    await updateWorkflowHeartbeat(workflowId);
+    await updateCurrentStage({ status: "running", started_at: new Date().toISOString() });
+    await updateWorkflowHeartbeat(workflowId, claimVersion);
 
     // Check for cancellation before invoking the provider
     const currentWf = await findWorkflowById(workflowId);
     if (currentWf?.status === "cancelled") {
-      await updateStageRun(stageRun.id, { status: "cancelled" });
+      await updateCurrentStage({ status: "cancelled" });
+      await updateWorkflowStatus(workflowId, "cancelled", {
+        expected_lock_version: claimVersion,
+        expected_claimed_by: "dispatcher",
+      });
       await syncWorkflowToApplication(workflowId, "cancelled");
       return;
     }
@@ -654,92 +719,86 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
     const ctx = await buildAgentContext(wf, previousArtifacts);
     const startMs = Date.now();
 
-    // Provider fallback: try up to 3 distinct routes, tracking failed key IDs.
-    let lastError: Error | null = null;
-    let agentOutput: any = null;
-    let resolvedProviderName = "";
-    let resolvedKeyId: string | null = null;
-    let resolvedModel: string | null = null;
-    const failedKeyIds = new Set<string>();
+    // Persist the exact immutable context/options handed to this agent before
+    // calling any provider.  The output artifact is written below and the
+    // stage run links both sides, making replay/evaluation auditable even when
+    // the provider fails or a later stage changes the live base resume.
+    const inputPayload = {
+      kind: "agent_input",
+      automationId: agentId,
+      sequenceNumber: currentIdx + 1,
+      attemptNumber,
+      agentOptions,
+      context: ctx,
+    };
+    const inputArtifact = await createArtifact({
+      workflowId,
+      automationId: `${agentId}:input`,
+      sequenceNumber: currentIdx + 1,
+      schemaVersion: `${getSchemaVersion(agentId)}InputV1`,
+      contentHash: sha256(JSON.stringify(inputPayload)),
+      data: inputPayload,
+    });
+    await updateCurrentStage({ input_artifact_id: inputArtifact.id });
 
-    for (let fallbackAttempt = 1; fallbackAttempt <= 3; fallbackAttempt++) {
-      try {
-        const callCtx: CallContext = {
-          userId: wf.started_by ?? undefined,
-          workflowId,
-          applicationId: wf.application_id,
-          attemptNumber,
-        };
-        // ai_agent_configs.timeout_ms was threaded through to AgentOptions
-        // but never actually enforced anywhere - a hung upstream fetch (no
-        // AbortController on any provider's fetch call) could block a claim
-        // slot indefinitely instead of failing and freeing it up for retry.
-        // Racing against a timeout here doesn't cancel the underlying fetch
-        // (providers don't accept an abort signal), but it does let the
-        // pipeline move on, record a clear timeout error, and retry/fail
-        // cleanly instead of hanging past the claim TTL with no diagnostic.
-        const timeoutMs = agentOptions.timeout_ms ?? 300_000;
-        const heartbeatTimer = setInterval(() => {
-          void updateWorkflowHeartbeat(workflowId).catch(err =>
-            console.warn(`[Workflow ${workflowId}] heartbeat refresh failed`, err)
-          );
-        }, 60_000);
-        let callResult;
-        try {
-          callResult = await Promise.race([
-            callWithUsageTracking(
-            agentId,
-            callCtx,
-            async (provider: AiProvider) => {
-              const agentFn = getAgentFn(agentId);
-              return agentFn(agentOptions, provider, ctx);
-            },
-            failedKeyIds.size > 0 ? failedKeyIds : undefined,
-          ),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error(`Agent call timed out after ${timeoutMs}ms`)), timeoutMs)
-            ),
-          ]);
-        } finally {
-          clearInterval(heartbeatTimer);
-        }
-        agentOutput = callResult.result;
-        resolvedProviderName = callResult.providerName;
-        resolvedKeyId = callResult.aiKeyId;
-        resolvedModel = callResult.model;
-        lastError = null;
-        break;
-      } catch (err: any) {
-        lastError = err;
-        // Only blacklist the key/route for a real provider-side failure
-        // (auth, rate limit, timeout, server error - anything classifyErrorCode
-        // in routing.ts recognizes). callWithUsageTracking wraps EVERY error
-        // thrown inside fn - including an agent's own content-validation
-        // rejection (e.g. Final Polish's "wiped the entire experience section
-        // ... rejecting") - into an AiRouteCallError carrying the key that was
-        // used, indistinguishable from an actual API failure. Blacklisting on
-        // that meant one bad generation exhausted BOTH configured routes
-        // (neither route was actually broken) and the 3rd fallback attempt hit
-        // an empty route list, throwing the generic "All configured routes
-        // failed and global fallback is disabled" - which overwrote the real,
-        // useful validation error as the stage's recorded last_error. Confirmed
-        // live via ai_usage_events: the true error was a content rejection, not
-        // a routing/key problem, on both the primary and backup key. Errors
-        // with no classifiable errorCode (validation/business-logic throws)
-        // now just retry the same route instead of blacklisting it.
-        if (err instanceof AiRouteCallError && err.aiKeyId && err.errorCode) {
-          failedKeyIds.add(err.aiKeyId);
-        }
-        resolvedKeyId = null;
-        if (fallbackAttempt < 3) {
-          await new Promise((r) => setTimeout(r, 500));
-        }
-      }
+    // Provider routing already owns retries and fallback selection.  A second
+    // retry loop here multiplied one failed stage into as many as twelve
+    // upstream requests, while the worker claim remained occupied.  Make one
+    // routed call per stage attempt and let the provider adapters' abort
+    // signal enforce the configured timeout.
+    const callCtx: CallContext = {
+      userId: wf.started_by ?? undefined,
+      workflowId,
+      applicationId: wf.application_id,
+      attemptNumber,
+      routingStateId: typeof (wf.config_snapshot as any)?.routingStateId === "string"
+        ? (wf.config_snapshot as any).routingStateId
+        : undefined,
+      // Each application stage has one primary and one configured fallback in
+      // the active state.  Bound this invocation to those two routes so a
+      // slow/failed primary cannot consume the claim with unrelated retries.
+      maxProviderAttempts: 2,
+    };
+    const timeoutMs = agentOptions.timeout_ms ?? 300_000;
+    const stageTimeoutMs = timeoutMs * 2 + 5_000;
+    // Keep the durable claim alive several times during a slow provider call.
+    // A fixed 60s interval is too coarse for short leases and gives no useful
+    // margin when a fallback is selected near the stage deadline.
+    const heartbeatIntervalMs = Math.max(15_000, Math.floor(timeoutMs / 4));
+    const heartbeatTimer = setInterval(() => {
+        void updateWorkflowHeartbeat(workflowId, claimVersion).catch(err =>
+        console.warn(`[Workflow ${workflowId}] heartbeat refresh failed`, err)
+      );
+    }, heartbeatIntervalMs);
+    let callResult;
+    try {
+      // Allow the primary and one fallback provider to each reach their own
+      // AbortController deadline.  A single timeout around the whole routed
+      // call used to fire while the fallback was still being selected, which
+      // made a healthy Vertex fallback look like a failed workflow.
+      callResult = await withTimeout(
+        callWithUsageTracking(
+          agentId,
+          callCtx,
+          async (provider: AiProvider) => {
+            const agentFn = getAgentFn(agentId);
+            return agentFn(agentOptions, provider, ctx);
+          },
+        ),
+        stageTimeoutMs,
+        `Agent stage timed out after ${stageTimeoutMs}ms`,
+      );
+    } finally {
+      clearInterval(heartbeatTimer);
     }
 
-    if (lastError || !agentOutput) {
-      throw lastError ?? new Error("No output from agent");
+    if (!callResult?.result) {
+      throw new Error("No output from agent");
     }
+    const agentOutput = callResult.result;
+    const resolvedProviderName = callResult.providerName;
+    const resolvedKeyId = callResult.aiKeyId;
+    const resolvedModel = callResult.model;
 
     const latencyMs = Date.now() - startMs;
 
@@ -759,7 +818,7 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       data: agentOutput,
     });
 
-    await updateStageRun(stageRun.id, {
+    await updateCurrentStage({
       status: "success",
       provider: resolvedProviderName,
       model: resolvedModel,
@@ -785,56 +844,74 @@ export async function processWorkflowStage(workflowId: string, _routeAttempt: nu
       // Check for cancellation before finalizing
       const currentWf2 = await findWorkflowById(workflowId);
       if (currentWf2?.status === "cancelled") {
-        await updateStageRun(stageRun.id, { status: "cancelled" });
+        await updateCurrentStage({ status: "cancelled" });
+        await updateWorkflowStatus(workflowId, "cancelled", {
+          expected_lock_version: claimVersion,
+          expected_claimed_by: "dispatcher",
+        });
         await syncWorkflowToApplication(workflowId, "cancelled");
         return;
       }
-      await finalizeWorkflow(workflowId);
+      await finalizeWorkflow(workflowId, claimVersion);
       return;
     }
 
-    // Advance to next stage and re-queue
-    await continueToNextStage(workflowId, currentIdx + 1);
+    // Advance to next stage and re-queue. This is the only continuation path;
+    // the scheduler will claim the next stage after this transaction commits.
+    await updateWorkflowStatus(workflowId, "queued", {
+      current_stage: currentIdx + 1,
+      next_retry_at: null,
+      stage_retry_count: 0,
+      expected_lock_version: claimVersion,
+      expected_claimed_by: "dispatcher",
+    });
     await syncWorkflowToApplication(workflowId, "queued");
 
-    // Immediately dispatch the next stage so the pipeline doesn't stall
-    // between stages waiting for the 5-minute cron dispatcher.
-    // Making an HTTP fetch to ourselves guarantees a fresh Cloudflare invocation
-    // with a reset 50-subrequest limit.
-    const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-        method: 'POST'
-      }).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} fetch failed:`, err);
-      })
-    );
+    // The scheduled dispatcher is the durable continuation mechanism.  Do not
+    // chain another self-fetch from inside a background invocation: that chain
+    // can be evicted with the parent worker and leave the next stage claimed
+    // but unprocessed.
   } catch (err: any) {
-    await updateStageRun(stageRun.id, {
-      status: "failed",
-      error_message: err.message ?? "Unknown error",
-      completed_at: new Date().toISOString(),
-    });
+    const errorMessage = err?.message ?? "Unknown error";
+    const errorCode = typeof err?.errorCode === "string"
+      ? err.errorCode
+      : /timeout|timed out|aborted/i.test(errorMessage)
+        ? "timeout"
+        : undefined;
+    try {
+      await updateCurrentStage({
+        status: "failed",
+        error_code: errorCode,
+        error_message: errorMessage,
+        completed_at: new Date().toISOString(),
+      });
+    } catch (ownershipError) {
+      console.warn(`[Workflow ${workflowId}] claim lost while recording stage failure; newer worker remains authoritative`, ownershipError);
+      return;
+    }
 
-    if (attemptNumber < maxAttempts) {
+    const deterministicRouteFailure = ["not_found", "configuration_error", "auth_error"].includes(errorCode ?? "");
+    if (attemptNumber < maxAttempts && !deterministicRouteFailure) {
+      const delayMs = errorCode === "rate_limit" ? 60_000 : errorCode === "timeout" ? 30_000 : 15_000;
       await updateWorkflowStatus(workflowId, "queued", {
         current_stage: currentIdx,
-        last_error: err.message,
+        last_error: errorMessage,
+        next_retry_at: new Date(Date.now() + delayMs).toISOString(),
+        stage_retry_count: (wf.stage_retry_count ?? 0) + 1,
+        expected_lock_version: claimVersion,
+        expected_claimed_by: "dispatcher",
       });
       await syncWorkflowToApplication(workflowId, "queued");
 
-      // Continue retry immediately — don't wait for cron
-      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-      await backgroundDispatch(
-        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST'
-        }).catch((retryErr) => {
-          console.error(`[Workflow ${workflowId}] Retry dispatch fetch failed:`, retryErr);
-        })
-      );
+      // Leave the queued retry for the durable scheduled dispatcher.  This
+      // avoids a fire-and-forget self-fetch racing the claim lease.
     } else {
-      await updateWorkflowStatus(workflowId, "failed", { last_error: err.message });
-      await syncWorkflowToApplication(workflowId, "failed", undefined, err.message);
+      await updateWorkflowStatus(workflowId, "failed", {
+        last_error: errorMessage,
+        expected_lock_version: claimVersion,
+        expected_claimed_by: "dispatcher",
+      });
+      await syncWorkflowToApplication(workflowId, "failed", undefined, errorMessage);
     }
   }
 }
@@ -870,6 +947,17 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
     lastDispatched = wf;
     count++;
 
+    if (wf.recovery_count > 0) {
+      await markOrphanedStageRuns(
+        wf.id,
+        `Stage attempt was orphaned during workflow recovery ${wf.recovery_count}; a new attempt is being evaluated.`,
+      ).catch((err) => {
+        // Cleanup is diagnostic; it must not prevent the recovered workflow
+        // from getting a fresh stage attempt.
+        console.warn(`[Dispatch] Could not close orphaned stage rows for ${wf.id}:`, err);
+      });
+    }
+
     if (wf.recovery_count >= 3 && wf.status === 'failed') {
       // Previously only synced to applications.resume_generation_error -
       // the workflow row itself (what GET .../ai-workflow and the overview
@@ -897,7 +985,8 @@ export async function dispatchNextQueuedWorkflow(): Promise<DispatchResult> {
       // makes the next stall debuggable via GET .../ai-workflow.
       const message = err?.message ?? String(err);
       console.error(`[Dispatch] Workflow ${wf.id} stage processing failed:`, err);
-      await updateWorkflowStatus(wf.id, "running", { last_error: message } as any).catch(() => {});
+      await updateWorkflowStatus(wf.id, "failed", { last_error: message } as any).catch(() => {});
+      await syncWorkflowToApplication(wf.id, "failed", undefined, message).catch(() => {});
     }
   }
 
@@ -918,30 +1007,9 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: `Workflow is not queued (status: ${wf.status})` };
   }
 
-  // Same concurrency cap as claimNextPendingWorkflow (see that function's
-  // comment): a queued workflow only gets claimed here if we're under the
-  // limit on genuinely active workflows. Bulk-created tickets each call this
-  // via their own auto-trigger, so without this check hundreds of them would
-  // all claim+dispatch (and fire an AI provider call) at the same instant.
-  // Over the cap, the workflow just stays 'queued' - the periodic dispatcher
-  // picks it up in its turn once capacity frees up.
-  const claimed = await queryOne(
-    `UPDATE application_ai_workflows w
-     SET status = 'running', claimed_at = NOW(),
-         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
-         claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
-     FROM ai_runtime_config c
-     WHERE id = $1
-       AND c.singleton = true
-       AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
-       AND (
-         status != 'queued'
-         OR (SELECT COUNT(*)::int FROM application_ai_workflows
-             WHERE status = 'running' AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()) < c.workflow_max_concurrency
-       )
-     RETURNING id`,
-    [workflowId]
-  );
+  // Manual retry/approval uses the exact same claim and next_retry_at checks
+  // as the scheduled dispatcher. There must be one claim implementation.
+  const claimed = await claimWorkflowById(workflowId);
   if (!claimed) {
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher, or at concurrency capacity" };
   }

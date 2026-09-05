@@ -22,9 +22,12 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   updateWorkflowStatus: vi.fn().mockResolvedValue(undefined),
   createStageRun: vi.fn().mockResolvedValue({ id: "stage-run-1" }),
   updateStageRun: vi.fn().mockResolvedValue(undefined),
+  updateStageRunForClaim: vi.fn().mockResolvedValue(true),
   createArtifact: vi.fn().mockResolvedValue({ id: "artifact-1" }),
   listStageRuns: vi.fn().mockResolvedValue([]),
   listArtifacts: vi.fn().mockResolvedValue([]),
+  markOrphanedStageRuns: vi.fn().mockResolvedValue(undefined),
+  claimWorkflowById: vi.fn(),
   claimNextPendingWorkflow: vi.fn().mockResolvedValue(null),
   updateWorkflowHeartbeat: vi.fn().mockResolvedValue(undefined),
 }));
@@ -56,7 +59,9 @@ vi.mock("@/lib/ai/routing", async () => {
 import { processWorkflowStage } from "@/server/services/applicationAiWorkflowService";
 import {
   findWorkflowById,
+  claimWorkflowById,
   updateWorkflowStatus,
+  updateStageRunForClaim,
 } from "@/server/repositories/applicationAiWorkflowRepository";
 import { callWithUsageTracking } from "@/lib/ai/routing";
 
@@ -66,8 +71,11 @@ function hiringPanelWorkflow() {
     application_id: "app-1",
     status: "queued",
     current_stage: 2, // index 2 = application_hiring_panel
-    config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [] },
+    config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [], routingStateId: "state-1" },
     started_by: null,
+    claimed_by: null,
+    lock_version: 0,
+    stage_retry_count: 0,
   } as any;
 }
 
@@ -85,6 +93,13 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (findWorkflowById as any).mockResolvedValue(hiringPanelWorkflow());
+    const queued = hiringPanelWorkflow();
+    (claimWorkflowById as any).mockResolvedValue({
+      ...queued,
+      status: "running",
+      claimed_by: "dispatcher",
+      lock_version: 1,
+    });
   });
 
   it("hard-fail-grade score does NOT stop the pipeline — still reaches Final Polish", async () => {
@@ -161,5 +176,43 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       (c: any[]) => c[1] === "failed"
     );
     expect(failedCall).toBeFalsy();
+  });
+
+  it("records a provider failure and queues the stage for a bounded retry", async () => {
+    (callWithUsageTracking as any).mockRejectedValue(new Error("OpenCode request timed out"));
+
+    await processWorkflowStage("wf-1");
+
+    const failedStageCall = (updateStageRunForClaim as any).mock.calls.find((c: any[]) => c[3]?.status === "failed");
+    expect(failedStageCall).toBeTruthy();
+    expect(failedStageCall[3]).toMatchObject({ error_code: "timeout" });
+
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find(
+      (c: any[]) => c[1] === "queued"
+    );
+    expect(queuedCall).toBeTruthy();
+    expect(queuedCall[2]).toMatchObject({ current_stage: 2 });
+    expect((callWithUsageTracking as any).mock.calls).toHaveLength(1);
+    expect((callWithUsageTracking as any).mock.calls[0][1]).toMatchObject({
+      maxProviderAttempts: 2,
+    });
+  });
+
+  it("does not retry deterministic route errors", async () => {
+    const routeError = Object.assign(new Error("OpenCode model not found"), { errorCode: "not_found" });
+    (callWithUsageTracking as any).mockRejectedValue(routeError);
+
+    await processWorkflowStage("wf-1");
+
+    const failedWorkflowCall = (updateWorkflowStatus as any).mock.calls.find(
+      (c: any[]) => c[1] === "failed"
+    );
+    expect(failedWorkflowCall).toBeTruthy();
+    expect(failedWorkflowCall[2]).toMatchObject({
+      last_error: "OpenCode model not found",
+      expected_lock_version: 1,
+      expected_claimed_by: "dispatcher",
+    });
+    expect((updateWorkflowStatus as any).mock.calls.some((c: any[]) => c[1] === "queued")).toBe(false);
   });
 });

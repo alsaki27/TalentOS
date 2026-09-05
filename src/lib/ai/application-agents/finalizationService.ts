@@ -22,7 +22,7 @@ import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdap
 import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
 
-export async function finalizeWorkflow(workflowId: string): Promise<string | null> {
+export async function finalizeWorkflow(workflowId: string, expectedLockVersion?: number): Promise<string | null> {
   const artifacts = await listArtifacts(workflowId);
 
   const wf = await queryOne<{
@@ -171,7 +171,7 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
   const dbSql = getSql();
   let versionId: string | null = null;
   try {
-    const [, versionRows] = await dbSql.transaction([
+    const [, versionRows, workflowRows] = await dbSql.transaction([
       dbSql`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
         SELECT id, ae_stage, 'ready_for_review', 'AI Pipeline (auto)', 'AI resume finalization completed', 'ai_pipeline'
         FROM applications
@@ -203,9 +203,22 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
        WHERE applications.id = ${wf.application_id}
        RETURNING inserted.id`,
 
-      dbSql`UPDATE application_ai_workflows
-        SET status = 'completed', completed_at = NOW(), last_error = NULL
-        WHERE id = ${workflowId}`,
+      expectedLockVersion == null
+        ? dbSql`UPDATE application_ai_workflows
+         SET status = 'completed', completed_at = NOW(), last_error = NULL,
+             claimed_at = NULL, claim_expires_at = NULL, claimed_by = NULL,
+             heartbeat_at = NULL, updated_at = NOW()
+         WHERE id = ${workflowId}
+         RETURNING id`
+        : dbSql`UPDATE application_ai_workflows
+         SET status = 'completed', completed_at = NOW(), last_error = NULL,
+             claimed_at = NULL, claim_expires_at = NULL, claimed_by = NULL,
+             heartbeat_at = NULL, updated_at = NOW()
+         WHERE id = ${workflowId}
+           AND status = 'running'
+           AND claimed_by = 'dispatcher'
+           AND lock_version = ${expectedLockVersion}
+         RETURNING id`,
 
       dbSql`INSERT INTO application_packets (application_id, base_resume_id, target_job_id, final_resume_version_id, created_by)
         VALUES (
@@ -222,6 +235,9 @@ export async function finalizeWorkflow(workflowId: string): Promise<string | nul
     ]);
     const versionRow = versionRows[0];
     if (!versionRow?.id) throw new Error("Failed to insert resume version — no ID returned");
+    if (expectedLockVersion != null && !(workflowRows as any)?.[0]?.id) {
+      throw new Error(`Workflow claim lost during finalization for ${workflowId}`);
+    }
     versionId = versionRow.id;
   } catch (err: any) {
     throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);

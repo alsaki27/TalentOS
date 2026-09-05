@@ -43,6 +43,12 @@ const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
   "google_vertex_proxy",
 ]);
 
+type OpenCodePoolRole = "primary" | "fallback";
+
+function getOpenCodePoolRole(key: { provider_config?: Record<string, unknown> | null }): OpenCodePoolRole {
+  return key.provider_config?.opencode_pool_role === "fallback" ? "fallback" : "primary";
+}
+
 function isKeyHealthBlocked(keyRow: { status: AiKeyStatus; last_failure_at?: string | null }): boolean {
   if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
   if (keyRow.status !== "rate_limited" && keyRow.status !== "quota_exhausted") return false;
@@ -107,9 +113,10 @@ type PoolCursorRow = { start_index: number | string | null };
  * never takes down all AI calls; the next successful migration run restores
  * round-robin behavior.
  */
-async function nextPoolIndex(provider: string, size: number): Promise<number> {
+async function nextPoolIndex(provider: string, size: number, poolRole?: OpenCodePoolRole): Promise<number> {
   if (size <= 1 || !ROUND_ROBIN_POOL_PROVIDERS.has(provider)) return 0;
   try {
+    const poolKey = poolRole ? `${provider}:${poolRole}` : provider;
     const row = await queryOne<PoolCursorRow>(
       `INSERT INTO ai_key_pool_cursors (pool_key, next_index, updated_at)
        VALUES ($1, 1, now())
@@ -117,7 +124,7 @@ async function nextPoolIndex(provider: string, size: number): Promise<number> {
          SET next_index = ai_key_pool_cursors.next_index + 1,
              updated_at = now()
        RETURNING next_index - 1 AS start_index`,
-      [provider]
+      [poolKey]
     );
     const value = Number(row?.start_index ?? 0);
     return Number.isFinite(value) ? Math.max(0, Math.floor(value)) % size : 0;
@@ -134,9 +141,11 @@ async function nextPoolIndex(provider: string, size: number): Promise<number> {
 async function getPoolKeyMetadata(
   provider: string,
   excludeKeyIds?: Set<string>,
+  poolRole?: OpenCodePoolRole,
 ): Promise<any[]> {
   const keys = (await listEnabledAiKeys())
     .filter((key) => key.provider === provider && !excludeKeyIds?.has(key.id))
+    .filter((key) => provider !== "opencode" || !poolRole || getOpenCodePoolRole(key) === poolRole)
     .filter((key) => !isKeyHealthBlocked(key as any))
     .sort((a, b) => {
       const priority = (a.priority ?? 100) - (b.priority ?? 100);
@@ -145,8 +154,25 @@ async function getPoolKeyMetadata(
     });
 
   if (keys.length <= 1 || !ROUND_ROBIN_POOL_PROVIDERS.has(provider)) return keys;
-  const start = await nextPoolIndex(provider, keys.length);
+  const start = await nextPoolIndex(provider, keys.length, poolRole);
   return keys.slice(start).concat(keys.slice(0, start));
+}
+
+function getPooledRouteCandidates(
+  provider: string,
+  routeRank: number,
+  excludeKeyIds?: Set<string>,
+): Promise<any[]> {
+  if (provider !== "opencode") return getPoolKeyMetadata(provider, excludeKeyIds);
+
+  // OpenCode has two tiers: the normal primary pool and an optional
+  // OpenCode-to-OpenCode fallback pool. Each tier gets its own cursor, so
+  // round-robin remains fair within the tier and fallback keys never enter
+  // primary rotation.
+  return Promise.all([
+    getPoolKeyMetadata(provider, excludeKeyIds, "primary"),
+    routeRank === 1 ? getPoolKeyMetadata(provider, excludeKeyIds, "fallback") : Promise.resolve([]),
+  ]).then(([primary, fallback]) => [...primary, ...fallback]);
 }
 
 /**
@@ -158,6 +184,7 @@ export async function getProviderForAutomation(
   excludeKeyIds?: Set<string>,
   excludeProviderNames?: Set<string>,
   excludeRouteIds?: Set<string>,
+  routingStateId?: string,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -172,7 +199,8 @@ export async function getProviderForAutomation(
   }
 
   const runtime = await getAiRuntimeConfig();
-  let routes = runtime.active_routing_state_id
+  const selectedRoutingStateId = routingStateId ?? runtime.active_routing_state_id;
+  let routes = selectedRoutingStateId
     ? await query<AutomationRouteRow>(
         `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
                 automation_id, ai_key_id, provider, rank, is_enabled, model_override,
@@ -180,7 +208,7 @@ export async function getProviderForAutomation(
          FROM ai_routing_state_routes
          WHERE state_id = $1 AND automation_id = $2 AND is_enabled = true
          ORDER BY rank ASC`,
-        [runtime.active_routing_state_id, automationId]
+        [selectedRoutingStateId, automationId]
       )
     : [];
   if (routes.length === 0) {
@@ -206,7 +234,7 @@ export async function getProviderForAutomation(
       if (!anchorProvider) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
       const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider)
-        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds)
+        ? await getPooledRouteCandidates(anchorProvider, route.rank, excludeKeyIds)
         : (anchor && !excludeKeyIds?.has(route.ai_key_id) ? [anchor] : []);
 
       for (const candidate of candidates) {
@@ -260,7 +288,7 @@ export async function getProviderForAutomation(
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
       // Provider-only routes resolve from Neon and never from deployment env.
-      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds);
+      const dbKeys = await getPooledRouteCandidates(route.provider, route.rank, excludeKeyIds);
       for (const key of dbKeys) {
         if (isKeyHealthBlocked(key as any)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
@@ -394,6 +422,10 @@ export interface CallContext {
   workflowId?: string;
   applicationId?: string;
   attemptNumber?: number;
+  /** Optional immutable routing-state pin used by isolated replay/evaluation workflows. */
+  routingStateId?: string;
+  /** Maximum provider attempts for a bounded workflow stage (primary + fallback). */
+  maxProviderAttempts?: number;
 }
 
 /**
@@ -415,6 +447,10 @@ export async function callWithUsageTracking<T>(
 ): Promise<CallWithUsageTrackingResult<T>> {
 
   const MAX_RETRIES = 3;
+  const maxProviderAttempts = Math.max(
+    1,
+    Math.min(ctx?.maxProviderAttempts ?? MAX_RETRIES + 1, MAX_RETRIES + 1),
+  );
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
   const excludedRouteIds = new Set<string>();
@@ -422,7 +458,7 @@ export async function callWithUsageTracking<T>(
   let lastError: Error | null = null;
   let lastResolved: AutomationRouteResult | null = null;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt < maxProviderAttempts; attempt++) {
     let resolved: AutomationRouteResult | null;
     try {
       resolved = await getProviderForAutomation(
@@ -430,6 +466,7 @@ export async function callWithUsageTracking<T>(
         excludedKeyIds,
         attempt > 0 ? excludedProviders : undefined,
         excludedRouteIds,
+        ctx?.routingStateId,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -561,8 +598,14 @@ export async function callWithUsageTracking<T>(
       // On rate-limit / quota errors, exclude this provider and retry.
       const isRetriable = ["rate_limit", "auth_error", "timeout", "server_error", "not_found", "configuration_error"].includes(errorCode ?? "");
 
-      if (isRetriable && attempt < MAX_RETRIES) {
-        if (errorCode === "auth_error") {
+      if (isRetriable && attempt + 1 < maxProviderAttempts) {
+        if (errorCode === "not_found" || errorCode === "configuration_error") {
+          // A missing model/endpoint is deterministic for the entire route.
+          // Rotating sibling keys only repeats the same bad request and can
+          // flood the fallback provider, so advance the route immediately.
+          if (resolved.routeId) excludedRouteIds.add(resolved.routeId);
+          else if (resolved.name) excludedProviders.add(resolved.name);
+        } else if (errorCode === "auth_error") {
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
         } else if (resolved.aiKeyId) {
@@ -579,7 +622,7 @@ export async function callWithUsageTracking<T>(
         }
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
-            `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
+            `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${maxProviderAttempts - 1})`
         );
         continue;
       }
@@ -603,7 +646,7 @@ function classifyErrorCode(err: any): string | null {
   const msg: string = (err?.message ?? "").toLowerCase();
   if (msg.includes("unauthorized") || msg.includes("401") || msg.includes("invalid api key") || msg.includes("auth")) return "auth_error";
   if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) return "rate_limit";
-  if (msg.includes("timeout") || msg.includes("408") || msg.includes("timed out")) return "timeout";
+  if (msg.includes("timeout") || msg.includes("408") || msg.includes("timed out") || msg.includes("aborted") || msg.includes("aborterror")) return "timeout";
   if (msg.includes("not found") || msg.includes("404")) return "not_found";
   if ((msg.includes("model") && msg.includes("not available")) || msg.includes("permission_error") || msg.includes("400") || msg.includes("403")) return "configuration_error";
   if (msg.includes("server error") || msg.includes("500") || msg.includes("502") || msg.includes("503")) return "server_error";
