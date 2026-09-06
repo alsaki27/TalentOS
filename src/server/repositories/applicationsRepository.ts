@@ -324,14 +324,56 @@ export async function advanceAeStageAfterAiCompletion(
 }
 
 /**
- * Delete an application by ID.
+ * Delete an application by ID, including the candidate+job resume state that
+ * outlives the row itself.
+ *
+ * Deleting `applications` cascades away everything genuinely owned by this
+ * one ticket - its AI workflows (and their stage runs/artifacts), packets,
+ * events, comments, proofs, etc. But application_resume_versions.application_id
+ * is ON DELETE SET NULL, and materializeFromBaseResume() never sets it in the
+ * first place - a materialized/tailored resume is linked to the candidate+job
+ * pair via target_job_id, not to one specific application. Left alone, that
+ * row survives as an orphan, still status='active', still linked to
+ * target_jobs(candidate_id, job_id). Confirmed live as a real bug: log a job,
+ * pick base resume A, generate, delete the ticket, log the same job again
+ * picking base resume B - the new tailored resume still came from A, because
+ * triggerAiWorkflowForApplication's target_job-linked lookup found the
+ * orphaned row from the deleted ticket before ever considering B. (That
+ * lookup's priority order is also fixed separately so an explicit choice
+ * always wins regardless - this is the other half: make the stale data stop
+ * existing at all.)
+ *
+ * Once no other application references this exact (candidate_id, job_id)
+ * pair, target_jobs itself is removed too - application_resume_versions and
+ * job_keywords both cascade from it, so this clears every resume version
+ * tied to that job for this candidate (this attempt's and any earlier
+ * orphaned ones) in one step, guaranteeing the next attempt starts clean.
  */
 export async function deleteApplication(id: string): Promise<void> {
-  const app = await queryOne("SELECT job_id, candidate_id FROM applications WHERE id = $1", [id]);
-  if (app) {
+  const app = await queryOne<{ job_id: string | null; candidate_id: string }>(
+    "SELECT job_id, candidate_id FROM applications WHERE id = $1",
+    [id]
+  );
+  if (!app) return;
+
+  if (app.job_id) {
     await execute("DELETE FROM job_match_scores WHERE job_id = $1 AND candidate_id = $2", [app.job_id, app.candidate_id]);
   }
+
   await execute("DELETE FROM applications WHERE id = $1", [id]);
+
+  if (app.job_id) {
+    const stillReferenced = await queryOne<{ exists: boolean }>(
+      "SELECT EXISTS(SELECT 1 FROM applications WHERE candidate_id = $1 AND job_id = $2) AS exists",
+      [app.candidate_id, app.job_id]
+    );
+    if (!stillReferenced?.exists) {
+      await execute(
+        "DELETE FROM target_jobs WHERE candidate_id = $1 AND job_id = $2",
+        [app.candidate_id, app.job_id]
+      );
+    }
+  }
 }
 
 // ───────────────────────────────────────────────────────────────

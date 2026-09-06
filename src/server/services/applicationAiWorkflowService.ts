@@ -287,27 +287,39 @@ export async function triggerAiWorkflowForApplication(
     return { started: false, reason: blockReason };
   }
 
-  // Prioritise the resume linked to the target_job for this application's
-  // job, falling back to domain-matched base resume, then the candidate's
-  // most recent base resume overall.
-  let resumeRow = await queryOne<any>(
-    `SELECT arv.* FROM application_resume_versions arv
-     WHERE arv.target_job_id IN (
-       SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
-     )
-     AND arv.source_type = 'base_resume' AND arv.status = 'active'
-     ORDER BY arv.created_at DESC LIMIT 1`,
-    [appRow.candidate_id, appRow.job_id]
-  );
+  // An explicit base-resume choice for THIS attempt always wins, checked
+  // before anything else. Previously the target_job-linked lookup below ran
+  // unconditionally and only consulted preferredBaseResumeId if it came back
+  // empty - so a candidate+job pair that already had a resume materialized
+  // against it (even from an earlier, since-deleted application) silently
+  // kept reusing that old resume forever, ignoring a freshly corrected
+  // choice. Confirmed live: pick resume A, generate, delete the ticket, log
+  // the job again picking resume B - the tailored output still came from A,
+  // because A's materialized application_resume_versions row stays linked to
+  // target_jobs(candidate_id, job_id) independent of any one application's
+  // lifecycle (deleteApplication() now also clears this - see there - but
+  // this ordering fix means a stale link can never win regardless of why it
+  // exists).
+  let resumeRow: any = null;
   let matchScore: number | null = null;
   let matchReason: string | null = null;
-  if (!resumeRow) {
-    if (preferredBaseResumeId) {
-      // User explicitly chose a base resume — honour that choice instead
-      // of running the automatic best-match selection.
-      matchReason = "User-selected base resume";
-      resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, preferredBaseResumeId);
-    } else {
+  if (preferredBaseResumeId) {
+    matchReason = "User-selected base resume";
+    resumeRow = await materializeFromBaseResume(appRow.candidate_id, appRow.job_id, applicationId, job, startedBy, preferredBaseResumeId);
+  } else {
+    // Prioritise the resume linked to the target_job for this application's
+    // job, falling back to domain-matched base resume, then the candidate's
+    // most recent base resume overall.
+    resumeRow = await queryOne<any>(
+      `SELECT arv.* FROM application_resume_versions arv
+       WHERE arv.target_job_id IN (
+         SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2
+       )
+       AND arv.source_type = 'base_resume' AND arv.status = 'active'
+       ORDER BY arv.created_at DESC LIMIT 1`,
+      [appRow.candidate_id, appRow.job_id]
+    );
+    if (!resumeRow) {
       // Domain-matched base resume selection — score each active base_resume
       // by industry/role overlap with the job, pick the best one, materialize
       // from it (not from the most recent), and persist the score + reason so

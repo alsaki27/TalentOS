@@ -3,6 +3,7 @@ import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { execute, queryOne } from "@/server/db/neon";
 import {
+  deleteApplication,
   findApplicationById,
   updateApplication,
 } from "@/server/repositories/applicationsRepository";
@@ -68,8 +69,7 @@ export async function POST(req: NextRequest) {
       try {
         const current = await findApplicationById(id);
         if (!current) { failed.push({ id, error: "Application not found" }); continue; }
-        await execute("DELETE FROM application_events WHERE application_id = $1", [id]);
-        await execute("DELETE FROM applications WHERE id = $1", [id]);
+        await deleteApplication(id);
         await execute("INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)", [currentUser.profile.user_id, currentUser.profile.email, "application.bulk_deleted", "application", id, JSON.stringify({ bulk: true })]);
         deleted.push(id);
       } catch (error: any) { failed.push({ id, error: error?.message || "Delete failed" }); }
