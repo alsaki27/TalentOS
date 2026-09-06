@@ -170,8 +170,27 @@ export async function POST(req: NextRequest) {
         
         // 1. Auto-trigger AI resume tailoring workflow
         await backgroundDispatch(
-          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, preferredBaseResumeId ?? undefined).catch((err) => {
+          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, preferredBaseResumeId ?? undefined).catch(async (err) => {
             console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
+            // Previously silent: a failure here (transient DB/provider error,
+            // bad data, anything) left the ticket at resume_generation_status
+            // 'not_started' forever - indistinguishable from "never attempted"
+            // - with no error visible anywhere and no way to retry short of
+            // recognizing the missing resume and clicking Generate manually.
+            // Persisting the real error puts it in the same 'failed' state a
+            // manual Generate failure already produces, which the Application
+            // Queue already renders with a visible error and a Retry button -
+            // no new UI, no new status value, nothing hardcoded to this one
+            // error. Guarded to only touch a still-'not_started' row so a
+            // concurrent manual click that already succeeded (or is still
+            // running) is never clobbered.
+            await execute(
+              `UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $2
+               WHERE id = $1 AND resume_generation_status = 'not_started'`,
+              [application.id, err?.message ?? String(err)]
+            ).catch((updateErr) => {
+              console.error(`[Application ${application.id}] Failed to persist auto-trigger error:`, updateErr);
+            });
           })
         );
         

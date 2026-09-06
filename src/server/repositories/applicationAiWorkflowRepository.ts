@@ -84,7 +84,7 @@ export async function createWorkflow(input: {
   const rows = await query<WorkflowRow>(
     `INSERT INTO application_ai_workflows
       (application_id, base_resume_id, status, current_stage, idempotency_key, config_snapshot, started_by, match_score, match_reason, routing_state_id, route_snapshot, next_retry_at, stage_retry_count, started_at)
-     VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $8, $9, NULL, 0, NOW())
+     VALUES ($1, $2, 'queued', 0, $3, $4, $5, $6, $7, $8, $9::jsonb, NULL, 0, NOW())
      RETURNING *`,
     [
       input.applicationId,
@@ -95,7 +95,20 @@ export async function createWorkflow(input: {
       input.matchScore ?? null,
       input.matchReason ?? null,
       input.routingStateId ?? null,
-      input.routeSnapshot ?? {},
+      // route_snapshot is always an array (the enabled routes for the active
+      // routing state, or [] when none is active - see startWorkflow()).
+      // Passed as a bare param with no cast, the driver serializes a
+      // top-level array as a Postgres array literal ({"...","..."}), not a
+      // JSON array - valid syntax for a text[] column, not for jsonb, so
+      // Postgres rejects it with "invalid input syntax for type json" the
+      // moment a routing state is actually active and this array is
+      // non-empty. An empty array degrades to `{}`, which happens to still
+      // parse as valid (if wrong) JSON, which is why this only ever surfaced
+      // once a routing state had real routes in it. JSON.stringify + an
+      // explicit cast is the same safe pattern already used for this exact
+      // column elsewhere (the legacy-workflow routing backfill in
+      // processWorkflowStage).
+      JSON.stringify(input.routeSnapshot ?? []),
     ]
   );
   return rows[0];
