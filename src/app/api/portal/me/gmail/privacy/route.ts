@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import { queryOne, execute } from "@/server/db/neon";
+import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
 
 export async function GET() {
   const { context, response } = await requireCurrentCandidate();
@@ -14,11 +15,13 @@ export async function GET() {
        LEFT JOIN LATERAL (
          SELECT id, email, status, scopes, last_synced_at, sync_error
            FROM integration_accounts
-          WHERE provider = 'gmail' AND owner_type = 'candidate' AND candidate_id = c.id
+          WHERE provider = 'gmail'
+            AND owner_type = 'shared_application_mailbox'
+            AND lower(email) = $2::text
           ORDER BY updated_at DESC LIMIT 1
        ) ia ON true
       WHERE c.id = $1`,
-    [context!.candidateId],
+    [context!.candidateId, configuredSharedGmailEmail()],
   );
   return NextResponse.json(row || { email_sync_paused: false, email_consent_at: null, email_retention_days: 365, gmail_status: null });
 }

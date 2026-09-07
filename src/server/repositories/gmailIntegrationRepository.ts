@@ -8,6 +8,7 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 import { encryptSecret, decryptSecret } from "@/server/security/secretCrypto";
+import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
 
 export interface GmailAccountRow {
   id: string;
@@ -41,13 +42,19 @@ export async function listActiveCandidateGmailAccounts(includeErrors = false): P
 // listActiveCandidateGmailAccounts() below is kept fully intact, just no
 // longer called from the sync loop, so this is purely additive.
 export async function listActiveSharedGmailAccount(includeErrors = false): Promise<GmailAccountRow | null> {
+  // Fail closed when the deployment has not declared which mailbox is
+  // authoritative.  This prevents an old/shared row for another account from
+  // being selected just because it happens to be active in the database.
+  const sharedEmail = configuredSharedGmailEmail();
   return queryOne<GmailAccountRow>(
     `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
             gmail_backfill_page_token, gmail_backfill_complete
      FROM integration_accounts
      WHERE provider = 'gmail' AND owner_type = 'shared_application_mailbox'
+       AND lower(email) = $1::text
        AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"}
-     ORDER BY updated_at DESC LIMIT 1`
+     ORDER BY updated_at DESC LIMIT 1`,
+    [sharedEmail],
   );
 }
 

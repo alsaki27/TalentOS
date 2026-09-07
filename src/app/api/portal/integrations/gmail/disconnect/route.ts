@@ -4,7 +4,20 @@ import { queryOne } from "@/server/db/neon";
 import { decryptSecret } from "@/server/security/secretCrypto";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 
+function candidateGmailRetired(): boolean { return true; }
+
 export async function POST() {
+  // ARCHIVED 2026-09-07 — candidate-owned Gmail is no longer an active
+  // integration.  Shared-mailbox disconnect is restricted to staff via
+  // /api/integrations/gmail/[id]. The original candidate privacy/revocation
+  // implementation remains below for a future rollback.
+  if (candidateGmailRetired()) {
+    return NextResponse.json(
+      { error: "Candidate Gmail connections have been retired. Contact Skarion staff for shared-mailbox changes." },
+      { status: 410 },
+    );
+  }
+
   const { context, response } = await requireCurrentCandidate();
   if (response) return response;
   const account = await queryOne<{ id: string; email: string | null; access_token: string | null; refresh_token: string | null }>(

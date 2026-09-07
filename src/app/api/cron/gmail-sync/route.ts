@@ -1,8 +1,8 @@
 // src/app/api/cron/gmail-sync/route.ts
-// GET -> pull new Gmail messages for every connected candidate account, AI-triage
-// them, and enqueue overdue follow-ups. Same CRON_SECRET bearer pattern as every
-// other /api/cron/* route; src/middleware.ts's generic /api/cron bypass already
-// covers this path — no middleware changes needed.
+// GET -> pull new Gmail messages from the one configured shared application
+// mailbox, AI-triage them, and enqueue overdue follow-ups. Same CRON_SECRET
+// bearer pattern as every other /api/cron/* route; src/middleware.ts's generic
+// /api/cron bypass already covers this path — no middleware changes needed.
 
 import { NextRequest, NextResponse } from "next/server";
 import { runGmailSync } from "@/server/services/gmailSyncService";

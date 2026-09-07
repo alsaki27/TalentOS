@@ -1,4 +1,5 @@
 const LOCAL_BASE_URL = "http://localhost:3000";
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export class RuntimeConfigurationError extends Error {
   readonly code: string;
@@ -75,6 +76,30 @@ export function gmailOAuthRedirectUri(): string {
     : canonicalUrl("/api/integrations/gmail/callback").toString();
 }
 
+/**
+ * The mailbox that TalentOS is allowed to synchronize.
+ *
+ * This is deliberately configuration, not a credential or a source-code
+ * constant.  A missing/invalid value is treated as a configuration error so
+ * a deployment can never silently fall back to an arbitrary Gmail account.
+ */
+export function configuredSharedGmailEmail(): string {
+  const value = process.env.GMAIL_SHARED_EMAIL?.trim().toLowerCase();
+  if (!value) {
+    throw new RuntimeConfigurationError(
+      "MISSING_GMAIL_SHARED_EMAIL",
+      "GMAIL_SHARED_EMAIL is required for the shared Gmail mailbox.",
+    );
+  }
+  if (!EMAIL_PATTERN.test(value)) {
+    throw new RuntimeConfigurationError(
+      "INVALID_GMAIL_SHARED_EMAIL",
+      "GMAIL_SHARED_EMAIL must be a valid email address.",
+    );
+  }
+  return value;
+}
+
 export function googleConfigurationReadiness() {
   const clientIdPresent = Boolean(process.env.GOOGLE_CLIENT_ID?.trim());
   const clientSecretPresent = Boolean(process.env.GOOGLE_CLIENT_SECRET?.trim());
@@ -111,17 +136,20 @@ export function gmailConfigurationReadiness() {
   const clientSecretPresent = Boolean(process.env.GMAIL_CLIENT_SECRET?.trim());
   let baseUrl: string | null = null;
   let gmailCallback: string | null = null;
+  let sharedMailboxEmail: string | null = null;
   let configurationError: string | null = null;
   try {
     baseUrl = getCanonicalBaseUrl();
     gmailCallback = gmailOAuthRedirectUri();
+    sharedMailboxEmail = configuredSharedGmailEmail();
   } catch (error) {
     configurationError = error instanceof RuntimeConfigurationError ? error.code : "INVALID_GMAIL_CONFIGURATION";
   }
   return {
-    ready: clientIdPresent && clientSecretPresent && !configurationError,
+    ready: clientIdPresent && clientSecretPresent && Boolean(sharedMailboxEmail) && !configurationError,
     clientIdPresent,
     clientSecretPresent,
+    sharedMailboxEmail,
     baseUrl,
     callbacks: { gmail: gmailCallback },
     configurationError,

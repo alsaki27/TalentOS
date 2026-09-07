@@ -4,7 +4,21 @@ import { queryOne, execute } from "@/server/db/neon";
 import { envFlag, gmailConfigurationReadiness } from "@/server/runtimeConfig";
 import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 
-export async function GET(req: NextRequest, { params }: { params: { token: string } }) {
+// See the shared-mailbox migration note below. This function keeps the
+// archived candidate flow type-checkable without making it reachable.
+function candidateGmailRetired(): boolean { return true; }
+
+export async function GET(_req: NextRequest, { params }: { params: { token: string } }) {
+  // ARCHIVED 2026-09-07 — candidate-owned Gmail OAuth is retired in the
+  // shared-mailbox model.  Keep the original token validation and OAuth state
+  // code below as a restore point, but do not issue candidate Gmail consent.
+  if (candidateGmailRetired()) {
+    return NextResponse.json(
+      { error: "Candidate Gmail connections have been retired. Application mail is forwarded to Skarion's shared mailbox." },
+      { status: 410 },
+    );
+  }
+
   if (!envFlag("CANDIDATE_GMAIL_ENABLED")) {
     return NextResponse.json({ error: "CANDIDATE_GMAIL_DISABLED" }, { status: 503 });
   }

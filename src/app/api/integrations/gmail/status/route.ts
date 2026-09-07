@@ -1,33 +1,31 @@
 import { NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { query } from "@/server/db/neon";
+import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
 
 export async function GET() {
   const context = await getCurrentUserContext();
   if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
-  const filters = [
-    `owner_user_id.eq.${context.profile.user_id}`,
-  ];
-  if (hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
-    filters.push("owner_type.eq.shared_application_mailbox");
-  }
-
   let data: any;
   let error: any;
 
   try {
-    const isManager = hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES);
-    const sql = isManager
-      ? `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at
+    // There is one authoritative mailbox now.  Return only that configured
+    // address to every authenticated staff member so the inbox header can
+    // show the real sync state without exposing retired personal connections.
+    const sharedEmail = configuredSharedGmailEmail();
+    const canManage = hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES);
+    data = await query(
+      `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at,
+              $2::boolean AS can_manage
          FROM integration_accounts
-         WHERE provider = 'gmail' AND (owner_user_id = $1 OR owner_type = 'shared_application_mailbox')
-         ORDER BY updated_at DESC`
-      : `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at
-         FROM integration_accounts
-         WHERE provider = 'gmail' AND owner_user_id = $1
-         ORDER BY updated_at DESC`;
-    data = await query(sql, [context.profile.user_id]);
+        WHERE provider = 'gmail'
+          AND owner_type = 'shared_application_mailbox'
+          AND lower(email) = $1::text
+        ORDER BY updated_at DESC`,
+      [sharedEmail, canManage],
+    );
     error = null;
   } catch (err: any) {
     error = { message: err.message };

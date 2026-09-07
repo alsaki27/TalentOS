@@ -9,7 +9,7 @@ export default function PrivacyPolicyPage() {
     <div style={{ minHeight: "100vh", background: "#0b0c10", color: "#e6e8ec", padding: "48px 20px" }}>
       <div style={{ maxWidth: 760, margin: "0 auto", lineHeight: 1.65, fontSize: 15 }}>
         <h1 style={{ fontSize: 28, marginBottom: 4 }}>Privacy Policy</h1>
-        <p style={{ color: "#9aa1ac", marginBottom: 32 }}>Last updated: September 1, 2026</p>
+        <p style={{ color: "#9aa1ac", marginBottom: 32 }}>Last updated: September 7, 2026</p>
 
         <p>
           TalentOS ("TalentOS", "we", "us") is a recruiting operations platform operated by Skarion,
@@ -23,26 +23,25 @@ export default function PrivacyPolicyPage() {
           <li>Candidate profile information you or a recruiter provides: name, contact details, resumes, and job application history.</li>
           <li>Application and hiring-pipeline data: job matches, application status, interview scheduling, and recruiter notes.</li>
           <li>
-            <strong>Gmail data (optional, opt-in only):</strong> if a candidate chooses to connect their Gmail account,
-            TalentOS reads messages related to their job applications (subject, sender, body, and thread metadata) in
-            order to detect recruiter replies, interview invitations, and offers, and to keep the candidate's
-            application timeline up to date. Connecting Gmail is never required to use TalentOS.
+            <strong>Gmail data (shared mailbox, opt-in controls):</strong> application messages forwarded to Skarion's
+            shared mailbox are read for recruiting signals (subject, sender, body, and thread metadata) so TalentOS can
+            match recruiter replies, interview invitations, and offers to the correct candidate. Candidates do not need
+            to connect a personal Gmail account.
           </li>
         </ul>
 
         <h2 style={sectionH2}>How we use Gmail data specifically</h2>
         <ul style={list}>
           <li>We read application-related email to automatically match it to the correct job application and update its status.</li>
-          <li>We apply Gmail labels (e.g. "TalentOS/Interview", "TalentOS/Offer") and stars to relevant messages so they're easy to find in the candidate's own inbox. We do not alter message content.</li>
-          <li>We never send email on a candidate's behalf automatically. Email is only ever sent from a connected account when a staff member explicitly composes and sends a reply through the TalentOS inbox tool.</li>
+          <li>We apply Gmail labels (e.g. "TalentOS/Interview", "TalentOS/Offer") and stars to relevant messages in the shared mailbox. We do not alter message content.</li>
+          <li>TalentOS does not send or draft replies from the shared mailbox. Staff use their normal approved email tools when a reply is needed.</li>
           <li>We do not permanently delete any email or mailbox data.</li>
           <li>We do not sell Gmail data, or any other personal data, to third parties.</li>
         </ul>
 
         <h2 style={sectionH2}>Candidate controls</h2>
         <ul style={list}>
-          <li>Gmail connection is opt-in and can be disconnected at any time from the candidate portal.</li>
-          <li>Candidates can pause automated email review at any time without disconnecting Gmail entirely.</li>
+          <li>The shared mailbox connection is managed by Skarion staff; candidates can pause automated review without disconnecting it.</li>
           <li>Candidates can delete previously-imported email history from their portal, on demand.</li>
           <li>Imported email is retained for a candidate-configurable period (365 days by default) and automatically purged after that window.</li>
         </ul>
@@ -67,7 +66,7 @@ export default function PrivacyPolicyPage() {
         <h2 style={sectionH2}>Contact</h2>
         <p>
           Questions about this policy or your data can be sent to{" "}
-          <a href="mailto:inuberryglobal@gmail.com" style={{ color: "#8ab4ff" }}>inuberryglobal@gmail.com</a>.
+          <a href="mailto:mail.skarion@gmail.com" style={{ color: "#8ab4ff" }}>mail.skarion@gmail.com</a>.
         </p>
       </div>
     </div>

@@ -2,13 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
 import { execute } from "@/server/db/neon";
+import { gmailConfigurationReadiness } from "@/server/runtimeConfig";
+import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export async function GET(req: NextRequest) {
   const context = await getCurrentUserContext();
   if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
   const url = new URL(req.url);
-  const owner = url.searchParams.get("owner") || "profile";
+  // Shared mailbox is the default so a bare /start URL cannot accidentally
+  // create a personal/profile Gmail integration.
+  const owner = url.searchParams.get("owner") || "shared";
   const redirectAfter = url.searchParams.get("redirect") || "/account";
 
   // ARCHIVED 2026-09-07 — per-candidate Gmail connections retired in favor
@@ -29,15 +33,23 @@ export async function GET(req: NextRequest) {
   //   if (ownerType === "candidate") {
   //     await execute("UPDATE integration_oauth_states SET candidate_id = $1 WHERE state = $2", [candidateId, state]);
   //   }
-  if (owner === "candidate") {
+  if (owner !== "shared") {
     return NextResponse.json(
-      { error: "Per-candidate Gmail connections have been retired. Connect the single shared application mailbox instead." },
+      { error: "Only the shared application Gmail can be connected. Per-candidate and personal Gmail connections have been retired." },
       { status: 410 }
     );
   }
 
-  if (owner === "shared" && !hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
+  if (!hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
     return NextResponse.json({ error: "Only admins and managers can connect the shared application Gmail." }, { status: 403 });
+  }
+
+  const readiness = gmailConfigurationReadiness();
+  if (!readiness.ready || !isEncryptionAvailable()) {
+    return NextResponse.json(
+      { error: "SHARED_GMAIL_NOT_READY", readiness: { ...readiness, tokenEncryptionReady: isEncryptionAvailable() } },
+      { status: 503 },
+    );
   }
 
   const ownerType = owner === "shared" ? "shared_application_mailbox" : "profile";

@@ -12,7 +12,7 @@ interface MeResponse {
 
 interface GmailAccount {
   id: string;
-  owner_type: "profile" | "candidate" | "shared_application_mailbox";
+  owner_type: "shared_application_mailbox";
   email: string | null;
   scopes: string[] | null;
   status: string;
@@ -50,8 +50,8 @@ export default function AccountPage() {
     setGmailLoading(false);
   }
 
-  function connectGmail(owner: "profile" | "shared") {
-    window.location.href = `/api/integrations/gmail/start?owner=${owner}&redirect=/account`;
+  function connectSharedGmail() {
+    window.location.href = "/api/integrations/gmail/start?owner=shared&redirect=/account";
   }
 
   async function disconnectGmail(id: string) {
@@ -109,14 +109,17 @@ export default function AccountPage() {
           <div>
             <h2 className="section-title">Gmail integrations</h2>
             <p className="muted" style={{ margin: 0 }}>
-              Connect the mailbox used for application replies. Admins and managers can also connect the shared application inbox.
+              TalentOS uses one shared application mailbox. Candidate mail is forwarded there and matched automatically.
             </p>
           </div>
           <div className="action-group" style={{ justifyContent: "flex-end" }}>
-            <button type="button" onClick={() => connectGmail("profile")}>Connect my Gmail</button>
             {(me?.profile.role === "admin" || me?.profile.role === "manager") && (
-              <button type="button" className="btn-primary" onClick={() => connectGmail("shared")}>Connect shared Gmail</button>
+              <button type="button" className="btn-primary" onClick={connectSharedGmail}>Connect shared Gmail</button>
             )}
+            {/* Retired personal-mailbox action (kept as a restore note):
+                <button type="button" onClick={() => connectGmail("profile")}>Connect my Gmail</button>
+                The API still keeps its old persistence branch commented/archived
+                so it can be restored without losing the historical code. */}
           </div>
         </div>
 

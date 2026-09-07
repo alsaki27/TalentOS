@@ -8,6 +8,9 @@ export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser();
   if (response) return response;
 
+  // Compatibility/read-only endpoint retained for the older candidate-Gmail
+  // dashboard. The active sync worker no longer consumes these rows; all new
+  // application mail arrives through the shared mailbox.
   const url = new URL(req.url);
   const candidateId = url.searchParams.get("candidateId");
 

@@ -3,7 +3,7 @@ import { exchangeGmailCode, getGoogleEmail, getGrantedGmailScopes } from "@/lib/
 import { queryOne, execute } from "@/server/db/neon";
 import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
 import { encryptSecret, isEncryptionAvailable } from "@/server/security/secretCrypto";
-import { canonicalUrl } from "@/server/runtimeConfig";
+import { canonicalUrl, configuredSharedGmailEmail } from "@/server/runtimeConfig";
 import { runGmailSync } from "@/server/services/gmailSyncService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
@@ -37,6 +37,12 @@ export async function GET(req: NextRequest) {
     [state],
   );
   if (!oauthState) return NextResponse.json({ error: "OAuth state is invalid, expired, or already used." }, { status: 400 });
+  // The shared mailbox is now the only supported Gmail integration.  Keep the
+  // legacy candidate/profile persistence branch below intact for restoration,
+  // but never let an old OAuth state create another active mailbox today.
+  if (String(oauthState.owner_type) !== "shared_application_mailbox") {
+    return oauthRedirect(oauthState, "error", "shared_mailbox_only");
+  }
   if (providerError) return oauthRedirect(oauthState, "error", "google_denied");
   if (!code) return oauthRedirect(oauthState, "error", "missing_code");
   if (!isEncryptionAvailable()) return oauthRedirect(oauthState, "error", "encryption_unavailable");
@@ -45,6 +51,13 @@ export async function GET(req: NextRequest) {
     const token = await exchangeGmailCode(code);
     const scopes = await getGrantedGmailScopes(token.access_token, token.scope);
     const email = await getGoogleEmail(token.access_token, token.id_token);
+    const expectedSharedEmail = configuredSharedGmailEmail();
+    if (!email || email.trim().toLowerCase() !== expectedSharedEmail) {
+      // Do not persist a token for the wrong Google account.  This is the
+      // important guard that keeps a stale browser session or a reused OAuth
+      // consent from silently switching the system mailbox.
+      throw new Error("wrong_shared_mailbox");
+    }
     const accessToken = await encryptSecret(token.access_token);
     const refreshToken = token.refresh_token ? await encryptSecret(token.refresh_token) : null;
     if (!accessToken.startsWith("enc:") || (refreshToken && !refreshToken.startsWith("enc:"))) {
@@ -90,34 +103,34 @@ export async function GET(req: NextRequest) {
       );
       accountId = account?.id ?? null;
     } else {
-      const existing = await queryOne<{ id: string }>(
-        `SELECT id FROM integration_accounts
-          WHERE provider = 'gmail' AND owner_type = $1
-            AND (($2::uuid IS NOT NULL AND owner_user_id = $2) OR ($2::uuid IS NULL AND owner_user_id IS NULL))
-          LIMIT 1`,
-        [oauthState.owner_type, oauthState.owner_user_id],
+      // Shared mailbox upsert is atomic against the database's unique
+      // (provider, owner_type) index. Two managers completing OAuth at the
+      // same time therefore still leave exactly one account row and the most
+      // recent refresh token wins deterministically.
+      const shared = await queryOne<{ id: string }>(
+        `INSERT INTO integration_accounts
+           (provider, owner_type, owner_user_id, candidate_id, email, scopes, access_token,
+            refresh_token, token_expires_at, status, metadata, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete, updated_at)
+         VALUES ('gmail', 'shared_application_mailbox', $1, NULL, $2, $3, $4, $5, $6,
+                 'active', $7::jsonb, NULL, NULL, false, NOW())
+         ON CONFLICT (provider, owner_type)
+           WHERE provider = 'gmail' AND owner_type = 'shared_application_mailbox'
+         DO UPDATE SET
+           owner_user_id = EXCLUDED.owner_user_id,
+           email = EXCLUDED.email,
+           scopes = EXCLUDED.scopes,
+           access_token = EXCLUDED.access_token,
+           refresh_token = COALESCE(EXCLUDED.refresh_token, integration_accounts.refresh_token),
+           token_expires_at = EXCLUDED.token_expires_at,
+           status = 'active', sync_error = NULL,
+           gmail_history_id = NULL, gmail_backfill_page_token = NULL,
+           gmail_backfill_complete = false,
+           metadata = EXCLUDED.metadata, updated_at = NOW()
+         RETURNING id`,
+        [oauthState.owner_user_id, email, scopes, accessToken, refreshToken, expiresAt, metadata],
       );
-      if (existing) {
-        await execute(
-          `UPDATE integration_accounts
-              SET email = $1, scopes = $2, access_token = $3,
-                  refresh_token = COALESCE($4, refresh_token), token_expires_at = $5,
-                  status = 'active', sync_error = NULL, metadata = $6::jsonb, updated_at = NOW()
-            WHERE id = $7`,
-          [email, scopes, accessToken, refreshToken, expiresAt, metadata, existing.id],
-        );
-        accountId = existing.id;
-      } else {
-        const inserted = await queryOne<{ id: string }>(
-          `INSERT INTO integration_accounts
-             (provider, owner_type, owner_user_id, candidate_id, email, scopes, access_token,
-              refresh_token, token_expires_at, status, metadata, updated_at)
-           VALUES ('gmail', $1, $2, $3, $4, $5, $6, $7, $8, 'active', $9::jsonb, NOW())
-           RETURNING id`,
-          [oauthState.owner_type, oauthState.owner_user_id, oauthState.candidate_id, email, scopes, accessToken, refreshToken, expiresAt, metadata],
-        );
-        accountId = inserted?.id ?? null;
-      }
+      accountId = shared?.id ?? null;
     }
     if (!accountId) throw new Error("Gmail account could not be persisted.");
 
@@ -144,6 +157,6 @@ export async function GET(req: NextRequest) {
     console.error("[gmail-oauth-callback] OAuth callback failed", {
       code: error instanceof Error ? error.name : "UNKNOWN_ERROR",
     });
-    return oauthRedirect(oauthState, "error", "connection_failed");
+    return oauthRedirect(oauthState, "error", error instanceof Error && error.message === "wrong_shared_mailbox" ? "wrong_shared_mailbox" : "connection_failed");
   }
 }

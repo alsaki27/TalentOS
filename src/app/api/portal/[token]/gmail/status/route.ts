@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
+import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
 
 export async function GET(_req: Request, { params }: { params: { token: string } }) {
   let candidate: any;
@@ -24,10 +25,20 @@ export async function GET(_req: Request, { params }: { params: { token: string }
   let data: any;
   let error: any;
 
-  data = await queryOne(
-    `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at FROM integration_accounts WHERE provider = 'gmail' AND owner_type = 'candidate' AND candidate_id = $1`,
-    [candidate.id]
-  );
+  // Candidate-owned Gmail is retired.  This read-only status is kept for the
+  // legacy portal page, but it now reports the one configured shared mailbox.
+  try {
+    data = await queryOne(
+      `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at
+         FROM integration_accounts
+        WHERE provider = 'gmail'
+          AND owner_type = 'shared_application_mailbox'
+          AND lower(email) = $1::text`,
+      [configuredSharedGmailEmail()],
+    );
+  } catch {
+    data = null;
+  }
   error = null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

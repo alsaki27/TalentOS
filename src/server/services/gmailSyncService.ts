@@ -86,6 +86,12 @@ type MessageFetchResult = {
 };
 
 async function fetchNewMessageIds(accessToken: string, account: GmailAccountRow): Promise<MessageFetchResult> {
+  // A completed backfill with no history cursor is the deliberate "start
+  // fresh" state used after an administrative inbox purge. Establish a new
+  // cursor from Gmail's profile below without replaying every old message.
+  if (!account.gmail_history_id && account.gmail_backfill_complete) {
+    return { ids: [], nextBackfillPageToken: null, backfillComplete: true, fromHistory: false };
+  }
   if (account.gmail_history_id) {
     try {
       const ids = new Set<string>();

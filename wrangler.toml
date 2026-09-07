@@ -16,7 +16,10 @@ TALENTOS_BASE_URL = "https://talent.skarion.com"
 STAFF_GOOGLE_AUTH_ENABLED = "true"
 CANDIDATE_GOOGLE_AUTH_ENABLED = "true"
 CANDIDATE_MFA_ENABLED = "true"
-CANDIDATE_GMAIL_ENABLED = "true"
+# Candidate-owned Gmail is retired. All application mail is forwarded into
+# the one shared mailbox configured below.
+CANDIDATE_GMAIL_ENABLED = "false"
+GMAIL_SHARED_EMAIL = "mail.skarion@gmail.com"
 BASE_RESUME_KEYWORD_AGENT_ENABLED = "true"
 CANDIDATE_JOB_MATCHER_ENABLED = "true"
 CANDIDATE_JOB_MATCHER_MODE = "dry_run"

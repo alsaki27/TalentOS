@@ -133,14 +133,13 @@ export default function CandidatePortalPage() {
       <div className="card" style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
           <div>
-            <h2 className="section-title">Application Gmail</h2>
+            <h2 className="section-title">Application email</h2>
             <p className="muted" style={{ margin: 0 }}>
-              Connect the Gmail inbox where employers may send replies, interview requests, or status updates.
+              Employer replies and application updates are forwarded to Skarion's shared application mailbox. You do not need to connect a personal Gmail account.
             </p>
           </div>
-          <button type="button" className="btn-primary" disabled={!enrolledAt || enrollmentSaving} onClick={() => { window.location.href = `/api/portal/${token}/gmail/start`; }}>
-            Connect Gmail
-          </button>
+          {/* The former candidate-owned "Connect Gmail" button is retired;
+              the shared mailbox is connected and maintained by Skarion staff. */}
         </div>
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
           <label htmlFor="skarion-enrolled-at" style={{ display: "block", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>When did you enroll with Skarion?</label>
@@ -160,7 +159,7 @@ export default function CandidatePortalPage() {
           {gmailLoading ? (
             <span className="muted">Checking Gmail connection...</span>
           ) : gmailAccounts.length === 0 ? (
-            <span className="muted">No Gmail account connected.</span>
+            <span className="muted">Shared application mailbox status is managed by Skarion.</span>
           ) : (
             gmailAccounts.map((account) => (
               <div key={account.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

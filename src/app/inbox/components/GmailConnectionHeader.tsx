@@ -11,6 +11,7 @@ interface SharedAccountStatus {
   email: string | null;
   status: "active" | "revoked" | "error";
   last_synced_at: string | null;
+  can_manage?: boolean;
 }
 
 export function GmailConnectionHeader() {
@@ -69,13 +70,13 @@ export function GmailConnectionHeader() {
               <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px #22c55e", display: "inline-block" }} />
               <span style={{ color: "#22c55e", fontWeight: 600 }}>{account.email || "Connected"}</span>
             </div>
-            <button
-              onClick={handleDisconnect}
-              disabled={disconnecting}
-              style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 14px", fontSize: 12, color: "var(--muted)", cursor: "pointer" }}
-            >
-              {disconnecting ? "Disconnecting…" : "Disconnect"}
-            </button>
+            {account.can_manage && <button
+                onClick={handleDisconnect}
+                disabled={disconnecting}
+                style={{ background: "transparent", border: "1px solid var(--border)", borderRadius: 6, padding: "6px 14px", fontSize: 12, color: "var(--muted)", cursor: "pointer" }}
+              >
+                {disconnecting ? "Disconnecting…" : "Disconnect"}
+              </button>}
           </>
         ) : account && account.status === "error" ? (
           <>

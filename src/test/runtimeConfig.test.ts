@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { candidateGoogleRedirectUri, getCanonicalBaseUrl, gmailOAuthRedirectUri, googleConfigurationReadiness } from "@/server/runtimeConfig";
+import { candidateGoogleRedirectUri, configuredSharedGmailEmail, getCanonicalBaseUrl, gmailOAuthRedirectUri, gmailConfigurationReadiness, googleConfigurationReadiness } from "@/server/runtimeConfig";
 
 const saved = { ...process.env };
 afterEach(() => { process.env = { ...saved }; });
@@ -24,5 +24,24 @@ describe("production Google runtime configuration", () => {
   test("rejects a canonical base URL containing a path", () => {
     process.env.TALENTOS_BASE_URL = "https://talent.skarion.com/login";
     expect(() => getCanonicalBaseUrl()).toThrow("must not contain a path");
+  });
+
+  test("requires and normalizes the configured shared Gmail address", () => {
+    process.env.GMAIL_SHARED_EMAIL = " Mail.Skarion@Gmail.com ";
+    expect(configuredSharedGmailEmail()).toBe("mail.skarion@gmail.com");
+
+    delete process.env.GMAIL_SHARED_EMAIL;
+    expect(() => configuredSharedGmailEmail()).toThrow("GMAIL_SHARED_EMAIL is required");
+  });
+
+  test("reports the shared mailbox as part of Gmail readiness without exposing credentials", () => {
+    process.env.TALENTOS_BASE_URL = "https://talent.skarion.com";
+    process.env.GMAIL_SHARED_EMAIL = "mail.skarion@gmail.com";
+    process.env.GMAIL_CLIENT_ID = "client-id";
+    process.env.GMAIL_CLIENT_SECRET = "client-secret";
+    const readiness = gmailConfigurationReadiness();
+    expect(readiness.ready).toBe(true);
+    expect(readiness.sharedMailboxEmail).toBe("mail.skarion@gmail.com");
+    expect(JSON.stringify(readiness)).not.toContain("client-secret");
   });
 });
