@@ -2,9 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, ShieldAlert } from "lucide-react";
+import PortalResumeDocument from "./PortalResumeDocument";
 
 interface Props {
-  pdfUrl: string;
+  /** Stored resume content, rendered with the real TalentOS studio templates. */
+  content: unknown;
   title: string;
   /** Shown in the tiled watermark so any capture is attributable to a person. */
   viewerLabel: string;
@@ -29,7 +31,7 @@ interface Props {
 //   3. Make any capture that does get through *attributable*, by tiling the
 //      viewer's identity and a timestamp across the document.
 // (3) is the part that carries real weight; (1) and (2) raise the effort.
-export default function ResumePdfModal({ pdfUrl, title, viewerLabel, onClose }: Props) {
+export default function ResumePdfModal({ content, title, viewerLabel, onClose }: Props) {
   const [obscured, setObscured] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
@@ -105,14 +107,15 @@ export default function ResumePdfModal({ pdfUrl, title, viewerLabel, onClose }: 
         </header>
 
         <div className="portal-modal-body">
-          {/* #toolbar=0 hides the built-in PDF viewer's download/print controls
-              in Chromium's viewer (a PDF Open Parameter; Firefox's pdf.js
-              ignores it, hence the layers above rather than relying on it). */}
-          <iframe
-            className="portal-pdf-frame"
-            src={`${pdfUrl}#toolbar=0&navpanes=0&statusbar=0`}
-            title={`${title} preview`}
-          />
+          {/* The document is rendered here rather than embedded as a PDF file:
+              the browser's native PDF viewer ships its own download and print
+              controls that a page cannot remove or intercept, which would walk
+              straight past everything this component is for. Rendering the
+              same studio templates as HTML keeps the document identical to
+              what TalentOS shows while leaving the surface under our control. */}
+          <div className="portal-doc-scroll">
+            <PortalResumeDocument content={content} />
+          </div>
           <div className="portal-pdf-watermark" aria-hidden="true">
             {Array.from({ length: 36 }).map((_, index) => <span key={index}>{watermark}</span>)}
           </div>

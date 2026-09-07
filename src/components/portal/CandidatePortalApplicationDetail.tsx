@@ -2,7 +2,6 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
-import PortalResumeDocument from "./PortalResumeDocument";
 import ResumePdfModal from "./ResumePdfModal";
 
 interface Props {
@@ -38,6 +37,11 @@ function CollapsibleCard({ title, defaultOpen = true, children }: { title: strin
   );
 }
 
+// The document itself is never rendered on the page - it only ever appears
+// inside the protected viewer, which is the single surface where the
+// watermarking and capture deterrence apply. Showing it inline as well would
+// hand out an unprotected copy of the same content and make all of that
+// pointless, so this section is deliberately just the heading and the button.
 function ResumePreview({ resume, candidateName }: { resume: any; candidateName?: string }) {
   const [pdfOpen, setPdfOpen] = useState(false);
 
@@ -49,35 +53,24 @@ function ResumePreview({ resume, candidateName }: { resume: any; candidateName?:
     </div>
   );
 
-  const pdfUrl = `/api/portal/me/applications/${resume.application_id}/resume-pdf`;
-
   return (
     <div className="portal-resume-preview">
       <div className="portal-resume-heading">
         <div><div className="portal-eyebrow">Tailored resume</div><h2>{resume.title}</h2><p>{resume.version_label || "Application version"} · Updated {formatDate(resume.updated_at)}</p></div>
         <div className="portal-resume-actions">
           <span className="portal-resume-pill portal-resume-ready">Approved · View only</span>
-          {resume.pdf_available && (
+          {resume.content && (
             <button type="button" className="portal-btn portal-btn-primary portal-btn-small" onClick={() => setPdfOpen(true)}>
               <ExternalLink size={13} style={{ marginRight: 4 }} />View PDF
             </button>
           )}
         </div>
       </div>
-      <p className="portal-greeting-sub">This tailored resume is available for review in TalentOS and cannot be downloaded.</p>
-
-      {/* Rendered through the same adapter + templates the TalentOS studio
-          uses, so the candidate sees the identical document, not a
-          portal-specific approximation of it. */}
-      {resume.content ? (
-        <PortalResumeDocument content={resume.content} />
-      ) : resume.generated_text ? (
-        <pre className="portal-resume-text">{resume.generated_text}</pre>
-      ) : null}
+      <p className="portal-greeting-sub">This tailored resume opens in a protected, view-only viewer and cannot be downloaded.</p>
 
       {pdfOpen && (
         <ResumePdfModal
-          pdfUrl={pdfUrl}
+          content={resume.content}
           title={resume.title || "Tailored resume"}
           viewerLabel={candidateName || "Skarion candidate"}
           onClose={() => setPdfOpen(false)}

@@ -1050,20 +1050,10 @@
 .portal-resume-heading p { margin: 0; color: var(--p-ink-soft); font-size: 12px; }
 .portal-resume-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
 .portal-resume-ready { color: #166534; background: #dcfce7; }
-.portal-resume-name { margin: 20px 0 4px; color: var(--p-ink); font-size: 20px; }
-.portal-resume-contact { margin: 0; color: var(--p-ink-soft); font-size: 12px; }
-
-.portal-resume-section { margin-top: 20px; }
-.portal-resume-section h3 { margin: 0 0 8px; color: var(--p-navy); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; }
-.portal-resume-section p { margin: 0; color: var(--p-ink); font-size: 13px; line-height: 1.6; }
-.portal-resume-skills { display: flex; flex-wrap: wrap; gap: 6px; }
-.portal-resume-skills span { border: 1px solid var(--p-border); border-radius: 999px; color: var(--p-ink); background: var(--p-bg); font-size: 11px; padding: 5px 8px; }
-.portal-resume-entry { margin-bottom: 16px; }
-.portal-resume-entry strong, .portal-resume-entry span { display: block; }
-.portal-resume-entry strong { color: var(--p-ink); font-size: 13px; }
-.portal-resume-entry span { margin-top: 2px; color: var(--p-ink-soft); font-size: 11px; }
-.portal-resume-entry ul, .portal-resume-plain-list { margin: 7px 0 0; padding-left: 18px; color: var(--p-ink); font-size: 13px; line-height: 1.55; }
-.portal-resume-text { overflow-x: auto; margin: 20px 0 0; white-space: pre-wrap; color: var(--p-ink); font: inherit; font-size: 13px; line-height: 1.6; }
+/* The rules that styled a hand-built resume layout here (name, contact line,
+   section headings, skill chips, entry lists, plain-text fallback) are gone
+   with that renderer - the document is now drawn by the studio templates
+   inside the protected viewer, which bring their own typography. */
 .portal-detail-empty { display: flex; flex-direction: column; gap: 6px; }
 
 .portal-chart-grid {
@@ -1798,11 +1788,19 @@
   overflow: hidden;
 }
 
-.portal-pdf-frame {
-  width: 100%;
+/* Holds the scrolling document. The watermark and blackout are siblings that
+   sit above it and stay put while this scrolls, so neither can be escaped by
+   simply scrolling the resume. */
+.portal-doc-scroll {
   height: 100%;
-  border: 0;
-  display: block;
+  overflow: auto;
+  padding: 20px;
+  overscroll-behavior: contain;
+}
+
+.portal-doc-scroll .portal-resume-doc {
+  margin-top: 0;
+  overflow-x: visible;
 }
 
 .portal-pdf-watermark {
@@ -2041,6 +2039,10 @@
      little space a phone has for a page-shaped document. */
   .portal-modal-backdrop { padding: 0; }
   .portal-modal { width: 100%; height: 100%; border-radius: 0; border: 0; }
+  /* Give the document as much of the narrow viewport as possible - it is
+     held at a readable minimum scale, so every pixel here is one less the
+     reader has to pan across. */
+  .portal-doc-scroll { padding: 10px; }
 }
 
 @media (max-width: 420px) {
