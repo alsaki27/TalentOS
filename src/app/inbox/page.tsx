@@ -46,7 +46,7 @@ interface InboxCounts {
   tasks: { needsReply: number; interviews: number; untracked: number; conflicts: number; escalated: number };
   mail: { relevant: number; awaitingReply: number; hidden: number; total: number; lastMessageAt: string | null };
   unassigned: { total: number };
-  handovers: { assigned: number; overdue: number };
+  handovers: { assignedToMe: number; overdue: number };
   categories: { category: string; count: number }[];
 }
 
@@ -146,13 +146,16 @@ export default function InboxPage() {
     if (activeTab !== "handovers") return;
     setLoadingHandovers(true);
     try {
-      const res = await fetch("/api/inbox/handover", { cache: "no-store" });
+      const params = new URLSearchParams();
+      if (candidateId) params.set("candidateId", candidateId);
+      const query = params.toString();
+      const res = await fetch(`/api/inbox/handover${query ? `?${query}` : ""}`, { cache: "no-store" });
       const data = await res.json();
       if (res.ok) setHandovers(data.handovers || []);
     } catch (e) {} finally {
       setLoadingHandovers(false);
     }
-  }, [activeTab]);
+  }, [activeTab, candidateId]);
 
   const refreshThreadsInPlace = useCallback(async () => {
     if (loading || activeTab !== "inbox") return;
@@ -399,7 +402,7 @@ export default function InboxPage() {
           style={{ borderBottom: activeTab === "handovers" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
           onClick={() => setActiveTab("handovers")}
         >
-          My Handovers {counts?.handovers?.assigned ? `(${counts.handovers.assigned})` : ""}
+          My Handovers {counts?.handovers?.assignedToMe ? `(${counts.handovers.assignedToMe})` : ""}
         </button>
       </div>
 
@@ -551,7 +554,17 @@ export default function InboxPage() {
                           {thread.suppression_reason && <span className="badge">Hidden by filters</span>}
                         </div>
                       </div>
-                      <time className="inbox-thread-time" style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{formatDate(thread.sent_at)}</time>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, flexShrink: 0 }}>
+                        <time className="inbox-thread-time" style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap" }}>{formatDate(thread.sent_at)}</time>
+                        <button
+                          type="button"
+                          className="btn outline sm"
+                          onClick={(event) => { event.stopPropagation(); setSelectedThread(thread); }}
+                          aria-label={`Show details for ${thread.subject || "email"}`}
+                        >
+                          Show details
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}

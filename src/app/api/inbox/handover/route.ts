@@ -6,6 +6,10 @@ import { createNotification } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 // Bonus fix (shared-inbox redesign pass): the "My Handovers" tab and its
 // "Mark Done" button on /inbox have always called GET/PATCH here, but
 // neither handler existed - confirmed dead, always rendering an empty list.
@@ -13,9 +17,14 @@ export const dynamic = "force-dynamic";
 // two missing handlers so the feature works as it was clearly meant to.
 const VALID_HANDOVER_STATUSES = new Set(["open", "in_progress", "done", "dismissed"]);
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
+
+  const candidateId = (new URL(req.url).searchParams.get("candidateId") || "").trim();
+  if (candidateId && !isUuid(candidateId)) {
+    return NextResponse.json({ error: "Invalid candidateId." }, { status: 400 });
+  }
 
   const handovers = await query<any>(
     `SELECT ai.id, ai.title, ai.description, ai.priority, ai.status, ai.created_at, ai.due_at,
@@ -23,9 +32,10 @@ export async function GET(_req: NextRequest) {
        FROM action_items ai
        LEFT JOIN candidates c ON c.id = ai.candidate_id
       WHERE ai.type = 'team_handover' AND ai.assigned_to_user_id = $1
+        AND ($2::uuid IS NULL OR ai.candidate_id = $2)
       ORDER BY (ai.status IN ('open', 'in_progress')) DESC, ai.created_at DESC
       LIMIT 200`,
-    [context.profile.user_id],
+    [context.profile.user_id, candidateId || null],
   );
 
   return NextResponse.json({ handovers });

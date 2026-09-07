@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
          COUNT(*) FILTER (WHERE decision = 'approved' AND decided_at >= date_trunc('day', now()))::int AS approved_today,
          COUNT(*) FILTER (WHERE decision = 'rejected' AND decided_at >= date_trunc('day', now()))::int AS rejected_today,
          COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND assigned_to_user_id = $2)::int AS handovers_assigned_to_me,
-         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND due_at < now())::int AS handovers_overdue
+         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND assigned_to_user_id = $2 AND due_at < now())::int AS handovers_overdue
        FROM action_items
        WHERE ($1::uuid IS NULL OR candidate_id = $1)`,
       [candidateFilter, context.profile.user_id],

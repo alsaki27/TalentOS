@@ -59,7 +59,27 @@ describe("GET /api/inbox/handover", () => {
 
     expect(res.status).toBe(200);
     expect(body.handovers).toHaveLength(1);
-    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("assigned_to_user_id = $1"), ["user-1"]);
+    expect(mocks.query).toHaveBeenCalledWith(expect.stringContaining("assigned_to_user_id = $1"), ["user-1", null]);
+  });
+
+  it("applies the selected candidate filter", async () => {
+    const candidateId = "11111111-1111-4111-8111-111111111111";
+    mocks.query.mockResolvedValue([]);
+
+    const res = await GET(new NextRequest(`https://talentos.test/api/inbox/handover?candidateId=${candidateId}`));
+
+    expect(res.status).toBe(200);
+    expect(mocks.query).toHaveBeenCalledWith(
+      expect.stringContaining("ai.candidate_id = $2"),
+      ["user-1", candidateId],
+    );
+  });
+
+  it("rejects an invalid candidate filter", async () => {
+    const res = await GET(new NextRequest("https://talentos.test/api/inbox/handover?candidateId=not-a-uuid"));
+
+    expect(res.status).toBe(400);
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 });
 

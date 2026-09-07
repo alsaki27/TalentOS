@@ -324,14 +324,10 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                 </pre>
               </details>
 
-              {/* Latest message, rendered in full (HTML when available, sandboxed) */}
-              <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "50vh", display: "flex", flexDirection: "column" }}>
-                <EmailBody bodyHtml={detail?.message?.body_html} bodyText={detail?.message?.body_text} />
-              </div>
-
-              {/* Full thread view - every message in this Gmail conversation,
-                  chronological, collapsed except the latest. */}
-              {detail?.thread?.length > 1 && (
+              {/* A single message uses the spacious reader. For a thread,
+                  render each message exactly once below so the newest message
+                  is not duplicated outside the chronological conversation. */}
+              {detail?.thread?.length > 1 ? (
                 <div>
                   <h4 style={{ margin: "0 0 10px" }}>Full conversation ({detail.thread.length} messages)</h4>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -344,6 +340,10 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                       />
                     ))}
                   </div>
+                </div>
+              ) : (
+                <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "50vh", display: "flex", flexDirection: "column" }}>
+                  <EmailBody bodyHtml={detail?.message?.body_html} bodyText={detail?.message?.body_text} />
                 </div>
               )}
 
