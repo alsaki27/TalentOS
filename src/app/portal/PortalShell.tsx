@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Briefcase, CalendarClock, ShieldCheck, Menu, X, LogOut, Sun, Moon, MonitorSmartphone } from "lucide-react";
+import { LayoutDashboard, Briefcase, ListChecks, CalendarClock, ShieldCheck, Menu, X, LogOut, Sun, Moon, MonitorSmartphone } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
 import PortalLogo from "./PortalLogo";
 
@@ -13,6 +13,7 @@ import PortalLogo from "./PortalLogo";
 const NAV_ITEMS = [
   { href: "/portal", label: "Overview", icon: LayoutDashboard },
   { href: "/portal/applications", label: "Applications", icon: Briefcase },
+  { href: "/portal/next-up", label: "Next Up", icon: ListChecks },
   { href: "/portal/interviews", label: "Interviews", icon: CalendarClock },
   { href: "/portal/account", label: "Account", icon: ShieldCheck },
 ];
@@ -63,6 +64,10 @@ export function PortalShell({
     );
   }
 
+  function firstName(name: string) {
+    return name.split(" ").filter(Boolean)[0] || name;
+  }
+
   function isActive(href: string) {
     // "/portal" itself must not match every sub-route (applications,
     // interviews, account, or an application-detail page) - only its own
@@ -97,12 +102,18 @@ export function PortalShell({
         </nav>
 
         <div className="portal-sidebar-profile">
-          <div className="portal-avatar" style={{ width: 32, height: 32, fontSize: 12 }}>
-            {initials(candidateName)}
+          <div className="portal-sidebar-profile-row">
+            <div className="portal-avatar" style={{ width: 32, height: 32, fontSize: 12 }}>
+              {initials(candidateName)}
+            </div>
+            {/* First name only here - the full name doesn't fit this fixed-width
+                sidebar without ellipsis-truncating; the full name is shown in
+                the "Welcome back" hero on Overview instead. */}
+            <span className="portal-sidebar-profile-name">{firstName(candidateName)}</span>
           </div>
-          <span className="portal-sidebar-profile-name">{candidateName}</span>
-          <button type="button" className="portal-sidebar-icon-btn" onClick={onSignOut} title="Sign out" aria-label="Sign out">
-            <LogOut size={16} />
+          <button type="button" className="portal-sidebar-signout" onClick={onSignOut}>
+            <LogOut size={15} />
+            Sign out
           </button>
         </div>
       </aside>

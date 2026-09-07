@@ -24,6 +24,7 @@
   --p-navy: #122461;
   --p-navy-fill: #122461;
   --p-navy-soft: #eef0f8;
+  --p-navy-soft-hover: #e0e5f7;
   --p-coral: #ff686b;
   --p-coral-soft: #ffeced;
   --p-ink: #14151a;
@@ -65,6 +66,7 @@
 :root.dark .portal-root {
   --p-navy: #8fa3f2;
   --p-navy-soft: rgba(143, 163, 242, 0.14);
+  --p-navy-soft-hover: rgba(143, 163, 242, 0.24);
   --p-coral-soft: rgba(255, 104, 107, 0.16);
   --p-ink: #eef1f8;
   --p-ink-soft: #93a0b8;
@@ -655,7 +657,10 @@
 }
 
 .portal-btn-secondary:hover:not(:disabled) {
-  background: #e0e5f7;
+  /* Was a hardcoded light-mode color: in dark mode the text (var(--p-navy),
+     which shifts to a light blue there) rendered on this near-white
+     background with very low contrast, effectively unreadable on hover. */
+  background: var(--p-navy-soft-hover);
   transform: translateY(-1px);
 }
 
@@ -749,7 +754,11 @@
 }
 
 .portal-detail-shell {
-  max-width: 980px;
+  /* No max-width - fills .portal-main the same way every other portal page
+     does. It used to cap at 980px with no auto-centering margin, which on a
+     wide viewport left a large unused gap on the right instead of the page
+     using the available width. */
+  width: 100%;
 }
 
 .portal-detail-hero {
@@ -782,10 +791,33 @@
   padding: 8px 12px;
 }
 
-.portal-detail-grid {
+/* Main content + side panel (Updates, resume) - replaces the old 2-card
+   .portal-detail-grid row, which only filled the top of the page and left
+   everything below it (Progress, Interviews, notes, resume) stacked full
+   width, wasting the wide-viewport space this now spreads across. */
+.portal-detail-layout {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 20px;
+  align-items: start;
+}
+
+.portal-detail-main,
+.portal-detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.portal-detail-side {
+  position: sticky;
+  top: 84px;
+}
+
+@media (max-width: 960px) {
+  .portal-detail-layout { grid-template-columns: 1fr; }
+  .portal-detail-side { position: static; }
 }
 
 .portal-card {
@@ -1319,7 +1351,6 @@
   .portal-btn-small { margin-left: 0; width: 100%; }
   .portal-pagination-actions { width: 100%; justify-content: space-between; }
   .portal-detail-hero { flex-direction: column; }
-  .portal-detail-grid { grid-template-columns: 1fr; }
   .portal-resume-preview { padding: 18px; }
   .portal-interview-card { flex-direction: column; }
   .portal-interview-card .portal-btn-small { width: auto; }
@@ -1425,11 +1456,18 @@
 
 .portal-sidebar-profile {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
   padding: 12px 10px 4px;
   margin-top: 10px;
   border-top: 1px solid var(--p-sidebar-border);
+}
+
+.portal-sidebar-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .portal-sidebar-profile-name {
@@ -1443,24 +1481,32 @@
   white-space: nowrap;
 }
 
-.portal-sidebar-icon-btn {
-  display: inline-flex;
+.portal-sidebar-signout {
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
   border-radius: var(--p-radius-sm);
-  border: none;
+  border: 1px solid var(--p-sidebar-border);
   background: transparent;
   color: var(--p-sidebar-ink-soft);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
   cursor: pointer;
-  flex-shrink: 0;
-  transition: background 160ms var(--p-ease), color 160ms var(--p-ease);
+  transition: background 160ms var(--p-ease), color 160ms var(--p-ease), border-color 160ms var(--p-ease);
 }
 
-.portal-sidebar-icon-btn:hover {
+.portal-sidebar-signout svg {
+  flex-shrink: 0;
+}
+
+.portal-sidebar-signout:hover {
   background: rgba(255, 255, 255, 0.08);
   color: var(--p-sidebar-ink-active);
+  border-color: var(--p-sidebar-ink-soft);
 }
 
 .portal-sidebar-backdrop {
@@ -1526,6 +1572,16 @@
   color: var(--p-ink-soft);
   cursor: pointer;
   transition: color 160ms var(--p-ease), border-color 160ms var(--p-ease), background 160ms var(--p-ease);
+}
+
+.portal-icon-btn svg {
+  /* Without this, the icon is a flex child with the default flex-shrink:1
+     and gets compressed to ~2px wide by the flex layout algorithm instead
+     of rendering at its intended 17px - effectively invisible. Every other
+     icon-in-flex-container in this file already carries this same rule
+     (.portal-sidebar-link svg, .portal-collapsible-header svg); this button
+     was the one place it was missing. */
+  flex-shrink: 0;
 }
 
 .portal-icon-btn:hover {

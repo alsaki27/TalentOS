@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock, RefreshCcw, Inbox, TrendingUp } from "lucide-react";
+import { TrendingUp } from "lucide-react";
 
 interface TrendPoint { bucket: string; count: number; }
-interface ActionItem { id: string; type: "interview" | "follow_up"; title: string; description: string; due_at: string | null; href: string; }
 
 interface Props {
   trend: { hourly24h: TrendPoint[]; daily7d: TrendPoint[]; monthly6m: TrendPoint[] };
-  actionItems: ActionItem[];
   loading?: boolean;
 }
 
@@ -90,69 +88,29 @@ function MiniChart({ title, points, mode }: { title: string; points: TrendPoint[
   );
 }
 
-function formatDue(value: string | null) {
-  if (!value) return "No date";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "No date" : date.toLocaleDateString([], { month: "short", day: "numeric" });
-}
-
-export default function CandidatePortalInsights({ trend, actionItems, loading }: Props) {
+export default function CandidatePortalInsights({ trend, loading }: Props) {
   return (
-    <>
-      <section className="portal-section" aria-labelledby="insights-heading">
-        <div className="portal-section-heading">
-          <div>
-            <div className="portal-eyebrow">Activity</div>
-            <h2 id="insights-heading" className="portal-section-heading-title">
-              <TrendingUp size={20} style={{ verticalAlign: -3, marginRight: 8, color: "var(--p-coral)" }} />
-              Your application momentum
-            </h2>
-          </div>
+    <section className="portal-section" aria-labelledby="insights-heading">
+      <div className="portal-section-heading">
+        <div>
+          <div className="portal-eyebrow">Activity</div>
+          <h2 id="insights-heading" className="portal-section-heading-title">
+            <TrendingUp size={20} style={{ verticalAlign: -3, marginRight: 8, color: "var(--p-coral)" }} />
+            Your application momentum
+          </h2>
         </div>
-        {loading ? (
-          <div className="portal-chart-grid">
-            {[0, 1, 2].map((i) => <div key={i} className="portal-skeleton" style={{ height: 260 }} />)}
-          </div>
-        ) : (
-          <div className="portal-chart-grid">
-            <MiniChart title="Last 24 hours" points={trend.hourly24h} mode="hour" />
-            <MiniChart title="Last 7 days" points={trend.daily7d} mode="day" />
-            <MiniChart title="Last 6 months" points={trend.monthly6m} mode="month" />
-          </div>
-        )}
-      </section>
-
-      <section className="portal-section" aria-labelledby="actions-heading">
-        <div className="portal-section-heading">
-          <div>
-            <div className="portal-eyebrow">Stay ready</div>
-            <h2 id="actions-heading" className="portal-section-heading-title">Next up</h2>
-          </div>
-          <span className="portal-count-badge">{actionItems.length}</span>
+      </div>
+      {loading ? (
+        <div className="portal-chart-grid">
+          {[0, 1, 2].map((i) => <div key={i} className="portal-skeleton" style={{ height: 260 }} />)}
         </div>
-        {actionItems.length === 0 ? (
-          <div className="portal-empty portal-action-empty">
-            <div className="portal-empty-icon"><Inbox size={26} /></div>
-            <strong>You&apos;re all caught up.</strong>
-            <span>New interview and follow-up reminders will appear here.</span>
-          </div>
-        ) : (
-          <div className="portal-action-list">
-            {actionItems.map((item) => (
-              <a className="portal-action-card" href={item.href} key={item.id}>
-                <span className={`portal-action-icon portal-action-${item.type}`}>
-                  {item.type === "interview" ? <CalendarClock size={14} /> : <RefreshCcw size={14} />}
-                </span>
-                <span className="portal-action-copy">
-                  <strong>{item.title}</strong>
-                  <span>{item.description}</span>
-                </span>
-                <span className="portal-action-due">{formatDue(item.due_at)}<br /><small>View</small></span>
-              </a>
-            ))}
-          </div>
-        )}
-      </section>
-    </>
+      ) : (
+        <div className="portal-chart-grid">
+          <MiniChart title="Last 24 hours" points={trend.hourly24h} mode="hour" />
+          <MiniChart title="Last 7 days" points={trend.daily7d} mode="day" />
+          <MiniChart title="Last 6 months" points={trend.monthly6m} mode="month" />
+        </div>
+      )}
+    </section>
   );
 }

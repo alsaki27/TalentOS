@@ -2,7 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Briefcase, Activity, CalendarCheck2, Award, FileCheck2, type LucideIcon } from "lucide-react";
+import { Briefcase, Activity, CalendarCheck2, Award, type LucideIcon } from "lucide-react";
+// ARCHIVED 2026-09-08 — FileCheck2 backed the "Resumes ready" stat card,
+// commented out below. To restore: uncomment the import and the stat card.
+// import { FileCheck2 } from "lucide-react";
 import CandidatePortalInsights from "@/components/portal/CandidatePortalInsights";
 import { PortalShell } from "./PortalShell";
 import { usePortalDashboard, DEFAULT_OVERVIEW_FILTERS } from "./usePortalDashboard";
@@ -70,7 +73,7 @@ export default function PortalOverviewPage() {
         <div className="portal-hero-left">
           <div className="portal-hero-avatar">{initials(data.name)}</div>
           <div>
-            <h1>Welcome back, {data.name.split(" ")[0]}</h1>
+            <h1>Welcome back, {data.name}</h1>
             <p>Here&apos;s where things stand with your applications.</p>
           </div>
         </div>
@@ -92,10 +95,14 @@ export default function PortalOverviewPage() {
         <StatCard icon={Activity} badgeClass="portal-icon-badge-coral" value={data.summary.activeApplications} label="Active" index={2} />
         <StatCard icon={CalendarCheck2} badgeClass="portal-icon-badge-amber" value={data.summary.interviews} label="Interviews" index={3} />
         <StatCard icon={Award} badgeClass="portal-icon-badge-green" value={data.summary.offers} label="Offers" index={4} />
+        {/* ARCHIVED 2026-09-08 — "Resumes ready" stat card hidden pending a
+            future redesign of this metric. To restore: uncomment this and
+            the FileCheck2 import above.
         <StatCard icon={FileCheck2} badgeClass="portal-icon-badge-navy" value={data.summary.resumesReady} label="Resumes ready" index={5} />
+        */}
       </div>
 
-      <CandidatePortalInsights trend={data.trend} actionItems={data.actionItems} loading={loading} />
+      <CandidatePortalInsights trend={data.trend} loading={loading} />
     </PortalShell>
   );
 }

@@ -81,11 +81,13 @@ export function sourceLabel(source: string | null) {
   return source === "company_site" ? "Company site" : source.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function resumeLabel(status: PortalApplication["resume"]["status"]) {
-  if (status === "ready") return { text: "Resume ready", color: "#166534", bg: "#dcfce7" };
-  if (status === "generating") return { text: "Resume generating", color: "#92400e", bg: "#fef3c7" };
-  return { text: "Resume pending", color: "#6b7280", bg: "#f1f2f5" };
-}
+// ARCHIVED 2026-09-08 — backed the resume-readiness pill/filter, both hidden
+// pending a future redesign of that feature. To restore: uncomment this.
+// function resumeLabel(status: PortalApplication["resume"]["status"]) {
+//   if (status === "ready") return { text: "Resume ready", color: "#166534", bg: "#dcfce7" };
+//   if (status === "generating") return { text: "Resume generating", color: "#92400e", bg: "#fef3c7" };
+//   return { text: "Resume pending", color: "#6b7280", bg: "#f1f2f5" };
+// }
 
 function salaryLabel(job: PortalApplication["job"]) {
   if (!job) return null;
@@ -151,12 +153,17 @@ export default function CandidatePortalApplications({ applications, total, page,
           <option value="">All sources</option>
           {Object.entries(sourceCounts).map(([source, count]) => <option key={source} value={source}>{sourceLabel(source)} ({count})</option>)}
         </FilterSelect>
+        {/* ARCHIVED 2026-09-08 — "Resume" status filter hidden pending a
+            future redesign of the resume-readiness feature. The underlying
+            filters.resumeStatus state, URL param, and API support are left
+            intact. To restore: uncomment this control.
         <FilterSelect label="Resume" value={filters.resumeStatus} onChange={(value) => onFiltersChange({ resumeStatus: value, page: 1 })}>
           <option value="all">Any resume status</option>
           <option value="ready">Resume ready</option>
           <option value="generating">Generating</option>
           <option value="unavailable">Not generated</option>
         </FilterSelect>
+        */}
         <FilterSelect label="Interview" value={filters.interviewStatus} onChange={(value) => onFiltersChange({ interviewStatus: value, page: 1 })}>
           <option value="all">Any interview status</option>
           <option value="upcoming">Upcoming</option>
@@ -196,7 +203,8 @@ export default function CandidatePortalApplications({ applications, total, page,
         <div className={`portal-list ${loading ? "portal-list-loading" : ""}`}>
           {applications.map((application, index) => {
             const meta = STAGE_META[application.public_status.stage] ?? STAGE_META.submitted;
-            const resume = resumeLabel(application.resume.status);
+            // ARCHIVED 2026-09-08 — see the matching resume-pill JSX note below.
+            // const resume = resumeLabel(application.resume.status);
             return (
               <article key={application.id} className={`portal-app-card portal-stagger-${Math.min(index + 1, 4)}`}>
                 <div className="portal-app-top">
@@ -216,7 +224,11 @@ export default function CandidatePortalApplications({ applications, total, page,
                   </span>
                 </div>
                 <div className="portal-app-footer">
+                  {/* ARCHIVED 2026-09-08 — resume-readiness pill hidden pending
+                      a future redesign of that feature. To restore: uncomment
+                      this and the "const resume = resumeLabel(...)" line above.
                   <span className="portal-resume-pill" style={{ color: resume.color, background: resume.bg }}>{resume.text}</span>
+                  */}
                   {application.interview.status !== "not_scheduled" && <span className="portal-next-action">Interview: {application.interview.status}</span>}
                   {application.needs_attention && <span className="portal-attention-pill">Needs attention</span>}
                   {application.next_action && <span className="portal-next-action">Next: {application.next_action}</span>}
