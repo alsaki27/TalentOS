@@ -595,7 +595,7 @@ export async function buildCandidatePortalDashboardPage(
     ),
     query<any>(
       `SELECT * FROM (
-         SELECT a.id, 'follow_up' AS type, 'Check in on your application' AS title,
+         SELECT a.id::text AS id, 'follow_up' AS type, 'Check in on your application' AS title,
                 COALESCE(j.company, 'the employer') || ' · ' || COALESCE(j.title, 'your application') AS description,
                 a.follow_up_at::timestamptz AS due_at
          FROM applications a

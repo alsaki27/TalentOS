@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Search, SearchX, Circle, RotateCw, Gem, Star, CircleSlash, type LucideIcon } from "lucide-react";
 
 export interface PortalApplication {
   id: string;
@@ -61,12 +62,12 @@ interface Props {
   onFiltersChange: (next: Partial<PortalDashboardFilters>) => void;
 }
 
-const STAGE_META: Record<string, { color: string; bg: string; icon: string }> = {
-  submitted: { color: "#6b7280", bg: "#f1f2f5", icon: "●" },
-  waiting: { color: "#122461", bg: "#eef0f8", icon: "↻" },
-  interview: { color: "#b45309", bg: "#fef3e2", icon: "◆" },
-  offer: { color: "#c2415a", bg: "#ffeced", icon: "★" },
-  closed: { color: "#9ca3af", bg: "#f1f2f5", icon: "○" },
+const STAGE_META: Record<string, { color: string; bg: string; icon: LucideIcon }> = {
+  submitted: { color: "#6b7280", bg: "#f1f2f5", icon: Circle },
+  waiting: { color: "#122461", bg: "#eef0f8", icon: RotateCw },
+  interview: { color: "#b45309", bg: "#fef3e2", icon: Gem },
+  offer: { color: "#c2415a", bg: "#ffeced", icon: Star },
+  closed: { color: "#9ca3af", bg: "#f1f2f5", icon: CircleSlash },
 };
 
 function formatDate(value: string | null) {
@@ -119,7 +120,7 @@ export default function CandidatePortalApplications({ applications, total, page,
       <div className="portal-filter-panel">
         <label className="portal-search-field">
           <span className="portal-sr-only">Search applications</span>
-          <span aria-hidden="true">⌕</span>
+          <Search size={14} aria-hidden="true" style={{ color: "var(--p-ink-soft)", flexShrink: 0 }} />
           <input
             value={filters.search}
             onChange={(event) => onFiltersChange({ search: event.target.value, page: 1 })}
@@ -186,7 +187,7 @@ export default function CandidatePortalApplications({ applications, total, page,
         </div>
       ) : applications.length === 0 ? (
         <div className="portal-empty">
-          <div className="portal-empty-icon">▱</div>
+          <div className="portal-empty-icon"><SearchX size={28} /></div>
           <strong>No applications match these filters.</strong>
           <span>Try clearing a filter or search term.</span>
           <button className="portal-btn portal-btn-secondary" onClick={() => onFiltersChange({ search: "", status: "", source: "", dateRange: "all", dateFrom: "", dateTo: "", resumeStatus: "all", interviewStatus: "all", needsAttention: false, sort: "submitted_at", order: "desc", page: 1 })}>Clear filters</button>
@@ -211,7 +212,7 @@ export default function CandidatePortalApplications({ applications, total, page,
                     </div>
                   </div>
                   <span className="portal-pill" style={{ color: meta.color, background: meta.bg }}>
-                    <span aria-hidden="true">{meta.icon}</span>{application.public_status.label}
+                    <meta.icon size={11} />{application.public_status.label}
                   </span>
                 </div>
                 <div className="portal-app-footer">

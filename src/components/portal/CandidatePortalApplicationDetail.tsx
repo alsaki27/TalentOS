@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
 
 interface Props {
   application: any;
@@ -21,12 +22,31 @@ function formatTime(value: string | null) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }).format(date);
 }
 
+function CollapsibleCard({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="portal-card portal-detail-card">
+      <button type="button" className="portal-collapsible-header" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <h2>{title}</h2>
+        {open ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
 function ResumeSection({ title, children }: { title: string; children: ReactNode }) {
   return <section className="portal-resume-section"><h3>{title}</h3>{children}</section>;
 }
 
 function ResumePreview({ resume }: { resume: any }) {
-  if (!resume) return <div className="portal-empty portal-detail-empty"><strong>Tailored resume is not ready yet.</strong><span>It will appear here when the application resume workflow completes.</span></div>;
+  if (!resume) return (
+    <div className="portal-empty portal-detail-empty">
+      <div className="portal-empty-icon"><FileText size={26} /></div>
+      <strong>Tailored resume is not ready yet.</strong>
+      <span>It will appear here when the application resume workflow completes.</span>
+    </div>
+  );
   const content = resume.content || {};
 
   return (
@@ -35,7 +55,7 @@ function ResumePreview({ resume }: { resume: any }) {
         <div><div className="portal-eyebrow">Tailored resume</div><h2>{resume.title}</h2><p>{resume.version_label || "Application version"} · Updated {formatDate(resume.updated_at)}</p></div>
         <div className="portal-resume-actions">
           <span className="portal-resume-pill portal-resume-ready">Approved · View only</span>
-          {resume.pdf_available && <a className="portal-btn portal-btn-primary portal-btn-small" href={`/api/portal/me/applications/${resume.application_id}/resume-pdf`} target="_blank" rel="noreferrer">View PDF</a>}
+          {resume.pdf_available && <a className="portal-btn portal-btn-primary portal-btn-small" href={`/api/portal/me/applications/${resume.application_id}/resume-pdf`} target="_blank" rel="noreferrer"><ExternalLink size={13} style={{ marginRight: 4 }} />View PDF</a>}
         </div>
       </div>
       <p className="portal-greeting-sub">This tailored resume is available for review in TalentOS and cannot be downloaded.</p>
@@ -81,19 +101,87 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
   }
 
   return (
-    <div className="portal-shell portal-detail-shell">
-      <button className="portal-back-link" onClick={onBack}>← Back to applications</button>
-      <div className="portal-detail-hero">
-        <div><div className="portal-eyebrow">Application details</div><h1>{application.job?.title || "Application"}</h1><p>{application.job?.company || "Company unavailable"}{application.job?.location ? ` · ${application.job.location}` : ""}</p></div>
+    <div className="portal-detail-shell" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <button className="portal-back-link" onClick={onBack}><ArrowLeft size={14} style={{ verticalAlign: -2, marginRight: 4 }} />Back to applications</button>
+
+      <div className="portal-hero" style={{ background: "linear-gradient(135deg, var(--p-navy-fill), #1c3496 70%, var(--p-coral))" }}>
+        <div>
+          <div className="portal-eyebrow" style={{ color: "rgba(255,255,255,0.75)" }}>Application details</div>
+          <h1>{application.job?.title || "Application"}</h1>
+          <p>{application.job?.company || "Company unavailable"}{application.job?.location ? ` · ${application.job.location}` : ""}</p>
+        </div>
         <span className="portal-detail-status">{application.public_status.label}</span>
       </div>
+
       <div className="portal-detail-grid">
-        <section className="portal-card portal-detail-card"><h2>Application overview</h2><dl className="portal-detail-facts"><div><dt>Submitted</dt><dd>{formatDate(application.submitted_at)}</dd></div><div><dt>Source</dt><dd>{application.job?.source || "Unknown"}</dd></div><div><dt>Next action</dt><dd>{application.next_action || "No action scheduled"}</dd></div><div><dt>Follow-up</dt><dd>{formatDate(application.follow_up_at)}</dd></div></dl>{application.job?.source_url && <a className="portal-btn portal-btn-secondary" href={application.job.source_url} target="_blank" rel="noreferrer">View job posting</a>}</section>
-        <section className="portal-card portal-detail-card"><h2>Updates</h2>{application.updates?.length ? <div className="portal-detail-updates">{application.updates.map((update: any) => <article key={update.id}><p>{update.body}</p><span>{update.author} · {formatDate(update.created_at)}</span></article>)}</div> : <p className="portal-greeting-sub">No candidate-visible updates yet.</p>}</section>
+        <CollapsibleCard title="Application overview">
+          <dl className="portal-detail-facts">
+            <div><dt>Submitted</dt><dd>{formatDate(application.submitted_at)}</dd></div>
+            <div><dt>Source</dt><dd>{application.job?.source || "Unknown"}</dd></div>
+            <div><dt>Next action</dt><dd>{application.next_action || "No action scheduled"}</dd></div>
+            <div><dt>Follow-up</dt><dd>{formatDate(application.follow_up_at)}</dd></div>
+          </dl>
+          {application.job?.source_url && <a className="portal-btn portal-btn-secondary" href={application.job.source_url} target="_blank" rel="noreferrer"><ExternalLink size={13} style={{ marginRight: 4 }} />View job posting</a>}
+        </CollapsibleCard>
+
+        <CollapsibleCard title="Updates">
+          {application.updates?.length ? (
+            <div className="portal-detail-updates">
+              {application.updates.map((update: any) => <article key={update.id}><p>{update.body}</p><span>{update.author} · {formatDate(update.created_at)}</span></article>)}
+            </div>
+          ) : <p className="portal-greeting-sub">No candidate-visible updates yet.</p>}
+        </CollapsibleCard>
       </div>
-      <section className="portal-card portal-detail-card"><h2>Progress</h2>{application.timeline?.length ? <div className="portal-timeline">{application.timeline.map((event: any) => <div className="portal-timeline-item" key={event.id}><span className="portal-timeline-dot" /><div><strong>{event.label}</strong><span>{formatDate(event.created_at)}</span></div></div>)}</div> : <p className="portal-greeting-sub">Your application timeline will appear as the team records updates.</p>}</section>
-      <section className="portal-card portal-detail-card"><h2>Interviews</h2>{application.interviews?.length ? <div className="portal-interview-list">{application.interviews.map((interview: any) => <article className="portal-interview-card" key={interview.id}><div><strong>{interview.round_name}</strong><span>{formatTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span><span>Status: {interview.status}</span>{interview.location && <span>Location: {interview.location}</span>}{interview.panel?.length > 0 && <span>Interviewers: {interview.panel.join(", ")}</span>}</div>{interview.meeting_link && <a className="portal-btn portal-btn-secondary portal-btn-small" href={interview.meeting_link} target="_blank" rel="noreferrer">Open meeting</a>}</article>)}</div> : <p className="portal-greeting-sub">No interviews are scheduled for this application yet.</p>}</section>
-      <section className="portal-card portal-detail-card"><div className="portal-notes-heading"><div><h2>My preparation notes</h2><p className="portal-greeting-sub">Private notes to help you prepare. These are not shared with the Skarion team.</p></div><span className="portal-count-badge">{notes.length}</span></div><div className="portal-note-composer"><textarea value={noteBody} onChange={(event) => setNoteBody(event.target.value)} maxLength={5000} placeholder="Add interview prep, questions, or follow-up reminders..." /><div><span>{noteBody.length}/5000</span><button className="portal-btn portal-btn-primary" disabled={!noteBody.trim() || savingNote} onClick={addNote}>{savingNote ? "Saving..." : "Add note"}</button></div></div>{noteError && <p className="portal-error">{noteError}</p>}{notes.length > 0 && <div className="portal-notes-list">{notes.map((note) => <article key={note.id}><p>{note.body}</p><div><span>Updated {formatDate(note.updated_at || note.created_at)}</span><button className="portal-note-delete" onClick={() => deleteNote(note.id)}>Delete</button></div></article>)}</div>}</section>
+
+      <CollapsibleCard title="Progress">
+        {application.timeline?.length ? (
+          <div className="portal-timeline">
+            {application.timeline.map((event: any) => <div className="portal-timeline-item" key={event.id}><span className="portal-timeline-dot" /><div><strong>{event.label}</strong><span>{formatDate(event.created_at)}</span></div></div>)}
+          </div>
+        ) : <p className="portal-greeting-sub">Your application timeline will appear as the team records updates.</p>}
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Interviews">
+        {application.interviews?.length ? (
+          <div className="portal-interview-list">
+            {application.interviews.map((interview: any) => (
+              <article className="portal-interview-card" key={interview.id}>
+                <div>
+                  <strong>{interview.round_name}</strong>
+                  <span>{formatTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
+                  <span>Status: {interview.status}</span>
+                  {interview.location && <span>Location: {interview.location}</span>}
+                  {interview.panel?.length > 0 && <span>Interviewers: {interview.panel.join(", ")}</span>}
+                </div>
+                {interview.meeting_link && <a className="portal-btn portal-btn-secondary portal-btn-small" href={interview.meeting_link} target="_blank" rel="noreferrer"><Video size={13} style={{ marginRight: 4 }} />Open meeting</a>}
+              </article>
+            ))}
+          </div>
+        ) : <p className="portal-greeting-sub">No interviews are scheduled for this application yet.</p>}
+      </CollapsibleCard>
+
+      <CollapsibleCard title="My preparation notes">
+        <div className="portal-notes-heading">
+          <p className="portal-greeting-sub" style={{ margin: 0 }}>Private notes to help you prepare. These are not shared with the Skarion team.</p>
+          <span className="portal-count-badge">{notes.length}</span>
+        </div>
+        <div className="portal-note-composer">
+          <textarea value={noteBody} onChange={(event) => setNoteBody(event.target.value)} maxLength={5000} placeholder="Add interview prep, questions, or follow-up reminders..." />
+          <div><span>{noteBody.length}/5000</span><button className="portal-btn portal-btn-primary" disabled={!noteBody.trim() || savingNote} onClick={addNote}>{savingNote ? "Saving..." : "Add note"}</button></div>
+        </div>
+        {noteError && <p className="portal-error">{noteError}</p>}
+        {notes.length > 0 && (
+          <div className="portal-notes-list">
+            {notes.map((note) => (
+              <article key={note.id}>
+                <p>{note.body}</p>
+                <div><span>Updated {formatDate(note.updated_at || note.created_at)}</span><button className="portal-note-delete" onClick={() => deleteNote(note.id)}><Trash2 size={12} style={{ verticalAlign: -2, marginRight: 3 }} />Delete</button></div>
+              </article>
+            ))}
+          </div>
+        )}
+      </CollapsibleCard>
+
       <ResumePreview resume={resume} />
     </div>
   );
