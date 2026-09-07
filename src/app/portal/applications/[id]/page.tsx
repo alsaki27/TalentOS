@@ -60,14 +60,14 @@ export default function CandidatePortalApplicationPage() {
     return (
       <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
         <p className="portal-error">{error || "Application not found."}</p>
-        <button className="portal-btn portal-btn-secondary" onClick={() => router.push("/portal")}>Back to dashboard</button>
+        <button className="portal-btn portal-btn-secondary" onClick={() => router.push("/portal/applications")}>Back to applications</button>
       </PortalShell>
     );
   }
 
   return (
     <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
-      <CandidatePortalApplicationDetail application={application} resume={resume} onBack={() => router.push("/portal")} />
+      <CandidatePortalApplicationDetail application={application} resume={resume} onBack={() => router.push("/portal/applications")} />
     </PortalShell>
   );
 }

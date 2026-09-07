@@ -1,15 +1,20 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { LayoutDashboard, Briefcase, CalendarClock, ShieldCheck, Menu, X, LogOut, Sun, Moon, MonitorSmartphone } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
 import PortalLogo from "./PortalLogo";
 
+// Real routes, not anchors - each nav item opens its own page (matching the
+// Luminaux inspiration site's actual per-section pages) instead of
+// scrolling one long page back to a section.
 const NAV_ITEMS = [
-  { href: "/portal#overview", label: "Overview", icon: LayoutDashboard },
-  { href: "/portal#applications", label: "Applications", icon: Briefcase },
-  { href: "/portal#interviews", label: "Interviews", icon: CalendarClock },
-  { href: "/portal#account", label: "Account", icon: ShieldCheck },
+  { href: "/portal", label: "Overview", icon: LayoutDashboard },
+  { href: "/portal/applications", label: "Applications", icon: Briefcase },
+  { href: "/portal/interviews", label: "Interviews", icon: CalendarClock },
+  { href: "/portal/account", label: "Account", icon: ShieldCheck },
 ];
 
 function PortalThemeToggle() {
@@ -45,6 +50,7 @@ export function PortalShell({
   onSignOut: () => void;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const pathname = usePathname();
 
   function initials(name: string) {
     return (
@@ -55,6 +61,15 @@ export function PortalShell({
         .map((part) => part[0]?.toUpperCase())
         .join("") || "?"
     );
+  }
+
+  function isActive(href: string) {
+    // "/portal" itself must not match every sub-route (applications,
+    // interviews, account, or an application-detail page) - only its own
+    // exact path. Every other nav item matches its own path and anything
+    // nested under it.
+    if (href === "/portal") return pathname === "/portal";
+    return pathname === href || pathname?.startsWith(`${href}/`);
   }
 
   return (
@@ -69,10 +84,15 @@ export function PortalShell({
 
         <nav className="portal-sidebar-nav" aria-label="Portal navigation">
           {NAV_ITEMS.map((item) => (
-            <a key={item.href} href={item.href} className="portal-sidebar-link" onClick={() => setMobileOpen(false)}>
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`portal-sidebar-link ${isActive(item.href) ? "portal-sidebar-link-active" : ""}`}
+              onClick={() => setMobileOpen(false)}
+            >
               <item.icon size={17} />
               {item.label}
-            </a>
+            </Link>
           ))}
         </nav>
 
@@ -87,7 +107,7 @@ export function PortalShell({
         </div>
       </aside>
 
-      <div>
+      <div className="portal-content">
         <header className="portal-topbar">
           <div className="portal-topbar-left">
             <button

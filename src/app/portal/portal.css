@@ -51,6 +51,11 @@
   color: var(--p-ink);
   position: relative;
   overflow-x: hidden;
+  /* overflow-x alone forces overflow-y to compute as auto per the CSS
+     overflow spec, turning this into its own scroll container and
+     breaking position:sticky/fixed's relationship to the real viewport
+     for anything positioned relative to it - keep overflow-y explicit. */
+  overflow-y: visible;
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
@@ -1022,15 +1027,16 @@
 .portal-chart-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+  gap: 16px;
 }
 
 .portal-chart-card {
   min-width: 0;
   background: var(--p-surface);
   border: 1px solid var(--p-border);
-  border-radius: var(--p-radius-md);
-  padding: 14px;
+  border-radius: var(--p-radius-lg);
+  padding: 20px;
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04);
 }
 
 .portal-chart-heading {
@@ -1040,20 +1046,22 @@
   gap: 8px;
 }
 
-.portal-chart-heading h3 { margin: 0; color: var(--p-ink); font-size: 13px; }
-.portal-chart-heading span { color: var(--p-ink-soft); font-size: 10px; white-space: nowrap; }
+.portal-chart-heading h3 { margin: 0; color: var(--p-ink); font-size: 14.5px; font-weight: 700; }
+.portal-chart-heading span { color: var(--p-ink-soft); font-size: 11.5px; white-space: nowrap; }
 
 .portal-chart {
+  position: relative;
   display: flex;
   align-items: flex-end;
-  gap: 4px;
-  height: 104px;
-  margin-top: 14px;
+  gap: 3px;
+  height: 180px;
+  margin-top: 20px;
   border-bottom: 1px solid var(--p-border);
   padding: 0 2px;
 }
 
 .portal-chart-column {
+  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -1061,25 +1069,89 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  gap: 5px;
+  gap: 8px;
+  cursor: default;
 }
 
 .portal-chart-bar {
   width: 100%;
-  max-width: 18px;
+  max-width: 22px;
   min-height: 3px;
-  border-radius: 4px 4px 0 0;
+  border-radius: 5px 5px 0 0;
   background: linear-gradient(180deg, var(--p-coral), #ffb0a7);
+  transition: filter 120ms var(--p-ease), transform 120ms var(--p-ease);
+  transform-origin: bottom center;
 }
 
-.portal-chart-column span {
-  overflow: hidden;
+.portal-chart-bar-active {
+  filter: brightness(1.12);
+  transform: scaleY(1.02);
+}
+
+.portal-chart-axis-label {
+  /* With 24 hourly columns in one card, each column is only a few px wide -
+     narrower than any label text. Only every 4th column carries a label
+     (see labelEvery in CandidatePortalInsights), so its neighbors are empty;
+     letting the label overflow its own column horizontally instead of
+     clipping it lets it render in full, spilling into that empty space
+     rather than being cut down to 1-2 characters. */
+  overflow: visible;
   width: 100%;
+  min-height: 14px;
   color: var(--p-ink-soft);
-  font-size: 9px;
+  font-size: 10.5px;
+  font-weight: 600;
   text-align: center;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.portal-chart-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 11px;
+  border-radius: var(--p-radius-sm);
+  background: var(--p-ink);
+  color: var(--p-bg);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 8px 20px -8px rgba(var(--p-shadow-rgb), 0.4);
+  animation: portal-tooltip-in 120ms var(--p-ease) both;
+}
+
+.portal-chart-tooltip strong {
+  color: var(--p-coral);
+  font-size: 13px;
+}
+
+.portal-chart-tooltip span {
+  color: var(--p-bg);
+  opacity: 0.75;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.portal-chart-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--p-ink);
+}
+
+@keyframes portal-tooltip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 .portal-action-list {
@@ -1214,11 +1286,14 @@
   .portal-header,
   .portal-stat,
   .portal-app-card,
+  .portal-hero,
+  .portal-chart-tooltip,
   .portal-skeleton {
     animation: none !important;
   }
   .portal-btn,
   .portal-app-card,
+  .portal-chart-bar,
   .portal-field input {
     transition: none !important;
   }
@@ -1251,7 +1326,7 @@
   .portal-chart-grid { grid-template-columns: 1fr; }
   .portal-sidebar { transform: translateX(-100%); }
   .portal-sidebar-open .portal-sidebar { transform: translateX(0); }
-  .portal-layout { grid-template-columns: 1fr; }
+  .portal-content { margin-left: 0; }
   .portal-main { padding: 20px 16px 60px; }
 }
 
@@ -1260,16 +1335,19 @@
 .portal-layout {
   position: relative;
   z-index: 1;
-  display: grid;
-  grid-template-columns: 248px 1fr;
   min-height: 100vh;
-  align-items: start;
 }
 
+/* The sidebar is position:fixed (not sticky-in-a-grid) - a fixed app-shell
+   sidebar has no dependency on scroll-container/containing-block chains
+   the way sticky does, so it can't be silently broken by an ancestor's
+   overflow value. .portal-content offsets by the same width instead. */
 .portal-sidebar {
-  position: sticky;
+  position: fixed;
   top: 0;
-  height: 100vh;
+  left: 0;
+  bottom: 0;
+  width: 248px;
   display: flex;
   flex-direction: column;
   background: var(--p-sidebar-bg);
@@ -1278,6 +1356,11 @@
   gap: 4px;
   transition: transform 220ms var(--p-ease);
   z-index: 20;
+}
+
+.portal-content {
+  margin-left: 248px;
+  min-width: 0;
 }
 
 .portal-sidebar-logo {
