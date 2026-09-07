@@ -2,10 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
+import PortalResumeDocument from "./PortalResumeDocument";
+import ResumePdfModal from "./ResumePdfModal";
 
 interface Props {
   application: any;
   resume: any;
+  candidateName?: string;
   onBack: () => void;
 }
 
@@ -35,11 +38,9 @@ function CollapsibleCard({ title, defaultOpen = true, children }: { title: strin
   );
 }
 
-function ResumeSection({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="portal-resume-section"><h3>{title}</h3>{children}</section>;
-}
+function ResumePreview({ resume, candidateName }: { resume: any; candidateName?: string }) {
+  const [pdfOpen, setPdfOpen] = useState(false);
 
-function ResumePreview({ resume }: { resume: any }) {
   if (!resume) return (
     <div className="portal-empty portal-detail-empty">
       <div className="portal-empty-icon"><FileText size={26} /></div>
@@ -47,7 +48,8 @@ function ResumePreview({ resume }: { resume: any }) {
       <span>It will appear here when the application resume workflow completes.</span>
     </div>
   );
-  const content = resume.content || {};
+
+  const pdfUrl = `/api/portal/me/applications/${resume.application_id}/resume-pdf`;
 
   return (
     <div className="portal-resume-preview">
@@ -55,22 +57,37 @@ function ResumePreview({ resume }: { resume: any }) {
         <div><div className="portal-eyebrow">Tailored resume</div><h2>{resume.title}</h2><p>{resume.version_label || "Application version"} · Updated {formatDate(resume.updated_at)}</p></div>
         <div className="portal-resume-actions">
           <span className="portal-resume-pill portal-resume-ready">Approved · View only</span>
-          {resume.pdf_available && <a className="portal-btn portal-btn-primary portal-btn-small" href={`/api/portal/me/applications/${resume.application_id}/resume-pdf`} target="_blank" rel="noreferrer"><ExternalLink size={13} style={{ marginRight: 4 }} />View PDF</a>}
+          {resume.pdf_available && (
+            <button type="button" className="portal-btn portal-btn-primary portal-btn-small" onClick={() => setPdfOpen(true)}>
+              <ExternalLink size={13} style={{ marginRight: 4 }} />View PDF
+            </button>
+          )}
         </div>
       </div>
       <p className="portal-greeting-sub">This tailored resume is available for review in TalentOS and cannot be downloaded.</p>
-      {content.header?.fullName && <h3 className="portal-resume-name">{content.header.fullName}</h3>}
-      {content.header && <p className="portal-resume-contact">{[content.header.location, content.header.email, content.header.phone].filter(Boolean).join(" · ")}</p>}
-      {content.summary?.text && <ResumeSection title="Summary"><p>{content.summary.text}</p></ResumeSection>}
-      {Array.isArray(content.skills) && content.skills.length > 0 && <ResumeSection title="Skills"><div className="portal-resume-skills">{content.skills.flatMap((section: any) => Array.isArray(section.skills) ? section.skills : []).map((skill: string) => <span key={skill}>{skill}</span>)}</div></ResumeSection>}
-      {Array.isArray(content.experience) && content.experience.length > 0 && <ResumeSection title="Experience">{content.experience.map((experience: any) => <article className="portal-resume-entry" key={experience.id || `${experience.company}-${experience.title}`}><strong>{experience.title}</strong><span>{experience.company} · {experience.startDate || ""}{experience.endDate ? ` - ${experience.endDate}` : experience.startDate ? " - Present" : ""}</span><ul>{(experience.bullets || []).map((bullet: any, index: number) => <li key={bullet.id || index}>{bullet.text}</li>)}</ul></article>)}</ResumeSection>}
-      {Array.isArray(content.education) && content.education.length > 0 && <ResumeSection title="Education"><ul className="portal-resume-plain-list">{content.education.map((education: any, index: number) => <li key={education.id || index}>{education.degree} · {education.school}{education.graduationDate ? ` (${education.graduationDate})` : ""}</li>)}</ul></ResumeSection>}
-      {resume.generated_text && !content.header && <pre className="portal-resume-text">{resume.generated_text}</pre>}
+
+      {/* Rendered through the same adapter + templates the TalentOS studio
+          uses, so the candidate sees the identical document, not a
+          portal-specific approximation of it. */}
+      {resume.content ? (
+        <PortalResumeDocument content={resume.content} />
+      ) : resume.generated_text ? (
+        <pre className="portal-resume-text">{resume.generated_text}</pre>
+      ) : null}
+
+      {pdfOpen && (
+        <ResumePdfModal
+          pdfUrl={pdfUrl}
+          title={resume.title || "Tailored resume"}
+          viewerLabel={candidateName || "Skarion candidate"}
+          onClose={() => setPdfOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
-export default function CandidatePortalApplicationDetail({ application, resume, onBack }: Props) {
+export default function CandidatePortalApplicationDetail({ application, resume, candidateName, onBack }: Props) {
   const [notes, setNotes] = useState<any[]>([]);
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState("");
@@ -183,10 +200,13 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
               </div>
             ) : <p className="portal-greeting-sub">No candidate-visible updates yet.</p>}
           </CollapsibleCard>
-
-          <ResumePreview resume={resume} />
         </div>
       </div>
+
+      {/* Full width, below the notes - a resume is a page-shaped document and
+          reads far better across the whole column than squeezed into the
+          narrow side rail. */}
+      <ResumePreview resume={resume} candidateName={candidateName} />
     </div>
   );
 }

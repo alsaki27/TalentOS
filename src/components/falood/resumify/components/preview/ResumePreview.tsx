@@ -1,12 +1,7 @@
 import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import { DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
-import { TechSidebarTemplate } from './templates/TechSidebarTemplate';
-import { BusinessProfessionalTemplate } from './templates/BusinessProfessionalTemplate';
-import { ModernMinimalTemplate } from './templates/ModernMinimalTemplate';
-import { ElegantTimelineTemplate } from './templates/ElegantTimelineTemplate';
-import { CreativeModernTemplate } from './templates/CreativeModernTemplate';
-import { BJetProfessionalTemplate } from './templates/BJetProfessionalTemplate';
+import { ResumeTemplateSwitch } from './ResumeTemplateSwitch';
 import { applySuggestionToResumeData } from './AiSuggestions';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -22,30 +17,7 @@ export const ResumePreview: React.FC = () => {
 
   const pagePadding = previewData.pagePadding ?? DEFAULT_PAGE_PADDING;
 
-  const renderTemplate = () => {
-    switch (previewData.template) {
-      case 'tech-sidebar':
-        return <TechSidebarTemplate data={previewData} />;
-      case 'business-professional':
-        return <BusinessProfessionalTemplate data={previewData} variant={1} />;
-      case 'business-professional-2':
-        return <BusinessProfessionalTemplate data={previewData} variant={2} />;
-      case 'business-professional-3':
-        return <BusinessProfessionalTemplate data={previewData} variant={3} />;
-      case 'business-professional-4':
-        return <BusinessProfessionalTemplate data={previewData} variant={4} />;
-      case 'modern-minimal':
-        return <ModernMinimalTemplate data={previewData} />;
-      case 'elegant-timeline':
-        return <ElegantTimelineTemplate data={previewData} />;
-      case 'creative-modern':
-        return <CreativeModernTemplate data={previewData} />;
-      case 'bjet-professional':
-        return <BJetProfessionalTemplate data={previewData} />;
-      default:
-        return <TechSidebarTemplate data={previewData} />;
-    }
-  };
+  const renderTemplate = () => <ResumeTemplateSwitch data={previewData} />;
 
   const [containerRef, setContainerRef] = React.useState<HTMLDivElement | null>(null);
   const [scale, setScale] = React.useState(0.8);

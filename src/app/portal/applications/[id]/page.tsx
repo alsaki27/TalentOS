@@ -67,7 +67,7 @@ export default function CandidatePortalApplicationPage() {
 
   return (
     <PortalShell candidateName={candidateName} pageTitle="Application" onSignOut={logout}>
-      <CandidatePortalApplicationDetail application={application} resume={resume} onBack={() => router.push("/portal/applications")} />
+      <CandidatePortalApplicationDetail application={application} resume={resume} candidateName={candidateName} onBack={() => router.push("/portal/applications")} />
     </PortalShell>
   );
 }

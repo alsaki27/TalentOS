@@ -80,6 +80,20 @@
   border-color: var(--p-border);
 }
 
+/* globals.css (the staff app's stylesheet, loaded on these pages too by the
+   root layout) styles EVERY `button:hover` with a slate background, purple
+   border, purple glow and a lift. That chrome is wrong for the portal's bare
+   buttons - collapsible section headers, the back link, interview tabs - which
+   are meant to read as text, not as raised controls. Neutralize it at
+   element-level specificity via :where() so each portal button class further
+   down can still declare the hover it actually wants and win on source order. */
+.portal-root :where(button):hover {
+  background: none;
+  border-color: var(--p-border);
+  box-shadow: none;
+  transform: none;
+}
+
 :root.dark .portal-root .portal-skeleton {
   background: linear-gradient(90deg, #161d38 25%, #1c2444 37%, #161d38 63%);
   background-size: 400% 100%;
@@ -815,10 +829,6 @@
   top: 84px;
 }
 
-@media (max-width: 960px) {
-  .portal-detail-layout { grid-template-columns: 1fr; }
-  .portal-detail-side { position: static; }
-}
 
 .portal-card {
   background: var(--p-surface);
@@ -1331,35 +1341,7 @@
   }
 }
 
-@media (max-width: 480px) {
-  .portal-auth-card { padding: 28px 22px; }
-  .portal-header { flex-wrap: wrap; }
-}
 
-@media (max-width: 760px) {
-  .portal-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .portal-search-field { grid-column: 1 / -1; }
-  .portal-pagination { align-items: flex-start; flex-direction: column; }
-}
-
-@media (max-width: 520px) {
-  .portal-shell { padding: 26px 14px 60px; gap: 22px; }
-  .portal-filter-panel { grid-template-columns: 1fr; }
-  .portal-search-field { grid-column: auto; }
-  .portal-app-top { flex-direction: column; }
-  .portal-app-footer { align-items: flex-start; flex-direction: column; }
-  .portal-btn-small { margin-left: 0; width: 100%; }
-  .portal-pagination-actions { width: 100%; justify-content: space-between; }
-  .portal-detail-hero { flex-direction: column; }
-  .portal-resume-preview { padding: 18px; }
-  .portal-interview-card { flex-direction: column; }
-  .portal-interview-card .portal-btn-small { width: auto; }
-  .portal-chart-grid { grid-template-columns: 1fr; }
-  .portal-sidebar { transform: translateX(-100%); }
-  .portal-sidebar-open .portal-sidebar { transform: translateX(0); }
-  .portal-content { margin-left: 0; }
-  .portal-main { padding: 20px 16px 60px; }
-}
 
 /* ---------- App shell: sidebar + topbar ---------- */
 
@@ -1513,16 +1495,6 @@
   display: none;
 }
 
-@media (max-width: 760px) {
-  .portal-sidebar-open .portal-sidebar-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(5, 8, 20, 0.5);
-    z-index: 15;
-  }
-}
-
 .portal-topbar {
   position: sticky;
   top: 0;
@@ -1590,12 +1562,9 @@
   background: var(--p-navy-soft);
 }
 
+/* Shown again in the ≤900px block, together with the off-canvas sidebar. */
 .portal-hamburger {
   display: none;
-}
-
-@media (max-width: 760px) {
-  .portal-hamburger { display: inline-flex; }
 }
 
 .portal-main {
@@ -1643,12 +1612,33 @@
 
 .portal-collapsible-header h2 {
   margin: 0;
+  transition: color 160ms var(--p-ease);
 }
 
 .portal-collapsible-header svg {
   color: var(--p-ink-soft);
   flex-shrink: 0;
-  transition: transform 200ms var(--p-ease);
+  transition: transform 200ms var(--p-ease), color 160ms var(--p-ease);
+}
+
+/* Quiet, text-level affordance instead of a raised button box - the chevron
+   picks up the accent and the title lifts to full ink. */
+.portal-collapsible-header:hover svg {
+  color: var(--p-coral);
+}
+
+.portal-collapsible-header:hover h2 {
+  color: var(--p-navy);
+}
+
+.portal-back-link {
+  transition: color 160ms var(--p-ease), gap 160ms var(--p-ease);
+}
+
+.portal-back-link:hover {
+  color: var(--p-coral);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ---------- Mini calendar (interview center) ---------- */
@@ -1701,6 +1691,186 @@
 
 .portal-mini-calendar-day-today.portal-mini-calendar-day-event::after {
   background: #fff;
+}
+
+/* ---------- Tailored resume document (studio templates) ---------- */
+
+/* The templates render on a white page at fixed print dimensions and are
+   scaled to fit; they carry their own typography, so the portal's theme
+   tokens deliberately stop at this boundary - the document must look the
+   same here as it does in the studio and on the PDF, in either theme. */
+.portal-resume-doc {
+  margin-top: 16px;
+  width: 100%;
+  min-width: 0;
+  /* Below the renderer's minimum scale the page is wider than this box; keep
+     that pan contained here so the page body never scrolls sideways. */
+  overflow-x: auto;
+}
+
+.portal-resume-doc-page {
+  position: relative;
+  overflow: hidden;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  box-shadow: 0 10px 30px -18px rgba(var(--p-shadow-rgb), 0.45);
+}
+
+.portal-resume-doc-inner {
+  background: #fff;
+}
+
+/* ---------- Modal + protected PDF viewer ---------- */
+
+.portal-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 8, 20, 0.72);
+  backdrop-filter: blur(4px);
+  animation: portal-fade-in 180ms var(--p-ease) both;
+}
+
+.portal-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  height: min(90vh, 100%);
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  animation: portal-rise 240ms var(--p-ease) both;
+}
+
+.portal-modal:focus {
+  outline: none;
+}
+
+/* Selection/drag are capture-adjacent affordances; off inside the viewer. */
+.portal-modal-protected {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.portal-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--p-border);
+}
+
+.portal-modal-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--p-ink);
+}
+
+.portal-modal-heading p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--p-coral);
+}
+
+.portal-modal-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--p-bg);
+  /* The watermark layer is deliberately scaled past its box so the rotated
+     tiles reach every corner; clip it here or it paints over the backdrop
+     and the page behind the modal. */
+  overflow: hidden;
+}
+
+.portal-pdf-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+}
+
+.portal-pdf-watermark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-content: space-around;
+  gap: 24px;
+  padding: 24px;
+  pointer-events: none;
+  overflow: hidden;
+  transform: rotate(-24deg) scale(1.4);
+  opacity: 0.16;
+}
+
+.portal-pdf-watermark span {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #7b8499;
+  text-align: center;
+}
+
+.portal-pdf-blackout {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  background: #05070f;
+  color: #e7ebf5;
+}
+
+.portal-pdf-blackout strong {
+  font-size: 14px;
+}
+
+.portal-pdf-blackout span {
+  font-size: 12px;
+  color: #9aa4bd;
+  max-width: 320px;
+}
+
+.portal-modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--p-border);
+  font-size: 11.5px;
+  color: var(--p-ink-soft);
+}
+
+/* Ctrl+P / "save as PDF" is a capture path - never let the protected
+   document reach the print surface. */
+@media print {
+  .portal-modal-backdrop,
+  .portal-resume-doc {
+    display: none !important;
+  }
+}
+
+@keyframes portal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* ---------- Hero card ---------- */
@@ -1798,4 +1968,86 @@
 
 @media (max-width: 520px) {
   .portal-hero { padding: 20px; }
+}
+
+/* ---------- Responsive ----------
+   One shared breakpoint (900px) drives the whole app shell: the hamburger
+   appearing, the sidebar going off-canvas, the backdrop and the content
+   losing its sidebar offset all switch together. These used to be split
+   across 760px and 520px, so every viewport in between rendered a hamburger
+   that toggled an already-visible sidebar while the content stayed pushed
+   248px to the right - the tablet/large-phone layout was broken outright. */
+@media (max-width: 900px) {
+  .portal-sidebar { transform: translateX(-100%); }
+  .portal-sidebar-open .portal-sidebar { transform: translateX(0); }
+  .portal-content { margin-left: 0; }
+  .portal-hamburger { display: inline-flex; }
+  .portal-sidebar-open .portal-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 20, 0.5);
+    z-index: 15;
+  }
+  .portal-main { padding: 20px 20px 64px; gap: 22px; }
+  .portal-topbar { padding: 12px 20px; }
+  .portal-detail-layout { grid-template-columns: 1fr; }
+  .portal-detail-side { position: static; }
+  .portal-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .portal-search-field { grid-column: 1 / -1; }
+  .portal-chart-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .portal-main { padding: 16px 14px 56px; gap: 18px; }
+  .portal-topbar { padding: 10px 14px; }
+  .portal-shell { padding: 26px 14px 60px; gap: 22px; }
+
+  /* Hero: stack the greeting above the stat chips and let the chips share
+     the row evenly instead of overflowing it. */
+  .portal-hero { flex-direction: column; align-items: stretch; gap: 16px; padding: 20px 18px; }
+  .portal-hero-chips { width: 100%; }
+  .portal-hero-chip { flex: 1; min-width: 0; align-items: center; text-align: center; }
+
+  .portal-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .portal-filter-panel { grid-template-columns: 1fr; }
+  .portal-search-field { grid-column: auto; }
+
+  .portal-app-top { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .portal-app-footer { align-items: stretch; flex-direction: column; gap: 8px; }
+  .portal-btn-small { margin-left: 0; width: 100%; }
+
+  .portal-pagination { align-items: stretch; flex-direction: column; gap: 10px; }
+  .portal-pagination-actions { width: 100%; justify-content: space-between; }
+
+  .portal-detail-hero { flex-direction: column; align-items: flex-start; gap: 12px; }
+  /* The detail hero reuses .portal-hero, which stretches its children here so
+     the overview's stat chips fill the row - the status pill must opt out or
+     it spans the whole card. */
+  .portal-detail-status { align-self: flex-start; }
+  .portal-resume-preview { padding: 16px; }
+  .portal-resume-heading { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .portal-resume-actions { width: 100%; flex-wrap: wrap; }
+
+  .portal-interview-card { flex-direction: column; }
+  .portal-interview-card .portal-btn-small { width: auto; }
+  .portal-interview-center-card { flex-direction: column; align-items: stretch; gap: 12px; }
+
+  .portal-action-card { align-items: flex-start; gap: 10px; }
+  .portal-action-due { text-align: right; white-space: nowrap; }
+
+  /* Full-bleed sheet on small screens - a centred, inset dialog wastes the
+     little space a phone has for a page-shaped document. */
+  .portal-modal-backdrop { padding: 0; }
+  .portal-modal { width: 100%; height: 100%; border-radius: 0; border: 0; }
+}
+
+@media (max-width: 420px) {
+  .portal-auth-card { padding: 28px 22px; }
+  .portal-header { flex-wrap: wrap; }
+  .portal-stats { grid-template-columns: 1fr; }
+  .portal-hero-chips { flex-wrap: wrap; }
+  .portal-hero-chip { flex-basis: calc(50% - 5px); }
+  .portal-main { padding: 14px 12px 52px; }
 }
