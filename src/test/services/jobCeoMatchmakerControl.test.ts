@@ -1,6 +1,14 @@
 // The Job CEO Matchmaker has two responsibilities in the legacy flow:
 // candidate matching and promotion of a staged job into `jobs`.
 // Disabling the agent must remove only the first responsibility.
+//
+// Regression coverage: processMatchmakerBatch used to decide "duplicate" by
+// checking title-match and company-match as two INDEPENDENT sets across all
+// existing jobs (existingTitles.has(x) && existingCompanies.has(y)) - which
+// finds "some job shares this title AND some possibly-different job shares
+// this company," not "the same job has both," and never checked a URL at
+// all. That logic is now deleted entirely; the only duplicate signal is
+// whatever createJob() (the apply-link-fingerprint guard) reports.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   claimNextStagedBatch: vi.fn(),
   updateStaged: vi.fn().mockResolvedValue(undefined),
   bumpRunCounts: vi.fn().mockResolvedValue(undefined),
-  listAllJobsForFuzzyDedupe: vi.fn(),
   loadCandidateSummaries: vi.fn(),
   findAgentConfigByAutomationId: vi.fn(),
   createJob: vi.fn(),
@@ -16,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   logActivity: vi.fn().mockResolvedValue(undefined),
   callWithUsageTracking: vi.fn(),
   runMatchmaker: vi.fn(),
+  notifyBatchDuplicateSummary: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/server/repositories/jobCeoStagingRepository", () => ({
@@ -39,7 +47,6 @@ vi.mock("@/server/repositories/aiAgentConfigRepository", () => ({
 }));
 
 vi.mock("@/server/repositories/jobsRepository", () => ({
-  listAllJobsForFuzzyDedupe: mocks.listAllJobsForFuzzyDedupe,
   createJob: mocks.createJob,
 }));
 
@@ -49,6 +56,10 @@ vi.mock("@/lib/companyDirectory", () => ({
 
 vi.mock("@/lib/activity", () => ({
   logActivity: mocks.logActivity,
+}));
+
+vi.mock("@/lib/jobDuplicateNotify", () => ({
+  notifyBatchDuplicateSummary: mocks.notifyBatchDuplicateSummary,
 }));
 
 vi.mock("@/lib/ai/routing", () => ({
@@ -98,9 +109,8 @@ describe("Job CEO Matchmaker control", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.claimNextStagedBatch.mockResolvedValue([stagedJob]);
-    mocks.listAllJobsForFuzzyDedupe.mockResolvedValue([]);
     mocks.loadCandidateSummaries.mockResolvedValue([{ id: "candidate-1", name: "Candidate" }]);
-    mocks.createJob.mockResolvedValue({ id: "job-1", title: stagedJob.title, company: stagedJob.company });
+    mocks.createJob.mockResolvedValue({ status: "created", job: { id: "job-1", title: stagedJob.title, company: stagedJob.company } });
     mocks.callWithUsageTracking.mockResolvedValue({
       result: { matches: [{ candidateId: "candidate-1", score: 95, reasons: ["fit"], outreachDraft: "draft" }] },
       providerName: "test",
@@ -137,21 +147,45 @@ describe("Job CEO Matchmaker control", () => {
     expect(result).toMatchObject({ processed: 1, matched: 0, logged: 1, skipped: 0 });
   });
 
-  it("does not create a duplicate job while matching is disabled", async () => {
+  it("regression: does not block a new job just because createJob() reports it as new, even if the staged row's title/company happens to overlap other unrelated existing jobs", async () => {
+    // This is exactly the scenario the old independent-Set bug mishandled:
+    // a title match against one job and a company match against a
+    // DIFFERENT job would have been flagged as a false-positive duplicate.
+    // There is no such cross-referencing logic left in jobCeoService.ts at
+    // all now - it defers entirely to createJob()'s real apply-link check,
+    // which correctly reports this as new.
     mocks.findAgentConfigByAutomationId.mockResolvedValue(disabledConfig);
-    mocks.listAllJobsForFuzzyDedupe.mockResolvedValue([
-      { title: stagedJob.title, company: stagedJob.company },
-    ]);
+    mocks.createJob.mockResolvedValue({ status: "created", job: { id: "job-new", title: stagedJob.title, company: stagedJob.company } });
 
     const result = await processMatchmakerBatch("run-1");
 
-    expect(mocks.createJob).not.toHaveBeenCalled();
-    expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
+    expect(mocks.createJob).toHaveBeenCalledTimes(1);
     expect(mocks.updateStaged).toHaveBeenCalledWith(
       "staged-1",
-      expect.objectContaining({ stage: "logged", match_results: { matches: [], duplicate: true } })
+      expect.objectContaining({ stage: "logged", logged_job_id: "job-new" })
+    );
+    expect(result).toMatchObject({ processed: 1, matched: 0, logged: 1, skipped: 0 });
+  });
+
+  it("regression: treats an apply-link duplicate reported by createJob() as skipped (not logged), regardless of title/company wording, and sends one aggregate summary for the run", async () => {
+    const existing = { id: "job-existing", title: "Different Wording Entirely", company: "A Totally Different Co", created_at: "2026-01-01T00:00:00Z" };
+    mocks.findAgentConfigByAutomationId.mockResolvedValue(disabledConfig);
+    mocks.createJob.mockResolvedValue({ status: "duplicate", existing, fingerprint: "example.test/job/1" });
+
+    const result = await processMatchmakerBatch("run-1");
+
+    expect(mocks.createJob).toHaveBeenCalledTimes(1);
+    expect(mocks.logActivity).not.toHaveBeenCalledWith(expect.objectContaining({ type: "job_ceo_match" }));
+    expect(mocks.updateStaged).toHaveBeenCalledWith(
+      "staged-1",
+      expect.objectContaining({ stage: "logged", match_results: expect.objectContaining({ duplicate: true, matchedJobId: "job-existing" }) })
     );
     expect(result).toMatchObject({ processed: 1, matched: 0, logged: 0, skipped: 1 });
+
+    expect(mocks.notifyBatchDuplicateSummary).toHaveBeenCalledTimes(1);
+    const summaryArg = mocks.notifyBatchDuplicateSummary.mock.calls[0][0];
+    expect(summaryArg.duplicates).toHaveLength(1);
+    expect(summaryArg.duplicates[0].existing.id).toBe("job-existing");
   });
 
   it("keeps historical matching behavior when no Matchmaker config exists", async () => {

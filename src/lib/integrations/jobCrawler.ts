@@ -55,8 +55,16 @@ export async function upsertCrawlerJob(payload: CrawlerJobPayload) {
     return { job: data, created: false };
   }
 
-  const data = await createJob(row);
-  return { job: data, created: true };
+  // A brand-new externalId can still be the same real posting under a
+  // different source (e.g. already logged manually or via Job CEO) - the
+  // apply-link fingerprint check inside createJob() catches that even
+  // though this crawler bot has never seen this externalId before. Reuse
+  // the matched job rather than creating a genuine duplicate row.
+  const outcome = await createJob(row);
+  if (outcome.status === "duplicate") {
+    return { job: outcome.existing, created: false };
+  }
+  return { job: outcome.job, created: true };
 }
 
 export async function recordHeartbeat(crawlerName: string, isActive: boolean, message?: string) {

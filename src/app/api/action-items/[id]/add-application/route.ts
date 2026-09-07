@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { queryOne, execute } from "@/server/db/neon";
 import { createApplications } from "@/server/repositories/applicationsRepository";
+import { createJob } from "@/server/repositories/jobsRepository";
+import { notifyInteractiveDuplicateBlocked } from "@/lib/jobDuplicateNotify";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser();
@@ -18,13 +20,40 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   );
   if (!task) return NextResponse.json({ error: "Untracked application task not found or already resolved." }, { status: 404 });
 
+  // Reusing an existing job here on a plain title+company match (no apply
+  // link check) is deliberate, not the weak-check gap it looks like: an AE
+  // re-logging a repeat application to a role they've already seen shouldn't
+  // spawn a near-identical job row every time, and this route often has no
+  // apply link at all to check against. What WAS a real gap is the create
+  // path below - it used to insert unconditionally, with zero duplicate
+  // protection, even when a real apply link was provided. That path is now
+  // covered by createJob()'s apply-link check like every other insertion
+  // path in the app.
   let job = await queryOne<{ id: string }>("SELECT id FROM jobs WHERE LOWER(title) = LOWER($1) AND LOWER(COALESCE(company, '')) = LOWER($2) LIMIT 1", [jobTitle, company]);
   if (!job) {
-    job = await queryOne<{ id: string }>(
-      `INSERT INTO jobs (title, company, source, apply_url, source_url, notes)
-       VALUES ($1, $2, 'email_confirmation', $3, $3, 'Created from an application confirmation email; verify details.') RETURNING id`,
-      [jobTitle, company, applyUrl]
-    );
+    const outcome = await createJob({
+      title: jobTitle,
+      company,
+      source: "email_confirmation",
+      apply_url: applyUrl,
+      source_url: applyUrl,
+      notes: "Created from an application confirmation email; verify details.",
+    });
+    if (outcome.status === "duplicate") {
+      await notifyInteractiveDuplicateBlocked({
+        userId: context!.profile.user_id,
+        actorName: context!.profile.display_name || context!.profile.email || undefined,
+        attempted: { title: jobTitle, company, applyUrl },
+        existing: outcome.existing,
+      }).catch(() => {});
+      // The apply link matches a job under a different title/company
+      // wording - reuse that existing job rather than blocking the AE from
+      // logging their application, since the goal here is recording the
+      // application, not gatekeeping the job row.
+      job = { id: outcome.existing.id };
+    } else {
+      job = { id: outcome.job.id };
+    }
   }
   if (!job) return NextResponse.json({ error: "Could not create job record." }, { status: 500 });
 

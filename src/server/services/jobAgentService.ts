@@ -7,6 +7,7 @@ import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/
 import { createRun, updateRunStatus, transitionRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
 import { rotateToken, markTokenError, deactivateToken } from "@/server/repositories/jobAgentTokenRepository";
 import { listAllJobsForFuzzyDedupe } from "@/server/repositories/jobsRepository";
+import { normalizeUrlFingerprint } from "@/lib/jobUrlFingerprint";
 import { getTitlesForGroups, getGroupForSearchQuery, getGroupById, getGroupLabel, inferRoleGroupForTitle, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
 import { classifyJob } from "@/lib/ai/jobAgentClassifier";
 import {
@@ -149,29 +150,6 @@ function normalizeActorItem(source: ActorSource, raw: Record<string, unknown>): 
  * Strips query params, lowercases, removes trailing slash.
  * Example: https://www.linkedin.com/jobs/view/123/ → linkedin.com/jobs/view/123
  */
-export function normalizeUrlFingerprint(url: string | null | undefined): string {
-  if (!url || !url.trim()) return "";
-  try {
-    const u = new URL(url.trim());
-    // Strip common tracking query params but keep the rest (like jk= for Indeed)
-    u.searchParams.delete("utm_source");
-    u.searchParams.delete("utm_medium");
-    u.searchParams.delete("utm_campaign");
-    u.searchParams.delete("ref");
-    u.hash = "";
-    
-    const cleaned = (u.hostname + u.pathname + u.search)
-      .toLowerCase()
-      .replace(/^www\./, "")
-      .replace(/\/+$/, "")
-      .replace(/[^a-z0-9/.-=?&]/g, "");
-    return cleaned;
-  } catch {
-    // Not a valid URL — use a normalized version of the raw string
-    return url.toLowerCase().replace(/[^a-z0-9/.-=?&]/g, "").substring(0, 200);
-  }
-}
-
 // ─── Options & Result Types ────────────────────────────────────────────────────
 
 export interface ExecuteRunOptions {

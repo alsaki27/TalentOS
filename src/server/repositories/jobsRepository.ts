@@ -2,6 +2,8 @@
 // Data-access abstraction for the jobs table.
 
 import { query, queryOne, execute } from "@/server/db/neon";
+import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
+import { checkJobDuplicate, checkJobDuplicatesBatch, type JobDuplicateMatch } from "@/server/services/jobDuplicateGuard";
 
 export interface JobRow {
   id: string;
@@ -9,6 +11,8 @@ export interface JobRow {
   company: string | null;
   location: string | null;
   source_url: string | null;
+  apply_url: string | null;
+  apply_link_fingerprint: string | null;
   source: string | null;
   raw_description: string | null;
   parsed_description: Record<string, unknown> | null;
@@ -33,6 +37,7 @@ export interface CreateJobInput {
   location?: string | null;
   source?: string;
   source_url?: string | null;
+  apply_url?: string | null;
   raw_description?: string | null;
   parsed_description?: Record<string, unknown> | null;
   ai_extracted_at?: string | null;
@@ -106,45 +111,108 @@ export async function findJobById(id: string): Promise<JobRow | null> {
   return row ?? null;
 }
 
+// Every job-creation function in this file returns this same shape, so a
+// duplicate is a typed, unavoidable-to-ignore outcome (TypeScript forces
+// every caller to handle both branches) rather than a value that can be
+// silently treated as success. "created" carries the new row; "duplicate"
+// carries the existing job it matched by apply-link fingerprint, for the
+// caller to build a clear rejection message from (see jobDuplicateNotify.ts).
+export type CreateJobOutcome =
+  | { status: "created"; job: JobRow }
+  | { status: "duplicate"; existing: JobDuplicateMatch; fingerprint: string };
+
+function isUniqueViolation(err: any): boolean {
+  return err?.code === "23505";
+}
+
+// The Neon driver serializes a bare object param as JSON automatically, but
+// a bare ARRAY param as a Postgres array literal ({a,b,c}, not [a,b,c]) -
+// fine for a genuine array column (jobs has real ones, e.g. category_tags),
+// invalid JSON syntax for a jsonb column (confirmed live elsewhere in this
+// codebase as the exact cause of an "invalid input syntax for type json"
+// bug). Since both column kinds coexist on `jobs`, which columns need this
+// fixed up is read from the schema itself rather than hand-maintained as a
+// column-name list here - keeps working if a column is added/renamed/typed
+// differently later without this file needing to change.
+let jsonbColumnsCache: Promise<Set<string>> | null = null;
+async function getJsonbColumns(): Promise<Set<string>> {
+  if (!jsonbColumnsCache) {
+    jsonbColumnsCache = query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND data_type = 'jsonb'`
+    ).then((rows) => new Set(rows.map((r) => r.column_name)));
+  }
+  return jsonbColumnsCache;
+}
+
+async function toSqlRow(row: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const jsonbCols = await getJsonbColumns();
+  const out: Record<string, unknown> = {};
+  for (const [col, value] of Object.entries(row)) {
+    out[col] = Array.isArray(value) && jsonbCols.has(col) ? JSON.stringify(value) : value;
+  }
+  return out;
+}
+
 /**
- * Create a new job row from parsed JD data.
+ * Create a new job row from parsed JD data (the pasted-JD / Quick
+ * Application flow). Checks the apply-link fingerprint first - this is a
+ * hard block regardless of the route's own separate fuzzy-match advisory
+ * (findPotentialDuplicateJobs), which only ever runs *after* this check
+ * passes and remains a soft, overridable warning for near-matches that
+ * don't share an apply link.
  */
-export async function createJobFromParsedJD(input: CreateJobInput): Promise<JobRow> {
-  const row = await queryOne<JobRow>(
-    `INSERT INTO jobs (
-      title, company, location, source, source_url,
-      raw_description, parsed_description, ai_extracted_at, ai_confidence_score,
-      employment_type, seniority_level, salary_min, salary_max,
-      salary_currency, salary_period, salary_range, notes, is_active
-    ) VALUES (
-      $1, $2, $3, $4, $5,
-      $6, $7, $8, $9,
-      $10, $11, $12, $13,
-      $14, $15, $16, $17, $18
-    ) RETURNING *`,
-    [
-      input.title ?? null,
-      input.company ?? null,
-      input.location ?? null,
-      input.source ?? "manual",
-      input.source_url ?? null,
-      input.raw_description ?? null,
-      input.parsed_description ?? null,
-      input.ai_extracted_at ?? null,
-      input.ai_confidence_score ?? null,
-      input.employment_type ?? null,
-      input.seniority_level ?? null,
-      input.salary_min ?? null,
-      input.salary_max ?? null,
-      input.salary_currency ?? null,
-      input.salary_period ?? null,
-      input.salary_range ?? null,
-      input.notes ?? null,
-      input.is_active ?? true,
-    ]
-  );
-  if (!row) throw new Error("Failed to insert job");
-  return row;
+export async function createJobFromParsedJD(input: CreateJobInput): Promise<CreateJobOutcome> {
+  const fingerprint = computeApplyLinkFingerprint({ applyUrl: input.apply_url, sourceUrl: input.source_url });
+  if (fingerprint) {
+    const check = await checkJobDuplicate({ applyUrl: input.apply_url, sourceUrl: input.source_url });
+    if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
+  }
+
+  try {
+    const row = await queryOne<JobRow>(
+      `INSERT INTO jobs (
+        title, company, location, source, source_url, apply_url, apply_link_fingerprint,
+        raw_description, parsed_description, ai_extracted_at, ai_confidence_score,
+        employment_type, seniority_level, salary_min, salary_max,
+        salary_currency, salary_period, salary_range, notes, is_active
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11,
+        $12, $13, $14, $15,
+        $16, $17, $18, $19, $20
+      ) RETURNING *`,
+      [
+        input.title ?? null,
+        input.company ?? null,
+        input.location ?? null,
+        input.source ?? "manual",
+        input.source_url ?? null,
+        input.apply_url ?? null,
+        fingerprint,
+        input.raw_description ?? null,
+        input.parsed_description ?? null,
+        input.ai_extracted_at ?? null,
+        input.ai_confidence_score ?? null,
+        input.employment_type ?? null,
+        input.seniority_level ?? null,
+        input.salary_min ?? null,
+        input.salary_max ?? null,
+        input.salary_currency ?? null,
+        input.salary_period ?? null,
+        input.salary_range ?? null,
+        input.notes ?? null,
+        input.is_active ?? true,
+      ]
+    );
+    if (!row) throw new Error("Failed to insert job");
+    return { status: "created", job: row };
+  } catch (err: any) {
+    if (isUniqueViolation(err) && fingerprint) {
+      const recheck = await checkJobDuplicate({ applyUrl: input.apply_url, sourceUrl: input.source_url });
+      if (recheck.isDuplicate) return { status: "duplicate", existing: recheck.existing, fingerprint: recheck.fingerprint };
+    }
+    throw err;
+  }
 }
 
 /**
@@ -338,32 +406,127 @@ export async function findJobByExternalIdAndSource(
   );
 }
 
-export async function createJob(row: Record<string, unknown>): Promise<JobRow> {
-  const cols = Object.keys(row);
+/**
+ * Create a single job row. Every caller across the app - the admin "Add
+ * Job" form, the browser extension capture, the crawler-bot webhook, Job
+ * CEO's matchmaker, and any future one - goes through this function (or
+ * createJobs below), which is what makes apply-link duplicate protection
+ * apply automatically regardless of which part of the codebase is adding
+ * the job: a developer writing a brand-new ingestion path gets it for free
+ * just by calling createJob() instead of writing a raw INSERT.
+ */
+export async function createJob(row: Record<string, unknown>): Promise<CreateJobOutcome> {
+  const applyUrl = row.apply_url as string | null | undefined;
+  const sourceUrl = row.source_url as string | null | undefined;
+  const fingerprint = computeApplyLinkFingerprint({ applyUrl, sourceUrl });
+
+  if (fingerprint) {
+    const check = await checkJobDuplicate({ applyUrl, sourceUrl });
+    if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
+  }
+
+  const fullRow = await toSqlRow({ ...row, apply_link_fingerprint: fingerprint });
+  const cols = Object.keys(fullRow);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-  const values = cols.map((c) => row[c]);
+  const values = cols.map((c) => fullRow[c]);
   const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
-  const result = await queryOne<JobRow>(sql, values);
-  if (!result) throw new Error("Failed to insert job");
-  return result;
+
+  try {
+    const result = await queryOne<JobRow>(sql, values);
+    if (!result) throw new Error("Failed to insert job");
+    return { status: "created", job: result };
+  } catch (err: any) {
+    if (isUniqueViolation(err) && fingerprint) {
+      const recheck = await checkJobDuplicate({ applyUrl, sourceUrl });
+      if (recheck.isDuplicate) return { status: "duplicate", existing: recheck.existing, fingerprint: recheck.fingerprint };
+    }
+    throw err;
+  }
 }
 
-export async function createJobs(rows: Record<string, any>[]): Promise<JobRow[]> {
-  if (rows.length === 0) return [];
-  const cols = Object.keys(rows[0]);
+/**
+ * Bulk-insert variant for import paths (ATS/career-page/LinkedIn/CSV
+ * import, the public partner API). Duplicate rows are excluded from the
+ * INSERT entirely rather than attempted-then-caught, since a bulk import
+ * commonly contains dozens of already-known postings and per-row exception
+ * handling at that volume would be unnecessarily slow.
+ */
+export async function createJobs(rows: Record<string, any>[]): Promise<{
+  inserted: JobRow[];
+  duplicates: { input: Record<string, any>; existing: JobDuplicateMatch; fingerprint: string }[];
+}> {
+  if (rows.length === 0) return { inserted: [], duplicates: [] };
+
+  const checks = await checkJobDuplicatesBatch(
+    rows.map((r) => ({ applyUrl: r.apply_url ?? null, sourceUrl: r.source_url ?? null }))
+  );
+
+  const duplicates: { input: Record<string, any>; existing: JobDuplicateMatch; fingerprint: string }[] = [];
+  const toInsert: Record<string, any>[] = [];
+  // Same-batch collisions (two rows in this one import sharing a fingerprint,
+  // neither matching anything already in `jobs`) are deliberately not
+  // treated as duplicates-to-report here - resolving those is the concern of
+  // each source's own in-batch dedup that already runs upstream of this call
+  // (e.g. jobAgentService.ts's dedupeInRun, jobAgentImporter.ts's
+  // pickDeterministicBatchWinners). This is just a safety net so a multi-row
+  // INSERT never attempts two rows with the same fingerprint in one
+  // statement (which Postgres would reject outright once the unique index
+  // exists) - first occurrence wins, later same-batch rows are silently
+  // skipped rather than surfaced as a cross-system duplicate.
+  const seenBatchFingerprints = new Set<string>();
+
+  rows.forEach((row, i) => {
+    const check = checks[i];
+    if (check.isDuplicate) {
+      duplicates.push({ input: row, existing: check.existing, fingerprint: check.fingerprint });
+      return;
+    }
+    if (check.fingerprint) {
+      if (seenBatchFingerprints.has(check.fingerprint)) return;
+      seenBatchFingerprints.add(check.fingerprint);
+    }
+    toInsert.push({ ...row, apply_link_fingerprint: check.fingerprint });
+  });
+
+  if (toInsert.length === 0) return { inserted: [], duplicates };
+
+  // Bulk-import rows can have heterogeneous column sets (e.g. one row has
+  // salary fields, another doesn't) - union every column across the batch
+  // so each row's INSERT list lines up positionally, defaulting missing
+  // fields to null rather than shifting columns between rows.
+  const sqlReadyRows = await Promise.all(toInsert.map((r) => toSqlRow(r)));
+  const cols = [...new Set(sqlReadyRows.flatMap((r) => Object.keys(r)))];
   const values: (string | number | boolean | null | Date | object)[] = [];
   const placeholders: string[] = [];
   let paramIdx = 1;
-  for (const row of rows) {
+  for (const row of sqlReadyRows) {
     const rowPlaceholders: string[] = [];
     for (const col of cols) {
       rowPlaceholders.push(`$${paramIdx++}`);
-      values.push((row as Record<string, any>)[col] ?? null);
+      values.push((row[col] ?? null) as any);
     }
     placeholders.push(`(${rowPlaceholders.join(", ")})`);
   }
   const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-  return query<JobRow>(sql, values);
+
+  try {
+    const inserted = await query<JobRow>(sql, values);
+    return { inserted, duplicates };
+  } catch (err: any) {
+    // Race backstop: the pre-check above and the unique index (once
+    // migration 095 ships) can only ever narrow this window, not close it
+    // entirely against a fully concurrent import of the same rows - fall
+    // back to per-row insertion so one collision doesn't lose the rest of
+    // an otherwise-legitimate batch.
+    if (!isUniqueViolation(err)) throw err;
+    const inserted: JobRow[] = [];
+    for (const row of toInsert) {
+      const outcome = await createJob(row);
+      if (outcome.status === "created") inserted.push(outcome.job);
+      else duplicates.push({ input: row, existing: outcome.existing, fingerprint: outcome.fingerprint });
+    }
+    return { inserted, duplicates };
+  }
 }
 
 export async function findJobsBySourceUrls(urls: string[]): Promise<{ source_url: string }[]> {

@@ -1,13 +1,15 @@
 // src/app/api/import/normalize/commit/route.ts
-// Minimal commit: URL-based dedupe only, 2 DB queries per batch max.
-// NO syncCompanyDirectoryFromJobs, NO fuzzy dedupe, NO enrich loop.
+// Minimal commit: apply-link-fingerprint dedupe (via createJobs), no fuzzy
+// dedupe, no enrich loop - unchanged design intent, just a real URL check
+// (normalized, checks apply_url too) instead of a raw source_url exact match.
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { query } from "@/server/db/neon";
 import { detectFormat } from "@/lib/normalizer/detect";
 import { parseTable } from "@/lib/normalizer/parse";
 import { applyMapping, FieldMapping } from "@/lib/normalizer";
+import { createJobs, type JobRow } from "@/server/repositories/jobsRepository";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 
 const BATCH_SIZE = 50;
 
@@ -17,15 +19,6 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
     chunks.push(arr.slice(i, i + size));
   }
   return chunks;
-}
-
-async function findExistingUrls(urls: string[]): Promise<Set<string>> {
-  if (urls.length === 0) return new Set();
-  const rows = await query<{ source_url: string }>(
-    "SELECT source_url FROM jobs WHERE source_url = ANY($1)",
-    [urls]
-  );
-  return new Set((rows ?? []).map((r) => r.source_url));
 }
 
 export async function POST(req: NextRequest) {
@@ -77,57 +70,29 @@ export async function POST(req: NextRequest) {
     const batches = chunkArray(rowsToInsert, BATCH_SIZE);
     let totalImported = 0;
     let totalSkipped = 0;
+    const allDuplicates: { input: Record<string, any>; existing: JobRow & { id: string; title: string; company: string | null; created_at: string | null }; fingerprint: string }[] = [];
 
     for (const batch of batches) {
       const validRows = batch.filter((r) => r.title && r.title.trim());
       totalSkipped += batch.length - validRows.length;
       if (validRows.length === 0) continue;
 
-      const urls = validRows.map((r) => r.source_url).filter((u): u is string => !!u);
-      const existingUrls = await findExistingUrls(urls);
+      const { inserted, duplicates } = await createJobs(validRows);
+      totalImported += inserted.length;
+      totalSkipped += duplicates.length;
+      allDuplicates.push(...(duplicates as any));
+    }
 
-      const newRows = validRows.filter((r) => {
-        if (!r.source_url) return true;
-        return !existingUrls.has(r.source_url);
-      });
-
-      totalSkipped += validRows.length - newRows.length;
-
-      if (newRows.length === 0) continue;
-
-      const JSONB_COLS = new Set([
-        "benefits",
-        "company_address",
-        "raw_source_payload",
-        "parsed_description",
-        "parsed_json",
-        "adhoc_job_data",
-        "ai_summary",
-        "checklist",
-        "warnings",
-      ]);
-
-      const cols = Object.keys(newRows[0]);
-      const values: any[] = [];
-      const placeholders: string[] = [];
-      let paramIdx = 1;
-      for (const row of newRows) {
-        const rowPlaceholders: string[] = [];
-        for (const col of cols) {
-          rowPlaceholders.push(`$${paramIdx++}`);
-          const val = (row as any)[col];
-          if (val !== null && val !== undefined && typeof val === "object" && JSONB_COLS.has(col)) {
-            values.push(JSON.stringify(val));
-          } else {
-            values.push(val);
-          }
-        }
-        placeholders.push(`(${rowPlaceholders.join(", ")})`);
-      }
-      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-      const data = await query(sql, values);
-
-      totalImported += data.length;
+    if (allDuplicates.length > 0) {
+      await notifyBatchDuplicateSummary({
+        runLabel: `file import (${filename ?? sourceLabel ?? "normalized rows"})`,
+        runLink: "/jobs",
+        totalCandidates: totalRowCount,
+        duplicates: allDuplicates.map((d) => ({
+          attemptedTitle: d.input.title, attemptedCompany: d.input.company ?? null,
+          attemptedApplyUrl: d.input.apply_url ?? d.input.source_url ?? null, existing: d.existing,
+        })),
+      }).catch((err) => console.error("Import commit duplicate summary failed:", err));
     }
 
     return NextResponse.json({

@@ -4,10 +4,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { query } from "@/server/db/neon";
 import { fetchCareerPageJobs } from "@/lib/jobPostingExtractor";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
+import { createJobs } from "@/server/repositories/jobsRepository";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 
 export async function POST(req: NextRequest) {
   const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
@@ -31,37 +31,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ imported: 0, skipped: 0 });
   }
 
-  const { newRows, duplicates } = await filterNewJobs(rows);
+  const { inserted, duplicates } = await createJobs(rows as any);
+  await syncCompanyDirectoryFromJobs(inserted);
 
-  if (newRows.length === 0) {
-    return NextResponse.json({ imported: 0, skipped: duplicates });
+  if (duplicates.length > 0) {
+    await notifyBatchDuplicateSummary({
+      runLabel: `career-page scrape (${url})`,
+      runLink: "/jobs",
+      totalCandidates: rows.length,
+      duplicates: duplicates.map((d) => ({
+        attemptedTitle: d.input.title, attemptedCompany: d.input.company ?? null,
+        attemptedApplyUrl: d.input.apply_url ?? d.input.source_url ?? null, existing: d.existing,
+      })),
+    }).catch((err) => console.error("Career-page import duplicate summary failed:", err));
   }
-
-  let data: any[];
-
-  if (newRows.length === 0) {
-    data = [];
-  } else {
-    const cols = Object.keys(newRows[0]);
-    const values: any[] = [];
-    const placeholders: string[] = [];
-    let paramIdx = 1;
-    for (const row of newRows) {
-      const rowPlaceholders: string[] = [];
-      for (const col of cols) {
-        rowPlaceholders.push(`$${paramIdx++}`);
-        values.push((row as any)[col]);
-      }
-      placeholders.push(`(${rowPlaceholders.join(", ")})`);
-    }
-    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-    data = await query(sql, values);
-  }
-
-  await syncCompanyDirectoryFromJobs(data ?? []);
 
   return NextResponse.json({
-    imported: data.length,
-    skipped: duplicates,
+    imported: inserted.length,
+    skipped: duplicates.length,
   });
 }

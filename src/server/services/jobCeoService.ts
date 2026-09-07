@@ -14,7 +14,8 @@ import { runCeoOrchestrator } from "@/lib/ai/job-agents/ceoOrchestrator";
 import { loadCandidateSummaries } from "@/lib/ai/job-agents/loadCandidateSummaries";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
-import { listAllJobsForFuzzyDedupe, createJob } from "@/server/repositories/jobsRepository";
+import { createJob } from "@/server/repositories/jobsRepository";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import {
   createRun,
@@ -263,19 +264,17 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
     console.error("[Job CEO] Matchmaker config could not be read; candidate matching disabled for safety:", (err as Error).message ?? String(err));
   }
 
-  // Hoist all shared reads to the top so they execute ONCE before parallelising the batch.
-  // Previously listAllJobsForFuzzyDedupe was inside the inner loop; now it runs once.
-  const [existingJobs, candidates] = await Promise.all([
-    listAllJobsForFuzzyDedupe(),
-    candidateMatchingEnabled ? loadCandidateSummaries(50) : Promise.resolve([]),
-  ]);
-
-  const existingTitles = new Set<string>();
-  const existingCompanies = new Set<string>();
-  for (const j of existingJobs) {
-    if (j.title) existingTitles.add(j.title.toLowerCase().trim());
-    if (j.company) existingCompanies.add(j.company.toLowerCase().trim());
-  }
+  // Hoist shared reads to the top so they execute ONCE before parallelising
+  // the batch. The duplicate check itself is no longer one of these shared
+  // reads - each job is checked individually, by apply-link fingerprint,
+  // via createJob()'s embedded guard below (see jobDuplicateGuard.ts). The
+  // previous approach here read every existing job's title/company into two
+  // independent Sets and checked isDuplicate = titles.has(x) && companies.has(y)
+  // - which finds "some job shares this title AND some possibly-different
+  // job shares this company," not "the same job has both." It also never
+  // checked a URL at all, so a real duplicate posting (same apply link,
+  // different wording) sailed straight through undetected.
+  const candidates = candidateMatchingEnabled ? await loadCandidateSummaries(50) : [];
 
   // Run matchmaking in parallel — each item is an independent AI call.
   const results = await runConcurrent(batch, STAGE_CONCURRENCY, async (row) => {
@@ -291,9 +290,6 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
     try {
       const title = row.title ?? "";
       const company = row.company ?? "";
-      const titleKey = title.toLowerCase().trim();
-      const companyKey = company.toLowerCase().trim();
-      const isDuplicate = existingTitles.has(titleKey) && existingCompanies.has(companyKey);
 
       const matchResult = candidateMatchingEnabled
         ? (await callAgent("job_ceo_matchmaker", ctx, async (provider) => {
@@ -307,33 +303,39 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
         : { matches: [] };
       const highMatches = matchResult.matches.filter((m) => m.score >= 90);
 
-      if (!isDuplicate) {
-        let parsedRaw: Record<string, any> = {};
-        if (row.raw && typeof row.raw === "object") parsedRaw = row.raw;
-        if (typeof row.raw === "string") { try { parsedRaw = JSON.parse(row.raw); } catch (e) {} }
+      let parsedRaw: Record<string, any> = {};
+      if (row.raw && typeof row.raw === "object") parsedRaw = row.raw;
+      if (typeof row.raw === "string") { try { parsedRaw = JSON.parse(row.raw); } catch (e) {} }
 
-        const jobRow: Record<string, unknown> = {
-          title: row.title,
-          company: row.company,
-          location: row.location,
-          source: parsedRaw.source ?? "openjobdata",
-          source_url: row.source_url,
-          description_text: row.description_text,
-          raw_source_payload: row.raw ?? null,
-          external_job_id: row.external_job_id,
-          is_active: true,
-          salary_min: parsedRaw.salary_min ?? null,
-          salary_max: parsedRaw.salary_max ?? null,
-          salary_range: parsedRaw.salary_range ?? null,
-          employment_type: parsedRaw.employment_type ?? null,
-          seniority_level: parsedRaw.seniority_level ?? null,
-          posted_at: parsedRaw.posted_at ?? null,
-          apply_url: parsedRaw.apply_url ?? null,
-          company_website: parsedRaw.company_website ?? null,
-          notes: parsedRaw.notes ?? null,
-        };
+      const jobRow: Record<string, unknown> = {
+        title: row.title,
+        company: row.company,
+        location: row.location,
+        source: parsedRaw.source ?? "openjobdata",
+        source_url: row.source_url,
+        description_text: row.description_text,
+        raw_source_payload: row.raw ?? null,
+        external_job_id: row.external_job_id,
+        is_active: true,
+        salary_min: parsedRaw.salary_min ?? null,
+        salary_max: parsedRaw.salary_max ?? null,
+        salary_range: parsedRaw.salary_range ?? null,
+        employment_type: parsedRaw.employment_type ?? null,
+        seniority_level: parsedRaw.seniority_level ?? null,
+        posted_at: parsedRaw.posted_at ?? null,
+        apply_url: parsedRaw.apply_url ?? null,
+        company_website: parsedRaw.company_website ?? null,
+        notes: parsedRaw.notes ?? null,
+      };
 
-        const created = await createJob(jobRow);
+      // The apply-link duplicate check now lives inside createJob() itself
+      // (jobDuplicateGuard.ts) - this is the authoritative gate for every
+      // Job CEO-sourced job, whether it arrived via OpenJobData or the
+      // Apify-bridged path, since both converge here.
+      const outcome = await createJob(jobRow);
+
+      if (outcome.status === "created") {
+        const created = outcome.job;
         await syncCompanyDirectoryFromJobs([created]);
 
         for (const m of highMatches) {
@@ -362,11 +364,14 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
       } else {
         await updateStaged(row.id, {
           stage: "logged",
-          match_results: { ...matchResult, duplicate: true },
+          match_results: { ...matchResult, duplicate: true, matchedJobId: outcome.existing.id },
           claimed_at: null as any,
           claim_expires_at: null as any,
         });
-        return { processed: 1, matched: matchResult.matches.length, logged: 0, skipped: 1 };
+        return {
+          processed: 1, matched: matchResult.matches.length, logged: 0, skipped: 1,
+          duplicate: { title, company, applyUrl: (jobRow.apply_url as string | null) ?? null, existing: outcome.existing },
+        };
       }
     } catch (err) {
       console.error(`[Job CEO] Matchmaker failed for staging row ${row.id}:`, (err as Error).message ?? String(err));
@@ -381,6 +386,19 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
   const skipped = results.reduce((s, r) => s + (r.skipped || 0), 0);
 
   await bumpRunCounts(runId, { matched_count: matched, logged_count: logged, skipped_count: skipped });
+
+  const duplicates = results.map((r) => r.duplicate).filter((d): d is NonNullable<typeof d> => !!d);
+  if (duplicates.length > 0) {
+    await notifyBatchDuplicateSummary({
+      runLabel: `Job CEO run ${runId}`,
+      runLink: `/job-ceo/runs/${runId}`,
+      totalCandidates: results.length,
+      duplicates: duplicates.map((d) => ({
+        attemptedTitle: d.title, attemptedCompany: d.company, attemptedApplyUrl: d.applyUrl, existing: d.existing,
+      })),
+    }).catch((err) => console.error("[Job CEO] Duplicate summary notification failed:", err));
+  }
+
   return { processed, matched, logged, skipped };
 }
 

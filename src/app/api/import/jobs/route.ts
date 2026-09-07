@@ -5,9 +5,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { query } from "@/server/db/neon";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
+import { createJobs } from "@/server/repositories/jobsRepository";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 
 interface CsvRow {
   title?: string;
@@ -16,6 +16,7 @@ interface CsvRow {
   role_tier?: string;
   salary_range?: string;
   source_url?: string;
+  apply_url?: string;
   notes?: string;
   posted_at?: string;
   applicants_count?: string | number;
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
       role_tier: r.role_tier?.trim() || null,
       salary_range: r.salary_range?.trim() || null,
       source_url: r.source_url?.trim() || null,
+      apply_url: r.apply_url?.trim() || null,
       notes: r.notes?.trim() || null,
       posted_at: r.posted_at?.trim() || null,
       applicants_count: toInt(r.applicants_count),
@@ -58,33 +60,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "no valid rows (missing title)" }, { status: 400 });
   }
 
-  const { newRows, duplicates } = await filterNewJobs(cleanRows);
+  const { inserted, duplicates } = await createJobs(cleanRows);
+  await syncCompanyDirectoryFromJobs(inserted);
 
-  if (newRows.length === 0) {
-    return NextResponse.json({ imported: 0, skipped: rows.length - cleanRows.length + duplicates });
+  if (duplicates.length > 0) {
+    await notifyBatchDuplicateSummary({
+      runLabel: "CSV job import",
+      runLink: "/jobs",
+      totalCandidates: rows.length,
+      duplicates: duplicates.map((d) => ({
+        attemptedTitle: d.input.title, attemptedCompany: d.input.company ?? null,
+        attemptedApplyUrl: d.input.apply_url ?? d.input.source_url ?? null, existing: d.existing,
+      })),
+    }).catch((err) => console.error("CSV import duplicate summary failed:", err));
   }
-
-  let data: any[];
-
-  const cols = Object.keys(newRows[0]);
-  const values: any[] = [];
-  const placeholders: string[] = [];
-  let paramIdx = 1;
-  for (const row of newRows) {
-    const rowPlaceholders: string[] = [];
-    for (const col of cols) {
-      rowPlaceholders.push(`$${paramIdx++}`);
-      values.push((row as any)[col]);
-    }
-    placeholders.push(`(${rowPlaceholders.join(", ")})`);
-  }
-  const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-  data = await query(sql, values);
-
-  await syncCompanyDirectoryFromJobs(data ?? []);
 
   return NextResponse.json({
-    imported: data.length,
-    skipped: rows.length - cleanRows.length + duplicates,
+    imported: inserted.length,
+    skipped: rows.length - cleanRows.length + duplicates.length,
   });
 }

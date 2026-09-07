@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
 import { query, queryOne } from "@/server/db/neon";
 import { createJob } from "@/server/repositories/jobsRepository";
@@ -77,15 +76,21 @@ export async function POST(req: NextRequest) {
     ...("job_category" in body ? { category_status: "done" } : {}),
   };
 
-  const { newRows } = await filterNewJobs([row]);
-  if (newRows.length === 0) {
-    return NextResponse.json({ error: "Duplicate job." }, { status: 409 });
-  }
-
   try {
-    const data = await createJob(row);
-    await syncCompanyDirectoryFromJobs([data]);
-    return NextResponse.json(data, { status: 201 });
+    const outcome = await createJob(row);
+    if (outcome.status === "duplicate") {
+      return NextResponse.json(
+        {
+          error: "duplicate_job",
+          message: `This job was not added because a posting with the same apply link is already in TalentOS: "${outcome.existing.title}" at ${outcome.existing.company ?? "an unspecified company"}.`,
+          attempted: { title: row.title, company: row.company ?? null, applyUrl: row.apply_url ?? row.source_url ?? null },
+          existingJob: outcome.existing,
+        },
+        { status: 409 }
+      );
+    }
+    await syncCompanyDirectoryFromJobs([outcome.job]);
+    return NextResponse.json(outcome.job, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }

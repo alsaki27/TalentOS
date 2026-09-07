@@ -6,8 +6,8 @@ import { query, execute } from "@/server/db/neon";
 import { createJobs } from "@/server/repositories/jobsRepository";
 import { fetchAtsJobs } from "@/lib/atsFetchers";
 import { fetchCareerPageJobs } from "@/lib/jobPostingExtractor";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 
 export interface ImportSource {
   id: string;
@@ -24,12 +24,22 @@ export async function runImportSource(source: ImportSource): Promise<ImportRunRe
       ? await fetchCareerPageJobs(source.token_or_url)
       : await fetchAtsJobs(source.provider as "greenhouse" | "lever" | "ashby" | "usajobs", source.token_or_url);
 
-    const { newRows, duplicates } = await filterNewJobs(rows);
-    const inserted = newRows.length > 0 ? await createJobs(newRows) : [];
+    const { inserted, duplicates } = await createJobs(rows);
+    if (inserted.length) await syncCompanyDirectoryFromJobs(inserted);
 
-    if (inserted?.length) await syncCompanyDirectoryFromJobs(inserted as any);
+    if (duplicates.length > 0) {
+      await notifyBatchDuplicateSummary({
+        runLabel: `import source "${source.label}"`,
+        runLink: "/jobs",
+        totalCandidates: rows.length,
+        duplicates: duplicates.map((d) => ({
+          attemptedTitle: d.input.title, attemptedCompany: d.input.company ?? null,
+          attemptedApplyUrl: d.input.apply_url ?? d.input.source_url ?? null, existing: d.existing,
+        })),
+      }).catch((err) => console.error(`Import source "${source.label}" duplicate summary failed:`, err));
+    }
 
-    return { imported: inserted?.length ?? 0, skipped: duplicates };
+    return { imported: inserted.length, skipped: duplicates.length };
   } catch (err: any) {
     return { error: err.message ?? "import failed" };
   }

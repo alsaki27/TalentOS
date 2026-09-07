@@ -13,6 +13,7 @@ import {
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
+import { notifyInteractiveDuplicateBlocked } from "@/lib/jobDuplicateNotify";
 
 function buildSalaryRange(
   min: number | null,
@@ -153,8 +154,13 @@ export async function POST(req: NextRequest) {
   );
 
   // --- G. Insert job via repository ---
+  // The apply-link fingerprint check inside createJobFromParsedJD is a hard
+  // block, independent of forceCreate above (which only overrides the softer
+  // fuzzy title/company/location advisory in step E for near-matches that
+  // don't share an apply link) - a real apply-link match is never overridable
+  // here, since that would mean intentionally creating a known duplicate.
   try {
-    const job = await createJobFromParsedJD({
+    const outcome = await createJobFromParsedJD({
       title: safeInsertValue(analysis.title),
       company: safeInsertValue(analysis.company),
       location: safeInsertValue(analysis.location),
@@ -177,6 +183,29 @@ export async function POST(req: NextRequest) {
       is_active: true,
     });
 
+    if (outcome.status === "duplicate") {
+      const attempted = { title: analysis.title, company: analysis.company ?? null, applyUrl: sourceUrl ?? null };
+      if (context) {
+        await notifyInteractiveDuplicateBlocked({
+          userId: context.profile.user_id,
+          actorName: context.profile.display_name || context.profile.email || undefined,
+          attempted,
+          existing: outcome.existing,
+        }).catch(() => {});
+      }
+      return NextResponse.json(
+        {
+          error: "duplicate_job",
+          message: `This job was not added because a posting with the same apply link is already in TalentOS: "${outcome.existing.title}" at ${outcome.existing.company ?? "an unspecified company"}.`,
+          analysis,
+          attempted,
+          existingJob: outcome.existing,
+        },
+        { status: 409 }
+      );
+    }
+
+    const job = outcome.job;
     await syncCompanyDirectoryFromJobs([job]);
 
     if (context) {

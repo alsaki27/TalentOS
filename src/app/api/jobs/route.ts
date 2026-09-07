@@ -4,11 +4,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
+import { createJob } from "@/server/repositories/jobsRepository";
+import { notifyInteractiveDuplicateBlocked } from "@/lib/jobDuplicateNotify";
 
 export const dynamic = "force-dynamic";
 
@@ -198,6 +199,7 @@ export async function POST(req: NextRequest) {
     role_tier: body.role_tier ?? null,
     salary_range: body.salary_range ?? null,
     source_url: body.source_url ?? null,
+    apply_url: body.apply_url ?? null,
     notes: body.notes ?? null,
     description_text: body.description_text ?? null,
     posted_at: body.posted_at || null,
@@ -206,24 +208,34 @@ export async function POST(req: NextRequest) {
     // the DB level and the AI categorization pass fills it in afterward.
   };
 
-  const { newRows } = await filterNewJobs([row]);
-  if (newRows.length === 0) {
-    return NextResponse.json(
-      { error: "Duplicate job: same posting URL or same title, company, posted date, and applicant count." },
-      { status: 409 }
-    );
-  }
-
   try {
-    const cols = Object.keys(row);
-    const values = Object.values(row);
-    const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-    const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES (${placeholders}) RETURNING *`;
-    const data = await queryOne<Record<string, any>>(sql, values);
-    if (!data) throw new Error("Insert failed");
+    const outcome = await createJob(row);
+
+    if (outcome.status === "duplicate") {
+      const attempted = { title: row.title, company: row.company, applyUrl: row.apply_url ?? row.source_url };
+      if (context) {
+        await notifyInteractiveDuplicateBlocked({
+          userId: context.profile.user_id,
+          actorName: context.profile.display_name || context.profile.email || undefined,
+          attempted,
+          existing: outcome.existing,
+        }).catch(() => {});
+      }
+      return NextResponse.json(
+        {
+          error: "duplicate_job",
+          message: `This job was not added because a posting with the same apply link is already in TalentOS: "${outcome.existing.title}" at ${outcome.existing.company ?? "an unspecified company"}.`,
+          attempted,
+          existingJob: outcome.existing,
+        },
+        { status: 409 }
+      );
+    }
+
+    const data = outcome.job;
     await syncCompanyDirectoryFromJobs([data]);
 
-    if (context && data) {
+    if (context) {
       await logActivity({
         userId: context.profile.user_id,
         actorName: context.profile.display_name || context.profile.email || undefined,
