@@ -1,7 +1,20 @@
+// ARCHIVED 2026-09-07 — retired when TalentOS moved to a single shared
+// Gmail inbox fed by external forwarding (see Planning MD Files/
+// "TalentOS — Single Shared Gmail Inbox Redesign 6 August 2026.md"). Drafts
+// only make sense alongside reply capability, which no longer applies to a
+// forwarded, non-repliable mailbox. Moved verbatim out of the app/api tree
+// (so it is not registered as a live route) - not deleted. The inbox_drafts
+// table itself is left in place, untouched, un-dropped.
+//
+// To restore: move this file back to src/app/api/inbox/drafts/route.ts and
+// restore createGmailDraft from src/lib/integrations/_archived/gmailSendApi.ts.
+// Original path: src/app/api/inbox/drafts/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { refreshGmailAccessToken, createGmailDraft } from "@/lib/integrations/gmailApi";
+import { refreshGmailAccessToken } from "@/lib/integrations/gmailApi";
+import { createGmailDraft } from "@/lib/integrations/_archived/gmailSendApi";
 import { decryptSecret } from "@/server/security/secretCrypto";
 
 export const dynamic = "force-dynamic";

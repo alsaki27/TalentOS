@@ -7,7 +7,12 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 import {
+  // Retained fully intact for the per-candidate mailbox model (not deleted -
+  // see the SHARED MAILBOX MODE comment in runGmailSync/registerGmailWatches
+  // below), but no longer called from the sync loop now that every
+  // candidate's mail arrives via the one shared, forwarded-to mailbox.
   listActiveCandidateGmailAccounts,
+  listActiveSharedGmailAccount,
   getDecryptedGmailAccount,
   saveEncryptedGmailTokens,
   markGmailAccountError,
@@ -17,6 +22,7 @@ import {
   type GmailAccountRow,
 } from "@/server/repositories/gmailIntegrationRepository";
 import { refreshGmailAccessToken, listMessageIds, listHistory, getMessage, getProfile, modifyMessage, ensureUserLabel, watchGmailMailbox, type GmailMessage } from "@/lib/integrations/gmailApi";
+import { matchCandidateForMessage, type CandidateMatchMethod } from "@/server/services/candidateEmailMatcher";
 import { triageEmail, INTERVIEW_EXTRACTION_CONFIDENCE, type TriageCandidateContext } from "@/lib/ai/emailTriage";
 import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
@@ -44,14 +50,21 @@ function backfillQuery(account: Pick<GmailAccountRow, "email">): string {
 
 interface SyncOutcome {
   accountId: string;
-  candidateId: string;
+  // Null for the shared mailbox (owner_type='shared_application_mailbox'),
+  // which has no single owning candidate.
+  candidateId: string | null;
   fetched: number;
   triaged: number;
   suppressed: number;
   error?: string;
 }
 
-async function ensureFreshAccessToken(account: NonNullable<Awaited<ReturnType<typeof getDecryptedGmailAccount>>>) {
+// Exported for the "Unassigned" manual-assign route (new
+// src/app/api/inbox/unassigned/route.ts), which needs the shared mailbox's
+// live access token to best-effort trigger triage immediately after a
+// staff member manually resolves a candidate match, instead of waiting for
+// the next scheduled sync's backlog sweep to pick it up.
+export async function ensureFreshAccessToken(account: NonNullable<Awaited<ReturnType<typeof getDecryptedGmailAccount>>>) {
   const expiresAt = account.token_expires_at ? new Date(account.token_expires_at).getTime() : 0;
   const needsRefresh = !expiresAt || expiresAt < Date.now() + 60_000;
   if (!needsRefresh) return account.access_token;
@@ -158,7 +171,12 @@ async function getCandidateApplicationContext(candidateId: string): Promise<Tria
   return rows.map((r) => ({ applicationId: r.id, jobTitle: r.title, company: r.company, status: r.status }));
 }
 
-async function storeRawMessage(candidateId: string, integrationAccountId: string, msg: GmailMessage) {
+async function storeRawMessage(
+  candidateId: string | null,
+  integrationAccountId: string,
+  msg: GmailMessage,
+  matchMethod: CandidateMatchMethod | null = null,
+) {
   const existing = await queryOne<{ id: string }>(
     "SELECT id FROM email_communications WHERE gmail_message_id = $1",
     [msg.id]
@@ -168,15 +186,20 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
   const row = await queryOne<{ id: string }>(
     `INSERT INTO email_communications
        (candidate_id, integration_account_id, gmail_message_id, gmail_thread_id, direction,
-        from_email, to_emails, subject, snippet, body_text, sent_at,
-        gmail_label_ids, gmail_is_unread, gmail_is_important, attachment_metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        from_email, to_emails, subject, snippet, body_text, body_html, sent_at,
+        gmail_label_ids, gmail_is_unread, gmail_is_important, attachment_metadata, candidate_match_method)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      ON CONFLICT (gmail_message_id) DO NOTHING
      RETURNING id`,
-    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT"), JSON.stringify(msg.attachments)]
+    [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.bodyHtml, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT"), JSON.stringify(msg.attachments), matchMethod]
   );
 
-  if (row && msg.from) {
+  // gmail_contact_profiles.candidate_id is NOT NULL - an unassigned (still
+  // Unassigned-queue) message has no candidate to attribute the contact to
+  // yet. It gets recorded here once the message is later manually assigned
+  // (see the thread-wide backfill in the Unassigned route), same as any
+  // other newly-matched message.
+  if (row && candidateId && msg.from) {
     const contactEmail = msg.from.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || msg.from.trim().toLowerCase();
     const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
     try {
@@ -241,7 +264,7 @@ async function storeRawMessage(candidateId: string, integrationAccountId: string
 // (and the 60s module-scope cache) on every call.
 export async function triageStoredMessage(id: string, accessToken: string, policyOverride?: EmailTriagePolicy) {
   const row = await queryOne<{
-    id: string; candidate_id: string; subject: string | null; snippet: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
+    id: string; candidate_id: string | null; subject: string | null; snippet: string | null; body_text: string; from_email: string | null; direction: string; gmail_message_id: string;
   }>(
     "SELECT id, candidate_id, subject, snippet, body_text, from_email, direction, gmail_message_id FROM email_communications WHERE id = $1",
     [id]
@@ -249,6 +272,14 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   if (!row || row.direction !== "inbound") {
     // Outbound messages aren't triaged for status signal — just logged.
     if (row) await execute("UPDATE email_communications SET triaged_at = now() WHERE id = $1", [id]);
+    return;
+  }
+  if (!row.candidate_id) {
+    // Still sitting in the Unassigned queue - nothing to match applications
+    // against yet, and creating action_items (candidate_id NOT NULL) would
+    // be impossible anyway. Leave triaged_at NULL so the next backlog sweep
+    // retries it automatically once it has a candidate (manual assignment
+    // backfills every message in its thread - see the Unassigned route).
     return;
   }
 
@@ -693,8 +724,41 @@ async function triageStoredBacklog(candidateId: string, accessToken: string, lim
   return processed;
 }
 
+// Shared-mailbox counterpart to triageStoredBacklog: the shared inbox has
+// messages spanning many different candidates (plus still-unassigned ones,
+// explicitly excluded here - see triageStoredMessage's own candidate_id
+// guard), so there is no single candidateId to scope the sweep to.
+async function triageStoredBacklogAny(accessToken: string, limit: number) {
+  if (limit <= 0) return 0;
+  const rows = await query<{ id: string }>(
+    `SELECT id FROM email_communications
+      WHERE candidate_id IS NOT NULL AND triaged_at IS NULL
+      ORDER BY sent_at ASC, id ASC LIMIT $1`,
+    [limit],
+  );
+  let processed = 0;
+  for (const row of rows) {
+    try {
+      await triageStoredMessage(row.id, accessToken);
+      processed++;
+    } catch (error: any) {
+      console.warn(`[Gmail sync] Backlog triage failed for ${row.id}; keeping it queued: ${error?.message || error}`);
+    }
+  }
+  return processed;
+}
+
 export async function runGmailSync(options: { retryErrored?: boolean } = {}): Promise<{ accounts: SyncOutcome[]; followUpsEnqueued: number }> {
-  const accounts = await listActiveCandidateGmailAccounts(Boolean(options.retryErrored));
+  // SHARED MAILBOX MODE (single Gmail inbox redesign, Sept 2026): the sync
+  // loop now targets the one shared, forwarded-to mailbox instead of one
+  // mailbox per candidate. listActiveCandidateGmailAccounts() above is left
+  // fully intact - not deleted - so existing candidate-owned connections
+  // and this whole per-candidate code path keep working if this is ever
+  // reverted; see Planning MD Files/"TalentOS — Single Shared Gmail Inbox
+  // Redesign 6 August 2026.md". To revert: change the two lines below back
+  // to `const accounts = await listActiveCandidateGmailAccounts(Boolean(options.retryErrored));`
+  const sharedAccount = await listActiveSharedGmailAccount(Boolean(options.retryErrored));
+  const accounts: GmailAccountRow[] = sharedAccount ? [sharedAccount] : [];
   const outcomes: SyncOutcome[] = [];
 
   for (const accountRow of accounts) {
@@ -726,13 +790,31 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
           .filter((msg): msg is GmailMessage => Boolean(msg));
         for (const msg of messages) {
           let storedId: string | null = null;
+          // account.candidate_id is set for a (retired, but still-supported)
+          // per-candidate mailbox; null for the shared mailbox, in which
+          // case every message must be matched deterministically - see
+          // candidateEmailMatcher.ts. Unmatched messages store with
+          // candidate_id = NULL and land in the "Unassigned" queue instead
+          // of being dropped or guessed.
+          let resolvedCandidateId: string | null = account.candidate_id;
           try {
             if (classifyGmailMessage(msg).suppress) {
               outcome.suppressed++;
               processedMessages++;
               continue;
             }
-            storedId = await storeRawMessage(account.candidate_id, account.id, msg);
+            let matchMethod: CandidateMatchMethod | null = null;
+            if (!resolvedCandidateId) {
+              const match = await matchCandidateForMessage({
+                gmailThreadId: msg.threadId,
+                fromEmail: msg.from,
+                toEmails: msg.to,
+                bodyText: msg.bodyText,
+              });
+              resolvedCandidateId = match.candidateId;
+              matchMethod = match.method;
+            }
+            storedId = await storeRawMessage(resolvedCandidateId, account.id, msg, matchMethod);
             outcome.fetched++;
           } catch (replicationError: any) {
             // A single malformed row/enrichment write must not prevent the
@@ -742,7 +824,10 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         // Mailbox replication is the critical path.  AI triage is deliberately
         // capped so a large historical page cannot hold the Gmail cursor open
         // for minutes; subsequent scheduled runs continue triage safely.
-        if (storedId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
+        // Still-unassigned messages (resolvedCandidateId null) are skipped
+        // here - triageStoredMessage itself also guards this, but skipping
+        // the call avoids burning a triagedMessages "slot" on a no-op.
+        if (storedId && resolvedCandidateId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
           try {
             await triageStoredMessage(storedId, accessToken);
             outcome.triaged++;
@@ -775,7 +860,9 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
       // Continue older untriaged rows independently of mailbox replication so
       // the queue drains across scheduled runs instead of only classifying the
       // messages imported in the current page.
-      const backlogTriaged = await triageStoredBacklog(account.candidate_id, accessToken, TRIAGE_MESSAGES_PER_RUN);
+      const backlogTriaged = account.candidate_id
+        ? await triageStoredBacklog(account.candidate_id, accessToken, TRIAGE_MESSAGES_PER_RUN)
+        : await triageStoredBacklogAny(accessToken, TRIAGE_MESSAGES_PER_RUN);
       outcome.triaged += backlogTriaged;
     } catch (err: any) {
       const message = err?.message === "invalid_grant" || err?.message === "no_refresh_token"
@@ -808,7 +895,10 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
 export async function registerGmailWatches() {
   const topic = process.env.GMAIL_PUBSUB_TOPIC;
   if (!topic) throw new Error("GMAIL_PUBSUB_TOPIC is not configured");
-  const accounts = await listActiveCandidateGmailAccounts(false);
+  // SHARED MAILBOX MODE - see the matching comment in runGmailSync(). Revert
+  // by changing this back to `await listActiveCandidateGmailAccounts(false)`.
+  const sharedAccount = await listActiveSharedGmailAccount(false);
+  const accounts: GmailAccountRow[] = sharedAccount ? [sharedAccount] : [];
   const results: Array<{ accountId: string; ok: boolean; error?: string }> = [];
   for (const row of accounts) {
     try {

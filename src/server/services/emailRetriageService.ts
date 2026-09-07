@@ -60,7 +60,9 @@ const PROTECTED_ACTION_ITEM_TYPES = ["interview_followup", "calendar_conflict"];
 
 interface EmailRow {
   id: string;
-  candidate_id: string;
+  // Nullable since the shared-inbox redesign - unused below (this service's
+  // reclassification is candidate-agnostic), kept accurate to the schema.
+  candidate_id: string | null;
   from_email: string | null;
   subject: string | null;
   snippet: string | null;

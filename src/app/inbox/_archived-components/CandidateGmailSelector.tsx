@@ -1,3 +1,19 @@
+// ARCHIVED 2026-09-07 — retired when TalentOS moved to a single shared
+// Gmail inbox fed by external forwarding (see Planning MD Files/
+// "TalentOS — Single Shared Gmail Inbox Redesign 6 August 2026.md"). Every
+// candidate's mail now arrives in one shared, admin-connected mailbox, so
+// per-candidate Gmail connections are no longer needed. This component is
+// fully working code, moved verbatim, just not imported/rendered anywhere
+// today. Existing owner_type='candidate' integration_accounts rows (and
+// the owner=candidate branch behind /api/integrations/gmail/start, disabled
+// with a 410 response) are left in place, not deleted.
+//
+// To restore: move this file back to
+// src/app/inbox/components/CandidateGmailSelector.tsx, re-import and render
+// it from src/app/inbox/page.tsx, and restore the owner=candidate branch in
+// src/app/api/integrations/gmail/start/route.ts.
+// Original path: src/app/inbox/components/CandidateGmailSelector.tsx
+
 "use client";
 
 import React, { useState, useEffect } from "react";

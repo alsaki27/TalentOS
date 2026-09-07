@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   }
   const candidateFilter = candidateId || null;
 
-  const [approvalsRow, mailRow, draftsRow, categoryRows] = await Promise.all([
+  const [approvalsRow, mailRow, draftsRow, unassignedRow, categoryRows] = await Promise.all([
     queryOne<{
       pending_approvals: number; urgent_approvals: number; needs_reply: number;
       interviews: number; untracked: number; conflicts: number; escalated: number;
@@ -66,6 +66,11 @@ export async function GET(req: NextRequest) {
        FROM inbox_drafts
        WHERE sent_at IS NULL AND discarded_at IS NULL AND ($1::uuid IS NULL OR candidate_id = $1)`,
       [candidateFilter]
+    ),
+    // candidateFilter is intentionally ignored here - an unassigned message
+    // has no candidate_id to filter by; this is a system-wide queue.
+    queryOne<{ total_unassigned: number }>(
+      `SELECT COUNT(*)::int AS total_unassigned FROM email_communications WHERE candidate_id IS NULL AND direction = 'inbound'`
     ),
     // Category breakdown for the clickable category chips - scoped to the
     // same "clean" default view the mail list itself shows (relevant mail,
@@ -109,6 +114,9 @@ export async function GET(req: NextRequest) {
     },
     drafts: {
       total: draftsRow?.total_drafts ?? 0,
+    },
+    unassigned: {
+      total: unassignedRow?.total_unassigned ?? 0,
     },
     handovers: {
       assignedToMe: approvalsRow?.handovers_assigned_to_me ?? 0,

@@ -132,7 +132,11 @@ export async function GET(req: NextRequest) {
     // Start the first bounded backfill immediately after OAuth. The background
     // registration lets Cloudflare continue importing after the redirect
     // response, while the five-minute cron keeps advancing the cursor.
-    if (oauthState.owner_type === "candidate") {
+    // Shared-mailbox redesign: this used to only fire for owner_type
+    // 'candidate' - now that the shared mailbox (owner=shared) is the
+    // primary connection, it needs the same immediate-backfill treatment,
+    // or connecting it would otherwise sit idle until the next cron tick.
+    if (oauthState.owner_type === "candidate" || oauthState.owner_type === "shared_application_mailbox") {
       await backgroundDispatch(runGmailSync({ retryErrored: true }));
     }
     return oauthRedirect(oauthState, "connected");

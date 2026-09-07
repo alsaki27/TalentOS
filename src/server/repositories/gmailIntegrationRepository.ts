@@ -11,7 +11,9 @@ import { encryptSecret, decryptSecret } from "@/server/security/secretCrypto";
 
 export interface GmailAccountRow {
   id: string;
-  candidate_id: string;
+  // Nullable since the shared-mailbox row (owner_type='shared_application_mailbox')
+  // has no single owning candidate - see listActiveSharedGmailAccount().
+  candidate_id: string | null;
   email: string | null;
   scopes: string[];
   access_token: string;
@@ -30,6 +32,22 @@ export async function listActiveCandidateGmailAccounts(includeErrors = false): P
      FROM integration_accounts
      WHERE provider = 'gmail' AND owner_type = 'candidate' AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"} AND candidate_id IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM candidates c WHERE c.id = integration_accounts.candidate_id AND c.email_sync_paused = true)`
+  );
+}
+
+// Mirrors listActiveCandidateGmailAccounts() but for the single, system-wide
+// shared mailbox (unique-constrained: at most one active row). Retired
+// per-candidate accounts are left exactly as-is (see gmailSyncService.ts) -
+// listActiveCandidateGmailAccounts() below is kept fully intact, just no
+// longer called from the sync loop, so this is purely additive.
+export async function listActiveSharedGmailAccount(includeErrors = false): Promise<GmailAccountRow | null> {
+  return queryOne<GmailAccountRow>(
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
+     FROM integration_accounts
+     WHERE provider = 'gmail' AND owner_type = 'shared_application_mailbox'
+       AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"}
+     ORDER BY updated_at DESC LIMIT 1`
   );
 }
 

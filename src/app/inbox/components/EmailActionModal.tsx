@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import ApprovalCard from "./ApprovalCard";
@@ -14,203 +14,104 @@ export interface EmailActionModalProps {
   onUpdated: () => void;
 }
 
-type Tab = "details" | "reply" | "draft" | "attachments" | "team";
+type Tab = "details" | "attachments" | "team";
+
+function EmailBody({ bodyHtml, bodyText }: { bodyHtml: string | null | undefined; bodyText: string | null | undefined }) {
+  if (bodyHtml) {
+    // Sandboxed, srcDoc-rendered iframe: the standard safe way to show
+    // untrusted HTML mail without pulling in a sanitization library - no
+    // scripts run, styles stay contained to the frame. allow-popups (beyond
+    // the plan's baseline allow-same-origin) is needed so a target="_blank"
+    // link inside the mail can actually open; the injected <base> forces
+    // every link to open outside the iframe even when the original HTML
+    // didn't set target itself.
+    return (
+      <iframe
+        title="Email body"
+        srcDoc={`<base target="_blank">${bodyHtml}`}
+        sandbox="allow-same-origin allow-popups"
+        style={{ width: "100%", flex: 1, minHeight: "50vh", border: "none", background: "#fff", borderRadius: "0 0 6px 6px" }}
+      />
+    );
+  }
+  if (bodyText) {
+    return (
+      <div style={{
+        padding: 28, color: "#e5e7eb", backgroundColor: "#111",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        fontSize: 15, lineHeight: 1.7, whiteSpace: "pre-wrap", wordWrap: "break-word",
+        flex: 1, overflowY: "auto",
+      }}>
+        {bodyText}
+      </div>
+    );
+  }
+  return <div style={{ padding: 24, color: "var(--muted)" }}>Loading email body...</div>;
+}
+
+function ThreadMessage({ msg, expanded, onToggle }: { msg: any; expanded: boolean; onToggle: () => void }) {
+  return (
+    <div style={{ border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", backgroundColor: "var(--bg)" }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{ width: "100%", textAlign: "left", padding: "10px 14px", background: "var(--bg-inset)", border: "none", cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}
+      >
+        <span style={{ fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <strong>{msg.direction === "outbound" ? "Sent" : (msg.from_email || "Unknown sender")}</strong>
+          {msg.snippet && !expanded ? ` — ${msg.snippet}` : ""}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--muted)", flexShrink: 0 }}>{new Date(msg.sent_at).toLocaleString()} {expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          <EmailBody bodyHtml={msg.body_html} bodyText={msg.body_text} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function EmailActionModal({ thread, candidates, onClose, onUpdated }: EmailActionModalProps) {
   const [activeTab, setActiveTab] = useState<Tab>("details");
   const [detail, setDetail] = useState<any>(null);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [drafts, setDrafts] = useState<any[]>([]);
   const [teamMembers, setTeamMembers] = useState<any[]>([]);
+  const [expandedThreadIds, setExpandedThreadIds] = useState<Set<string>>(new Set());
 
-  const [replyTo, setReplyTo] = useState(thread.from_email || "");
-  const [replySubject, setReplySubject] = useState(thread.subject ? (thread.subject.toLowerCase().startsWith("re:") ? thread.subject : `Re: ${thread.subject}`) : "Re: ");
-  const [replyBody, setReplyBody] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState("");
-  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
-  
   const [handoverAssigneeId, setHandoverAssigneeId] = useState("");
   const [handoverNote, setHandoverNote] = useState("");
   const [handoverPriority, setHandoverPriority] = useState<"normal" | "high" | "urgent">("normal");
-  
-  const [sending, setSending] = useState(false);
-  const [savingDraft, setSavingDraft] = useState(false);
   const [handingOver, setHandingOver] = useState(false);
-  
+
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [mounted, setMounted] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
   useEffect(() => {
     setMounted(true);
-    // Load detail
     fetch(`/api/gmail-communications/${thread.id}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setDetail(data));
+      .then((data) => {
+        setDetail(data);
+        // Most recent message expanded by default, per the redesign's
+        // "full thread view" requirement.
+        const latest = data?.thread?.[data.thread.length - 1];
+        if (latest) setExpandedThreadIds(new Set([latest.id]));
+      });
 
-    // Load templates
-    fetch("/api/email-templates?limit=100")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setTemplates(Array.isArray(data) ? data : data.items ?? []));
-
-    // Load drafts
-    loadDrafts();
-
-    // Load team
     fetch("/api/users?limit=100")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setTeamMembers(Array.isArray(data) ? data : data.items ?? []));
   }, [thread.id]);
 
-  const loadDrafts = () => {
-    fetch(`/api/inbox/drafts?candidateId=${thread.candidate_id}&threadId=${thread.gmail_thread_id}`)
-      .then((r) => (r.ok ? r.json() : { drafts: [] }))
-      .then((data) => setDrafts(data.drafts || []));
-  };
-
   const candidateName = thread.candidate_name || "Unknown Candidate";
 
-  const handleTemplateSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const tid = e.target.value;
-    setSelectedTemplateId(tid);
-    if (!tid) return;
-    const tmpl = templates.find((t) => t.id === tid);
-    if (tmpl) {
-      let b = tmpl.body || "";
-      let s = tmpl.subject || "";
-      // Replace simple merge tags
-      b = b.replace(/{{candidate_name}}/g, candidateName);
-      b = b.replace(/{{job_title}}/g, thread.job_title || "");
-      b = b.replace(/{{company_name}}/g, thread.company_name || "");
-      setReplyBody(b);
-      // We keep replySubject as "Re: " + original usually, but if template has subject, maybe use it
-      if (s) setReplySubject(s.replace(/{{candidate_name}}/g, candidateName));
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files);
-      const validFiles = newFiles.filter(f => f.size <= 10485760);
-      if (validFiles.length < newFiles.length) {
-        alert("Some files were skipped because they exceed the 10MB limit.");
-      }
-      setAttachedFiles(prev => [...prev, ...validFiles].slice(0, 3));
-    }
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const removeFile = (index: number) => {
-    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const uploadAttachments = async (): Promise<string[]> => {
-    if (attachedFiles.length === 0) return [];
-    const formData = new FormData();
-    formData.append("candidate_id", thread.candidate_id);
-    attachedFiles.forEach(f => formData.append("files", f));
-    
-    const res = await fetch("/api/email/send", {
-      method: "POST",
-      body: formData,
+  const toggleThreadMessage = (id: string) => {
+    setExpandedThreadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "Failed to upload attachments");
-    return data.attachment_urls || [];
-  };
-
-  const handleSend = async (draftId?: string) => {
-    setError("");
-    setSuccessMessage("");
-    setSending(true);
-    try {
-      let attachmentUrls: string[] = [];
-      if (!draftId && attachedFiles.length > 0) {
-        attachmentUrls = await uploadAttachments();
-      }
-
-      const payload = {
-        candidate_id: thread.candidate_id,
-        to_email: replyTo,
-        subject: replySubject,
-        body: replyBody,
-        reply_to_thread_id: thread.gmail_thread_id,
-        draft_id: draftId,
-        attachment_urls: attachmentUrls,
-      };
-
-      const res = await fetch("/api/inbox/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to send email");
-
-      setSuccessMessage(`✓ Sent via ${candidateName}'s Gmail`);
-      setAttachedFiles([]);
-      setReplyBody("");
-      onUpdated();
-      if (draftId) loadDrafts();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleSaveDraft = async () => {
-    setError("");
-    setSuccessMessage("");
-    setSavingDraft(true);
-    try {
-      const payload = {
-        candidate_id: thread.candidate_id,
-        to_email: replyTo,
-        subject: replySubject,
-        body: replyBody,
-        email_communication_id: thread.id,
-        gmail_thread_id: thread.gmail_thread_id,
-        sync_to_gmail: true,
-      };
-
-      const res = await fetch("/api/inbox/drafts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to save draft");
-
-      setSuccessMessage("✓ Draft saved");
-      setActiveTab("draft");
-      loadDrafts();
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setSavingDraft(false);
-    }
-  };
-
-  const handleDiscardDraft = async (id: string) => {
-    if (!confirm("Are you sure you want to discard this draft?")) return;
-    try {
-      await fetch(`/api/inbox/drafts?id=${id}`, { method: "DELETE" });
-      loadDrafts();
-    } catch (e) {
-      alert("Failed to discard draft");
-    }
-  };
-
-  const handleEditDraft = (draft: any) => {
-    setReplyTo(draft.to_email);
-    setReplySubject(draft.subject);
-    setReplyBody(draft.body);
-    setActiveTab("reply");
   };
 
   const handleHandover = async () => {
@@ -234,7 +135,7 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to handover email");
-      
+
       const assigneeName = teamMembers.find(m => m.user_id === handoverAssigneeId)?.display_name || "team member";
       setSuccessMessage(`✓ Handed over to ${assigneeName}. They've been notified.`);
       setHandoverNote("");
@@ -298,7 +199,7 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
   return createPortal(
     <div className="modal-overlay" onClick={onClose} style={{ zIndex: 100, backgroundColor: "rgba(0, 0, 0, 0.75)" }}>
       <div className="modal-content" style={{ width: "98vw", maxWidth: 1680, height: "95vh", maxHeight: "95vh", padding: 0, display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
-        
+
         {/* Header */}
         <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -312,6 +213,9 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
                 <strong>Gmail Thread ID:</strong> <span style={{ fontFamily: "monospace" }}>{thread.gmail_thread_id}</span>
+                {detail?.message?.candidate_match_method && (
+                  <span style={{ marginLeft: 12 }}><strong>Matched by:</strong> {String(detail.message.candidate_match_method).replaceAll("_", " ")}</span>
+                )}
               </div>
               {thread.job_title && (
                 <div>
@@ -325,28 +229,28 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "0 24px" }}>
-          {(["details", "reply", "draft", "attachments", "team"] as Tab[]).map((t) => (
+          {(["details", "attachments", "team"] as Tab[]).map((t) => (
             <button
               key={t}
               className={`btn text ${activeTab === t ? "active" : ""}`}
               style={{ borderBottom: activeTab === t ? "2px solid var(--accent)" : "none", borderRadius: 0, padding: "12px 16px", textTransform: "capitalize" }}
               onClick={() => setActiveTab(t)}
             >
-              {t} {t === "draft" && drafts.length > 0 ? `(${drafts.length})` : ""}
+              {t}
             </button>
           ))}
         </div>
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: "auto", padding: 24, backgroundColor: "var(--bg-inset)" }}>
-          
+
           {error && <div className="alert error" style={{ marginBottom: 16 }}>{error}</div>}
           {successMessage && <div className="alert success" style={{ marginBottom: 16 }}>{successMessage}</div>}
 
           {/* TAB: DETAILS */}
           {activeTab === "details" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-              
+
               {detail?.message?.ai_summary && (
                 <div style={{ padding: 16, backgroundColor: "var(--accent-soft)", borderRadius: 6 }}>
                   <h4 style={{ margin: "0 0 8px", fontSize: 13, textTransform: "uppercase", color: "var(--accent)" }}>AI Summary</h4>
@@ -409,7 +313,7 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
               {hasAttachments && (
                 <div style={{ padding: 12, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
-                  📎 This email has {detail.message.attachment_metadata.length} attachments. To download them, click "Open Gmail ↗" below.
+                  📎 This email has {detail.message.attachment_metadata.length} attachment(s). See the Attachments tab to view or download.
                 </div>
               )}
 
@@ -420,145 +324,67 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                 </pre>
               </details>
 
-              <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "55vh", display: "flex", flexDirection: "column" }}>
-                {detail?.message?.body_text ? (
-                  <div style={{
-                    padding: 28,
-                    color: "#e5e7eb",
-                    backgroundColor: "#111",
-                    fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                    fontSize: 15,
-                    lineHeight: 1.7,
-                    whiteSpace: "pre-wrap",
-                    wordWrap: "break-word",
-                    flex: 1,
-                    overflowY: "auto"
-                  }}>
-                    {detail.message.body_text}
+              {/* Latest message, rendered in full (HTML when available, sandboxed) */}
+              <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "50vh", display: "flex", flexDirection: "column" }}>
+                <EmailBody bodyHtml={detail?.message?.body_html} bodyText={detail?.message?.body_text} />
+              </div>
+
+              {/* Full thread view - every message in this Gmail conversation,
+                  chronological, collapsed except the latest. */}
+              {detail?.thread?.length > 1 && (
+                <div>
+                  <h4 style={{ margin: "0 0 10px" }}>Full conversation ({detail.thread.length} messages)</h4>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {detail.thread.map((msg: any) => (
+                      <ThreadMessage
+                        key={msg.id}
+                        msg={msg}
+                        expanded={expandedThreadIds.has(msg.id)}
+                        onToggle={() => toggleThreadMessage(msg.id)}
+                      />
+                    ))}
                   </div>
-                ) : (
-                  <div style={{ padding: 24, color: "var(--muted)" }}>Loading email body...</div>
-                )}
-              </div>
-
-            </div>
-          )}
-
-          {/* TAB: REPLY */}
-          {activeTab === "reply" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div style={{ display: "flex", gap: 16 }}>
-                <div style={{ flex: 1 }}>
-                  <label className="label">To</label>
-                  <input className="input" value={replyTo} onChange={(e) => setReplyTo(e.target.value)} />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <label className="label">Subject</label>
-                  <input className="input" value={replySubject} onChange={(e) => setReplySubject(e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <label className="label">Template</label>
-                <select className="input" value={selectedTemplateId} onChange={handleTemplateSelect}>
-                  <option value="">(No template)</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-              </div>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                <textarea 
-                  className="input" 
-                  style={{ flex: 1, minHeight: 300, resize: "vertical", fontFamily: "monospace", fontSize: 13 }}
-                  value={replyBody}
-                  onChange={(e) => setReplyBody(e.target.value)}
-                  placeholder="Type your message here..."
-                />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <button className="btn outline" onClick={handleSaveDraft} disabled={savingDraft || sending}>
-                  {savingDraft ? "Saving..." : "Save as Draft"}
-                </button>
-                <button className="btn primary" onClick={() => handleSend()} disabled={sending || savingDraft}>
-                  {sending ? "Sending..." : `Send via ${candidateName.split(' ')[0]}'s Gmail →`}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* TAB: DRAFT */}
-          {activeTab === "draft" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <h3 style={{ margin: 0 }}>Drafts for {candidateName}</h3>
-                <button className="btn outline sm" onClick={() => setActiveTab("reply")}>+ New Draft</button>
-              </div>
-              {drafts.length === 0 ? (
-                <div className="text-muted">No unsent drafts.</div>
-              ) : (
-                drafts.map(d => (
-                  <div key={d.id} style={{ padding: 16, border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div>
-                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.subject}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)" }}>Saved {new Date(d.created_at).toLocaleString()}</div>
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button className="btn text sm" onClick={() => handleEditDraft(d)}>Edit draft</button>
-                      <button className="btn outline sm" onClick={() => handleSend(d.id)} disabled={sending}>{sending ? "..." : "Send now"}</button>
-                      <button className="btn text sm" style={{ color: "var(--danger)" }} onClick={() => handleDiscardDraft(d.id)}>Discard ×</button>
-                    </div>
-                  </div>
-                ))
               )}
+
             </div>
           )}
 
           {/* TAB: ATTACHMENTS */}
           {activeTab === "attachments" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-              <div>
-                <h3 style={{ margin: "0 0 12px" }}>Incoming attachments (from this email)</h3>
-                {hasAttachments ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {detail.message.attachment_metadata.map((a: any, i: number) => (
-                      <div key={i} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)", display: "flex", gap: 12 }}>
-                        <span>📎</span>
-                        <div>
-                          <div>{a.filename}</div>
-                          <div style={{ fontSize: 12, color: "var(--muted)" }}>{Math.round((a.size || 0)/1024)} KB &middot; {a.mimeType}</div>
+            <div>
+              <h3 style={{ margin: "0 0 12px" }}>Attachments</h3>
+              {hasAttachments ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {detail.message.attachment_metadata.map((a: any, i: number) => {
+                    const canFetch = Boolean(a.attachmentId && detail?.message?.gmail_message_id);
+                    const baseUrl = canFetch
+                      ? `/api/gmail/attachments/${encodeURIComponent(detail.message.gmail_message_id)}/${encodeURIComponent(a.attachmentId)}`
+                      : null;
+                    return (
+                      <div key={i} style={{ padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)", display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between" }}>
+                        <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
+                          <span>📎</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.filename}</div>
+                            <div style={{ fontSize: 12, color: "var(--muted)" }}>{Math.round((a.size || 0) / 1024)} KB &middot; {a.mimeType}</div>
+                          </div>
                         </div>
+                        {baseUrl ? (
+                          <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                            <Link href={baseUrl} target="_blank" className="btn outline sm">View</Link>
+                            <Link href={`${baseUrl}?download=1`} className="btn outline sm">Download</Link>
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--muted)", flexShrink: 0 }}>Unavailable</span>
+                        )}
                       </div>
-                    ))}
-                    <div style={{ marginTop: 8, fontSize: 13, color: "var(--muted)" }}>
-                      ⓘ To download: click "Open Gmail ↗" below. Gmail will open this email directly with download links.
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-muted">No attachments in this email.</div>
-                )}
-              </div>
-              <hr style={{ border: 0, borderTop: "1px solid var(--border)" }} />
-              <div>
-                <h3 style={{ margin: "0 0 12px" }}>Send attachments with your reply</h3>
-                <div style={{ marginBottom: 12 }}>
-                  <input type="file" multiple ref={fileInputRef} onChange={handleFileChange} style={{ display: "none" }} />
-                  <button className="btn outline" onClick={() => fileInputRef.current?.click()} disabled={attachedFiles.length >= 3}>
-                    Choose files...
-                  </button>
-                  <span style={{ marginLeft: 12, fontSize: 12, color: "var(--muted)" }}>(max 3 files, 10 MB each)</span>
+                    );
+                  })}
                 </div>
-                {attachedFiles.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {attachedFiles.map((f, i) => (
-                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", border: "1px solid var(--border)", borderRadius: 6, backgroundColor: "var(--bg)" }}>
-                        <span>✓ {f.name} <span style={{ color: "var(--muted)", fontSize: 12 }}>({Math.round(f.size/1024)} KB)</span></span>
-                        <button className="btn text sm" onClick={() => removeFile(i)}>×</button>
-                      </div>
-                    ))}
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
-                      Note: attachments will be uploaded when you click Send in the Reply tab.
-                    </div>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div className="text-muted">No attachments in this email.</div>
+              )}
             </div>
           )}
 
@@ -600,7 +426,11 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                 {detail?.actionItems?.filter((a: any) => a.type === "team_handover").length > 0 ? (
                   detail.actionItems.filter((a: any) => a.type === "team_handover").map((a: any) => (
                     <div key={a.id} style={{ padding: 12, border: "1px solid var(--border)", borderRadius: 6, marginBottom: 8 }}>
-                      <div style={{ fontWeight: 600 }}>Assigned to: {teamMembers.find(m => m.user_id === a.assigned_to)?.display_name || "Unknown"}</div>
+                      {/* Fixed field-name bug: this used to read a.assigned_to,
+                          which does not exist on action_items (the real
+                          column is assigned_to_user_id) - always showed
+                          "Unknown". */}
+                      <div style={{ fontWeight: 600 }}>Assigned to: {teamMembers.find(m => m.user_id === a.assigned_to_user_id)?.display_name || "Unknown"}</div>
                       <div style={{ fontSize: 12, color: "var(--muted)", margin: "4px 0" }}>Priority: {a.priority} &middot; Status: {a.status} &middot; {new Date(a.created_at).toLocaleString()}</div>
                       {a.description && <div style={{ fontSize: 13 }}>Note: "{a.description}"</div>}
                     </div>
@@ -619,12 +449,9 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
             <Link href={detail.gmailUrl} target="_blank" className="btn outline sm">Open Gmail ↗</Link>
           )}
           <button className="btn outline sm" onClick={markNotImportant}>Mark not important</button>
-          
+
           {pendingProposal && (
-            <>
-              {/* Approval/Reject are on the card itself, but we can duplicate or let user do it on the details tab */}
-              <button className="btn primary sm" onClick={() => setActiveTab("details")}>View pending approval</button>
-            </>
+            <button className="btn primary sm" onClick={() => setActiveTab("details")}>View pending approval</button>
           )}
 
           <button className="btn text sm" style={{ color: "var(--danger)", marginLeft: "auto" }} onClick={markUrgent}>

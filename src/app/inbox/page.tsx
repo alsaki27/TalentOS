@@ -1,15 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import ApprovalsPanel from "./components/ApprovalsPanel";
-import { CandidateGmailSelector } from "./components/CandidateGmailSelector";
+import { GmailConnectionHeader } from "./components/GmailConnectionHeader";
+import { UnassignedPanel } from "./components/UnassignedPanel";
 import { PriorityBadge } from "./components/PriorityBadge";
 import EmailActionModal from "./components/EmailActionModal";
 import EmailTaskRow, { type EmailTask } from "./components/EmailTaskRow";
 
 type Direction = "inbox" | "sent" | "all";
-type PageTab = "inbox" | "approvals" | "drafts" | "handovers";
+type PageTab = "inbox" | "approvals" | "unassigned" | "handovers";
 
 interface MailThread {
   id: string;
@@ -45,7 +45,7 @@ interface InboxCounts {
   approvals: { pending: number; urgent: number; approvedToday: number; rejectedToday: number };
   tasks: { needsReply: number; interviews: number; untracked: number; conflicts: number; escalated: number };
   mail: { relevant: number; awaitingReply: number; hidden: number; total: number; lastMessageAt: string | null };
-  drafts: { total: number };
+  unassigned: { total: number };
   handovers: { assigned: number; overdue: number };
   categories: { category: string; count: number }[];
 }
@@ -64,13 +64,11 @@ function categoryLabel(category: string | null) {
 export default function InboxPage() {
   const [activeTab, setActiveTab] = useState<PageTab>("inbox");
   const [counts, setCounts] = useState<InboxCounts | null>(null);
-  
+
   // Inbox state
   const [direction, setDirection] = useState<Direction>("inbox");
   const [search, setSearch] = useState("");
   const [candidateId, setCandidateId] = useState("");
-  const [gmailCandidateId, setGmailCandidateId] = useState("");
-  const [connectedIds, setConnectedIds] = useState<Set<string>>(new Set());
   const [candidates, setCandidates] = useState<{ id: string; name: string }[]>([]);
   const [candidatesError, setCandidatesError] = useState(false);
   const [candidatesLoading, setCandidatesLoading] = useState(true);
@@ -85,20 +83,16 @@ export default function InboxPage() {
   const [pageInput, setPageInput] = useState("");
   const [pageError, setPageError] = useState("");
   const [selectedThread, setSelectedThread] = useState<MailThread | null>(null);
-  
+
   // Global state
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
-  
-  // Tasks state
+
+  // Untracked-application tasks (restored - see EmailTaskRow)
   const [tasks, setTasks] = useState<EmailTask[]>([]);
-  
-  // Drafts state
-  const [drafts, setDrafts] = useState<any[]>([]);
-  const [loadingDrafts, setLoadingDrafts] = useState(false);
-  
+
   // Handovers state
   const [handovers, setHandovers] = useState<any[]>([]);
   const [loadingHandovers, setLoadingHandovers] = useState(false);
@@ -119,7 +113,8 @@ export default function InboxPage() {
     ]);
     const openData = openRes.ok ? await openRes.json() : { items: [] };
     const inProgressData = inProgressRes.ok ? await inProgressRes.json() : { items: [] };
-    const merged = [...(openData.items ?? []), ...(inProgressData.items ?? [])].filter((t: any) => t.type !== "status_change_approval");
+    const merged = [...(openData.items ?? []), ...(inProgressData.items ?? [])]
+      .filter((t: any) => t.type === "untracked_application");
     setTasks(merged);
   }, []);
 
@@ -146,18 +141,6 @@ export default function InboxPage() {
       setLoading(false);
     }
   }, [direction, search, candidateId, category, needsReply, showHidden, activeTab]);
-
-  const loadDraftsData = useCallback(async () => {
-    if (activeTab !== "drafts") return;
-    setLoadingDrafts(true);
-    try {
-      const res = await fetch("/api/inbox/drafts", { cache: "no-store" });
-      const data = await res.json();
-      if (res.ok) setDrafts(data.drafts || []);
-    } catch (e) {} finally {
-      setLoadingDrafts(false);
-    }
-  }, [activeTab]);
 
   const loadHandoversData = useCallback(async () => {
     if (activeTab !== "handovers") return;
@@ -230,17 +213,6 @@ export default function InboxPage() {
     };
   }, [candidatesRetryKey]);
 
-  useEffect(() => {
-    fetch("/api/integrations/gmail/candidate-status")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.connected_candidates) {
-          setConnectedIds(new Set(data.connected_candidates));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   useEffect(() => { loadCounts(); }, [loadCounts]);
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
@@ -248,8 +220,7 @@ export default function InboxPage() {
     const timer = window.setTimeout(() => { void loadThreads(1); }, 300);
     return () => window.clearTimeout(timer);
   }, [loadThreads]);
-  
-  useEffect(() => { loadDraftsData(); }, [loadDraftsData]);
+
   useEffect(() => { loadHandoversData(); }, [loadHandoversData]);
 
   useEffect(() => {
@@ -284,13 +255,6 @@ export default function InboxPage() {
     }
   }
 
-  const handleDeleteDraft = async (id: string) => {
-    if (!confirm("Delete draft?")) return;
-    await fetch(`/api/inbox/drafts?id=${id}`, { method: "DELETE" });
-    loadDraftsData();
-    loadCounts();
-  };
-
   const handleUpdateHandover = async (id: string, status: string) => {
     await fetch(`/api/inbox/handover`, {
       method: "PATCH",
@@ -299,6 +263,15 @@ export default function InboxPage() {
     });
     loadHandoversData();
     loadCounts();
+  };
+
+  const handleUpdateTask = async (id: string, status: string, note: string | undefined, takeover: boolean) => {
+    await fetch(`/api/action-items/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, resolution_note: note, takeover }),
+    });
+    await Promise.all([loadTasks(), loadCounts()]);
   };
 
   function goToPage(val: string) {
@@ -366,16 +339,27 @@ export default function InboxPage() {
       <div style={{ marginBottom: 20 }}>
         <div style={{ color: "var(--accent)", fontSize: 12, fontWeight: 800, letterSpacing: 1, textTransform: "uppercase" }}>Communication intelligence</div>
         <h1 style={{ margin: "6px 0 4px" }}>Candidate Inbox</h1>
-        <p className="page-kicker" style={{ margin: 0 }}>Recruiting email, AI findings, application matches, and AE follow-up in one place.</p>
+        <p className="page-kicker" style={{ margin: 0 }}>One shared Gmail inbox, automatically matched to each candidate, with AI findings, application matches, and AE follow-up in one place.</p>
+      </div>
+
+      <div style={{ marginBottom: 20 }}>
+        <GmailConnectionHeader />
       </div>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "stretch", marginBottom: 28 }}>
-        <div style={{ flex: 1, minWidth: 320 }}>
-          <CandidateGmailSelector
-            candidates={candidates}
-            value={gmailCandidateId}
-            onChange={setGmailCandidateId}
-          />
+        <div style={{ flex: 1, minWidth: 320, background: "var(--surface-2, #1a1a2e)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Filter inbox & handovers</div>
+          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>Show mail and handovers for a specific candidate.</div>
+          <select
+            style={{ width: "100%", background: "var(--bg, #111)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 13 }}
+            value={candidateId}
+            onChange={(e) => setCandidateId(e.target.value)}
+          >
+            <option value="">All candidates</option>
+            {[...candidates].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
           {candidatesLoading && candidates.length === 0 && (
             <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Loading candidates…</div>
           )}
@@ -386,54 +370,31 @@ export default function InboxPage() {
             </div>
           )}
         </div>
-
-        <div style={{ flex: 1, minWidth: 320, background: "var(--surface-2, #1a1a2e)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Filter inbox & tasks</div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>Show mail and handovers for a specific candidate.</div>
-          <select
-            style={{ width: "100%", background: "var(--bg, #111)", color: "var(--ink)", border: "1px solid var(--border)", borderRadius: 6, padding: "8px 10px", fontSize: 13 }}
-            value={candidateId}
-            onChange={(e) => setCandidateId(e.target.value)}
-          >
-            <option value="">All candidates</option>
-            {[...candidates].sort((a, b) => {
-              const aConn = connectedIds.has(a.id);
-              const bConn = connectedIds.has(b.id);
-              if (aConn && !bConn) return -1;
-              if (!aConn && bConn) return 1;
-              return a.name.localeCompare(b.name);
-            }).map((c) => (
-              <option key={c.id} value={c.id}>
-                {connectedIds.has(c.id) ? "🟢 " : ""}{c.name}{connectedIds.has(c.id) ? " (Connected)" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
-      <div style={{ display: "flex", gap: 24, borderBottom: "1px solid var(--border)", marginBottom: 24 }}>
-        <button 
-          className={`btn text ${activeTab === "inbox" ? "active" : ""}`} 
+      <div style={{ display: "flex", gap: 24, borderBottom: "1px solid var(--border)", marginBottom: 24, flexWrap: "wrap" }}>
+        <button
+          className={`btn text ${activeTab === "inbox" ? "active" : ""}`}
           style={{ borderBottom: activeTab === "inbox" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
           onClick={() => setActiveTab("inbox")}
         >
           Inbox {counts?.mail.relevant ? `(${counts.mail.relevant})` : ""}
         </button>
-        <button 
+        <button
           className={`btn text ${activeTab === "approvals" ? "active" : ""}`}
           style={{ borderBottom: activeTab === "approvals" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
           onClick={() => setActiveTab("approvals")}
         >
           Approvals {counts?.approvals.pending ? `(${counts.approvals.pending})` : ""}
         </button>
-        <button 
-          className={`btn text ${activeTab === "drafts" ? "active" : ""}`}
-          style={{ borderBottom: activeTab === "drafts" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
-          onClick={() => setActiveTab("drafts")}
+        <button
+          className={`btn text ${activeTab === "unassigned" ? "active" : ""}`}
+          style={{ borderBottom: activeTab === "unassigned" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
+          onClick={() => setActiveTab("unassigned")}
         >
-          Drafts {counts?.drafts?.total ? `(${counts.drafts.total})` : ""}
+          Unassigned {counts?.unassigned?.total ? `(${counts.unassigned.total})` : ""}
         </button>
-        <button 
+        <button
           className={`btn text ${activeTab === "handovers" ? "active" : ""}`}
           style={{ borderBottom: activeTab === "handovers" ? "2px solid var(--accent)" : "2px solid transparent", borderRadius: 0, paddingBottom: 12 }}
           onClick={() => setActiveTab("handovers")}
@@ -447,6 +408,17 @@ export default function InboxPage() {
       {/* INBOX TAB */}
       {activeTab === "inbox" && (
         <>
+          {tasks.length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Applications found outside TalentOS ({tasks.length})</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {tasks.map((t) => (
+                  <EmailTaskRow key={t.id} task={t} onUpdate={handleUpdateTask} />
+                ))}
+              </div>
+            </div>
+          )}
+
           <div style={{ padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2, #1a1a2e)", borderRadius: 10, border: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 2, background: "var(--bg, #111)", borderRadius: 7, padding: 3, border: "1px solid var(--border)" }}>
               {(["inbox", "sent", "all"] as Direction[]).map((tab) => (
@@ -607,26 +579,9 @@ export default function InboxPage() {
         <ApprovalsPanel candidateId={candidateId} />
       )}
 
-      {/* DRAFTS TAB */}
-      {activeTab === "drafts" && (
-        <div>
-          {loadingDrafts ? <div className="text-muted">Loading drafts...</div> : drafts.length === 0 ? <div className="text-muted">No drafts found.</div> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {drafts.map(d => (
-                <div key={d.id} className="card" style={{ padding: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div>
-                    <h3 style={{ margin: "0 0 4px", fontSize: 15 }}>{d.subject || "(No subject)"}</h3>
-                    <div style={{ fontSize: 13, color: "var(--muted)" }}>To: {d.to_email}</div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>Saved {new Date(d.created_at).toLocaleString()}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn text sm" style={{ color: "var(--danger)" }} onClick={() => handleDeleteDraft(d.id)}>Delete</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+      {/* UNASSIGNED TAB */}
+      {activeTab === "unassigned" && (
+        <UnassignedPanel candidates={candidates} onAssigned={() => { loadCounts(); loadThreads(page); }} />
       )}
 
       {/* HANDOVERS TAB */}

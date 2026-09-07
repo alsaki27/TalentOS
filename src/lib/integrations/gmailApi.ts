@@ -12,7 +12,10 @@ export async function watchGmailMailbox(accessToken: string, topicName: string):
   return { historyId: data.historyId, expiration: new Date(Number(data.expiration)).toISOString() };
 }
 
-async function gmailFetch(path: string, accessToken: string, init?: RequestInit) {
+// Exported (in addition to being used locally in this file) so
+// src/lib/integrations/_archived/gmailSendApi.ts can reuse it verbatim
+// without duplicating this helper.
+export async function gmailFetch(path: string, accessToken: string, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set("Authorization", "Bearer " + accessToken);
   const res = await fetch(GMAIL_BASE + path, { ...init, headers });
@@ -133,6 +136,10 @@ export interface GmailMessage {
   subject: string | null;
   snippet: string;
   bodyText: string;
+  // Raw text/html part, untouched (not stripped/converted), for the
+  // sandboxed-iframe rendering added by the shared-inbox redesign. Null
+  // when the message has no HTML part - callers fall back to bodyText.
+  bodyHtml: string | null;
   sentAt: string;
   direction: "inbound" | "outbound";
   attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string | null }>;
@@ -212,6 +219,36 @@ function extractBodyText(payload: any): string {
   return "";
 }
 
+// Captures the raw text/html part untouched, alongside (not instead of)
+// extractBodyText's stripped plain-text version - extractBodyText discards
+// the original HTML the moment it strips it, so this is a separate walk of
+// the same MIME tree rather than a refactor of that function.
+function extractBodyHtml(payload: any): string | null {
+  if (!payload) return null;
+  if (payload.mimeType === "text/html" && payload.body?.data) {
+    return decodeBase64Url(payload.body.data);
+  }
+  if (payload.parts) {
+    const htmlPart = payload.parts.find((p: any) => p.mimeType === "text/html" && p.body?.data);
+    if (htmlPart) return decodeBase64Url(htmlPart.body.data);
+    for (const part of payload.parts) {
+      const nested = extractBodyHtml(part);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+// Fetches one attachment's raw base64url-encoded bytes via Gmail's
+// messages.attachments.get. Used by the attachment-download proxy route
+// (part of the shared-inbox redesign's "read attachments properly"
+// requirement) with the same bearer-token auth pattern getMessage() uses.
+export async function getAttachment(accessToken: string, messageId: string, attachmentId: string): Promise<{ data: string; size: number }> {
+  const res = await gmailFetch(`/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`, accessToken);
+  const data = await res.json();
+  return { data: data.data, size: data.size };
+}
+
 export function extractAttachments(payload: any, result: GmailMessage["attachments"] = []) {
   if (!payload) return result;
   if (payload.filename && payload.body && (payload.body.attachmentId || payload.body.size)) {
@@ -250,92 +287,15 @@ export async function getMessage(accessToken: string, messageId: string, ownerEm
     subject: headerValue(headers, "Subject"),
     snippet: data.snippet || "",
     bodyText: extractBodyText(data.payload).slice(0, 20000),
+    bodyHtml: extractBodyHtml(data.payload)?.slice(0, 200000) ?? null,
     sentAt: dateHeader ? new Date(dateHeader).toISOString() : new Date(Number(data.internalDate)).toISOString(),
     direction: ownerEmail && from?.toLowerCase().includes(ownerEmail.toLowerCase()) ? "outbound" : "inbound",
     attachments: extractAttachments(data.payload),
   };
 }
 
-export interface GmailSendOptions {
-  to: string;
-  subject: string;
-  body: string;
-  replyToThreadId?: string | null;
-  attachmentUrls?: string[];
-}
-
-export interface GmailSendResult {
-  messageId: string;
-  threadId: string;
-}
-
-export interface GmailDraftResult {
-  draftId: string;
-  messageId: string;
-  threadId: string;
-}
-
-function buildRawEmail(opts: GmailSendOptions): string {
-  const lines: string[] = [];
-  lines.push(`To: ${opts.to}`);
-  lines.push(`Subject: ${opts.subject}`);
-  
-  if (opts.replyToThreadId) {
-    // Gmail uses In-Reply-To and References, but providing just threadId in the request body 
-    // is sufficient for the Gmail API to thread it correctly. However, adding basic headers doesn't hurt.
-  }
-  
-  lines.push("Content-Type: text/plain; charset=utf-8");
-  lines.push("");
-  lines.push(opts.body);
-  
-  const raw = lines.join("\r\n");
-  
-  // base64url encode
-  if (typeof btoa !== 'undefined') {
-    return btoa(unescape(encodeURIComponent(raw))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  } else {
-    return Buffer.from(raw, 'utf8').toString('base64url');
-  }
-}
-
-export async function sendGmailMessage(accessToken: string, opts: GmailSendOptions): Promise<GmailSendResult> {
-  const raw = buildRawEmail(opts);
-  const bodyPayload: any = { raw };
-  if (opts.replyToThreadId) {
-    bodyPayload.threadId = opts.replyToThreadId;
-  }
-
-  const res = await gmailFetch("/messages/send", accessToken, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(bodyPayload),
-  });
-  
-  const data = await res.json();
-  return {
-    messageId: data.id,
-    threadId: data.threadId,
-  };
-}
-
-export async function createGmailDraft(accessToken: string, opts: GmailSendOptions): Promise<GmailDraftResult> {
-  const raw = buildRawEmail(opts);
-  const bodyPayload: any = { message: { raw } };
-  if (opts.replyToThreadId) {
-    bodyPayload.message.threadId = opts.replyToThreadId;
-  }
-
-  const res = await gmailFetch("/drafts", accessToken, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(bodyPayload),
-  });
-
-  const data = await res.json();
-  return {
-    draftId: data.id,
-    messageId: data.message.id,
-    threadId: data.message.threadId,
-  };
-}
+// GmailSendOptions/GmailSendResult/GmailDraftResult and
+// buildRawEmail/sendGmailMessage/createGmailDraft were archived here to
+// src/lib/integrations/_archived/gmailSendApi.ts when TalentOS moved to a
+// single shared, forward-only Gmail inbox (a forwarded message cannot be
+// replied to). See that file's header for the restore path.
