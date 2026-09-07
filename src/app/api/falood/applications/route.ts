@@ -4,7 +4,9 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { resumifyResumeDataToExportDocument } from "@/lib/falood/resumeDocumentAdapters";
+import {
+  mergeResumifyEditorIntoBaseResume,
+} from "@/lib/falood/resumeDocumentAdapters";
 
 export const runtime = "nodejs";
 
@@ -224,46 +226,10 @@ export async function PATCH(req: NextRequest) {
             [baseResumeId]
           );
           if (baseRow) {
-            const converted = resumifyResumeDataToExportDocument(body.resumeData);
-            // Merge onto the existing content rather than replacing it
-            // wholesale: the resumify editor has no concept of
-            // certifications or the base resume's presentation "formatting"
-            // (styleId/margins/etc.) at all, so a full overwrite would
-            // silently delete them. Only the fields the Tailor Studio can
-            // actually edit are synced.
-            //
-            // customSections is a genuine, actively-edited field here (this
-            // route IS the save path for /falood/studio/tailor/[id], which
-            // renders the real ResumeForm/CustomSectionsForm editor - a prior
-            // version of this comment incorrectly assumed the caller was the
-            // A4Preview/SectionSidebar stack, which has no custom-section UI
-            // and, it turns out, doesn't even save through this route).
-            // resumifyResumeDataToExportDocument() reshapes customSections
-            // into the canonical { bullets } shape for the AI-pipeline
-            // consumers, which drops the Resumify-native fields
-            // (content/visible/type/order/placement) that CustomSectionsForm
-            // and the base editor's own preview templates depend on
-            // (templates filter on `visible`). Use body.resumeData's raw,
-            // untouched customSections array instead of the converted one so
-            // the round-trip back into base_resumes.content is lossless -
-            // exactly what the base editor itself will read back later.
-            const existingContent =
-              baseRow.content && typeof baseRow.content === "object" && !Array.isArray(baseRow.content)
-                ? baseRow.content
-                : {};
-            const rawCustomSections = Array.isArray((body.resumeData as any)?.customSections)
-              ? (body.resumeData as any).customSections
-              : converted.customSections;
-            const mergedContent = {
-              ...existingContent,
-              header: converted.header,
-              summary: converted.summary,
-              skills: converted.skills,
-              experience: converted.experience,
-              education: converted.education,
-              projects: converted.projects,
-              customSections: rawCustomSections,
-            };
+            const mergedContent = mergeResumifyEditorIntoBaseResume(
+              baseRow.content,
+              body.resumeData,
+            );
             await execute(
               "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
               [JSON.stringify(mergedContent), baseResumeId]

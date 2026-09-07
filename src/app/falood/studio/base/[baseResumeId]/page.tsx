@@ -14,23 +14,6 @@ import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/compon
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 
-// #region debug-point A:base-resume-runtime
-const reportBaseResumeDebug = (hypothesisId: 'A' | 'B' | 'C' | 'D' | 'E', msg: string, data: Record<string, unknown> = {}) =>
-    fetch('http://127.0.0.1:7777/event', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            sessionId: 'base-resume-load-loop',
-            runId: 'pre-fix',
-            hypothesisId,
-            location: 'src/app/falood/studio/base/[baseResumeId]/page.tsx',
-            msg: `[DEBUG] ${msg}`,
-            data,
-            ts: Date.now(),
-        }),
-    }).catch(() => {});
-// #endregion
-
 /* ── Tailor Modal ── */
 function TailorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { jobTitle: string; company: string; jobDescription: string }) => void }) {
     const [jobTitle, setJobTitle] = useState('');
@@ -215,70 +198,18 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     const isNew = baseResumeId === 'new';
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(isNew);
     const lastSavedSnapshotRef = useRef<string | null>(null);
-    const debugInstanceIdRef = useRef(`${baseResumeId}-${Math.random().toString(36).slice(2, 8)}`);
-    const renderCountRef = useRef(0);
-
-    renderCountRef.current += 1;
-
-    // #region debug-point A:render-commit
-    useEffect(() => {
-        if (renderCountRef.current <= 12) {
-            reportBaseResumeDebug('A', 'resume content committed', {
-                instanceId: debugInstanceIdRef.current,
-                renderCount: renderCountRef.current,
-                baseResumeId,
-                isNew,
-                isLoading,
-                hasLoadedInitialData,
-            });
-        }
-    });
-    // #endregion
-
-    // #region debug-point A:mount-cycle
-    useEffect(() => {
-        reportBaseResumeDebug('A', 'resume content mounted', {
-            instanceId: debugInstanceIdRef.current,
-            baseResumeId,
-            isNew,
-        });
-        return () => {
-            reportBaseResumeDebug('A', 'resume content unmounted', {
-                instanceId: debugInstanceIdRef.current,
-                baseResumeId,
-            });
-        };
-    }, [baseResumeId, isNew]);
-    // #endregion
-
-    // #region debug-point E:browser-errors
-    useEffect(() => {
-        const handleWindowError = (event: ErrorEvent) => {
-            reportBaseResumeDebug('E', 'window error', {
-                instanceId: debugInstanceIdRef.current,
-                message: event.message,
-                source: event.filename,
-                line: event.lineno,
-                column: event.colno,
-            });
-        };
-        const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-            reportBaseResumeDebug('E', 'unhandled rejection', {
-                instanceId: debugInstanceIdRef.current,
-                reason: typeof event.reason === 'object'
-                    ? JSON.stringify(event.reason, Object.getOwnPropertyNames(event.reason))
-                    : String(event.reason),
-            });
-        };
-
-        window.addEventListener('error', handleWindowError);
-        window.addEventListener('unhandledrejection', handleUnhandledRejection);
-        return () => {
-            window.removeEventListener('error', handleWindowError);
-            window.removeEventListener('unhandledrejection', handleUnhandledRejection);
-        };
-    }, []);
-    // #endregion
+    // Synchronous mutual-exclusion for saves (a ref, not state, since it must
+    // be readable/settable instantly - see persistBaseResume). Root cause of
+    // deleted custom sections reappearing: the PATCH route used to await a
+    // multi-second AI keyword-generation call before responding, and with a
+    // 1s autosave debounce plus the explicit Save button, two saves could
+    // easily be in flight at once. Since each PATCH fully overwrites
+    // `content`, their responses could arrive out of order and let an
+    // older, in-flight save silently clobber a newer one (e.g. one made
+    // right after deleting a section). This guard ensures only one save is
+    // ever in flight; the debounce effect below retries with the freshest
+    // state once it clears.
+    const isSavingRef = useRef(false);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -289,66 +220,22 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     useEffect(() => {
         if (!isNew) {
             const fetchBaseResume = async () => {
-                // #region debug-point B:fetch-start
-                reportBaseResumeDebug('B', 'base resume fetch starting', {
-                    instanceId: debugInstanceIdRef.current,
-                    baseResumeId,
-                    isLoading,
-                    hasLoadedInitialData,
-                });
-                // #endregion
                 setIsLoading(true);
                 try {
                     const response = await fetch(`/api/base-resumes/${baseResumeId}`);
-                    // #region debug-point B:fetch-response
-                    reportBaseResumeDebug('B', 'base resume fetch completed', {
-                        instanceId: debugInstanceIdRef.current,
-                        baseResumeId,
-                        ok: response.ok,
-                        status: response.status,
-                    });
-                    // #endregion
                     const json = await response.json();
                     if (json && json.content) {
                         const convertedData = convertOldFormatToNew(json.content);
-                        // #region debug-point C:before-import
-                        reportBaseResumeDebug('C', 'importing fetched resume content', {
-                            instanceId: debugInstanceIdRef.current,
-                            baseResumeId,
-                            responseKeys: Object.keys(json || {}).slice(0, 12),
-                            experienceCount: Array.isArray(convertedData?.experience) ? convertedData.experience.length : null,
-                            projectCount: Array.isArray(convertedData?.projects) ? convertedData.projects.length : null,
-                        });
-                        // #endregion
                         importResumeData(convertedData);
                         lastSavedSnapshotRef.current = JSON.stringify(convertedData);
                         setCandidateId(json.candidate_id || null);
                         setHasLoadedInitialData(true);
                         showToast('Base Resume loaded.');
-                        // #region debug-point C:after-import
-                        reportBaseResumeDebug('C', 'fetched resume content imported', {
-                            instanceId: debugInstanceIdRef.current,
-                            baseResumeId,
-                            candidateId: json.candidate_id || null,
-                        });
-                        // #endregion
                     }
                 } catch (error) {
-                    // #region debug-point E:fetch-error
-                    reportBaseResumeDebug('E', 'base resume fetch failed', {
-                        instanceId: debugInstanceIdRef.current,
-                        baseResumeId,
-                        error: error instanceof Error ? error.message : String(error),
-                    });
-                    // #endregion
+                    console.error('Error loading base resume:', error);
                 } finally {
                     setIsLoading(false);
-                    // #region debug-point C:fetch-finally
-                    reportBaseResumeDebug('C', 'base resume fetch finalized', {
-                        instanceId: debugInstanceIdRef.current,
-                        baseResumeId,
-                    });
-                    // #endregion
                 }
             };
             fetchBaseResume();
@@ -382,11 +269,17 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     const persistBaseResume = useCallback(async (showSuccessToast = false) => {
         if (isNew) return false;
 
+        // Never let two PATCHes race - see isSavingRef's declaration for why.
+        // The debounce effect below re-checks and retries once this clears,
+        // so a save that's skipped here is never silently lost.
+        if (isSavingRef.current) return false;
+
         const snapshot = JSON.stringify(state.resumeData);
         if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
             return true;
         }
 
+        isSavingRef.current = true;
         setIsSaving(true);
         setSaveStatus('saving');
         try {
@@ -415,6 +308,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
             }
             return false;
         } finally {
+            isSavingRef.current = false;
             setIsSaving(false);
         }
     }, [baseResumeId, isNew, state.resumeData]);
@@ -455,7 +349,11 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     };
 
     useEffect(() => {
-        if (isNew || isLoading || !hasLoadedInitialData) return;
+        // isSaving re-runs this effect the instant a save finishes, so a
+        // change that arrived while one was in flight (skipped by
+        // persistBaseResume's isSavingRef guard) always gets a follow-up
+        // attempt with the freshest state - it's never silently dropped.
+        if (isNew || isLoading || !hasLoadedInitialData || isSaving) return;
 
         const snapshot = JSON.stringify(state.resumeData);
         if (snapshot === lastSavedSnapshotRef.current) return;
@@ -465,19 +363,17 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
         }, 1000);
 
         return () => window.clearTimeout(timeoutId);
-    }, [hasLoadedInitialData, isLoading, isNew, persistBaseResume, state.resumeData]);
+    }, [hasLoadedInitialData, isLoading, isNew, isSaving, persistBaseResume, state.resumeData]);
 
     const handleTailorSubmit = async (data: { jobTitle: string; company: string; jobDescription: string }) => {
         setShowTailorModal(false);
-        // Save current base resume first
+        // Save current base resume first - routed through the same guarded
+        // persistBaseResume as everything else, so this can't race an
+        // in-flight autosave with its own separate, un-tracked PATCH.
         if (!isNew) {
-            await fetch(`/api/base-resumes/${baseResumeId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: state.resumeData }),
-            });
+            await persistBaseResume(false);
         }
-        
+
         // Then create a NEW application for tailoring
         try {
             const createResponse = await fetch('/api/falood/applications', {

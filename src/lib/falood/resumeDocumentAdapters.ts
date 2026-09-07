@@ -125,3 +125,57 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
     },
   });
 }
+
+/**
+ * Applies the Resumify editor's full, current state to a base resume without
+ * leaving an older representation of the same editable data behind.
+ *
+ * Base resumes exist in two shapes in production. Older rows use the
+ * canonical ResumeDocument shape, while rows created by the base-resume
+ * editor use Resumify's native shape. Preserve the row's shape so existing
+ * consumers keep seeing the format they already understand.
+ *
+ * Certifications need special handling. Canonical certifications are shown
+ * in Resumify as a custom section. Once the editor saves, that custom section
+ * is the authoritative representation, so the legacy certifications array
+ * must be cleared. Otherwise deleting the visible Certifications section only
+ * removes customSections; the hidden legacy array recreates it on reopen.
+ */
+export function mergeResumifyEditorIntoBaseResume(
+  existingContent: unknown,
+  resumeData: any,
+): Record<string, unknown> {
+  const existing = existingContent && typeof existingContent === "object" && !Array.isArray(existingContent)
+    ? existingContent as Record<string, unknown>
+    : {};
+  const rawResumeData = resumeData && typeof resumeData === "object" && !Array.isArray(resumeData)
+    ? resumeData as Record<string, unknown>
+    : {};
+  const hasCustomSections = Object.prototype.hasOwnProperty.call(rawResumeData, "customSections");
+  const rawCustomSections = Array.isArray(rawResumeData.customSections)
+    ? rawResumeData.customSections
+    : [];
+
+  // Rows already in the editor-native shape must stay editor-native. Mixing
+  // canonical experience/skills into a document that still has personalInfo
+  // makes the loader choose the native parser and then read the wrong keys.
+  if (existing.personalInfo && typeof existing.personalInfo === "object") {
+    return {
+      ...existing,
+      ...rawResumeData,
+      ...(hasCustomSections ? { customSections: rawCustomSections, certifications: [] } : {}),
+    };
+  }
+
+  const converted = resumifyResumeDataToExportDocument(rawResumeData);
+  return {
+    ...existing,
+    header: converted.header,
+    summary: converted.summary,
+    skills: converted.skills,
+    experience: converted.experience,
+    education: converted.education,
+    projects: converted.projects,
+    ...(hasCustomSections ? { customSections: rawCustomSections, certifications: [] } : {}),
+  };
+}

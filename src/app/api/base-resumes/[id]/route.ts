@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { queryOne, execute } from "@/server/db/neon";
 import { generateBaseResumeJobSearchProfile } from "@/server/services/baseResumeJobSearchKeywordService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -56,15 +57,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   if ((body.content || body.target_industry || body.target_roles) && data?.candidate_id) {
-    try {
-      await generateBaseResumeJobSearchProfile({
+    // Dispatched in the background instead of awaited: this used to block the
+    // response on a full AI keyword-generation call. The editor autosaves on
+    // every edit (1s debounce) and awaited AI calls can take several seconds,
+    // so two saves (e.g. an autosave and the explicit Save button, or two
+    // autosaves in a row) could easily be in flight at once - and since each
+    // PATCH does a full-object overwrite of `content`, their responses could
+    // arrive out of order and let an older, in-flight save silently clobber
+    // a newer one (confirmed as the cause of deleted custom sections
+    // reappearing). Not awaiting this call removes the multi-second window
+    // that made that race routine, without changing what the keyword agent
+    // does - failures were already just logged, never surfaced to the caller.
+    await backgroundDispatch(
+      generateBaseResumeJobSearchProfile({
         baseResumeId: data.id,
         triggerType: "resume_updated",
         userId: context!.profile.user_id,
-      });
-    } catch (keywordError: any) {
-      console.error("[BASE_RESUME_UPDATE] keyword agent failed", keywordError?.message || keywordError);
-    }
+      }).catch((keywordError: any) => {
+        console.error("[BASE_RESUME_UPDATE] keyword agent failed", keywordError?.message || keywordError);
+      })
+    );
   }
 
   return NextResponse.json(data);
