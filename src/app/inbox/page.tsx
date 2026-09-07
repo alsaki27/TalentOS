@@ -6,7 +6,6 @@ import { GmailConnectionHeader } from "./components/GmailConnectionHeader";
 import { UnassignedPanel } from "./components/UnassignedPanel";
 import { PriorityBadge } from "./components/PriorityBadge";
 import EmailActionModal from "./components/EmailActionModal";
-import EmailTaskRow, { type EmailTask } from "./components/EmailTaskRow";
 
 type Direction = "inbox" | "sent" | "all";
 type PageTab = "inbox" | "approvals" | "unassigned" | "handovers";
@@ -90,33 +89,15 @@ export default function InboxPage() {
   const [message, setMessage] = useState("");
   const [messageKind, setMessageKind] = useState<"success" | "error">("success");
 
-  // Untracked-application tasks (restored - see EmailTaskRow)
-  const [tasks, setTasks] = useState<EmailTask[]>([]);
-
   // Handovers state
   const [handovers, setHandovers] = useState<any[]>([]);
   const [loadingHandovers, setLoadingHandovers] = useState(false);
-
-  const busyRef = useRef(false);
 
   const loadCounts = useCallback(async () => {
     const params = candidateId ? `?candidateId=${candidateId}` : "";
     const res = await fetch(`/api/inbox/counts${params}`, { cache: "no-store" });
     if (res.ok) setCounts(await res.json());
   }, [candidateId]);
-
-  const loadTasks = useCallback(async () => {
-    if (busyRef.current) return;
-    const [openRes, inProgressRes] = await Promise.all([
-      fetch("/api/action-items?status=open", { cache: "no-store" }),
-      fetch("/api/action-items?status=in_progress", { cache: "no-store" }),
-    ]);
-    const openData = openRes.ok ? await openRes.json() : { items: [] };
-    const inProgressData = inProgressRes.ok ? await inProgressRes.json() : { items: [] };
-    const merged = [...(openData.items ?? []), ...(inProgressData.items ?? [])]
-      .filter((t: any) => t.type === "untracked_application");
-    setTasks(merged);
-  }, []);
 
   const loadThreads = useCallback(async (nextPage = 1) => {
     if (activeTab !== "inbox") return;
@@ -217,8 +198,6 @@ export default function InboxPage() {
   }, [candidatesRetryKey]);
 
   useEffect(() => { loadCounts(); }, [loadCounts]);
-  useEffect(() => { loadTasks(); }, [loadTasks]);
-
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadThreads(1); }, 300);
     return () => window.clearTimeout(timer);
@@ -249,7 +228,7 @@ export default function InboxPage() {
       if (!response.ok) throw new Error(data.error || "Gmail sync failed.");
       setMessageKind("success");
       setMessage("Gmail sync completed.");
-      await Promise.all([loadThreads(1), loadCounts(), loadTasks()]);
+      await Promise.all([loadThreads(1), loadCounts()]);
     } catch (error) {
       setMessageKind("error");
       setMessage(error instanceof Error ? error.message : "Gmail sync failed.");
@@ -266,15 +245,6 @@ export default function InboxPage() {
     });
     loadHandoversData();
     loadCounts();
-  };
-
-  const handleUpdateTask = async (id: string, status: string, note: string | undefined, takeover: boolean) => {
-    await fetch(`/api/action-items/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status, resolution_note: note, takeover }),
-    });
-    await Promise.all([loadTasks(), loadCounts()]);
   };
 
   function goToPage(val: string) {
@@ -411,17 +381,6 @@ export default function InboxPage() {
       {/* INBOX TAB */}
       {activeTab === "inbox" && (
         <>
-          {tasks.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Applications found outside TalentOS ({tasks.length})</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {tasks.map((t) => (
-                  <EmailTaskRow key={t.id} task={t} onUpdate={handleUpdateTask} />
-                ))}
-              </div>
-            </div>
-          )}
-
           <div style={{ padding: "10px 14px", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2, #1a1a2e)", borderRadius: 10, border: "1px solid var(--border)" }}>
             <div style={{ display: "flex", gap: 2, background: "var(--bg, #111)", borderRadius: 7, padding: 3, border: "1px solid var(--border)" }}>
               {(["inbox", "sent", "all"] as Direction[]).map((tab) => (
