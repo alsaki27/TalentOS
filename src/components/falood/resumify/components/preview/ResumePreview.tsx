@@ -1,6 +1,11 @@
 import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
-import { DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
+import {
+  DEFAULT_PAGE_PADDING,
+  getPageSizePx,
+  getPageSizeCss,
+  PAGE_OVERFLOW_TOLERANCE_PX,
+} from '@/components/falood/resumify/types/resume';
 import { ResumeTemplateSwitch } from './ResumeTemplateSwitch';
 import { applySuggestionToResumeData } from './AiSuggestions';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -132,33 +137,59 @@ export const ResumePreview: React.FC = () => {
     };
   }, [containerRef]);
 
+  const pageSizePx = getPageSizePx(previewData.pageFormat);
+  const pageSizeCss = getPageSizeCss(previewData.pageFormat);
+
   React.useEffect(() => {
     if (dimensions.width === 0 || dimensions.height === 0) return;
-
-    const isA4 = resumeData.pageFormat === 'a4';
-    const pageWidth = isA4 ? 794 : 816; // A4: 210mm = 794px, Letter: 8.5in = 816px
-    const pageHeight = isA4 ? 1123 : 1056; // A4: 297mm = 1123px, Letter: 11in = 1056px
 
     // Add padding to container calculation
     const padding = 32;
     const availableWidth = dimensions.width - padding;
     const availableHeight = dimensions.height - padding;
 
-    const scaleWidth = availableWidth / pageWidth;
-    const scaleHeight = availableHeight / pageHeight;
+    const scaleWidth = availableWidth / pageSizePx.width;
+    // Deliberately still fits a SINGLE page to the viewport, so a one-page
+    // resume looks exactly as it always has. Extra pages are reached by
+    // scrolling rather than by shrinking every resume to fit them all.
+    const scaleHeight = availableHeight / pageSizePx.height;
 
     // Use the smaller scale to fit entirely, but don't go too small
     const newScale = Math.min(scaleWidth, scaleHeight);
     setScale(newScale);
-  }, [dimensions, resumeData.pageFormat]);
+  }, [dimensions, pageSizePx.width, pageSizePx.height]);
 
-  const isA4 = resumeData.pageFormat === 'a4';
-  const pageWidth = isA4 ? 794 : 816;
-  const pageHeight = isA4 ? 1123 : 1056;
+  // The rendered height of the resume at 100% scale. Measured rather than
+  // estimated, because it depends on the template, typography, and page
+  // padding all together. transform: scale() does not affect layout metrics,
+  // so this stays correct at any zoom level.
+  const [contentEl, setContentEl] = React.useState<HTMLDivElement | null>(null);
+  const [contentHeight, setContentHeight] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!contentEl) return;
+    const measure = () => setContentHeight(contentEl.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(contentEl);
+    return () => observer.disconnect();
+  }, [contentEl]);
+
+  // How many pages the content actually occupies. The paper grows to match,
+  // instead of being clipped to the first page.
+  const pageCount = Math.max(
+    1,
+    Math.ceil((contentHeight - PAGE_OVERFLOW_TOLERANCE_PX) / pageSizePx.height) || 1,
+  );
+  const pageBreaks = Array.from({ length: pageCount - 1 }, (_, index) => index + 1);
 
   return (
     <div
-      className="resume-preview-container w-full h-full flex items-center justify-center p-2 print:p-0 print:block print:w-full print:h-auto"
+      className="resume-preview-container w-full h-full flex justify-center p-2 overflow-auto print:p-0 print:block print:w-full print:h-auto print:overflow-visible"
+      // A single page stays vertically centred exactly as before; once the
+      // resume spills over, it anchors to the top so page one is what you see
+      // first and the rest is a scroll away.
+      style={{ alignItems: pageCount > 1 ? 'flex-start' : 'center' }}
       ref={setContainerRef}
     >
       {dimensions.width === 0 ? (
@@ -167,20 +198,23 @@ export const ResumePreview: React.FC = () => {
         </div>
       ) : (
         <div
-          className="resume-paper bg-white rounded-lg shadow-xl overflow-visible origin-center print:shadow-none print:m-0 print:w-full print:h-auto print:max-w-full"
+          className="resume-paper relative bg-white rounded-lg shadow-xl overflow-visible origin-center shrink-0 print:shadow-none print:m-0 print:w-full print:h-auto print:max-w-full"
           style={{
-            width: pageWidth * scale,
-            height: pageHeight * scale,
-            maxWidth: '100%',
-            maxHeight: '100%'
+            width: pageSizePx.width * scale,
+            height: pageSizePx.height * pageCount * scale,
           }}
         >
           <div
             id="resume-content"
-            className="w-full h-full relative print:shadow-none print:rounded-none overflow-hidden"
+            ref={setContentEl}
+            className="relative print:shadow-none print:rounded-none"
             style={{
-              width: isA4 ? '210mm' : '8.5in',
-              height: isA4 ? '297mm' : '11in',
+              width: pageSizeCss.width,
+              // minHeight, not height: the paper is always at least one page
+              // tall but is free to grow with the content. A fixed height
+              // here (paired with overflow: hidden) was what silently hid
+              // everything past page one.
+              minHeight: pageSizeCss.height,
               fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
               padding: `${pagePadding}in`,
               color: '#050505ff',
@@ -191,6 +225,22 @@ export const ResumePreview: React.FC = () => {
           >
             {renderTemplate()}
           </div>
+
+          {/* Where each new sheet of paper starts. Screen-only: printing is
+              paginated by the browser itself, which draws no such markers. */}
+          {pageBreaks.map((pageIndex) => (
+            <div
+              key={pageIndex}
+              aria-hidden="true"
+              className="pointer-events-none absolute left-0 right-0 flex items-center justify-end print:hidden"
+              style={{ top: pageSizePx.height * pageIndex * scale, transform: 'translateY(-50%)' }}
+            >
+              <div className="absolute left-0 right-0 border-t border-dashed border-slate-400/70" />
+              <span className="relative mr-2 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-medium leading-none text-slate-500 shadow-sm">
+                Page {pageIndex + 1}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>

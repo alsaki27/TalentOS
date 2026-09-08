@@ -127,6 +127,38 @@ export const DEFAULT_PAGE_PADDING = 0.75;
 // here instead of duplicated as a bare `10` in each of those.
 export const DEFAULT_FONT_SIZE = 10;
 
+// Physical paper geometry, derived from the real page sizes rather than
+// restated as pixel literals. CSS defines one inch as exactly 96px, so every
+// value the preview needs (px for scaling maths, CSS units for layout) comes
+// from these two source dimensions.
+export const CSS_PX_PER_INCH = 96;
+const MM_PER_INCH = 25.4;
+
+const PAGE_SIZE_INCHES: Record<ResumeData['pageFormat'], { width: number; height: number }> = {
+  a4: { width: 210 / MM_PER_INCH, height: 297 / MM_PER_INCH },
+  letter: { width: 8.5, height: 11 },
+};
+
+/** Page size in CSS pixels — used for scale maths and page-boundary offsets. */
+export function getPageSizePx(pageFormat: ResumeData['pageFormat']) {
+  const { width, height } = PAGE_SIZE_INCHES[pageFormat] ?? PAGE_SIZE_INCHES.a4;
+  return { width: width * CSS_PX_PER_INCH, height: height * CSS_PX_PER_INCH };
+}
+
+/** Page size as CSS length strings — used for the paper element's own box. */
+export function getPageSizeCss(pageFormat: ResumeData['pageFormat']) {
+  return pageFormat === 'letter'
+    ? { width: '8.5in', height: '11in' }
+    : { width: '210mm', height: '297mm' };
+}
+
+// Slack before content counts as having spilled onto another page. A page is
+// a fractional pixel height (A4 is 1122.52px), while offsetHeight is a
+// rounded integer, so an exactly-one-page resume measures a hair "taller"
+// than the page it fits on. Shared so the preview's page count and the
+// editors' overflow banner can never disagree by a rounding error.
+export const PAGE_OVERFLOW_TOLERANCE_PX = 1;
+
 export const DEFAULT_SECTIONS: ResumeSection[] = [
   { id: 'summary', title: 'Professional Summary', visible: true, order: 1 },
   { id: 'skills', title: 'Skills', visible: true, order: 2 },

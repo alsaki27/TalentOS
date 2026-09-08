@@ -10,6 +10,7 @@ import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDo
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
+import { getPageSizePx, PAGE_OVERFLOW_TOLERANCE_PX } from '@/components/falood/resumify/types/resume';
 import { readResumePresentation } from '@/lib/falood/resumePresentation';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -117,7 +118,12 @@ function projectBulletsToText(value: unknown): string {
 
 function convertOldFormatToNew(old: any): any {
     if (!old || typeof old !== 'object') return old;
-    if (old.personalInfo) return old; // Already new format
+    // Already the editor-native shape - content passes through untouched, but
+    // presentation is still normalized so a row missing (or carrying an empty)
+    // sections/colors/typography block opens with usable defaults instead of
+    // rendering a blank page. Matches what studioDocumentToResumeData already
+    // does for the same shape, so both editors agree on any given resume.
+    if (old.personalInfo) return { ...old, ...readResumePresentation(old) };
     
     // It's the old ResumeDocument format (has header, experience, education, etc)
     return {
@@ -240,14 +246,15 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
         }
     }, [baseResumeId, isNew]);
 
-    // Page overflow detection
+    // Page overflow detection. Measured against the same derived page
+    // geometry the preview paginates with, so this banner and the page
+    // separators drawn in the preview can never disagree.
     React.useEffect(() => {
         const checkOverflow = () => {
             const element = document.getElementById('resume-content');
             if (element) {
-                const pageHeight = state.resumeData.pageFormat === 'a4' ? 297 * 3.779 : 11 * 96;
-                const isOverflowing = element.scrollHeight > pageHeight * 1.1;
-                setPageOverflow(isOverflowing);
+                const { height: pageHeight } = getPageSizePx(state.resumeData.pageFormat);
+                setPageOverflow(element.offsetHeight - PAGE_OVERFLOW_TOLERANCE_PX > pageHeight);
             }
         };
         const timeoutId = setTimeout(checkOverflow, 500);
