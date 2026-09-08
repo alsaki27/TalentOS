@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
-import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
+import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
 
 export interface ResumeVersion {
   id: string;
@@ -71,7 +71,7 @@ const initialResumeData: ResumeData = {
   colors: DEFAULT_COLORS,
   template: 'business-professional',
   pageFormat: 'a4',
-  fontSize: 10,
+  fontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Inter',
   pagePadding: DEFAULT_PAGE_PADDING
 };
@@ -175,6 +175,15 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
       return { ...initialState, resumeData: initialResumeData };
     case 'IMPORT_RESUME_DATA': {
       const newData = { ...initialResumeData, ...action.payload };
+      // Normalize at the single funnel every load path goes through (base
+      // resume fetch, JSON import, AI-tailored seed data): a fontSize that
+      // isn't a valid number - e.g. a legacy named size like "medium" from
+      // before this field was point-based, or a hand-edited JSON import -
+      // would otherwise silently persist as-is and never coerce back to a
+      // usable value on its own.
+      if (typeof newData.fontSize !== 'number' || !Number.isFinite(newData.fontSize)) {
+        newData.fontSize = DEFAULT_FONT_SIZE;
+      }
       if (newData.skills?.categorized) {
         newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
           ...cat,

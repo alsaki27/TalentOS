@@ -17,6 +17,7 @@
 // pass whatever shape it has without its own adapter.
 
 import { ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
+import { pickResumePresentation } from "@/lib/falood/resumePresentation";
 
 export const DEFAULT_FORMATTING: ResumeFormatting = {
   styleId: "default",
@@ -140,6 +141,13 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
  * is the authoritative representation, so the legacy certifications array
  * must be cleared. Otherwise deleting the visible Certifications section only
  * removes customSections; the hidden legacy array recreates it on reopen.
+ *
+ * Presentation settings (template/colors/typography/page format/section
+ * order - everything the Customize and Settings panels edit) are carried
+ * through for canonical rows too. The canonical shape has no home for them,
+ * so they used to be dropped here and then re-defaulted on the next read,
+ * which meant a canonical base resume could never keep a single one of those
+ * changes. See resumePresentation.ts.
  */
 export function mergeResumifyEditorIntoBaseResume(
   existingContent: unknown,
@@ -176,6 +184,12 @@ export function mergeResumifyEditorIntoBaseResume(
     experience: converted.experience,
     education: converted.education,
     projects: converted.projects,
+    // Only the presentation keys this save actually carried, so a
+    // content-only caller leaves the stored settings alone rather than
+    // resetting them. `formatting` is intentionally left as-is: it is the
+    // canonical styling block the Skarion PDF renderer reads, and rewriting
+    // it here would change existing exports.
+    ...pickResumePresentation(rawResumeData),
     ...(hasCustomSections ? { customSections: rawCustomSections, certifications: [] } : {}),
   };
 }

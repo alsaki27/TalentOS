@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Palette, RotateCcw, Type, Settings } from 'lucide-react';
-import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING } from '@/components/falood/resumify/types/resume';
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
 
 export const ColorCustomizer: React.FC = () => {
   const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding } = useResume();
@@ -141,8 +141,8 @@ export const ColorCustomizer: React.FC = () => {
 
             <div className="space-y-2">
               <Label>Font Size</Label>
-              <Select 
-                value={String(typeof fontSize === 'number' ? fontSize : 10)} 
+              <Select
+                value={String(typeof fontSize === 'number' ? fontSize : DEFAULT_FONT_SIZE)}
                 onValueChange={(value) => updateFontSize(Number(value))}
               >
                 <SelectTrigger>

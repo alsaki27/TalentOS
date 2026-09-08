@@ -26,10 +26,9 @@
 
 import {
   ResumeData,
-  DEFAULT_COLORS,
-  DEFAULT_PAGE_PADDING,
   DEFAULT_SECTIONS,
 } from "@/components/falood/resumify/types/resume";
+import { readResumePresentation } from "@/lib/falood/resumePresentation";
 
 export interface StudioDocumentLike {
   header?: {
@@ -172,13 +171,7 @@ function normalizeResumifyNative(d: any): ResumeData {
       order: typeof c?.order === "number" ? c.order : DEFAULT_SECTIONS.length + 1,
       placement: c?.placement === "left" || c?.placement === "right" ? c.placement : undefined,
     })),
-    sections: asArray<any>(d.sections).length > 0 ? d.sections : DEFAULT_SECTIONS,
-    colors: d.colors && typeof d.colors === "object" ? d.colors : DEFAULT_COLORS,
-    template: typeof d.template === "string" ? d.template : "business-professional",
-    pageFormat: d.pageFormat === "a4" ? "a4" : "letter",
-    fontSize: typeof d.fontSize === 'number' ? Math.min(16, Math.max(6, d.fontSize)) : d.fontSize === 'large' ? 12 : d.fontSize === 'medium' ? 11 : 10,
-    fontFamily: asString(d.fontFamily) || "Inter",
-    pagePadding: typeof d.pagePadding === "number" ? d.pagePadding : DEFAULT_PAGE_PADDING,
+    ...readResumePresentation(d),
   };
 }
 
@@ -286,13 +279,13 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
       categorized,
     },
     customSections,
-    sections: DEFAULT_SECTIONS,
-    colors: DEFAULT_COLORS,
-    template: "business-professional",
-    pageFormat: "a4",
-    fontSize: 10,
-    fontFamily: "Inter",
-    pagePadding: DEFAULT_PAGE_PADDING,
+    // Read from the document rather than hardcoded here. A canonical base
+    // resume carries these only once the editor has saved them (see
+    // mergeResumifyEditorIntoBaseResume) - before that they fall back to the
+    // same defaults this used to hardcode, so first-open behavior is
+    // unchanged. What changes is that a saved Customize/Settings choice now
+    // survives the reopen instead of being overwritten.
+    ...readResumePresentation(d),
   };
 }
 

@@ -121,6 +121,12 @@ export const DEFAULT_COLORS: ResumeColors = {
 
 export const DEFAULT_PAGE_PADDING = 0.75;
 
+// Single source of truth for the initial/fallback font size (points), used
+// by ResumeContext's initial state, the old-format-resume conversion in the
+// base resume editor, and the Typography control's display fallback - kept
+// here instead of duplicated as a bare `10` in each of those.
+export const DEFAULT_FONT_SIZE = 10;
+
 export const DEFAULT_SECTIONS: ResumeSection[] = [
   { id: 'summary', title: 'Professional Summary', visible: true, order: 1 },
   { id: 'skills', title: 'Skills', visible: true, order: 2 },

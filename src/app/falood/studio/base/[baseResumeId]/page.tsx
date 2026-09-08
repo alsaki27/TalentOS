@@ -10,7 +10,7 @@ import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDo
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
-import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS } from '@/components/falood/resumify/types/resume';
+import { readResumePresentation } from '@/lib/falood/resumePresentation';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -170,13 +170,11 @@ function convertOldFormatToNew(old: any): any {
             endDate: p.endDate || ''
         })).filter((project: any) => project.title || project.description || project.technologies.length || project.liveUrl || project.githubUrl) : [],
         customSections: buildCustomSectionsForBuilder(old),
-        sections: DEFAULT_SECTIONS,
-        colors: DEFAULT_COLORS,
-        template: 'business-professional',
-        pageFormat: 'a4',
-        fontSize: 'medium',
-        fontFamily: 'Inter',
-        pagePadding: DEFAULT_PAGE_PADDING
+        // Presentation settings come from the stored document (falling back
+        // to the same defaults this used to hardcode when it carries none),
+        // so a saved template/color/typography/section-order choice is not
+        // silently reset on reopen. See src/lib/falood/resumePresentation.ts.
+        ...readResumePresentation(old),
     };
 }
 
