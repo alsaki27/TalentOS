@@ -19,18 +19,20 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(1, Number.parseInt(url.searchParams.get("pageSize") || "100", 10) || 100));
   const status = (url.searchParams.get("status") || "active").trim().toLowerCase();
+  const pipelineStage = "applying";
   const offset = (page - 1) * pageSize;
   const totalRow = await queryOne<{ total: number }>(
-    "SELECT COUNT(*)::int AS total FROM candidates WHERE lower(COALESCE(status, '')) = $1",
-    [status]
+    "SELECT COUNT(*)::int AS total FROM candidates WHERE lower(COALESCE(status, '')) = $1 AND lower(COALESCE(pipeline_stage, '')) = $2",
+    [status, pipelineStage]
   );
   const data = await query(
-    `SELECT id, candidate_number, name, email, status, pipeline_stage
+    `SELECT id, name
      FROM candidates
      WHERE lower(COALESCE(status, '')) = $1
+       AND lower(COALESCE(pipeline_stage, '')) = $2
      ORDER BY name ASC
-     OFFSET $2 LIMIT $3`,
-    [status, offset, pageSize]
+     OFFSET $3 LIMIT $4`,
+    [status, pipelineStage, offset, pageSize]
   );
-  return NextResponse.json({ data: data ?? [], total: totalRow?.total ?? 0, page, pageSize, status });
+  return NextResponse.json({ data: data ?? [], total: totalRow?.total ?? 0, page, pageSize, status, pipelineStage });
 }
