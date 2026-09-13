@@ -155,7 +155,23 @@ function isJobCeoAuthorized(req: NextRequest, pathname: string) {
     if (!secret) return false;
     return req.headers.get("authorization") === `Bearer ${secret}`;
   }
-  if (pathname === "/api/job-ceo/ingest") {
+  // effective-keywords and seen-external-ids are the two read paths the
+  // agency-source scripts (actalent_ingest.py, broadstaff_ingest.py) call
+  // alongside /api/job-ceo/ingest - each route already carries its own
+  // identical JOB_CEO_INGEST_SECRET bearer check, but that check is
+  // unreachable without this middleware exemption: this gate's default,
+  // for anything not listed here, is to require a staff session cookie,
+  // which a scheduled script has no way to present. Missing this exemption
+  // produced a 401 "Authentication required" from middleware itself, before
+  // either route's own auth logic ever ran - both scripts already degrade
+  // gracefully when these calls fail (falling back to static keywords /
+  // fetching every candidate), so the symptom was silent reduced coverage,
+  // not a hard crash, until this was traced down.
+  if (
+    pathname === "/api/job-ceo/ingest" ||
+    pathname === "/api/job-ceo/effective-keywords" ||
+    pathname === "/api/job-ceo/seen-external-ids"
+  ) {
     const secret = process.env.JOB_CEO_INGEST_SECRET;
     if (!secret) return false;
     return req.headers.get("authorization") === `Bearer ${secret}`;
