@@ -1,5 +1,6 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { insertStaged, checkAndRecordDedup } from "@/server/repositories/jobCeoStagingRepository";
+import { insertStaged, checkAndRecordDedup, computeJobDedupSignature } from "@/server/repositories/jobCeoStagingRepository";
 import { createRun, bumpRunCounts } from "@/server/repositories/jobCeoRunRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
@@ -33,27 +34,26 @@ export async function POST(req: NextRequest) {
       runId = run.id;
     }
 
-    // Build dedup signatures for all incoming jobs
-    const signaturesInput = jobs.map((j) => {
-      const title = (String(j.title ?? "")).toLowerCase().trim();
-      const company = (String(j.company ?? "")).toLowerCase().trim();
-      return {
-        signature: `${title}|${company}`,
-        title: String(j.title ?? ""),
-        company: String(j.company ?? ""),
-      };
-    });
+    // Build dedup signatures for all incoming jobs. computeJobDedupSignature
+    // is the same function insertStaged uses to populate dedup_signature on
+    // the row — they must never diverge (see its docstring: a mismatch
+    // breaks the release path used on QA-drop and run deletion). A job with
+    // literally no title, company, or external_job_id gets a random,
+    // never-repeating signature rather than colliding every such row into
+    // one shared blank-key signature.
+    const jobSignatures = jobs.map((j) => computeJobDedupSignature(j) ?? `empty:${randomUUID()}`);
+
+    const signaturesInput = jobs.map((j, i) => ({
+      signature: jobSignatures[i],
+      title: String(j.title ?? ""),
+      company: String(j.company ?? ""),
+    }));
 
     // Cross-run dedup: get only signatures not previously seen
     const newSignatures = await checkAndRecordDedup(runId, signaturesInput);
 
     // Filter jobs to only the ones with new signatures
-    const dedupedJobs = jobs.filter((j) => {
-      const title = (String(j.title ?? "")).toLowerCase().trim();
-      const company = (String(j.company ?? "")).toLowerCase().trim();
-      const sig = `${title}|${company}`;
-      return newSignatures.has(sig);
-    });
+    const dedupedJobs = jobs.filter((_, i) => newSignatures.has(jobSignatures[i]));
 
     const skipped = jobs.length - dedupedJobs.length;
 

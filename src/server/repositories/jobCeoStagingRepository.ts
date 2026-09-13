@@ -26,6 +26,51 @@ export interface StagedJobRow {
   updated_at: string;
 }
 
+/**
+ * The single source of truth for "is this the same job we've already staged",
+ * used both by the cross-run gate in job-ceo/ingest/route.ts (which decides
+ * whether to insert at all) and by insertStaged below (which stores the same
+ * value on the row so it can later be released via removeDedupSignature —
+ * see jobCeoService.ts's "no_description" skip and jobCeoRunRepository.ts's
+ * deleteRun). Those two call sites MUST agree on every job, or a release
+ * call deletes a signature that was never actually inserted, silently
+ * blacklisting that job from ever being re-ingested.
+ *
+ * Prefers a namespaced external_job_id when the source supplies one. A bare
+ * title|company signature collapses distinct postings that share both — not
+ * hypothetical: Actalent and Broadstaff are single-employer staffing boards
+ * (company is always "Actalent" / "Broadstaff"), and real, differently
+ * located requisitions with the exact same title are common there (e.g.
+ * multiple regional "OSP Field Inspector" reqs, multiple "GIS Analyst"
+ * reqs). Namespaced by source so two sources' id spaces can never collide by
+ * coincidence. Falls back to title|company when no external_job_id is
+ * present, which is every job from every source before this change — so
+ * existing sources (OpenJobData, and anything without an id) see byte-
+ * identical signatures to before.
+ */
+export function computeJobDedupSignature(job: {
+  title?: unknown;
+  company?: unknown;
+  external_job_id?: unknown;
+  raw?: unknown;
+}): string | null {
+  const title = String(job.title ?? "").toLowerCase().trim();
+  const company = String(job.company ?? "").toLowerCase().trim();
+  const externalId = typeof job.external_job_id === "string" ? job.external_job_id.trim() : "";
+
+  if (externalId) {
+    let source = "unknown";
+    if (job.raw && typeof job.raw === "object") {
+      const rawSource = (job.raw as Record<string, unknown>).source;
+      if (typeof rawSource === "string" && rawSource.trim()) source = rawSource.trim().toLowerCase();
+    }
+    return `id:${source}:${externalId.toLowerCase()}`;
+  }
+
+  if (!title && !company) return null;
+  return `${title}|${company}`;
+}
+
 export async function insertStaged(
   runId: string,
   rows: Partial<StagedJob>[]
@@ -39,9 +84,7 @@ export async function insertStaged(
 
   for (var i = 0; i < rows.length; i++) {
     var r = rows[i];
-    var title = r.title ?? null;
-    var company = r.company ?? null;
-    var dedupSig = title && company ? title.toLowerCase() + "|" + company.toLowerCase() : null;
+    var dedupSig = computeJobDedupSignature(r);
 
     var rowPh: string[] = [];
     rowPh.push("$" + idx); valuesList.push(runId); idx++;
