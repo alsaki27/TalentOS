@@ -262,6 +262,122 @@ body::before {
   padding-right: 16px;
 }
 
+/* Job Agent's Run Dashboard table has 11 columns of run/tier data - same
+   full-bleed treatment as Application Queue, the AI Control Center, and the
+   Inbox rather than the default 1100px content shell. */
+.page:has(.job-agent-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Job CEO's Run History table has 11 columns of run/pipeline data - same
+   full-bleed treatment as Application Queue, the AI Control Center, the
+   Inbox, and Job Agent rather than the default 1100px content shell. */
+.page:has(.job-ceo-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.job-agent-page .job-agent-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.job-agent-page .job-agent-eyebrow {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.job-agent-page .stats-strip {
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+}
+
+.job-agent-page .source-actor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  transition: all 140ms var(--ease);
+  user-select: none;
+}
+
+.job-agent-page .source-actor-chip.active {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.job-agent-page .source-actor-chip input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+.job-agent-page .keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.job-agent-page .keyword-chip-icon-btn {
+  padding: 3px 6px;
+  font-size: 11px;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+.job-agent-page .run-dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 900px) {
+  .job-agent-page .stats-strip {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .job-agent-page .job-agent-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .job-agent-page .job-agent-header-row > a,
+  .job-agent-page .job-agent-header-row > button {
+    width: 100%;
+    text-align: center;
+  }
+  .job-agent-page .stats-strip {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+  .job-agent-page .run-now-btn {
+    width: 100%;
+  }
+}
+
 @media (max-width: 560px) {
   .inbox-page .inbox-thread-row {
     flex-direction: column;
@@ -1065,6 +1181,22 @@ label {
 
 .badge-tier-b {
   background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+/* Referenced by 8 pages (job-agent, jobs, candidates, application-queue,
+   admin/ai, resume-parsing-status, ...) that all assumed these existed
+   alongside the badge-tier-*/badge-priority-* variants above — none of them
+   were ever actually defined, so every "danger"/"warning" status badge on
+   those pages silently rendered as the plain default (violet) badge instead
+   of red/orange. Purely additive: fixes all 8 at once, overrides nothing. */
+.badge-danger {
+  background: rgba(var(--danger-rgb), 0.15);
+  color: var(--danger);
+}
+
+.badge-warning {
+  background: rgba(var(--warn-rgb), 0.15);
   color: var(--warn);
 }
 

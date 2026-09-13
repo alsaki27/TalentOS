@@ -93,8 +93,18 @@ export default function JobAgentPage() {
   const [showKgForm, setShowKgForm] = useState(false);
 
   async function load() {
-    const [runsRes, libRes, kgRes, batchesRes] = await Promise.allSettled([
-      fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"), fetch("/api/job-agent/batches?limit=10"),
+    // ARCHIVED 2026-09-13 — Nightly Automation is paused pending a rework
+    // (see the matching JSX block below). Commented out, not deleted, along
+    // with its render block so this whole call/fetch/render chain can be
+    // restored together. To restore: uncomment the batchesRes fetch below,
+    // the [runsRes, libRes, kgRes, batchesRes] destructure, and the JSX
+    // block marked "Nightly batch visibility" further down this file.
+    //
+    // const [runsRes, libRes, kgRes, batchesRes] = await Promise.allSettled([
+    //   fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"), fetch("/api/job-agent/batches?limit=10"),
+    // ]);
+    const [runsRes, libRes, kgRes] = await Promise.allSettled([
+      fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"),
     ]);
     if (runsRes.status === "fulfilled" && runsRes.value.ok) setRuns((await runsRes.value.json().catch(() => [])) ?? []);
     if (libRes.status === "fulfilled" && libRes.value.ok) {
@@ -102,16 +112,16 @@ export default function JobAgentPage() {
       setRoleGroups(d.groups ?? []);
     }
     if (kgRes.status === "fulfilled" && kgRes.value.ok) setKeywordGroups((await kgRes.value.json().catch(() => [])) ?? []);
-    if (batchesRes.status === "fulfilled" && batchesRes.value.ok) {
-      const data = await batchesRes.value.json().catch(() => ({ batches: [] }));
-      setNightlyBatches(data.batches ?? []);
-      setNightlyBatchError("");
-    } else if (batchesRes.status === "fulfilled") {
-      const data = await batchesRes.value.json().catch(() => ({}));
-      setNightlyBatchError(data.error ?? "Could not load nightly batches");
-    } else {
-      setNightlyBatchError("Could not load nightly batches");
-    }
+    // if (batchesRes.status === "fulfilled" && batchesRes.value.ok) {
+    //   const data = await batchesRes.value.json().catch(() => ({ batches: [] }));
+    //   setNightlyBatches(data.batches ?? []);
+    //   setNightlyBatchError("");
+    // } else if (batchesRes.status === "fulfilled") {
+    //   const data = await batchesRes.value.json().catch(() => ({}));
+    //   setNightlyBatchError(data.error ?? "Could not load nightly batches");
+    // } else {
+    //   setNightlyBatchError("Could not load nightly batches");
+    // }
   }
 
   useEffect(() => { load().then(() => setLoading(false)); }, []);
@@ -188,52 +198,70 @@ export default function JobAgentPage() {
     load();
   }
 
-  return (<>
-    <div className="page-header">
-      <h1>Job Agent</h1>
-      <Link href="/job-agent/review" className="btn" style={{ marginLeft: "auto" }}>Review & Approve →</Link>
+  const activeCount = runs.filter((r) => r.status === "running" || r.status === "pending" || r.status === "processing").length;
+  const succeededCount = runs.filter((r) => r.status === "succeeded").length;
+  const failedCount = runs.filter((r) => r.status !== "succeeded" && r.status !== "running" && r.status !== "pending" && r.status !== "processing").length;
+  const bestTotal = runs.reduce((sum, r) => sum + (r.best_count || 0), 0);
+
+  return (
+    <div className="job-agent-page">
+    <div className="page-header job-agent-header-row">
+      <div>
+        <div className="job-agent-eyebrow">Automated sourcing</div>
+        <h1>Job Agent</h1>
+        <p className="page-kicker">Pull fresh roles from Indeed, Google Jobs, and LinkedIn, then review and approve before they go live.</p>
+      </div>
+      <Link href="/job-agent/review" className="btn btn-primary">Review & Approve →</Link>
     </div>
-    {error && <p className="form-error">{error}</p>}
-    {message && <p style={{ color: "var(--accent)", fontSize: 13 }}>{message}</p>}
+    {error && <p className="form-error" style={{ marginBottom: 12 }}>{error}</p>}
+    {message && <p className="form-success" style={{ marginBottom: 12 }}>{message}</p>}
+
+    <div className="stats-strip">
+      <div className="stat-card"><span className="stat-label">Total runs</span><span className="stat-value">{runs.length}</span></div>
+      <div className="stat-card"><span className="stat-label">Active now</span><span className="stat-value">{activeCount}</span></div>
+      <div className="stat-card"><span className="stat-label">Succeeded</span><span className="stat-value">{succeededCount}</span></div>
+      <div className="stat-card"><span className="stat-label">Failed</span><span className="stat-value">{failedCount}</span></div>
+      <div className="stat-card"><span className="stat-label">Best-tier jobs</span><span className="stat-value">{bestTotal}</span></div>
+    </div>
 
     {/* ── Agent Controls ── */}
     <div className="card" style={{ marginBottom: 16 }}>
-      <h2 className="section-title">Agent Controls</h2>
+      <h2 className="section-title" style={{ fontSize: 17 }}>Agent Controls</h2>
 
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
           <h3 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>Role Groups</h3>
           <button onClick={() => {
             if (selectedRoleGroups.size === roleGroups.length) setSelectedRoleGroups(new Set());
             else setSelectedRoleGroups(new Set(roleGroups.map(g => g.id)));
-          }} style={{ fontSize: 13, background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}>
+          }} style={{ fontSize: 13, background: "none", border: "none", color: "var(--accent)", cursor: "pointer", fontWeight: 600, padding: 0 }}>
             {selectedRoleGroups.size === roleGroups.length ? "Deselect All" : "Select All"}
           </button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12, marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 10, marginBottom: 8 }}>
           {roleGroups.map((g) => (
-            <label key={g.id} className="checkbox-row" style={{ fontSize: 14, opacity: selectedRoleGroups.has(g.id) ? 1 : 0.75, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, padding: "4px 0" }}>
-              <input type="checkbox" checked={selectedRoleGroups.has(g.id)} onChange={() => trg(g.id)} style={{ width: 16, height: 16, cursor: "pointer" }} />
-              <span style={{ fontWeight: selectedRoleGroups.has(g.id) ? 600 : 400 }}>{g.id}: {g.label}</span>
+            <label key={g.id} className="checkbox-row" style={{ fontSize: 14, opacity: selectedRoleGroups.has(g.id) ? 1 : 0.75, cursor: "pointer", display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: selectedRoleGroups.has(g.id) ? "var(--accent-soft)" : "transparent", border: `1px solid ${selectedRoleGroups.has(g.id) ? "rgba(var(--accent-rgb), 0.4)" : "var(--border)"}` }}>
+              <input type="checkbox" checked={selectedRoleGroups.has(g.id)} onChange={() => trg(g.id)} style={{ width: 16, height: 16, cursor: "pointer", flexShrink: 0 }} />
+              <span style={{ fontWeight: selectedRoleGroups.has(g.id) ? 600 : 400, color: selectedRoleGroups.has(g.id) ? "var(--accent)" : "var(--ink)" }}>{g.id}: {g.label}</span>
             </label>
           ))}
         </div>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h3 style={{ fontSize: 14, margin: 0 }}>Custom Keyword Groups</h3>
-          <button onClick={startCreateKg} style={{ fontSize: 12 }}>+ New Group</button>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+          <h3 style={{ fontSize: 15, margin: 0, fontWeight: 600 }}>Custom Keyword Groups</h3>
+          <button onClick={startCreateKg} className="btn-compact">+ New Group</button>
         </div>
         {keywordGroups.length === 0 ? (
-          <p className="muted" style={{ fontSize: 13 }}>No custom keyword groups yet. Create one to add your own search queries.</p>
+          <p className="muted" style={{ fontSize: 13.5 }}>No custom keyword groups yet. Create one to add your own search queries.</p>
         ) : (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 8 }}>
             {keywordGroups.map((g) => (
-              <div key={g.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                <label className="checkbox-row" style={{ fontSize: 13 }}><input type="checkbox" checked={selectedKeywordGroups.has(g.id)} onChange={() => tkg(g.id)} />{g.label}</label>
-                <button onClick={() => startEditKg(g)} style={{ fontSize: 10, padding: "1px 4px" }}>✎</button>
-                <button onClick={() => deleteKg(g.id)} style={{ fontSize: 10, padding: "1px 4px", color: "var(--danger)" }}>✕</button>
+              <div key={g.id} className="keyword-chip">
+                <label className="checkbox-row" style={{ fontSize: 13.5 }}><input type="checkbox" checked={selectedKeywordGroups.has(g.id)} onChange={() => tkg(g.id)} />{g.label}</label>
+                <button onClick={() => startEditKg(g)} className="keyword-chip-icon-btn" title="Edit">✎</button>
+                <button onClick={() => deleteKg(g.id)} className="keyword-chip-icon-btn" style={{ color: "var(--danger)" }} title="Delete">✕</button>
               </div>
             ))}
           </div>
@@ -241,25 +269,25 @@ export default function JobAgentPage() {
       </div>
 
       {showKgForm && (
-        <div style={{ marginBottom: 16, padding: 12, background: "var(--surface)", borderRadius: 6, border: "1px solid var(--border)" }}>
-          <div className="field-group" style={{ marginBottom: 8 }}>
+        <div style={{ marginBottom: 20, padding: 14, background: "var(--surface)", borderRadius: 10, border: "1px solid var(--border)" }}>
+          <div className="field-group" style={{ marginBottom: 10 }}>
             <label>Group Name</label>
             <input value={kgForm.label} onChange={(e) => setKgForm((f) => ({ ...f, label: e.target.value }))} placeholder="e.g. My Fiber Roles" />
           </div>
-          <div className="field-group" style={{ marginBottom: 8 }}>
+          <div className="field-group" style={{ marginBottom: 10 }}>
             <label>Keywords (comma, semicolon, or newline separated)</label>
-            <textarea value={kgForm.keywordsText} onChange={(e) => setKgForm((f) => ({ ...f, keywordsText: e.target.value }))} placeholder="OSP Designer, Fiber Engineer, AutoCAD Drafter" style={{ width: "100%", height: 60, padding: 8 }} />
+            <textarea value={kgForm.keywordsText} onChange={(e) => setKgForm((f) => ({ ...f, keywordsText: e.target.value }))} placeholder="OSP Designer, Fiber Engineer, AutoCAD Drafter" style={{ width: "100%", height: 70, padding: 10 }} />
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="btn-primary" onClick={saveKg}>{kgForm.id ? "Update" : "Create"}</button>
             <button onClick={cancelKg}>Cancel</button>
           </div>
         </div>
       )}
 
-      <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
-        <h3 style={{ fontSize: 14, margin: 0 }}>Date Posted</h3>
-        <select value={dateInterval} onChange={(e) => setDateInterval(e.target.value)} className="input" style={{ width: "auto", padding: "4px 8px" }}>
+      <div style={{ marginBottom: 20 }}>
+        <h3 style={{ fontSize: 15, margin: "0 0 10px", fontWeight: 600 }}>Date Posted</h3>
+        <select value={dateInterval} onChange={(e) => setDateInterval(e.target.value)} style={{ width: "auto", minWidth: 160 }}>
           <option value="today">Today</option>
           <option value="2 days">2 Days</option>
           <option value="7 days">7 Days</option>
@@ -268,51 +296,54 @@ export default function JobAgentPage() {
         </select>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
-        <h3 style={{ fontSize: 14, marginBottom: 8 }}>Source Actors <span style={{ fontSize: 11, fontWeight: 400, color: "var(--muted)" }}>(select one or more)</span></h3>
+      <div style={{ marginBottom: 20 }}>
+        <h3 style={{ fontSize: 15, margin: "0 0 10px", fontWeight: 600 }}>Source Actors <span style={{ fontSize: 12, fontWeight: 400, color: "var(--ink-soft)" }}>(select one or more)</span></h3>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           {([
             { id: "indeed",  label: "Indeed",    icon: "🔍" },
             { id: "google",  label: "Google Jobs", icon: "🌐" },
             { id: "linkedin",label: "LinkedIn",   icon: "💼" },
-          ] as { id: string; label: string; icon: string }[]).map((actor) => (
-            <label key={actor.id} className="checkbox-row" style={{ fontSize: 13, opacity: selectedActorSources.has(actor.id) ? 1 : 0.65, fontWeight: selectedActorSources.has(actor.id) ? 600 : 400 }}>
-              <input
-                type="checkbox"
-                checked={selectedActorSources.has(actor.id)}
-                onChange={() => setSelectedActorSources((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(actor.id)) next.delete(actor.id); else next.add(actor.id);
-                  return next;
-                })}
-              />
-              {actor.icon} {actor.label}
-            </label>
-          ))}
+          ] as { id: string; label: string; icon: string }[]).map((actor) => {
+            const active = selectedActorSources.has(actor.id);
+            return (
+              <label key={actor.id} className={`source-actor-chip${active ? " active" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={active}
+                  onChange={() => setSelectedActorSources((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(actor.id)) next.delete(actor.id); else next.add(actor.id);
+                    return next;
+                  })}
+                />
+                {actor.icon} {actor.label}
+              </label>
+            );
+          })}
         </div>
         {selectedActorSources.size > 1 && (
-          <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 6, margin: 0 }}>
+          <p style={{ fontSize: 12, color: "var(--ink-soft)", marginTop: 8, margin: 0 }}>
             ⚠ Running multiple actors will automatically deduplicate results across sources.
           </p>
         )}
       </div>
 
-      <button className="btn-primary" onClick={runNow} disabled={running}>{running ? "Running…" : "Run Now"}</button>
+      <button className="btn-primary run-now-btn" onClick={runNow} disabled={running}>{running ? "Running…" : "Run Now"}</button>
     </div>
 
     {/* ── Role Group Browser (collapsed) ── */}
     <div className="card" style={{ marginBottom: 16 }}>
-      <button onClick={() => setExpandedRoleBrowser(!expandedRoleBrowser)} style={{ width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 15, display: "flex", justifyContent: "space-between", padding: 0 }}>
+      <button onClick={() => setExpandedRoleBrowser(!expandedRoleBrowser)} style={{ width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 15, display: "flex", justifyContent: "space-between", gap: 12, padding: 0 }}>
         <span>Role Group Browser ({roleGroups.reduce((s, g) => s + g.titles.length, 0)} titles across {roleGroups.length} groups)</span>
-        <span>{expandedRoleBrowser ? "▲" : "▼"}</span>
+        <span style={{ flexShrink: 0 }}>{expandedRoleBrowser ? "▲" : "▼"}</span>
       </button>
       {expandedRoleBrowser && (
-        <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
+        <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
           {roleGroups.map((g) => (
-            <details key={g.id} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 8 }}>
-              <summary style={{ fontWeight: 500, cursor: "pointer", fontSize: 13 }}>Group {g.id}: {g.label} ({g.titles.length} titles)</summary>
-              <div style={{ padding: "8px 0 0 0", display: "flex", flexWrap: "wrap", gap: 4 }}>
-                {g.titles.map((t) => <span key={t} className="badge" style={{ fontSize: 11 }}>{t}</span>)}
+            <details key={g.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10 }}>
+              <summary style={{ fontWeight: 500, cursor: "pointer", fontSize: 13.5 }}>Group {g.id}: {g.label} ({g.titles.length} titles)</summary>
+              <div style={{ padding: "10px 0 0 0", display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {g.titles.map((t) => <span key={t} className="badge">{t}</span>)}
               </div>
             </details>
           ))}
@@ -320,7 +351,17 @@ export default function JobAgentPage() {
       )}
     </div>
 
-    {/* Nightly batch visibility */}
+    {/*
+      ARCHIVED 2026-09-13 — Nightly Automation section, paused on request
+      pending a rework of this feature. Commented out, not deleted, along
+      with its data-fetching in load() above (the batchesRes fetch and
+      nightlyBatches/nightlyBatchError state updates). The state
+      declarations (nightlyBatches, nightlyBatchError), the NightlyBatch/
+      NightlyBatchShard/NightlyActorProgress types, and the NIGHTLY_ACTORS/
+      dateExclusionSummary/nightlyShardTitle helpers above are all left
+      exactly as they were, so restoring is just: uncomment this block,
+      uncomment the load() fetch, done.
+
     <div className="card" style={{ marginBottom: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h2 className="section-title" style={{ margin: 0 }}>Nightly Automation</h2>
@@ -425,15 +466,16 @@ export default function JobAgentPage() {
         </div>
       )}
     </div>
+    */}
 
     {/* ── Run Dashboard ── */}
     <div className="card" style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-        <h2 className="section-title" style={{ margin: 0 }}>Run Dashboard</h2>
+      <div className="run-dashboard-header">
+        <h2 className="section-title" style={{ margin: 0, fontSize: 17 }}>Run Dashboard</h2>
         <button
           onClick={clearStuckRuns}
           disabled={cleaningUp}
-          style={{ fontSize: 12, padding: "4px 10px", opacity: 0.7 }}
+          className="btn-compact"
           title="Mark all stuck running/pending/processing runs as failed"
         >
           {cleaningUp ? "Clearing…" : "🧹 Clear Stuck Runs"}
@@ -460,37 +502,40 @@ export default function JobAgentPage() {
       {loading ? <TableSkeleton cols={10} /> : runs.length === 0 ? (
         <p className="muted">No runs yet. Select groups and click Run Now.</p>
       ) : (
-        <table className="table" style={{ marginTop: runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") ? 32 : 0 }}>
-          <thead><tr><th>Date</th><th>Source</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
-          <tbody>
-            {runs.map((run) => (
-              <tr key={run.id}>
-                <td className="muted">{new Date(run.started_at).toLocaleString()}</td>
-                <td>
-                  <span className="badge" style={{ fontSize: 10, textTransform: "uppercase" }}>
-                    {(run as any).actor_source === "google" ? "🌐 Google" : (run as any).actor_source === "linkedin" ? "💼 LinkedIn" : "🔍 Indeed"}
-                  </span>
-                </td>
-                <td title={groupLabel(run.role_groups_ran).full}>{groupLabel(run.role_groups_ran).short}</td>
-                <td>{run.raw_count}</td>
-                <td>{run.deduped_count}</td>
-                <td>{run.classified_count}</td>
-                <td style={{ color: "#166534" }}>{run.best_count}</td>
-                <td style={{ color: "#854d0e" }}>{run.medium_count}</td>
-                <td style={{ color: "#1e40af" }}>{run.worthy_count}</td>
-                <td style={{ color: "#991b1b" }}>{run.skip_count}</td>
-                <td>
-                  <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" || run.status === "processing" ? "badge-warning" : "badge-danger"}`}
-                    style={run.status === "running" || run.status === "processing" ? { animation: "pulse 1.5s infinite" } : undefined}>
-                    {run.status === "running" ? "⏳ scraping..." : run.status === "pending" ? "⏳ pending..." : run.status === "processing" ? "⚙ classifying..." : run.status}
-                  </span>
-                  {run.error && <div className="form-error" style={{ fontSize: 11 }}>{run.error}</div>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="table-shell" style={{ marginTop: runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") ? 20 : 0 }}>
+          <table className="table">
+            <thead><tr><th>Date</th><th>Source</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
+            <tbody>
+              {runs.map((run) => (
+                <tr key={run.id}>
+                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{new Date(run.started_at).toLocaleString()}</td>
+                  <td>
+                    <span className="badge" style={{ textTransform: "uppercase" }}>
+                      {(run as any).actor_source === "google" ? "🌐 Google" : (run as any).actor_source === "linkedin" ? "💼 LinkedIn" : "🔍 Indeed"}
+                    </span>
+                  </td>
+                  <td title={groupLabel(run.role_groups_ran).full}>{groupLabel(run.role_groups_ran).short}</td>
+                  <td>{run.raw_count}</td>
+                  <td>{run.deduped_count}</td>
+                  <td>{run.classified_count}</td>
+                  <td style={{ color: "var(--accent)", fontWeight: 600 }}>{run.best_count}</td>
+                  <td style={{ color: "var(--warn)", fontWeight: 600 }}>{run.medium_count}</td>
+                  <td style={{ color: "var(--info)", fontWeight: 600 }}>{run.worthy_count}</td>
+                  <td style={{ color: "var(--danger)", fontWeight: 600 }}>{run.skip_count}</td>
+                  <td>
+                    <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" || run.status === "processing" ? "badge-warning" : "badge-danger"}`}
+                      style={{ whiteSpace: "nowrap", ...(run.status === "running" || run.status === "processing" ? { animation: "pulse 1.5s infinite" } : undefined) }}>
+                      {run.status === "running" ? "⏳ scraping..." : run.status === "pending" ? "⏳ pending..." : run.status === "processing" ? "⚙ classifying..." : run.status}
+                    </span>
+                    {run.error && <div className="form-error" style={{ fontSize: 11.5, marginTop: 4, maxWidth: 240, whiteSpace: "normal" }}>{run.error}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
-  </>);
+    </div>
+  );
 }

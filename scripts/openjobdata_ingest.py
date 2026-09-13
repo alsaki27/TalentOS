@@ -20,7 +20,6 @@ CLI arguments (for GitHub Actions workflow_dispatch):
 """
 
 import argparse
-import hashlib
 import math
 import os
 import re
@@ -541,7 +540,21 @@ def build_job_payload(row: "pd.Series", companies: Dict[Any, Dict[str, Any]]) ->
             pass
 
     company_name = (company_info or {}).get("name") or None
-    apply_url = row.get("apply_url") or (company_info or {}).get("career_url") or None
+
+    # Only use a URL that points at this SPECIFIC posting. The old fallback to
+    # the company's generic career_url when a row had no direct apply_url made
+    # Deep Fetch scrape that shared landing page instead — which either has no
+    # content specific to this requisition (wrongly logged as "description too
+    # short", even though the real posting is fine when viewed directly) or
+    # has enough generic boilerplate text to slip past the length check and
+    # get stored as if it were this job's actual description. Also guards
+    # against NaN: pandas represents a missing "apply_url" as float NaN for
+    # this column, which is truthy in Python, so a bare `row.get(...) or
+    # fallback` never even reached the fallback for a NaN value — leaving
+    # behavior silently dependent on which of NaN/None the column happened to
+    # produce. pd.notna() makes the "no direct URL" case explicit either way.
+    raw_apply_url = row.get("apply_url")
+    apply_url = str(raw_apply_url).strip() if pd.notna(raw_apply_url) and str(raw_apply_url).strip() else None
 
     loc_parts: List[str] = []
     if row.get("is_remote"):
@@ -664,9 +677,21 @@ def main():
     print("\nLoading company data...")
     companies = load_companies(fs, bucket_prefix)
 
-    # Deduplicate within this batch (title|company signature)
+    # Deduplicate within this batch. Mirrors the authoritative signature rule
+    # Job CEO itself uses server-side (computeJobDedupSignature in
+    # jobCeoStagingRepository.ts): prefer the posting's own external_job_id,
+    # namespaced by source, and only fall back to title|company when no id
+    # is present. Keying on title|company alone — the previous behavior here
+    # — collapsed genuinely distinct postings that happen to share both,
+    # which is common, not rare: large national employers run many regional
+    # requisitions under the identical title (e.g. several "GIS Analyst"
+    # openings in different cities), each with its own external_job_id. That
+    # older rule silently discarded every one but the first before it ever
+    # reached Job CEO's own correctly-namespaced dedup, deleting real,
+    # distinct openings. Deduping on external_job_id first (when available)
+    # keeps every one of them, matching how the server itself already treats
+    # these rows once ingested.
     seen_sig: set = set()
-    seen_ext_ids: set = set()
     jobs: List[Dict[str, Any]] = []
 
     for _, row in df.iterrows():
@@ -674,19 +699,16 @@ def main():
         if not payload:
             continue
 
-        # In-batch dedup
-        sig = f"{(payload['title'] or '').lower()}|{(payload['company'] or '').lower()}"
-        sig_hash = hashlib.md5(sig.encode()).hexdigest()
-        if sig_hash in seen_sig:
-            continue
-
-        ext_id = payload.get("external_job_id") or ""
-        if ext_id and ext_id in seen_ext_ids:
-            continue
-
-        seen_sig.add(sig_hash)
+        ext_id = str(payload.get("external_job_id") or "").strip()
         if ext_id:
-            seen_ext_ids.add(ext_id)
+            sig_key = f"id:openjobdata:{ext_id.lower()}"
+        else:
+            sig_key = f"{(payload['title'] or '').lower()}|{(payload['company'] or '').lower()}"
+
+        if sig_key in seen_sig:
+            continue
+
+        seen_sig.add(sig_key)
         jobs.append(payload)
 
     print(f"\nUnique jobs after in-batch dedup: {len(jobs):,}")

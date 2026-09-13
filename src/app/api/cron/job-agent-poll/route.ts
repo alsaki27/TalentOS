@@ -25,7 +25,15 @@ import {
 export const dynamic = "force-dynamic";
 
 const METADATA_GRACE_MS = 5 * 60 * 1000;
-const PROCESSING_LEASE_MS = 30 * 60 * 1000;
+// Was 30 minutes. Every outbound Apify call processApifyRunData() can make
+// (status check, dataset fetch) is now individually timeout-bounded (see
+// fetchApify() in jobAgentService.ts), so a hang can no longer swallow the
+// whole invocation silently - processing now either finishes or throws
+// within a couple of minutes at the very worst (large-dataset dedup +
+// classification included). 10 minutes keeps a comfortable safety margin
+// over that while cutting the worst-case "stuck with no real error" wait
+// from 30 minutes down to 10.
+const PROCESSING_LEASE_MS = 10 * 60 * 1000;
 const MAX_DATASETS_PER_POLL = 1;
 
 function isAuthorized(req: NextRequest) {

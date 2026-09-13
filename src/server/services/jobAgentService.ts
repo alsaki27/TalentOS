@@ -35,6 +35,37 @@ const ACTOR_IDS: Record<ActorSource, string> = {
 const COST_PER_RESULT_USD = 0.001; // conservative average across actors
 const CLASSIFICATION_DELAY_MS = 300;
 
+// Every outbound Apify call now goes through fetchApify() (see below), which
+// enforces one of these. Root cause of the recurring Google/LinkedIn run
+// failures ("Dataset processing lease expired after 30 minutes", "Run timed
+// out — automatically marked failed after 120 minutes"): none of these fetch
+// calls had a timeout, so a slow/stalled response from Apify's API (far more
+// likely for Google/LinkedIn's larger, description-heavy datasets than for
+// Indeed's) could hang the request indefinitely. The hosting platform
+// eventually kills the invocation with no chance for our own try/catch to
+// ever run, orphaning the run in "processing"/"running" with no real error
+// recorded - only the 30-minute lease watchdog (or a manual "Clear Stuck
+// Runs" click) ever noticed, 30-120 minutes after the fact. A bounded
+// timeout turns that into an immediate, specific, correctly-caught failure.
+const APIFY_STATUS_TIMEOUT_MS = 20_000;
+const APIFY_START_TIMEOUT_MS = 20_000;
+const APIFY_DATASET_FETCH_TIMEOUT_MS = 45_000;
+
+async function fetchApify(url: string, init: RequestInit | undefined, timeoutMs: number, label: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ─── Date Interval Mappers ─────────────────────────────────────────────────────
 
 // ─── Actor Input Builders ──────────────────────────────────────────────────────
@@ -42,7 +73,7 @@ const CLASSIFICATION_DELAY_MS = 300;
 // ─── Output Normalizer ─────────────────────────────────────────────────────────
 
 export interface ApifyDatasetItem {
-  // Canonical fields — populated by normalizeActorItem
+  // Canonical fields — populated by normalizeActorItem (jobAgentActorContracts.ts)
   job_title?: string; title?: string;
   company_name?: string; company?: string;
   location?: string;
@@ -59,88 +90,6 @@ export interface ApifyDatasetItem {
   _actor_source?: ActorSource;
   // Raw source-specific fields
   [key: string]: unknown;
-}
-
-/**
- * Normalize actor-specific output to the canonical ApifyDatasetItem shape.
- * This is the "translation layer" for each actor's unique field names.
- */
-function normalizeActorItem(source: ActorSource, raw: Record<string, unknown>): ApifyDatasetItem {
-  if (source === "indeed") {
-    // Indeed fields: title, company, location, job_url, description, date_posted, job_type, is_remote, min_amount, max_amount, currency
-    const minAmt = raw.min_amount as number | undefined;
-    const maxAmt = raw.max_amount as number | undefined;
-    const currency = (raw.currency as string | undefined) ?? "USD";
-    const salaryRange = (minAmt && maxAmt)
-      ? `$${minAmt.toLocaleString()} - $${maxAmt.toLocaleString()} ${currency}/yr`
-      : undefined;
-    return {
-      ...raw,
-      _actor_source: "indeed",
-      job_title:       String(raw.title ?? "").trim(),
-      company_name:    String(raw.company ?? "").trim(),
-      location:        String(raw.location ?? "").trim(),
-      source_url:      String(raw.job_url ?? "").trim(),
-      apply_link:      String(raw.job_url ?? "").trim(),
-      description:     String(raw.description ?? "").trim(),
-      date_posted:     raw.date_posted ? String(raw.date_posted) : undefined,
-      employment_type: raw.job_type ? String(raw.job_type) : undefined,
-      is_remote:       raw.is_remote === true,
-      salary_range:    salaryRange,
-      via_platform:    "Indeed",
-      search_query:    String(raw.query ?? raw.search_query ?? "").trim(),
-    };
-  }
-
-  if (source === "google") {
-    // Google actor fields: title, company_name, location, via, description, detected_extensions, apply_options, job_id, query
-    const applyOptions = Array.isArray(raw.apply_options) ? raw.apply_options as Array<{ title: string; link: string }> : [];
-    const applyLink = applyOptions[0]?.link ?? "";
-    const detectedExt = (raw.detected_extensions ?? {}) as Record<string, unknown>;
-    const scheduleType = detectedExt.schedule_type as string | undefined;
-    return {
-      ...raw,
-      _actor_source: "google",
-      job_title:       String(raw.title ?? "").trim(),
-      company_name:    String(raw.company_name ?? "").trim(),
-      location:        String(raw.location ?? "").trim(),
-      source_url:      applyLink,
-      apply_link:      applyLink,
-      description:     String(raw.description ?? "").trim(),
-      date_posted:     detectedExt.posted_at ? String(detectedExt.posted_at) : undefined,
-      employment_type: scheduleType ?? undefined,
-      is_remote:       String(raw.location ?? "").toLowerCase().includes("remote"),
-      salary_range:    undefined,
-      via_platform:    raw.via ? String(raw.via) : "Google Jobs",
-      search_query:    String(raw.query ?? "").trim(),
-    };
-  }
-
-  if (source === "linkedin") {
-    // cheap_scraper/linkedin-job-scraper fields: jobTitle, companyName, location, jobUrl, jobDescription, publishedAt, salaryInfo
-    const applyLink = String(raw.applyUrl ?? raw.jobUrl ?? "").trim();
-    const salaryArr = Array.isArray(raw.salaryInfo) ? raw.salaryInfo : [];
-    const salaryRange = salaryArr.length > 0 ? salaryArr.join(" - ") : undefined;
-    return {
-      ...raw,
-      _actor_source: "linkedin",
-      job_title:       String(raw.jobTitle ?? raw.title ?? "").trim(),
-      company_name:    String(raw.companyName ?? "").trim(),
-      location:        String(raw.location ?? "").trim(),
-      source_url:      String(raw.jobUrl ?? "").trim(),
-      apply_link:      applyLink,
-      description:     String(raw.jobDescription ?? raw.description ?? "").trim(),
-      date_posted:     raw.publishedAt ? String(raw.publishedAt) : (raw.postedTime ? String(raw.postedTime) : undefined),
-      employment_type: String(raw.contractType ?? "").trim() || undefined,
-      is_remote:       String(raw.location ?? "").toLowerCase().includes("remote"),
-      salary_range:    salaryRange,
-      via_platform:    "LinkedIn",
-      search_query:    String(raw.searchString ?? raw.query ?? "").trim(),
-    };
-  }
-
-  // Fallback (should never reach here)
-  return { ...raw, _actor_source: source };
 }
 
 // ─── URL Fingerprint Helper ───────────────────────────────────────────────────
@@ -380,8 +329,10 @@ export async function processApifyRunData(
     );
     const totalDupes = inRunDups + crossRunDups;
 
-    // Vercel serverless functions time out after 10-60s. AI classification takes ~1-2s per batch of 15.
-    // For massive datasets (> 250 unique jobs), force regex fallback to guarantee completion and prevent hanging.
+    // The cron poll invocation running this has its own bounded time budget.
+    // AI classification takes ~1-2s per batch of 15. For massive datasets
+    // (> 250 unique jobs), force regex fallback to guarantee completion and
+    // prevent hanging.
     const requestedAi = options.useAi ?? true;
     const safeUseAi = requestedAi && (uniqueJobs.length <= 250);
     
@@ -455,7 +406,7 @@ export async function processApifyRunData(
 
 export async function checkApifyRunStatus(apifyRunId: string, token: string): Promise<string> {
   const url = `${APIFY_BASE_URL}/actor-runs/${apifyRunId}?token=${encodeURIComponent(token)}`;
-  const res = await fetch(url);
+  const res = await fetchApify(url, undefined, APIFY_STATUS_TIMEOUT_MS, `Apify status check for run ${apifyRunId}`);
   if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Status check failed (${res.status}): ${text}`); }
   const data = await res.json();
   return data?.data?.status;
@@ -486,9 +437,17 @@ async function startApifyRun(
   timeoutSeconds = 3600
 ): Promise<{ runId: string; datasetId: string }> {
   // Per-actor timeout: Google is capped at 100 results so 30 min is ample;
-  // Indeed/LinkedIn can have larger datasets so they get 1 hour.
+  // Indeed/LinkedIn can have larger datasets so they get 1 hour. This is
+  // Apify's own actor-run timeout (how long the ACTOR is allowed to scrape
+  // for) - unrelated to APIFY_START_TIMEOUT_MS below, which only bounds how
+  // long we wait for Apify to acknowledge the start request.
   const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&timeout=${timeoutSeconds}`;
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+  const res = await fetchApify(
+    url,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    APIFY_START_TIMEOUT_MS,
+    `Apify start run for actor ${actorId}`,
+  );
   if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Apify start run failed (${res.status}): ${text}`); }
   const data = await res.json();
   const runId = data?.data?.id; const datasetId = data?.data?.defaultDatasetId;
@@ -498,14 +457,14 @@ async function startApifyRun(
 
 async function fetchApifyDataset(datasetId: string, token: string): Promise<ApifyDatasetItem[]> {
   const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true`;
-  const res = await fetch(url);
+  const res = await fetchApify(url, undefined, APIFY_DATASET_FETCH_TIMEOUT_MS, `Apify dataset fetch for dataset ${datasetId}`);
   if (!res.ok) throw new Error(`Dataset fetch failed (${res.status})`);
   return (await res.json()) as ApifyDatasetItem[];
 }
 
 export async function fetchLiveApifyDatasetItems(datasetId: string, token: string, limit: number = 50): Promise<ApifyDatasetItem[]> {
   const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true&limit=${limit}&desc=true`;
-  const res = await fetch(url);
+  const res = await fetchApify(url, undefined, APIFY_STATUS_TIMEOUT_MS, `Apify live dataset fetch for dataset ${datasetId}`);
   if (!res.ok) throw new Error(`Live dataset fetch failed (${res.status})`);
   return (await res.json()) as ApifyDatasetItem[];
 }

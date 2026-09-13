@@ -98,9 +98,9 @@ export function LiveFeedBoard({ runId, onComplete }: { runId: string; onComplete
       }}
     >
       {/* Header & Progress */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
-          <h2 style={{ margin: 0, fontSize: 18, display: "flex", alignItems: "center", gap: 8 }}>
+          <h2 style={{ margin: 0, fontSize: 18, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ color: "var(--accent)", textShadow: "0 0 10px var(--accent)" }}>
               Live Scraping Feed
             </span>
@@ -116,7 +116,7 @@ export function LiveFeedBoard({ runId, onComplete }: { runId: string; onComplete
           )}
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "var(--foreground)" }}>{items.length}</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "var(--ink)" }}>{items.length}</div>
           <div className="muted" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 1 }}>
             Jobs Found
           </div>
@@ -186,7 +186,7 @@ export function LiveFeedBoard({ runId, onComplete }: { runId: string; onComplete
                 style={{
                   fontSize: 14,
                   margin: "0 0 4px 0",
-                  color: "var(--foreground)",
+                  color: "var(--ink)",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",

@@ -47,15 +47,6 @@ interface ScheduleRow {
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
 function statusBadge(status: string) {
-  const map: Record<string, string> = {
-    ingesting: "bg-blue-900 text-blue-200",
-    qa: "bg-yellow-900 text-yellow-200",
-    deep_fetch: "bg-purple-900 text-purple-200",
-    matchmaking: "bg-green-900 text-green-200",
-    completed: "bg-green-800 text-green-100",
-    failed: "bg-red-900 text-red-200",
-    cancelled: "bg-gray-700 text-gray-300",
-  };
   const labels: Record<string, string> = {
     ingesting: "Ingesting",
     qa: "QA",
@@ -65,8 +56,23 @@ function statusBadge(status: string) {
     failed: "Failed",
     cancelled: "Cancelled",
   };
+  // Reuses the app's real semantic badge classes (globals.css) instead of
+  // hardcoded Tailwind default-palette colors (blue/yellow/purple/green-900
+  // etc.) that never matched the app's actual accent/warn/danger theme.
+  // The four in-flight pipeline stages share one "in progress" treatment —
+  // isLive() already treats them as one undifferentiated bucket, so four
+  // arbitrary distinct hues conveyed no real signal.
+  const classMap: Record<string, string> = {
+    ingesting: "badge badge-in_progress",
+    qa: "badge badge-in_progress",
+    deep_fetch: "badge badge-in_progress",
+    matchmaking: "badge badge-in_progress",
+    completed: "badge",
+    failed: "badge badge-danger",
+    cancelled: "badge badge-assigned",
+  };
   return (
-    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[status] ?? "bg-gray-700 text-gray-300"}`}>
+    <span className={classMap[status] ?? "badge badge-assigned"}>
       {labels[status] ?? status}
     </span>
   );
@@ -140,10 +146,12 @@ function KeywordGroupSelector({
 
 function ScheduleCard({
   schedule,
+  roleGroups,
   onSave,
   saving,
 }: {
   schedule: ScheduleRow;
+  roleGroups: RoleGroup[];
   onSave: (patch: Partial<ScheduleRow>) => Promise<void>;
   saving: boolean;
 }) {
@@ -158,13 +166,13 @@ function ScheduleCard({
   };
 
   return (
-    <div className="p-4 rounded-lg border border-border bg-bg">
-      <div className="flex items-center justify-between mb-3">
+    <div className="card">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <h3 className="text-sm font-semibold text-ink">Ingest Schedule</h3>
         <div className="flex items-center gap-2">
           <span className="text-xs text-ink-soft">
             {local.is_enabled ? (
-              <span className="text-emerald-400">● Enabled — {cronToHuman(local.cron_expression)}</span>
+              <span className="text-accent">● Enabled — {cronToHuman(local.cron_expression)}</span>
             ) : (
               <span className="text-ink-soft">○ Disabled</span>
             )}
@@ -184,7 +192,7 @@ function ScheduleCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-xs font-medium text-ink-soft block mb-1">Cron Expression (UTC)</label>
           <input
@@ -204,10 +212,9 @@ function ScheduleCard({
             className="w-full px-2 py-1.5 text-xs rounded border border-border bg-surface text-ink focus:outline-none focus:border-accent"
           >
             <option value="all">All Groups (default)</option>
-            <option value="A">A — OSP / Fiber</option>
-            <option value="B">B — CAD / Drafting</option>
-            <option value="C">C — GIS / Geospatial</option>
-            <option value="D">D — Telecom General</option>
+            {roleGroups.map((g) => (
+              <option key={g.id} value={g.id}>{g.id} — {g.label}</option>
+            ))}
           </select>
         </div>
         <div>
@@ -238,7 +245,7 @@ function ScheduleCard({
         <button
           onClick={() => onSave(local).then(() => setDirty(false))}
           disabled={saving}
-          className="px-3 py-1.5 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+          className="w-full sm:w-auto px-3 py-1.5 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
           {saving ? "Saving..." : "Save Schedule"}
         </button>
@@ -427,21 +434,31 @@ export default function JobCeoPage() {
     }
   }, [hasActive]);
 
+  // ─── Stats ────────────────────────────────────────────────────────────────
+
+  const totalRuns = runs.length;
+  const completedCount = runs.filter((r) => r.status === "completed").length;
+  const failedCount = runs.filter((r) => r.status === "failed").length;
+  const totalLogged = runs.reduce((sum, r) => sum + (r.logged_count || 0), 0);
+
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <div className="job-ceo-page space-y-6">
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
+          <span className="block text-[11px] font-extrabold uppercase tracking-wider text-accent mb-1">
+            Multi-Agent Pipeline
+          </span>
           <h1 className="text-2xl font-bold text-ink">Job CEO</h1>
           <p className="text-sm text-ink-soft mt-1">Multi-agent job ingestion pipeline — OpenJobData + Apify</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <Link
             href="/job-ceo/proposals"
-            className="px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors"
+            className="w-full sm:w-auto text-center px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors"
           >
             Proposals
           </Link>
@@ -449,26 +466,50 @@ export default function JobCeoPage() {
             onClick={handleEnrich}
             disabled={enriching}
             title="Backfill full descriptions for logged jobs with thin/missing text"
-            className="px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors disabled:opacity-50"
+            className="w-full sm:w-auto px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors disabled:opacity-50"
           >
             {enriching ? "Enriching..." : "Enrich Descriptions"}
           </button>
         </div>
       </div>
 
+      {/* Stats */}
+      <div className="stats-strip">
+        <div className="stat-card">
+          <span className="stat-label">Total Runs</span>
+          <span className="stat-value">{totalRuns}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Active Now</span>
+          <span className="stat-value">{activeRuns.length}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Completed</span>
+          <span className="stat-value">{completedCount}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Failed</span>
+          <span className="stat-value">{failedCount}</span>
+        </div>
+        <div className="stat-card">
+          <span className="stat-label">Jobs Logged</span>
+          <span className="stat-value">{totalLogged}</span>
+        </div>
+      </div>
+
       {/* Enrich result */}
       {enrichResult && (
-        <div className="p-3 rounded-lg border border-border bg-bg flex items-center gap-4 text-sm">
+        <div className="p-3 rounded-lg border border-border bg-bg flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           <span className="text-ink-soft">Description Enricher:</span>
           <span className="text-ink">{enrichResult.enriched} of {enrichResult.processed} enriched this batch</span>
-          <span className="text-ink-soft">·</span>
+          <span className="text-ink-soft hidden sm:inline">·</span>
           <span className="text-ink-soft">{enrichResult.pendingAfter} jobs still pending</span>
         </div>
       )}
 
       {/* Keyword Selector + Trigger */}
-      <div className="p-4 rounded-lg border border-border bg-bg space-y-3">
-        <div className="flex items-center justify-between">
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-sm font-semibold text-ink">Role Groups (Default)</h2>
           {roleGroups.length > 0 && (
             <button
@@ -491,11 +532,11 @@ export default function JobCeoPage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
             {roleGroups.map((g) => (
-              <label 
-                key={g.id} 
+              <label
+                key={g.id}
                 className={`flex items-start gap-2.5 p-3 rounded-lg border text-sm cursor-pointer transition-all select-none ${
-                  selectedRoleGroupIds.has(g.id) 
-                    ? "bg-accent/10 border-accent text-accent shadow-sm" 
+                  selectedRoleGroupIds.has(g.id)
+                    ? "bg-accent/10 border-accent text-accent shadow-sm"
                     : "bg-surface border-border text-ink hover:border-ink-soft hover:bg-surface/80"
                 }`}
               >
@@ -520,7 +561,7 @@ export default function JobCeoPage() {
           </div>
         )}
 
-        <div className="flex items-center justify-between pt-2 border-t border-border">
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-border">
           <h2 className="text-sm font-semibold text-ink">Custom Keyword Groups</h2>
           <button
             onClick={() => setShowNewGroup((v) => !v)}
@@ -535,7 +576,7 @@ export default function JobCeoPage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {keywordGroups.map((g) => (
-              <label key={g.id} className="flex items-center gap-1.5 px-2 py-1 bg-surface border border-border rounded text-xs">
+              <label key={g.id} className="flex items-center gap-1.5 px-3 py-1 bg-surface border border-border rounded-full text-xs">
                 <input
                   type="checkbox"
                   checked={selectedGroupIds.has(g.id)}
@@ -547,7 +588,7 @@ export default function JobCeoPage() {
                   className="rounded border-border text-accent focus:ring-0"
                 />
                 <span className="text-ink">{g.label}</span>
-                <button onClick={() => handleDeleteGroup(g.id)} className="ml-1 text-ink-soft hover:text-red-500">×</button>
+                <button onClick={() => handleDeleteGroup(g.id)} className="ml-1 text-ink-soft hover:text-danger">×</button>
               </label>
             ))}
           </div>
@@ -587,7 +628,7 @@ export default function JobCeoPage() {
             <button
               onClick={handleCreateGroup}
               disabled={savingGroup || !newGroupLabel.trim() || !newGroupKeywords.trim()}
-              className="px-3 py-1 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              className="w-full sm:w-auto px-3 py-1 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
               {savingGroup ? "Creating..." : "Create Group"}
             </button>
@@ -609,42 +650,50 @@ export default function JobCeoPage() {
         </div>
 
         {/* Trigger button */}
-        <div className="flex items-center gap-3 pt-1">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 pt-1">
           <button
             onClick={handleTrigger}
             disabled={triggering}
-            className="px-5 py-2 text-sm font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+            className="w-full sm:w-auto px-5 py-2 text-sm font-semibold rounded-md bg-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50"
           >
             {triggering ? "Triggering..." : "▶ Trigger Run Now"}
           </button>
-          {selectedRoleGroupIds.size > 0 && (
-            <span className="text-xs text-ink-soft">
-              Using {selectedRoleGroupIds.size} role group{selectedRoleGroupIds.size !== 1 ? "s" : ""}
-            </span>
-          )}
-          {selectedGroupIds.size > 0 && (
-            <span className="text-xs text-ink-soft">
-              Using {selectedGroupIds.size} custom group{selectedGroupIds.size !== 1 ? "s" : ""}
-            </span>
-          )}
-          {customKeywords && (
-            <span className="text-xs text-ink-soft">+ custom keywords</span>
-          )}
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {selectedRoleGroupIds.size > 0 && (
+              <span className="text-xs text-ink-soft">
+                Using {selectedRoleGroupIds.size} role group{selectedRoleGroupIds.size !== 1 ? "s" : ""}
+              </span>
+            )}
+            {selectedGroupIds.size > 0 && (
+              <span className="text-xs text-ink-soft">
+                Using {selectedGroupIds.size} custom group{selectedGroupIds.size !== 1 ? "s" : ""}
+              </span>
+            )}
+            {customKeywords && (
+              <span className="text-xs text-ink-soft">+ custom keywords</span>
+            )}
+          </div>
         </div>
         {triggerError && (
-          <p className="text-xs text-red-400 mt-1">⚠ {triggerError}</p>
+          <p className="form-error mt-1">⚠ {triggerError}</p>
         )}
       </div>
 
+      {/* Ingest Schedule — the daily cron job configuration (src/app/api/cron/job-ceo
+          reads job_ceo_schedule) was fully built and wired to a working API but
+          never actually rendered anywhere on this page; restored to visibility here. */}
+      {schedule && (
+        <ScheduleCard schedule={schedule} roleGroups={roleGroups} onSave={handleSaveSchedule} saving={savingSchedule} />
+      )}
 
       {/* Active Runs */}
       {hasActive && (
         <div>
           <h2 className="text-lg font-semibold text-ink mb-3">Active Runs</h2>
           {activeRuns.map((run) => (
-            <div key={run.id} className="p-4 rounded-lg border border-border bg-bg mb-3">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-3">
+            <div key={run.id} className="card mb-3">
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <span className="pipeline-live-dot pipeline-live-dot-running" />
                   <Link
                     href={`/job-ceo/runs/${run.id}`}
@@ -654,25 +703,27 @@ export default function JobCeoPage() {
                   </Link>
                   {statusBadge(run.status)}
                 </div>
-                <Link
-                  href={`/job-ceo/runs/${run.id}`}
-                  className="text-xs text-ink-soft hover:text-ink transition-colors"
-                >
-                  View full details →
-                </Link>
-                <button
-                  onClick={async () => {
-                    if (!confirm("Stop this run?")) return;
-                    await fetch(`/api/job-ceo/runs/${run.id}/cancel`, { method: "POST" });
-                    setRuns((prev) => prev.map((r) => r.id === run.id ? { ...r, status: "cancelled" } : r));
-                  }}
-                  className="text-xs text-red-500 hover:text-red-600 transition-colors ml-4 font-medium px-2 py-1 border border-red-500 rounded"
-                >
-                  Stop
-                </button>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Link
+                    href={`/job-ceo/runs/${run.id}`}
+                    className="text-xs text-ink-soft hover:text-ink transition-colors"
+                  >
+                    View full details →
+                  </Link>
+                  <button
+                    onClick={async () => {
+                      if (!confirm("Stop this run?")) return;
+                      await fetch(`/api/job-ceo/runs/${run.id}/cancel`, { method: "POST" });
+                      setRuns((prev) => prev.map((r) => r.id === run.id ? { ...r, status: "cancelled" } : r));
+                    }}
+                    className="text-xs text-danger hover:opacity-80 transition-opacity font-medium px-2 py-1 border border-danger rounded"
+                  >
+                    Stop
+                  </button>
+                </div>
               </div>
 
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
                 {[
                   { label: "Ingested", val: run.ingested_count },
                   { label: "Kept", val: run.kept_count },
@@ -689,8 +740,8 @@ export default function JobCeoPage() {
               </div>
 
               {run.last_error && (
-                <div className="mt-3 p-2 rounded bg-red-950 border border-red-800">
-                  <p className="text-xs text-red-300 font-mono">{run.last_error}</p>
+                <div className="mt-3 p-2 rounded border bg-[rgba(var(--danger-rgb),0.12)] border-[rgba(var(--danger-rgb),0.35)]">
+                  <p className="text-xs text-danger font-mono break-words">{run.last_error}</p>
                 </div>
               )}
             </div>
@@ -701,7 +752,7 @@ export default function JobCeoPage() {
       {/* Run History */}
       <div>
         <h2 className="text-lg font-semibold text-ink mb-3">Run History</h2>
-        <div className="table-shell overflow-x-auto">
+        <div className="table-shell">
           <table className="table w-full">
             <thead>
               <tr className="border-b border-border">
@@ -765,7 +816,7 @@ export default function JobCeoPage() {
                           }
                         }}
                         title="Delete this run and all staging data"
-                        className="text-xs text-red-400 hover:text-red-300 disabled:opacity-40 transition-colors px-2 py-0.5 border border-red-700 hover:border-red-500 rounded"
+                        className="text-xs text-danger hover:opacity-80 disabled:opacity-40 transition-opacity px-2 py-0.5 border border-danger rounded"
                       >
                         {deletingRunIds.has(run.id) ? "…" : "Delete"}
                       </button>
@@ -784,12 +835,12 @@ export default function JobCeoPage() {
           <h2 className="text-base font-semibold text-ink mb-3">Keyword Groups</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {keywordGroups.map((g) => (
-              <div key={g.id} className="p-3 rounded-lg border border-border bg-bg">
+              <div key={g.id} className="card">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-ink">{g.label}</span>
                   <button
                     onClick={() => handleDeleteGroup(g.id)}
-                    className="text-xs text-red-400 hover:text-red-300 transition-colors"
+                    className="text-xs text-danger hover:opacity-80 transition-opacity"
                   >
                     Delete
                   </button>
