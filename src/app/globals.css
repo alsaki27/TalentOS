@@ -1186,7 +1186,7 @@ label {
 
 /* Referenced by 8 pages (job-agent, jobs, candidates, application-queue,
    admin/ai, resume-parsing-status, ...) that all assumed these existed
-   alongside the badge-tier-*/badge-priority-* variants above — none of them
+   alongside the badge-tier and badge-priority variants above — none of them
    were ever actually defined, so every "danger"/"warning" status badge on
    those pages silently rendered as the plain default (violet) badge instead
    of red/orange. Purely additive: fixes all 8 at once, overrides nothing. */
