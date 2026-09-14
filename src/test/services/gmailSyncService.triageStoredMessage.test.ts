@@ -79,7 +79,7 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     // Row fetch inside triageStoredMessage.
     (queryOne as any).mockResolvedValueOnce({
       id: "email-1", candidate_id: "cand-1", subject: "Update on your application",
-      snippet: "We regret to inform you", body_text: "We regret to inform you we will not be moving forward.",
+      snippet: "We regret to inform you", body_text: "We regret to inform you we will not be moving forward. Please reply with any questions about this decision.",
       from_email: "recruiter@acmecorp.com", direction: "inbound", gmail_message_id: "gm-1",
     });
     // getCandidateApplicationContext's query.
@@ -161,7 +161,7 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
   it("auto policy auto-writes even below the risk_based confidence threshold - this is the goal-#4 acceptance path: config only, no code change", async () => {
     (queryOne as any).mockResolvedValueOnce({
       id: "email-4", candidate_id: "cand-1", subject: "Application status",
-      snippet: "We will not be moving forward", body_text: "We will not be moving forward with your application.",
+      snippet: "We will not be moving forward", body_text: "We will not be moving forward with your application. Please reply with any questions about this decision.",
       from_email: "recruiter@acmecorp.com", direction: "inbound", gmail_message_id: "gm-4",
     });
     (query as any).mockResolvedValueOnce([{ id: "app-1", title: "Backend Engineer", company: "Acme Corp", status: "interview" }]);

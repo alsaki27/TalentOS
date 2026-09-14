@@ -44,6 +44,53 @@ describe("candidate Gmail pre-storage suppression", () => {
       subject: "New jobs posted from careers.example.com",
     })).toMatchObject({ suppress: true, reason: "job_board_alert" });
   });
+
+  test("drops ATS application campaigns, closed-loop rejections, and candidate verification mail", () => {
+    expect(classifyGmailMessage({
+      from: "KPMG University Talent Acquisition <kpmgcampus@avature.net>",
+      subject: "KPMG applications are open!",
+      bodyText: "KPMG jobs are live. Some positions are open now. Learn about our service offerings and recruiting timeline.",
+    })).toMatchObject({ suppress: true, reason: "job_board_alert" });
+    expect(classifyGmailMessage({
+      from: "no-reply@company.example",
+      subject: "Thank you for your interest in our position",
+      bodyText: "We are moving forward with other candidates.",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_rejection" });
+    expect(classifyGmailMessage({
+      from: "workday.fau@myworkday.com",
+      subject: "Verify your candidate account",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_account" });
+    expect(classifyGmailMessage({
+      from: "Human Resources <do_not_reply@clearcompany.com>",
+      subject: "Application Received",
+      bodyText: "We received your application. If you are selected for an interview, a member of our team will contact you.",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_application" });
+    expect(classifyGmailMessage({
+      from: "Marco Rodriguez <marco@alsoncable.com>",
+      subject: "Mir Najiur Interview",
+      bodyText: "I would like to set up a CAD test and an interview. Can you share a few dates and times that work best for you?",
+    })).toMatchObject({ suppress: false });
+    expect(classifyGmailMessage({
+      from: "Hiring Manager <manager@company.example>",
+      subject: "Thank you for your interest in our position",
+      bodyText: "We'd love to speak with you about the role. Please let me know a good time to connect.",
+    })).toMatchObject({ suppress: false });
+    expect(classifyGmailMessage({
+      from: "systemmessage@msgphx.paycomonline.com",
+      subject: "Your Network Architect II Application",
+      bodyText: "Thank you for applying for Network Architect II. If you are among qualified candidates, you will receive an email from one of our recruiters to schedule an interview.",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_application" });
+    expect(classifyGmailMessage({
+      from: "Fastenal Company <Do_Not_Reply@fastenal.com>",
+      subject: "Fastenal Company - Thank you for your interest",
+      bodyText: "Unfortunately, you were not the best match for the position, and as a result, we are unable to offer you further consideration.",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_rejection" });
+    expect(classifyGmailMessage({
+      from: "statejobs-noreply@utah.gov",
+      subject: "State of Utah - GIS Analyst IV Application Update",
+      bodyText: "After careful consideration, we have decided to move forward with other candidates whose qualifications are a closer match.",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_rejection" });
+  });
 });
 
 describe("classifyGmailMessage — job-board sender-shape rules (Chunk A)", () => {

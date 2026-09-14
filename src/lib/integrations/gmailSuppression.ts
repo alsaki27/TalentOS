@@ -16,6 +16,7 @@ export type GmailSuppressionReason =
   | "job_alert"            // legacy sender+content AND-gate, unchanged
   | "job_board_alert"      // new: sender-shape-driven, catches single-job alerts
   | "non_actionable_application" // receipt/status mail with no next step
+  | "non_actionable_rejection"   // automated rejection/closed-loop status mail
   | "non_actionable_account"     // verification/account housekeeping mail
   | "personal_transaction"
   | "bulk_marketing";
@@ -62,6 +63,14 @@ function parseSender(from: string | null | undefined): { local: string; domain: 
 const JOB_BOARD_DOMAIN =
   /(^|\.)(indeed|indeedemail|linkedin|ziprecruiter|glassdoor|monster|dice|simplyhired|careerbuilder|jobcase|snagajob|lensa|adzuna|jobrapido|talent|jooble|neuvoo)\.(com|net|org|co\.uk|ca|io)$/i;
 
+// ATS and university-career platforms commonly send bulk "applications are
+// open" / profile-verification mail. Keep this vendor-neutral at the
+// decision point: it is only a machine-sender signal, and an actionable
+// interview/recruiter message still wins below via the concrete-next-step
+// check.
+const ATS_DOMAIN =
+  /(^|\.)((avature|workday|myworkday|icims|greenhouse|lever|smartrecruiters|taleo|successfactors|jobvite|oraclecloud|ashby|recruitee|bamboohr|ultipro|paylocity|applicantpro|applicantstack|hirebridge|clearcompany|bullhorn|paradox|eightfold)\.(com|net|org|io)|myworkdayjobs\.com)$/i;
+
 // Machine-generated alert/digest local parts on a job-board domain.
 const ALERT_LOCAL =
   /(^|[._+-])(job|jobs|jobalert|jobalerts|job-alerts|jobs-listings|jobs-noreply|jobalerts-noreply|jobseeker|alert|alerts|match|matches|recommend|recommendations|digest|newsletter|invitetoapply|talentnetwork|notification|notifications|updates)([._+-]|$)/i;
@@ -87,29 +96,35 @@ const TITLE_AT_COMPANY_SUBJECT = /^[^@\n<>]{3,90}\s+@\s+[^@\n<>]{2,90}$/;
 // silently dropped because their employer happens to relay mail through a
 // job board's domain.
 const HUMAN_CONVERSATION =
-  /(\bi'?m\b|\bi wanted\b|\bwe'?d (like|love)\b|your (application|resume|cv|interview|candidacy)|are you (available|free|interested)|schedule a (call|chat|time|screen)|phone screen|hiring manager|next steps|thanks for (applying|your time)|following up (on|with) your|sent you a message|replied to your message)/i;
+  /(\bi'?m\b|\bi wanted\b|\bwe'?d (like|love)\b|your (interview|candidacy)|are you (available|free|interested)|schedule a (call|chat|time|screen)|phone screen|hiring manager|following up (on|with) your|sent you a message|replied to your message)/i;
 
 // Receipt-only messages are not useful to the operating inbox. Keep them out
 // unless the same message contains a real next step (interview, assessment,
 // scheduling, offer, or a request for information). This intentionally uses
 // message content, not a hardcoded sender list, because ATS vendors vary.
 const NON_ACTIONABLE_APPLICATION_RECEIPT =
-  /(thank you for applying|thanks for applying|application (has been|was|is)?\s*(received|submitted|successfully submitted|confirmed)|we (have )?received your (application|resume|cv)|your (application|resume|cv) (has been|was|is)?\s*(received|submitted|successfully submitted|confirmed)|resume (submission )?received|cv (submission )?received|application confirmation|application was viewed|application was sent to|received your application)/i;
+  /((?:(?:thank you|thanks)(?: very much| so much)? for (?:(?:taking the time to )?(?:submit|send)|(?:your )?(?:recent )?(?:interest|applying|application|submitting|submission|resume|cv)))|(?:application|resume|cv|candidate profile|profile)\s+(?:has been|was|is)?\s*(?:received|submitted|successfully submitted|confirmed|started|viewed|sent to)|(?:started|begin(?:ned)?|created|completed) (?:your )?(?:candidate )?profile|we (?:have )?received your (?:job )?(?:application|resume|cv|submission)|resume (?:submission )?received|cv (?:submission )?received|application confirmation|application was viewed|application was sent to|received your (?:job )?application|(?:application|candidate profile|profile) (?:started|began|received|submitted|confirmed|completed|viewed)|(?:complete|finish|continue) your (?:job )?application|application reminder|consent kit|document request|application\/onboarding)/i;
+
+const NON_ACTIONABLE_REJECTION =
+  /((?:we (?:regret|are sorry)|we (?:will not|won['’]?t) be moving forward|not be moving forward|moving forward with other candidates|move forward with other candidates|decided to pursue other candidates|chosen to (?:explore|move forward with) other candidates|selected another candidate|position (?:has been|was) filled|your application (?:was|has been) (?:not selected|declined|unsuccessful)|not the best match|unable to offer you further consideration|file will be closed)|(?:thank you|thanks) for your interest(?: in (?:the )?(?:position|role|opportunity|joining|our team))?)/i;
 
 const NON_ACTIONABLE_ACCOUNT_EVENT =
-  /(verification code|one[- ]time password|confirm your identity|verify (your )?(email|account|identity)|account created|password reset|reset your password|activate your account|security alert)/i;
+  /(verification code|one[- ]time (?:password|code)|\botp\b|sign[- ]in link|confirm your identity|verify (?:your )?(?:email|account|identity|candidate (?:account|profile))|confirm your (?:email|account|identity)|account created|password reset|reset your password|activate your (?:account|candidate profile)|complete your candidate profile|security alert)/i;
 
-const ACTIONABLE_JOB_SIGNAL =
-  /(interview|phone screen|video screen|onsite|assessment|coding (challenge|test)|technical (test|interview)|task (round|assignment)|next steps|schedule|availability|offer|recruiter|hiring manager|are you (available|free|interested)|please respond|reply by|interview loop)/i;
+// Promotion/campaign mail can mention
+// "recruiting", "offerings", or generic opportunities without creating work.
+// A machine campaign is retained only when it contains a concrete next step.
+const CONCRETE_NEXT_STEP =
+  /(?:would like to (?:set up|schedule)|(?:we(?:['’]d)?|we would) (?:like|love) to (?:speak|chat|connect|discuss)|please\s+(?:respond|share|provide|confirm|choose|select|let me know|reply with|reply by)|(?:can you|could you|would you)[\s\S]{0,100}(?:respond|reply with|reply by|share|provide|confirm|choose|select|let me know|schedule|availability|available|dates?|times?)|are you (?:available|free|interested)|(?:scheduled|set up|add it to the schedule)[\s\S]{0,120}(?:interview|test|screen|call|meeting)|(?:interview|phone screen|video screen|onsite|assessment|coding (?:challenge|test)|technical (?:test)|task (?:round|assignment))[\s\S]{0,100}(?:confirm|respond|reply with|reply by|please (?:confirm|respond|let me know)|can you|could you|would you|available|dates?|times?)|(?:interview|phone screen|video screen|onsite|assessment) (?:is|has been)?\s*(?:scheduled|confirmed|invitation)|offer (?:letter|details|the (?:position|role|job)|you (?:the )?(?:position|role|job))\b)/i;
 
 const NON_ACTIONABLE_PROMOTION =
-  /(new jobs? posted|job alert|jobs? for you|recommended jobs?|you look like a great fit|top jobs?|hiring near you|sponsored job|weekly newsletter|special offer|limited[- ]time|promotional email|unsubscribe)/i;
+  /(new jobs? posted|job alert|jobs? for you|recommended jobs?|you look like a great fit|top jobs?|hiring near you|sponsored job|weekly newsletter|special offer|limited[- ]time|promotional email|unsubscribe|applications? (?:are|is|now)?\s*(?:open|available|live)|open positions|career profile|new hiring opportunities|job opportunities)/i;
 
 // Machine-generated/no-reply local parts, independent of domain - this is
 // what lets forceNeedsReplyFalse apply to no-reply senders on ANY domain,
 // not just job boards.
 const NO_REPLY_LOCAL =
-  /(^|[._+-])(no-?reply|do-?not-?reply|donotreply|noreply|automated|auto-?reply|mailer-daemon|bounce[sd]?|postmaster|unsubscribe|notification|notifications)([._+-]|$)/i;
+  /(^|[._+-])(no[_-]?reply|do[_-]?not[_-]?reply|donotreply|noreply|automated|auto[_-]?reply|mailer-daemon|bounce[sd]?|postmaster|unsubscribe|notification|notifications)([._+-]|$)/i;
 
 export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict {
   const { local, domain } = parseSender(msg.from);
@@ -120,20 +135,42 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
   const personalSender = /(doordash|ubereats|uber\.com|lyft|instacart|amazon|walmart|target|bestbuy|fedex|ups|usps|dhl|delta|united|airbnb|booking\.com|venmo|paypal|chase|bankofamerica|wellsfargo|citi|capitalone|cvs|walgreens|mychart)/i.test(senderRaw);
 
   const onJobBoardDomain = JOB_BOARD_DOMAIN.test(domain);
+  const onAtsDomain = ATS_DOMAIN.test(domain);
   const isAlertLocal = ALERT_LOCAL.test(local);
-  const isHumanRelay = HUMAN_RELAY_LOCAL.test(local);
   const isNoReplyLocal = NO_REPLY_LOCAL.test(local);
+  // `do_not_reply` contains the token "reply" but is explicitly machine
+  // generated; it must never take the human-relay escape hatch.
+  const isHumanRelay = HUMAN_RELAY_LOCAL.test(local) && !isNoReplyLocal;
 
   let senderClass: GmailSenderClass = "human";
   if (onJobBoardDomain && isAlertLocal && !isHumanRelay) senderClass = "job_board_alert";
   else if (isNoReplyLocal) senderClass = "no_reply";
 
-  const hasActionableJobSignal = ACTIONABLE_JOB_SIGNAL.test(preview);
+  // A subject that directly asks the candidate to schedule/confirm an
+  // interview is actionable even when the body is absent from Gmail's list
+  // payload. The body-only rule remains deliberately stricter so conditional
+  // boilerplate such as "we will contact you to schedule an interview" does
+  // not rescue a receipt.
+  const hasConcreteNextStep =
+    CONCRETE_NEXT_STEP.test(preview) ||
+    /\b(?:schedule|confirm) (?:your|an?|the) (?:interview|phone screen|video screen|onsite|assessment|test|call|meeting)\b/i.test(subjectRaw);
+
+  // Closed-loop rejection/decline messages do not create work for the AE.
+  // They are filtered using content, not a sender allow/deny list, and an
+  // interview, assessment, scheduling, offer, or information request in the
+  // same message keeps it available.
+  if (NON_ACTIONABLE_REJECTION.test(preview) && !hasConcreteNextStep) {
+    return {
+      suppress: true, storeButHide: false, reason: "non_actionable_rejection", senderClass,
+      forceNeedsReplyFalse: true,
+      rule: "application:closed_loop_rejection",
+    };
+  }
 
   // High-confidence noise is rejected before the human-conversation rescue.
   // A receipt that also contains an interview/assessment/scheduling signal is
   // retained, while a receipt-only message is never written to the database.
-  if (NON_ACTIONABLE_APPLICATION_RECEIPT.test(preview) && !hasActionableJobSignal) {
+  if (NON_ACTIONABLE_APPLICATION_RECEIPT.test(preview) && !hasConcreteNextStep) {
     return {
       suppress: true, storeButHide: false, reason: "non_actionable_application", senderClass,
       forceNeedsReplyFalse: true,
@@ -141,7 +178,7 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
     };
   }
 
-  if (NON_ACTIONABLE_ACCOUNT_EVENT.test(preview) && !hasActionableJobSignal) {
+  if (NON_ACTIONABLE_ACCOUNT_EVENT.test(preview) && !hasConcreteNextStep) {
     return {
       suppress: true, storeButHide: false, reason: personalSender ? "personal_transaction" : "non_actionable_account", senderClass,
       forceNeedsReplyFalse: true,
@@ -152,8 +189,8 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
   // Catch job-site digests and promotional alerts even when the vendor is not
   // in the finite list of well-known job-board domains. Machine-shaped senders
   // are required here so a human recruiter mentioning a job is not discarded.
-  const machineSender = senderClass !== "human" || /(^|[._+-])(jobs?|jobsearch|career|careers|news|newsletter|marketing|promotion|updates?|notification|notifications)([._+-]|$)/i.test(local);
-  if (machineSender && NON_ACTIONABLE_PROMOTION.test(preview) && !hasActionableJobSignal) {
+  const machineSender = senderClass !== "human" || onAtsDomain || /(^|[._+-])(jobs?|jobsearch|career|careers|campus|talent|recruiting|recruitment|university|students?|news|newsletter|marketing|promotion|updates?|notification|notifications)([._+-]|$)/i.test(local) || /(?:no-?reply|do-?not-?reply|donotreply|automated|notification|mailer|bounce|unsubscribe)/i.test(local);
+  if (machineSender && NON_ACTIONABLE_PROMOTION.test(preview) && !CONCRETE_NEXT_STEP.test(preview)) {
     return {
       suppress: true, storeButHide: false, reason: "job_board_alert", senderClass,
       forceNeedsReplyFalse: true,
