@@ -5,7 +5,13 @@ import { query, queryOne, execute } from "@/server/db/neon";
 import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
 import { computeContentIdentityKey } from "@/lib/jobContentIdentity";
 import { checkJobDuplicate, checkJobDuplicatesBatch, type JobDuplicateMatch } from "@/server/services/jobDuplicateGuard";
-import { checkContentDuplicate, checkContentDuplicatesBatch, type ContentDuplicateCheckResult } from "@/server/services/jobContentDuplicateGuard";
+import {
+  checkContentDuplicate,
+  checkContentDuplicatesBatch,
+  recordDuplicateForReview,
+  CONTENT_IDENTITY_MATCH_SCORE,
+  type ContentDuplicateCheckResult,
+} from "@/server/services/jobContentDuplicateGuard";
 
 function describeContentDuplicateReason(existing: { id: string; source: string | null; created_at: string | null }): string {
   const seen = existing.created_at ? new Date(existing.created_at).toISOString().slice(0, 10) : "an earlier date";
@@ -38,6 +44,21 @@ function applyContentDuplicateResult(row: Record<string, unknown>, check: Conten
   row.is_active = false;
   row.content_duplicate_of = check.existing.id;
   row.content_duplicate_reason = describeContentDuplicateReason(check.existing);
+}
+
+/**
+ * Logs every auto-hidden row into the `job_duplicates` review queue. Runs
+ * AFTER the insert, since the queue references the new row's id, and reads
+ * content_duplicate_of off the row the database actually returned rather
+ * than the pre-insert object - so a row only ever gets queued if it really
+ * was stored as a duplicate.
+ */
+async function recordInsertedContentDuplicates(rows: JobRow[]): Promise<void> {
+  await Promise.all(
+    rows
+      .filter((row) => row?.content_duplicate_of)
+      .map((row) => recordDuplicateForReview(row.content_duplicate_of!, row.id, CONTENT_IDENTITY_MATCH_SCORE))
+  );
 }
 
 export interface JobRow {
@@ -475,6 +496,7 @@ export async function createJob(row: Record<string, unknown>): Promise<CreateJob
   try {
     const result = await queryOne<JobRow>(sql, values);
     if (!result) throw new Error("Failed to insert job");
+    await recordInsertedContentDuplicates([result]);
     return { status: "created", job: result };
   } catch (err: any) {
     if (isUniqueViolation(err) && fingerprint) {
@@ -566,6 +588,7 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
 
   try {
     const inserted = await query<JobRow>(sql, values);
+    await recordInsertedContentDuplicates(inserted);
     return { inserted, duplicates };
   } catch (err: any) {
     // Race backstop: the pre-check above and the unique index (once

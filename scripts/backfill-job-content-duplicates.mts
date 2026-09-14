@@ -33,14 +33,19 @@
 //
 // Usage:
 //   npx tsx scripts/backfill-job-content-duplicates.mts                    # dry run, writes nothing
-//   npx tsx scripts/backfill-job-content-duplicates.mts --apply            # writes content_identity_key only
-//   npx tsx scripts/backfill-job-content-duplicates.mts --apply --dedupe   # also deactivates confirmed historical duplicate pairs
+//   npx tsx scripts/backfill-job-content-duplicates.mts --apply            # content_identity_key + queue pairs for review
+//   npx tsx scripts/backfill-job-content-duplicates.mts --apply --dedupe   # also hides the confirmed duplicate pairs
+//   npx tsx scripts/backfill-job-content-duplicates.mts --undo             # dry run of the reversal
+//   npx tsx scripts/backfill-job-content-duplicates.mts --undo --apply     # un-hides everything this script ever hid
 
 import { Client } from "@neondatabase/serverless";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 import { computeContentIdentityKey, areLocationsCompatible } from "../src/lib/jobContentIdentity";
-import { CONTENT_DUPLICATE_CHECK_WINDOW_DAYS } from "../src/server/services/jobContentDuplicateGuard";
+import {
+  CONTENT_DUPLICATE_CHECK_WINDOW_DAYS,
+  CONTENT_IDENTITY_MATCH_SCORE,
+} from "../src/server/services/jobContentDuplicateGuard";
 
 let dbUrl = process.env.DATABASE_URL ?? "";
 try {
@@ -57,6 +62,7 @@ if (!dbUrl) {
 
 const apply = process.argv.includes("--apply");
 const dedupe = process.argv.includes("--dedupe");
+const undo = process.argv.includes("--undo");
 const BATCH_SIZE = 500;
 
 interface JobRow {
@@ -86,6 +92,36 @@ async function main() {
   if (!hasColumn) {
     console.log("NOTE: migration 099 (content_identity_key/content_duplicate_of columns) has not run against this database yet.");
     console.log("This dry run still works (it computes everything in memory) but --apply cannot run until that migration deploys.\n");
+  }
+
+  // --undo reverses every hide this script has ever made, using
+  // content_duplicate_of as the record of what it touched. It deliberately
+  // does NOT clear content_identity_key (harmless lookup key) and does not
+  // delete the review-queue rows - it marks them resolved instead, so the
+  // history of "this was flagged and then un-flagged" survives.
+  if (undo) {
+    if (!hasColumn) {
+      console.error("Nothing to undo: migration 099 has not run, so no hide could have been recorded.");
+      await client.end();
+      process.exit(1);
+    }
+    const target = await client.query<{ c: string }>(
+      `SELECT COUNT(*) c FROM jobs WHERE content_duplicate_of IS NOT NULL`
+    );
+    console.log(`--undo: ${target.rows[0].c} row(s) currently carry a content_duplicate_of marker.`);
+    if (!apply) {
+      console.log("Dry run — nothing written. Re-run with --undo --apply to actually restore them.");
+      await client.end();
+      return;
+    }
+    const restored = await client.query(
+      `UPDATE jobs SET is_active = true, content_duplicate_of = NULL, content_duplicate_reason = NULL
+       WHERE content_duplicate_of IS NOT NULL RETURNING id`
+    );
+    await client.query(`UPDATE job_duplicates SET resolved = true WHERE resolved = false`);
+    console.log(`Restored ${restored.rowCount} row(s) to is_active = true and marked the review queue resolved.`);
+    await client.end();
+    return;
   }
 
   const { rows } = await client.query<JobRow>(
@@ -180,6 +216,23 @@ async function main() {
     console.log(`  updated ${Math.min(i + BATCH_SIZE, keyUpdates.length)}/${keyUpdates.length}`);
   }
 
+  // The review trail goes in regardless of --dedupe: knowing which pairs were
+  // detected is useful on its own, and is what makes hiding auditable and
+  // reversible (see --undo below). Idempotent via the unique pair index from
+  // migration 100, so re-running never accumulates rows.
+  console.log("\nRecording detected pairs in the job_duplicates review queue...");
+  for (let i = 0; i < dedupeUpdates.length; i += BATCH_SIZE) {
+    const batch = dedupeUpdates.slice(i, i + BATCH_SIZE);
+    await client.query(
+      `INSERT INTO job_duplicates (canonical_job_id, duplicate_job_id, similarity_score, resolved)
+       SELECT t.canonical, t.dup, $3::numeric, false
+       FROM UNNEST($1::uuid[], $2::uuid[]) AS t(canonical, dup)
+       ON CONFLICT (canonical_job_id, duplicate_job_id) DO NOTHING`,
+      [batch.map((u) => u.existing.id), batch.map((u) => u.id), CONTENT_IDENTITY_MATCH_SCORE]
+    );
+    console.log(`  queued ${Math.min(i + BATCH_SIZE, dedupeUpdates.length)}/${dedupeUpdates.length}`);
+  }
+
   if (dedupe) {
     console.log("\n--dedupe passed: hiding confirmed historical duplicate pairs...");
     for (let i = 0; i < dedupeUpdates.length; i += BATCH_SIZE) {
@@ -193,10 +246,10 @@ async function main() {
       console.log(`  hid ${Math.min(i + BATCH_SIZE, dedupeUpdates.length)}/${dedupeUpdates.length}`);
     }
   } else {
-    console.log("\n--dedupe not passed: confirmed duplicate pairs listed above were NOT hidden. Nothing was deactivated.");
+    console.log("\n--dedupe not passed: pairs are queued for review but NOT hidden. Nothing was deactivated.");
   }
 
-  console.log("\nDone. No row was deleted or merged; content_duplicate_of is always reversible with a single UPDATE.");
+  console.log("\nDone. No row was deleted or merged. Everything this script did is reversible with --undo.");
   await client.end();
 }
 

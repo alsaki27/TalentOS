@@ -25,8 +25,45 @@
 //   3. The two postings' locations are not an obvious mismatch (see
 //      areLocationsCompatible - biased toward "compatible" on purpose).
 
-import { query } from "@/server/db/neon";
+import { query, execute } from "@/server/db/neon";
 import { computeContentIdentityKey, areLocationsCompatible } from "@/lib/jobContentIdentity";
+
+/**
+ * Records a detected cross-platform duplicate pair in `job_duplicates` - a
+ * table that already existed in the schema with exactly this shape
+ * (canonical_job_id / duplicate_job_id / similarity_score / resolved) but
+ * was never written to by any code path. It is the review trail for this
+ * system: every automatic hide is listed here so it can be audited and
+ * reversed, which is what makes acting automatically acceptable at all.
+ *
+ * Best-effort on purpose: failing to write the audit row must never fail
+ * the job insert that already succeeded. A missing review row degrades
+ * auditability, whereas a thrown error here would lose a real job.
+ */
+export async function recordDuplicateForReview(
+  canonicalJobId: string,
+  duplicateJobId: string,
+  similarityScore: number
+): Promise<void> {
+  if (canonicalJobId === duplicateJobId) return;
+  await execute(
+    `INSERT INTO job_duplicates (canonical_job_id, duplicate_job_id, similarity_score, resolved)
+     VALUES ($1, $2, $3, false)
+     ON CONFLICT (canonical_job_id, duplicate_job_id) DO NOTHING`,
+    [canonicalJobId, duplicateJobId, similarityScore]
+  ).catch((err) => {
+    console.error("[jobContentDuplicateGuard] could not record duplicate for review:", (err as Error).message ?? String(err));
+  });
+}
+
+/**
+ * Confidence attached to a content-identity match. Not a fuzzy-similarity
+ * number - this detector is an exact normalized match gated by group size,
+ * so there is only one tier it can emit. It exists because
+ * `job_duplicates.similarity_score` is NOT NULL and because a future
+ * stronger/weaker signal should be distinguishable in the same queue.
+ */
+export const CONTENT_IDENTITY_MATCH_SCORE = 0.95;
 
 // Same window as jobDuplicateGuard.ts's fingerprint check - a posting that
 // is still the same "live" job is one both checks should agree on, and

@@ -21,11 +21,13 @@ vi.mock("@/server/services/jobDuplicateGuard", () => ({
 vi.mock("@/server/services/jobContentDuplicateGuard", () => ({
   checkContentDuplicate: vi.fn(),
   checkContentDuplicatesBatch: vi.fn(),
+  recordDuplicateForReview: vi.fn(),
+  CONTENT_IDENTITY_MATCH_SCORE: 0.95,
 }));
 
 import { query, queryOne } from "@/server/db/neon";
 import { checkJobDuplicate, checkJobDuplicatesBatch } from "@/server/services/jobDuplicateGuard";
-import { checkContentDuplicate, checkContentDuplicatesBatch } from "@/server/services/jobContentDuplicateGuard";
+import { checkContentDuplicate, checkContentDuplicatesBatch, recordDuplicateForReview } from "@/server/services/jobContentDuplicateGuard";
 import { createJob, createJobs } from "@/server/repositories/jobsRepository";
 
 const ORIGINAL = {
@@ -76,6 +78,18 @@ describe("createJob — cross-platform content duplicate", () => {
       expect(outcome.job.content_duplicate_of).toBe("job-linkedin-1");
       expect(outcome.job.content_duplicate_reason).toContain("job-linkedin-1");
     }
+    // The hide must be auditable/reversible: it is queued in job_duplicates,
+    // keyed off the id the DB actually returned, not the pre-insert object.
+    expect(recordDuplicateForReview).toHaveBeenCalledWith("job-linkedin-1", "job-indeed-2", 0.95);
+  });
+
+  it("does not queue anything for review when the row was not stored as a duplicate", async () => {
+    (checkContentDuplicate as any).mockResolvedValue({ isContentDuplicate: false, contentIdentityKey: "some::key" });
+    (queryOne as any).mockResolvedValue({ id: "job-new", is_active: true, content_duplicate_of: null });
+
+    await createJob({ title: "Brand New Role", company: "Some Co" });
+
+    expect(recordDuplicateForReview).not.toHaveBeenCalled();
   });
 
   it("leaves is_active untouched when no content duplicate is found", async () => {
