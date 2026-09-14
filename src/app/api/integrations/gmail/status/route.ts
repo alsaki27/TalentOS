@@ -17,7 +17,9 @@ export async function GET() {
     const sharedEmail = configuredSharedGmailEmail();
     const canManage = hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES);
     data = await query(
-      `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at, created_at, updated_at,
+      `SELECT id, provider, owner_type, email, scopes, status, token_expires_at, last_synced_at,
+              gmail_backfill_complete, gmail_backfill_page_token IS NOT NULL AS has_backfill_page,
+              gmail_watch_expiration, sync_locked_until, sync_error, created_at, updated_at,
               $2::boolean AS can_manage
          FROM integration_accounts
         WHERE provider = 'gmail'

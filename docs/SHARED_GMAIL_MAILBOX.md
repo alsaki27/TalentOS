@@ -96,6 +96,13 @@ access.
   accounts.
 - `GET /api/cron/gmail-sync` uses only the shared row and never polls retired
   candidate rows.
+- Shared-mailbox sync persists only messages with a unique candidate match.
+  Ambiguous/unassigned messages are rejected before database insertion, and
+  receipt-only applications, resume/CV confirmations, account verification
+  mail, job-site promotions, and job-alert digests are filtered before storage.
+- Candidate matching uses thread continuity, candidate/known-contact email,
+  unique normalized candidate names in the message, and a unique active
+  application domain. It never guesses when a signal is missing or ambiguous.
 - Candidate email privacy controls (pause/resume, retention, and delete
   history) still operate on each candidate's matched messages; they do not
   create another Gmail connection.

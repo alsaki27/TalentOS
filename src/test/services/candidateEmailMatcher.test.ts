@@ -7,10 +7,11 @@ vi.mock("@/server/db/neon", () => ({
 }));
 
 import { query, queryOne } from "@/server/db/neon";
-import { matchCandidateForMessage } from "@/server/services/candidateEmailMatcher";
+import { clearCandidateNameCache, matchCandidateForMessage } from "@/server/services/candidateEmailMatcher";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearCandidateNameCache();
   (queryOne as any).mockResolvedValue(null); // no prior thread match, unless overridden
   (query as any).mockResolvedValue([]); // no matches at any tier, unless overridden
 });
@@ -92,6 +93,41 @@ describe("matchCandidateForMessage", () => {
       fromEmail: "recruiter@company.com",
       toEmails: [],
       bodyText: null,
+    });
+
+    expect(result).toEqual({ candidateId: null, method: null });
+  });
+
+  it("tier 4: matches a unique candidate by normalized full name in the message", async () => {
+    (query as any)
+      .mockResolvedValueOnce([]) // tier 2: no direct match
+      .mockResolvedValueOnce([]) // tier 3: no known contact
+      .mockResolvedValueOnce([{ id: "cand-name", name: "Ada Lovelace" }]); // tier 4: unique name
+
+    const result = await matchCandidateForMessage({
+      gmailThreadId: "thread-name",
+      fromEmail: "recruiter@company.com",
+      toEmails: [],
+      bodyText: "Hello Ada Lovelace, we would like to schedule an interview.",
+    });
+
+    expect(result).toEqual({ candidateId: "cand-name", method: "candidate_name" });
+  });
+
+  it("does not guess when the same full name belongs to multiple candidates", async () => {
+    (query as any)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: "cand-a", name: "Ada Lovelace" },
+        { id: "cand-b", name: "Ada Lovelace" },
+      ]);
+
+    const result = await matchCandidateForMessage({
+      gmailThreadId: "thread-ambiguous-name",
+      fromEmail: "recruiter@company.com",
+      toEmails: [],
+      bodyText: "Hello Ada Lovelace, please reply.",
     });
 
     expect(result).toEqual({ candidateId: null, method: null });

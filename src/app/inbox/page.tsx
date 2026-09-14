@@ -226,8 +226,26 @@ export default function InboxPage() {
       const response = await fetch("/api/candidate-dashboard/force-sync", { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Gmail sync failed.");
+      const outcomes = Array.isArray(data?.result?.accounts) ? data.result.accounts : [];
+      if (outcomes.length === 0) {
+        setMessageKind("error");
+        setMessage("No active shared Gmail account was available for syncing.");
+        await Promise.all([loadThreads(1), loadCounts()]);
+        return;
+      }
       setMessageKind("success");
-      setMessage("Gmail sync completed.");
+      const busy = outcomes.some((outcome: any) => outcome?.busy);
+      if (busy) {
+        setMessage("Gmail sync is already in progress. New mail will appear when that run finishes.");
+      } else {
+        const filtered = outcomes.reduce((sum: number, outcome: any) => sum + Number(outcome?.suppressed || 0), 0);
+        const unmatched = outcomes.reduce((sum: number, outcome: any) => sum + Number(outcome?.unmatched || 0), 0);
+        const details = [
+          filtered ? `${filtered} filtered` : "",
+          unmatched ? `${unmatched} unmatched and not stored` : "",
+        ].filter(Boolean).join(" · ");
+        setMessage(details ? `Gmail sync completed — ${details}.` : "Gmail sync completed.");
+      }
       await Promise.all([loadThreads(1), loadCounts()]);
     } catch (error) {
       setMessageKind("error");

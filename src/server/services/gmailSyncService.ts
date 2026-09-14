@@ -56,6 +56,11 @@ interface SyncOutcome {
   fetched: number;
   triaged: number;
   suppressed: number;
+  /** Messages rejected before insertion because no unique candidate identity
+   * was available in the shared mailbox. */
+  unmatched?: number;
+  /** True when another sync request currently owns the account lease. */
+  busy?: boolean;
   error?: string;
 }
 
@@ -183,6 +188,10 @@ async function storeRawMessage(
   msg: GmailMessage,
   matchMethod: CandidateMatchMethod | null = null,
 ) {
+  // The shared-mailbox contract is candidate-owned rows only. Keep this guard
+  // at the persistence boundary as a second line of defence in case a future
+  // caller bypasses the matcher in runGmailSync().
+  if (!candidateId) return null;
   const existing = await queryOne<{ id: string }>(
     "SELECT id FROM email_communications WHERE gmail_message_id = $1",
     [msg.id]
@@ -200,11 +209,9 @@ async function storeRawMessage(
     [candidateId, integrationAccountId, msg.id, msg.threadId, msg.direction, msg.from, msg.to, msg.subject, msg.snippet, msg.bodyText, msg.bodyHtml, msg.sentAt, msg.labelIds, msg.labelIds.includes("UNREAD"), msg.labelIds.includes("IMPORTANT"), JSON.stringify(msg.attachments), matchMethod]
   );
 
-  // gmail_contact_profiles.candidate_id is NOT NULL - an unassigned (still
-  // Unassigned-queue) message has no candidate to attribute the contact to
-  // yet. It gets recorded here once the message is later manually assigned
-  // (see the thread-wide backfill in the Unassigned route), same as any
-  // other newly-matched message.
+  // gmail_contact_profiles.candidate_id is NOT NULL. Shared-mailbox sync now
+  // guarantees candidateId before calling this function, so this enrichment
+  // path only runs for a message with a proven candidate owner.
   if (row && candidateId && msg.from) {
     const contactEmail = msg.from.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || msg.from.trim().toLowerCase();
     const contactName = msg.from.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null;
@@ -768,9 +775,13 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
   const outcomes: SyncOutcome[] = [];
 
   for (const accountRow of accounts) {
-    const outcome: SyncOutcome = { accountId: accountRow.id, candidateId: accountRow.candidate_id, fetched: 0, triaged: 0, suppressed: 0 };
+    const outcome: SyncOutcome = { accountId: accountRow.id, candidateId: accountRow.candidate_id, fetched: 0, triaged: 0, suppressed: 0, unmatched: 0 };
     const locked = await tryAccountLock(accountRow.id);
-    if (!locked) continue;
+    if (!locked) {
+      outcome.busy = true;
+      outcomes.push(outcome);
+      continue;
+    }
     const startedAt = Date.now();
     try {
       const account = await getDecryptedGmailAccount(accountRow.id);
@@ -799,12 +810,16 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
           // account.candidate_id is set for a (retired, but still-supported)
           // per-candidate mailbox; null for the shared mailbox, in which
           // case every message must be matched deterministically - see
-          // candidateEmailMatcher.ts. Unmatched messages store with
-          // candidate_id = NULL and land in the "Unassigned" queue instead
-          // of being dropped or guessed.
+          // candidateEmailMatcher.ts. Unmatched messages are rejected before
+          // persistence instead of being guessed or placed in an unassigned
+          // database queue.
           let resolvedCandidateId: string | null = account.candidate_id;
           try {
-            if (classifyGmailMessage(msg).suppress) {
+            const filterVerdict = classifyGmailMessage(msg);
+            // Both hard suppression and the former recoverable-hide tier are
+            // excluded from the shared mailbox database. The product inbox is
+            // intentionally limited to actionable job communication now.
+            if (filterVerdict.suppress || filterVerdict.storeButHide) {
               outcome.suppressed++;
               processedMessages++;
               continue;
@@ -815,10 +830,20 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
                 gmailThreadId: msg.threadId,
                 fromEmail: msg.from,
                 toEmails: msg.to,
+                subject: msg.subject,
                 bodyText: msg.bodyText,
               });
               resolvedCandidateId = match.candidateId;
               matchMethod = match.method;
+            }
+            // A shared mailbox message without a unique candidate identity is
+            // not safe to persist. Keeping it as candidate_id=NULL created an
+            // ever-growing unassigned queue and made candidate filtering
+            // unreliable. Reject it before storeRawMessage().
+            if (!resolvedCandidateId) {
+              outcome.unmatched = (outcome.unmatched || 0) + 1;
+              processedMessages++;
+              continue;
             }
             storedId = await storeRawMessage(resolvedCandidateId, account.id, msg, matchMethod);
             outcome.fetched++;
@@ -830,9 +855,8 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
         // Mailbox replication is the critical path.  AI triage is deliberately
         // capped so a large historical page cannot hold the Gmail cursor open
         // for minutes; subsequent scheduled runs continue triage safely.
-        // Still-unassigned messages (resolvedCandidateId null) are skipped
-        // here - triageStoredMessage itself also guards this, but skipping
-        // the call avoids burning a triagedMessages "slot" on a no-op.
+        // Every stored shared-mailbox message has a candidate identity, so no
+        // unassigned row can consume a triage slot.
         if (storedId && resolvedCandidateId && triagedMessages < TRIAGE_MESSAGES_PER_RUN) {
           try {
             await triageStoredMessage(storedId, accessToken);

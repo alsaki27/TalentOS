@@ -5,9 +5,9 @@
 // per-candidate mailbox it arrived in. Once every candidate's mail lands in
 // one inbox via forwarding, this module is the only thing that answers that
 // question - tried in strict priority order, stopping at the first hit.
-// Anything that clears none of these tiers is intentionally left
-// unresolved (candidate_id = NULL) rather than guessed, and surfaces in the
-// "Unassigned" queue for a one-click manual match instead.
+// Anything that clears none of these tiers is intentionally left unresolved
+// rather than guessed. Shared-mailbox sync drops that message before storage;
+// it never creates a candidate_id=NULL inbox row.
 //
 // The only consumer is gmailSyncService.ts's storeRawMessage path for the
 // shared mailbox.
@@ -15,12 +15,13 @@
 import { query, queryOne } from "@/server/db/neon";
 import { parseForwardedHeaders, extractEmailAddress } from "@/lib/integrations/forwardedMessageParser";
 
-export type CandidateMatchMethod = "thread_continuity" | "candidate_email" | "known_contact" | "company_domain";
+export type CandidateMatchMethod = "thread_continuity" | "candidate_email" | "known_contact" | "candidate_name" | "company_domain";
 
 export interface CandidateMatchInput {
   gmailThreadId: string;
   fromEmail: string | null;
   toEmails: string[] | null;
+  subject?: string | null;
   bodyText: string | null;
 }
 
@@ -42,6 +43,54 @@ const PERSONAL_EMAIL_DOMAINS = new Set([
 function domainOf(email: string): string | null {
   const at = email.lastIndexOf("@");
   return at === -1 ? null : email.slice(at + 1).toLowerCase();
+}
+
+function normalizeNameText(value: string | null | undefined): string {
+  return (value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+let candidateNameCache: { expiresAt: number; rows: Array<{ id: string; name: string }> } | null = null;
+
+// Test/support hook; production callers simply benefit from the short cache
+// so a large backfill does not issue one candidate-list query per message.
+export function clearCandidateNameCache() {
+  candidateNameCache = null;
+}
+
+async function listCandidateNames(): Promise<Array<{ id: string; name: string }>> {
+  const now = Date.now();
+  if (candidateNameCache && candidateNameCache.expiresAt > now) return candidateNameCache.rows;
+  const rows = await query<{ id: string; name: string }>(
+    `SELECT id, name FROM candidates WHERE name IS NOT NULL AND btrim(name) <> ''`,
+  );
+  candidateNameCache = { expiresAt: now + 5 * 60_000, rows };
+  return rows;
+}
+
+async function matchByUniqueCandidateName(input: CandidateMatchInput): Promise<string | null> {
+  const searchableText = normalizeNameText([
+    input.subject || "",
+    input.bodyText || "",
+    ...(input.toEmails || []),
+  ].join(" "));
+  if (!searchableText) return null;
+
+  const paddedText = ` ${searchableText} `;
+  const matches = (await listCandidateNames()).filter((candidate) => {
+    const normalizedName = normalizeNameText(candidate.name);
+    // A single token is too ambiguous to be a safe identity signal. Full
+    // names are matched on normalized token boundaries, never substrings.
+    if (normalizedName.split(" ").length < 2) return false;
+    return paddedText.includes(` ${normalizedName} `);
+  });
+  const distinctIds = Array.from(new Set(matches.map((candidate) => candidate.id)));
+  return distinctIds.length === 1 ? distinctIds[0] : null;
 }
 
 export async function matchCandidateForMessage(input: CandidateMatchInput): Promise<CandidateMatchResult> {
@@ -76,29 +125,36 @@ export async function matchCandidateForMessage(input: CandidateMatchInput): Prom
       if (addr) addresses.add(addr);
     }
   }
-  if (addresses.size === 0) return { candidateId: null, method: null };
   const addressList = Array.from(addresses);
 
-  // Tier 2: direct candidate-email match.
-  const directMatches = await query<{ id: string }>(
-    `SELECT DISTINCT id FROM candidates WHERE lower(email) = ANY($1::text[])`,
-    [addressList],
-  );
-  if (directMatches.length === 1) return { candidateId: directMatches[0].id, method: "candidate_email" };
-  // More than one candidate shares an address in this set (e.g. a CC'd
-  // recruiter who is also, coincidentally, a candidate) - never guess.
-  if (directMatches.length > 1) return { candidateId: null, method: null };
+  if (addressList.length > 0) {
+    // Tier 2: direct candidate-email match.
+    const directMatches = await query<{ id: string }>(
+      `SELECT DISTINCT id FROM candidates WHERE lower(email) = ANY($1::text[])`,
+      [addressList],
+    );
+    if (directMatches.length === 1) return { candidateId: directMatches[0].id, method: "candidate_email" };
+    // More than one candidate shares an address in this set (e.g. a CC'd
+    // recruiter who is also, coincidentally, a candidate) - never guess.
+    if (directMatches.length > 1) return { candidateId: null, method: null };
 
-  // Tier 3: known Gmail contact - an address TalentOS has already linked to
-  // one specific candidate from a prior, correctly-matched email.
-  const knownContacts = await query<{ candidate_id: string }>(
-    `SELECT DISTINCT candidate_id FROM gmail_contact_profiles WHERE lower(email) = ANY($1::text[])`,
-    [addressList],
-  );
-  if (knownContacts.length === 1) return { candidateId: knownContacts[0].candidate_id, method: "known_contact" };
-  if (knownContacts.length > 1) return { candidateId: null, method: null };
+    // Tier 3: known Gmail contact - an address TalentOS has already linked to
+    // one specific candidate from a prior, correctly-matched email.
+    const knownContacts = await query<{ candidate_id: string }>(
+      `SELECT DISTINCT candidate_id FROM gmail_contact_profiles WHERE lower(email) = ANY($1::text[])`,
+      [addressList],
+    );
+    if (knownContacts.length === 1) return { candidateId: knownContacts[0].candidate_id, method: "known_contact" };
+    if (knownContacts.length > 1) return { candidateId: null, method: null };
+  }
 
-  // Tier 4: active-application company-domain match, auto-assigned only
+  // Tier 4: exact normalized full-name match in subject/body/recipient text.
+  // Only a unique candidate is accepted; common or duplicated names remain
+  // unresolved rather than being guessed.
+  const nameMatch = await matchByUniqueCandidateName(input);
+  if (nameMatch) return { candidateId: nameMatch, method: "candidate_name" };
+
+  // Tier 5: active-application company-domain match, auto-assigned only
   // when exactly one candidate's active application resolves to one of
   // these domains. A shared ATS domain (Greenhouse, Workday, ...) naturally
   // matches many candidates at once and correctly falls through to
@@ -119,6 +175,7 @@ export async function matchCandidateForMessage(input: CandidateMatchInput): Prom
     if (domainMatches.length === 1) return { candidateId: domainMatches[0].candidate_id, method: "company_domain" };
   }
 
-  // Tier 5: unresolved - lands in the Unassigned queue for a manual match.
+  // Unresolved messages are intentionally not auto-assigned. The shared-mailbox
+  // sync worker drops them before storage, so no unassigned queue row is made.
   return { candidateId: null, method: null };
 }

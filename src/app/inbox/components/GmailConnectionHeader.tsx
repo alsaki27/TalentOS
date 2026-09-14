@@ -11,6 +11,11 @@ interface SharedAccountStatus {
   email: string | null;
   status: "active" | "revoked" | "error";
   last_synced_at: string | null;
+  gmail_backfill_complete?: boolean;
+  has_backfill_page?: boolean;
+  gmail_watch_expiration?: string | null;
+  sync_locked_until?: string | null;
+  sync_error?: string | null;
   can_manage?: boolean;
 }
 
@@ -69,6 +74,15 @@ export function GmailConnectionHeader() {
             <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
               <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px #22c55e", display: "inline-block" }} />
               <span style={{ color: "#22c55e", fontWeight: 600 }}>{account.email || "Connected"}</span>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
+              {account.sync_locked_until
+                ? "Sync in progress"
+                : account.gmail_backfill_complete === false
+                  ? "Initial sync continuing"
+                  : account.last_synced_at
+                    ? `Last sync ${new Date(account.last_synced_at).toLocaleString()}`
+                    : "Not synced yet"}
             </div>
             {account.can_manage && <button
                 onClick={handleDisconnect}

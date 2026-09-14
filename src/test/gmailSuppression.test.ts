@@ -15,6 +15,35 @@ describe("candidate Gmail pre-storage suppression", () => {
     expect(gmailSuppressionReason({ from: "offers@example.com", subject: "Special offer — unsubscribe" })).toBe("bulk_marketing");
     expect(gmailSuppressionReason({ from: "recruiter@engineeringco.com", subject: "Interview availability", bodyText: "Can you meet the hiring manager Tuesday?" })).toBeNull();
   });
+
+  test("drops receipt-only application and resume messages before storage", () => {
+    expect(classifyGmailMessage({
+      from: "careers@company.example",
+      subject: "Thank you for applying",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_application" });
+    expect(classifyGmailMessage({
+      from: "no-reply@ats.example",
+      subject: "Your resume was received",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_application" });
+  });
+
+  test("keeps application mail when it contains a real interview next step", () => {
+    expect(classifyGmailMessage({
+      from: "recruiter@company.example",
+      subject: "Thank you for applying — schedule your interview",
+    })).toMatchObject({ suppress: false, storeButHide: false });
+  });
+
+  test("drops account housekeeping and machine job promotions", () => {
+    expect(classifyGmailMessage({
+      from: "SecurityServices_NoReply@adp.com",
+      subject: "Here's your verification code from ADP",
+    })).toMatchObject({ suppress: true, reason: "non_actionable_account" });
+    expect(classifyGmailMessage({
+      from: "jobs-notification@jobs2web.com",
+      subject: "New jobs posted from careers.example.com",
+    })).toMatchObject({ suppress: true, reason: "job_board_alert" });
+  });
 });
 
 describe("classifyGmailMessage — job-board sender-shape rules (Chunk A)", () => {

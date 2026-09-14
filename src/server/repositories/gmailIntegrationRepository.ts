@@ -115,7 +115,7 @@ export async function updateGmailBackfillState(id: string, nextPageToken: string
   await execute(
     `UPDATE integration_accounts
         SET gmail_backfill_page_token = $1::text, gmail_backfill_complete = $2::boolean,
-            status = 'active', sync_error = NULL, updated_at = now()
+            last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now()
       WHERE id = $3::uuid`,
     [nextPageToken, complete, id]
   );

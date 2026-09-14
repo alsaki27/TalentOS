@@ -15,6 +15,8 @@
 export type GmailSuppressionReason =
   | "job_alert"            // legacy sender+content AND-gate, unchanged
   | "job_board_alert"      // new: sender-shape-driven, catches single-job alerts
+  | "non_actionable_application" // receipt/status mail with no next step
+  | "non_actionable_account"     // verification/account housekeeping mail
   | "personal_transaction"
   | "bulk_marketing";
 
@@ -87,6 +89,22 @@ const TITLE_AT_COMPANY_SUBJECT = /^[^@\n<>]{3,90}\s+@\s+[^@\n<>]{2,90}$/;
 const HUMAN_CONVERSATION =
   /(\bi'?m\b|\bi wanted\b|\bwe'?d (like|love)\b|your (application|resume|cv|interview|candidacy)|are you (available|free|interested)|schedule a (call|chat|time|screen)|phone screen|hiring manager|next steps|thanks for (applying|your time)|following up (on|with) your|sent you a message|replied to your message)/i;
 
+// Receipt-only messages are not useful to the operating inbox. Keep them out
+// unless the same message contains a real next step (interview, assessment,
+// scheduling, offer, or a request for information). This intentionally uses
+// message content, not a hardcoded sender list, because ATS vendors vary.
+const NON_ACTIONABLE_APPLICATION_RECEIPT =
+  /(thank you for applying|thanks for applying|application (has been|was|is)?\s*(received|submitted|successfully submitted|confirmed)|we (have )?received your (application|resume|cv)|your (application|resume|cv) (has been|was|is)?\s*(received|submitted|successfully submitted|confirmed)|resume (submission )?received|cv (submission )?received|application confirmation|application was viewed|application was sent to|received your application)/i;
+
+const NON_ACTIONABLE_ACCOUNT_EVENT =
+  /(verification code|one[- ]time password|confirm your identity|verify (your )?(email|account|identity)|account created|password reset|reset your password|activate your account|security alert)/i;
+
+const ACTIONABLE_JOB_SIGNAL =
+  /(interview|phone screen|video screen|onsite|assessment|coding (challenge|test)|technical (test|interview)|task (round|assignment)|next steps|schedule|availability|offer|recruiter|hiring manager|are you (available|free|interested)|please respond|reply by|interview loop)/i;
+
+const NON_ACTIONABLE_PROMOTION =
+  /(new jobs? posted|job alert|jobs? for you|recommended jobs?|you look like a great fit|top jobs?|hiring near you|sponsored job|weekly newsletter|special offer|limited[- ]time|promotional email|unsubscribe)/i;
+
 // Machine-generated/no-reply local parts, independent of domain - this is
 // what lets forceNeedsReplyFalse apply to no-reply senders on ANY domain,
 // not just job boards.
@@ -98,6 +116,8 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
   const subjectRaw = (msg.subject || "").trim();
   const subject = subjectRaw.toLowerCase();
   const preview = `${subject}\n${msg.snippet || ""}\n${msg.bodyText || ""}`.toLowerCase().slice(0, 4000);
+  const senderRaw = (msg.from || "").toLowerCase();
+  const personalSender = /(doordash|ubereats|uber\.com|lyft|instacart|amazon|walmart|target|bestbuy|fedex|ups|usps|dhl|delta|united|airbnb|booking\.com|venmo|paypal|chase|bankofamerica|wellsfargo|citi|capitalone|cvs|walgreens|mychart)/i.test(senderRaw);
 
   const onJobBoardDomain = JOB_BOARD_DOMAIN.test(domain);
   const isAlertLocal = ALERT_LOCAL.test(local);
@@ -107,6 +127,39 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
   let senderClass: GmailSenderClass = "human";
   if (onJobBoardDomain && isAlertLocal && !isHumanRelay) senderClass = "job_board_alert";
   else if (isNoReplyLocal) senderClass = "no_reply";
+
+  const hasActionableJobSignal = ACTIONABLE_JOB_SIGNAL.test(preview);
+
+  // High-confidence noise is rejected before the human-conversation rescue.
+  // A receipt that also contains an interview/assessment/scheduling signal is
+  // retained, while a receipt-only message is never written to the database.
+  if (NON_ACTIONABLE_APPLICATION_RECEIPT.test(preview) && !hasActionableJobSignal) {
+    return {
+      suppress: true, storeButHide: false, reason: "non_actionable_application", senderClass,
+      forceNeedsReplyFalse: true,
+      rule: "application:receipt_only",
+    };
+  }
+
+  if (NON_ACTIONABLE_ACCOUNT_EVENT.test(preview) && !hasActionableJobSignal) {
+    return {
+      suppress: true, storeButHide: false, reason: personalSender ? "personal_transaction" : "non_actionable_account", senderClass,
+      forceNeedsReplyFalse: true,
+      rule: personalSender ? "personal_transaction" : "account:verification_or_housekeeping",
+    };
+  }
+
+  // Catch job-site digests and promotional alerts even when the vendor is not
+  // in the finite list of well-known job-board domains. Machine-shaped senders
+  // are required here so a human recruiter mentioning a job is not discarded.
+  const machineSender = senderClass !== "human" || /(^|[._+-])(jobs?|jobsearch|career|careers|news|newsletter|marketing|promotion|updates?|notification|notifications)([._+-]|$)/i.test(local);
+  if (machineSender && NON_ACTIONABLE_PROMOTION.test(preview) && !hasActionableJobSignal) {
+    return {
+      suppress: true, storeButHide: false, reason: "job_board_alert", senderClass,
+      forceNeedsReplyFalse: true,
+      rule: "promotion:machine_alert",
+    };
+  }
 
   // 1. Rescue first, always - never suppress or hide past this point.
   if (isHumanRelay || HUMAN_CONVERSATION.test(preview)) {
@@ -142,8 +195,6 @@ export function classifyGmailMessage(msg: GmailFilterInput): GmailFilterVerdict 
   //    legitimately host recruiting mail (careers@amazon.com) - so this
   //    stays content-gated rather than switching to the sender-shape-only
   //    logic used for job boards above.
-  const senderRaw = (msg.from || "").toLowerCase();
-  const personalSender = /(doordash|ubereats|uber\.com|lyft|instacart|amazon|walmart|target|bestbuy|fedex|ups|usps|dhl|delta|united|airbnb|booking\.com|venmo|paypal|chase|bankofamerica|wellsfargo|citi|capitalone|cvs|walgreens|mychart)/i.test(senderRaw);
   const personalContent = /(order|receipt|delivery|shipment|tracking|invoice|payment|reservation|ride|trip|verification code|one-time password|security alert|prescription|appointment)/i.test(preview);
   if (personalSender && personalContent) {
     return { suppress: true, storeButHide: false, reason: "personal_transaction", senderClass, forceNeedsReplyFalse: true, rule: "personal_transaction" };
