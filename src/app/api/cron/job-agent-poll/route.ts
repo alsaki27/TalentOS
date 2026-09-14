@@ -113,7 +113,10 @@ async function handlePoll(req: NextRequest) {
           ? Date.now() - new Date(processingStartedAt).getTime()
           : 0;
         if (processingStartedAt && Number.isFinite(processingAge) && processingAge >= PROCESSING_LEASE_MS) {
-          const message = "Dataset processing lease expired after 30 minutes";
+          // Was a literal "30 minutes" even after PROCESSING_LEASE_MS was
+          // reduced to 10 (see its own comment above) - the message no
+          // longer matched the actual configured lease at all.
+          const message = `Dataset processing lease expired after ${Math.round(PROCESSING_LEASE_MS / 60000)} minutes`;
           const recovered = await transitionRunStatus(run.id, "processing", {
             status: "failed",
             error: message,
