@@ -3,7 +3,42 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
+import { computeContentIdentityKey } from "@/lib/jobContentIdentity";
 import { checkJobDuplicate, checkJobDuplicatesBatch, type JobDuplicateMatch } from "@/server/services/jobDuplicateGuard";
+import { checkContentDuplicate, checkContentDuplicatesBatch, type ContentDuplicateCheckResult } from "@/server/services/jobContentDuplicateGuard";
+
+function describeContentDuplicateReason(existing: { id: string; source: string | null; created_at: string | null }): string {
+  const seen = existing.created_at ? new Date(existing.created_at).toISOString().slice(0, 10) : "an earlier date";
+  return `Auto-hidden: same company+title as job ${existing.id}${existing.source ? ` (source: ${existing.source})` : ""}, first captured ${seen}. Review and re-activate if this is actually a distinct opening.`;
+}
+
+/**
+ * Applies the cross-platform content-identity check to a row about to be
+ * inserted, mutating it in place: always stamps content_identity_key, and
+ * when the guard is confident enough, also sets is_active = false and
+ * content_duplicate_of/content_duplicate_reason. Never blocks the insert -
+ * see jobContentDuplicateGuard.ts for why a wrong content match must never
+ * cost a real job its only row.
+ */
+async function applyContentDuplicateCheck(row: Record<string, unknown>): Promise<void> {
+  const title = (row.title as string | null | undefined) ?? null;
+  const company = (row.company as string | null | undefined) ?? null;
+  const location = (row.location as string | null | undefined) ?? null;
+  const contentIdentityKey = computeContentIdentityKey({ title, company });
+  row.content_identity_key = contentIdentityKey;
+  if (!contentIdentityKey) return;
+
+  const check = await checkContentDuplicate({ title, company, location });
+  applyContentDuplicateResult(row, check);
+}
+
+function applyContentDuplicateResult(row: Record<string, unknown>, check: ContentDuplicateCheckResult): void {
+  row.content_identity_key = check.contentIdentityKey;
+  if (!check.isContentDuplicate) return;
+  row.is_active = false;
+  row.content_duplicate_of = check.existing.id;
+  row.content_duplicate_reason = describeContentDuplicateReason(check.existing);
+}
 
 export interface JobRow {
   id: string;
@@ -27,6 +62,9 @@ export interface JobRow {
   salary_range: string | null;
   notes: string | null;
   is_active: boolean | null;
+  content_identity_key: string | null;
+  content_duplicate_of: string | null;
+  content_duplicate_reason: string | null;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -425,7 +463,10 @@ export async function createJob(row: Record<string, unknown>): Promise<CreateJob
     if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
   }
 
-  const fullRow = await toSqlRow({ ...row, apply_link_fingerprint: fingerprint });
+  const enrichedRow: Record<string, unknown> = { ...row };
+  await applyContentDuplicateCheck(enrichedRow);
+
+  const fullRow = await toSqlRow({ ...enrichedRow, apply_link_fingerprint: fingerprint });
   const cols = Object.keys(fullRow);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
   const values = cols.map((c) => fullRow[c]);
@@ -489,6 +530,20 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
   });
 
   if (toInsert.length === 0) return { inserted: [], duplicates };
+
+  // Cross-platform content check, against jobs already committed to the
+  // table (see jobContentDuplicateGuard.ts). Deliberately does not also
+  // dedupe same-batch content collisions - a single import batch is
+  // effectively always single-source (one Apify run, one ATS pull), so the
+  // real cross-platform case (LinkedIn captured in one run, Indeed in a
+  // later, separate one) is caught by this check regardless; only a
+  // hypothetical batch mixing multiple platforms in one call would miss an
+  // in-batch pair, mirroring the same accepted non-goal already documented
+  // above for same-batch fingerprint collisions.
+  const contentChecks = await checkContentDuplicatesBatch(
+    toInsert.map((r) => ({ title: r.title ?? null, company: r.company ?? null, location: r.location ?? null }))
+  );
+  toInsert.forEach((row, i) => applyContentDuplicateResult(row, contentChecks[i]));
 
   // Bulk-import rows can have heterogeneous column sets (e.g. one row has
   // salary fields, another doesn't) - union every column across the batch
