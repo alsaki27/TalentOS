@@ -271,14 +271,25 @@ def run_sitemap_mode(role_group: str, base_url: str, ingest_secret: str, limit: 
         f"delisted_410={delisted}, skipped_non_us={non_us}, extraction_failures={extraction_failures}"
     )
 
-    # Only suspicious if there were actually not-already-seen URLs to check —
-    # "everything today was already seen yesterday" is a legitimate outcome
-    # once the backlog is caught up, not a sign extraction broke.
-    unseen_url_count = len(all_urls) - skipped_already_seen
-    if role_group == "all" and unseen_url_count > 0 and len(candidates) == 0:
-        print("::error::[actalent] 0 candidates passed the title pre-filter out of a nonzero not-already-seen "
-              "sitemap listing on an 'all'-group run — this almost certainly means the sitemap URL pattern "
-              "changed (slug parsing broke), not that zero of thousands of jobs are relevant today. "
+    # Hard floor — same reasoning as broadstaff_ingest.py's: this detects a
+    # BROKEN PARSE, never a legitimate "nothing new is relevant today".
+    #
+    # The real broken-parse signal here is the sitemap walk yielding zero job
+    # URLs: _JOB_URL_RE not matching means the site's URL pattern changed and
+    # every downstream stage is working from nothing. That is checked directly
+    # and unconditionally, independent of role group or how many were already
+    # seen.
+    #
+    # Deliberately NOT checked: "candidates == 0 after the title pre-filter".
+    # Actalent lists thousands of jobs across every discipline it staffs for
+    # (labs, clinical, manufacturing, finance), so the overwhelming majority
+    # legitimately don't match these role groups — a day where none of the
+    # newly-posted ones do is entirely ordinary, and failing the run for it
+    # would be a false alarm, exactly the bug this replaced in the Broadstaff
+    # adapter.
+    if len(all_urls) == 0:
+        print(f"::error::[actalent] The sitemap walk produced zero job URLs from {SITEMAP_INDEX_URL}. "
+              "The site's job-URL pattern has almost certainly changed, so nothing downstream can work. "
               "Failing loudly per design.")
         sys.exit(1)
 

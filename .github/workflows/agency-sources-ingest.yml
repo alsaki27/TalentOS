@@ -73,7 +73,16 @@ jobs:
       - name: Install dependencies
         run: pip install -r scripts/requirements-agency-sources.txt
 
+      # The two sources are independent: one being down, blocked, or having
+      # changed its markup says nothing about the other, so a failure in one
+      # must never stop the other from running or prevent the jobs that DID
+      # ingest from being processed. continue-on-error lets the run proceed;
+      # the outcome is captured per-step and re-raised by the final gate step
+      # below, so a genuine failure is still surfaced as a red run rather
+      # than silently swallowed.
       - name: Run Broadstaff ingest
+        id: broadstaff
+        continue-on-error: true
         if: github.event.inputs.source != 'actalent'
         env:
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
@@ -86,7 +95,13 @@ jobs:
           python scripts/broadstaff_ingest.py "${ARGS[@]}"
 
       - name: Run Actalent ingest
-        if: github.event.inputs.source != 'broadstaff'
+        id: actalent
+        continue-on-error: true
+        # always() so this still runs when the Broadstaff step above failed —
+        # without it, GitHub's default "skip everything after a failure"
+        # behavior means one bad source silently costs a whole day of the
+        # other source's postings.
+        if: always() && github.event.inputs.source != 'broadstaff'
         env:
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
@@ -103,7 +118,12 @@ jobs:
         # needsDispatch=false (both this run's staged jobs are fully
         # processed) or the wall-clock budget below is spent, so newly
         # staged jobs don't sit waiting for the separate */10 dispatch cron.
-        if: github.event.inputs.dry_run != 'true'
+        #
+        # always() so a partial success still gets processed: if one source
+        # failed but the other staged jobs, those jobs must still be driven
+        # through QA/matchmaking rather than left sitting in staging until
+        # the next cron tick.
+        if: always() && github.event.inputs.dry_run != 'true'
         env:
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
@@ -171,3 +191,27 @@ jobs:
             echo "::error::$FAILURES of $CALLS dispatch calls failed"
             exit 1
           fi
+
+      # Re-raises any source failure that continue-on-error let the run past,
+      # so a real problem still shows up as a red run — the point of
+      # continue-on-error above is to stop one source blocking the other,
+      # not to hide failures. Reports every source's outcome either way, so
+      # the summary says which one actually broke instead of just "the run
+      # failed".
+      - name: Report source outcomes
+        if: always()
+        run: |
+          BROADSTAFF="${{ steps.broadstaff.outcome }}"
+          ACTALENT="${{ steps.actalent.outcome }}"
+          echo "Broadstaff: ${BROADSTAFF:-not run}"
+          echo "Actalent:   ${ACTALENT:-not run}"
+
+          FAILED=""
+          [ "$BROADSTAFF" = "failure" ] && FAILED="$FAILED broadstaff"
+          [ "$ACTALENT" = "failure" ] && FAILED="$FAILED actalent"
+
+          if [ -n "$FAILED" ]; then
+            echo "::error::Source ingest failed for:$FAILED (see that step's log above). Any other source in this run completed and its jobs were still ingested and dispatched."
+            exit 1
+          fi
+          echo "All requested sources completed successfully."

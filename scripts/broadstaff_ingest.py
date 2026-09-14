@@ -274,15 +274,33 @@ def main() -> None:
         f"skipped_no_keyword_match={skipped_no_match}, fetch_failures={fetch_failures}"
     )
 
-    # Hard floor (plan §4 item 5): Broadstaff's inventory is confirmed almost
-    # entirely OSP/fiber/telecom-relevant. Zero matches is only suspicious
-    # when there were actually new (not-already-seen) candidates to examine —
-    # "everything today was already seen yesterday" is a legitimate, expected
-    # outcome on a slow-moving ~39-job board, not a sign extraction broke.
-    if role_group == "all" and len(new_job_ids) > 0 and len(jobs) == 0:
-        print("::error::[broadstaff] 0 jobs matched out of a nonzero not-already-seen listing on an "
-              "'all'-group run — this almost certainly means extraction broke (site markup changed, JSON-LD moved, etc.), "
-              "not that zero jobs are genuinely relevant today. Failing loudly per design.")
+    # Hard floor — detects EXTRACTION failure, which is a bug, and must not
+    # fire on ZERO MATCHES, which is a legitimate business outcome.
+    #
+    # The earlier version of this check conflated the two ("0 matched on an
+    # 'all' run means extraction broke") and produced a false failure the
+    # first time it met normal conditions: a real run found 38 listed jobs,
+    # correctly skipped the 26 already ingested, read all 12 remaining pages
+    # perfectly, and found that all 12 were genuinely off-target (sales,
+    # EHS, access-control roles) — then exited 1 claiming extraction was
+    # broken. Nothing was broken. Once a source's backlog is caught up,
+    # "today's new postings aren't relevant to us" is the ordinary case, not
+    # an anomaly, and a source with a small fixed inventory reaches that
+    # state within days.
+    #
+    # What actually distinguishes the two: a title we could READ. Any page
+    # counted in matched / non-US / no-keyword-match yielded a parseable
+    # JobPosting with a title, which is proof extraction worked. Only
+    # not-found and fetch failures indicate we could not read the page at
+    # all. So the real signal is "we attempted pages and could not extract a
+    # usable title from a single one of them".
+    extraction_attempted = len(new_job_ids)
+    titles_extracted = len(jobs) + skipped_non_us + skipped_no_match
+    if extraction_attempted > 0 and titles_extracted == 0:
+        print(f"::error::[broadstaff] Attempted {extraction_attempted} detail page(s) and could not extract a "
+              f"usable job title from any of them (not_found={skipped_not_found}, fetch_failures={fetch_failures}). "
+              "That is an extraction failure — site markup changed, JSON-LD moved, or the site is blocking us — "
+              "not a 'nothing relevant today' result. Failing loudly per design.")
         sys.exit(1)
 
     if not jobs:
