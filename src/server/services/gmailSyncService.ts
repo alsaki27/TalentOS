@@ -498,12 +498,22 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   }
 
   const stageTarget = emailStageTarget(triage.category);
+  // A status-change proposal is only meaningful when it would move the
+  // matched application to a different status. The approval list and
+  // decision service apply the same check again at read/decision time to
+  // cover a status change that races this request.
+  const proposedFromStatus = triage.matchedApplicationId
+    ? applications.find((a) => a.applicationId === triage.matchedApplicationId)?.status ?? null
+    : null;
+  const stageChangeRequired = Boolean(stageTarget && proposedFromStatus && proposedFromStatus !== stageTarget);
   const policy = policyOverride ?? (await loadEmailTriagePolicy());
   const decision = decideStatusWrite(policy, {
     category: triage.category,
     confidence: triage.confidence,
     hasMatchedApplication: Boolean(triage.matchedApplicationId),
-    stageTarget,
+    // Treat a same-status signal as having no stage target. This keeps both
+    // auto-write and human-approval paths from creating a no-op status task.
+    stageTarget: stageChangeRequired ? stageTarget : null,
   });
   const canAutoWrite = decision.action === "auto_write" && (!senderRule || senderRule.can_change_stage);
 
@@ -517,7 +527,6 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
   // thread - a proposal must never be closeable that way.
   let proposalCreated = false;
   if (decision.action === "propose") {
-    const proposedFromStatus = applications.find((a) => a.applicationId === triage.matchedApplicationId)?.status ?? null;
     const priority = triage.category === "offer" ? "urgent" : (triage.category === "interview_invite" || triage.category === "rejection") ? "high" : "normal";
     const { rowCount } = await execute(
       `INSERT INTO action_items

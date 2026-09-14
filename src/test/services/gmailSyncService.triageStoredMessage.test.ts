@@ -200,6 +200,27 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     const calls = (execute as any).mock.calls as [string, unknown[]][];
     expect(calls.some(([sql]) => sql.includes("status_change_approval"))).toBe(true);
   });
+
+  it("does not create a proposal when the application is already at the target status", async () => {
+    (queryOne as any).mockResolvedValueOnce({
+      id: "email-6", candidate_id: "cand-1", subject: "Application received",
+      snippet: "Thanks for applying", body_text: "We received your application.",
+      from_email: "recruiter@acmecorp.com", direction: "inbound", gmail_message_id: "gm-6",
+    });
+    (query as any).mockResolvedValueOnce([{ id: "app-1", title: "Backend Engineer", company: "Acme Corp", status: "applied" }]);
+    (triageEmail as any).mockResolvedValue({
+      relevant: true, category: "application_confirmation", confidence: 0.6,
+      matchedApplicationId: "app-1", suggestedStatus: "applied", needsReply: false,
+      summary: "Application confirmation detected.",
+    });
+
+    const alwaysHuman: EmailTriagePolicy = { policy: "always_human", threshold: 0.85, isActive: true, loadedFrom: "config" };
+    await triageStoredMessage("email-6", "fake-access-token", alwaysHuman);
+
+    expect(changeApplicationStatus).not.toHaveBeenCalled();
+    const calls = (execute as any).mock.calls as [string, unknown[]][];
+    expect(calls.some(([sql]) => sql.includes("status_change_approval"))).toBe(false);
+  });
 });
 
 describe("triageStoredMessage — storeButHide skips AI and records suppression_reason/suppression_rule", () => {

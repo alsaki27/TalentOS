@@ -41,7 +41,16 @@ export async function GET(req: NextRequest) {
 
   if (direction === "inbox") {
     predicates.push(`ec.direction = 'inbound'`);
-    predicates.push(`NOT EXISTS (SELECT 1 FROM action_items ai3 WHERE ai3.email_communication_id = ec.id AND ai3.type = 'status_change_approval' AND ai3.status IN ('open', 'in_progress'))`);
+    predicates.push(`NOT EXISTS (
+      SELECT 1
+        FROM action_items ai3
+        JOIN applications approval_app3 ON approval_app3.id = ai3.application_id
+       WHERE ai3.email_communication_id = ec.id
+         AND ai3.type = 'status_change_approval'
+         AND ai3.status IN ('open', 'in_progress')
+         AND ai3.proposed_status IS NOT NULL
+         AND approval_app3.status IS DISTINCT FROM ai3.proposed_status
+    )`);
   }
   if (direction === "sent") predicates.push(`ec.direction = 'outbound'`);
   if (candidateId) predicates.push(`ec.candidate_id = ${add(candidateId)}`);
@@ -61,7 +70,16 @@ export async function GET(req: NextRequest) {
   }
   predicates.push(clearanceExclusionSql(add(CLEARANCE_KEYWORDS)));
   if (hasOpenTask) {
-    const existsSql = `EXISTS (SELECT 1 FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress'))`;
+    const existsSql = `EXISTS (
+      SELECT 1
+        FROM action_items ai2
+        LEFT JOIN applications approval_app2 ON approval_app2.id = ai2.application_id
+       WHERE ai2.email_communication_id = ec.id
+         AND ai2.status IN ('open', 'in_progress')
+         AND (ai2.type <> 'status_change_approval'
+              OR (ai2.application_id IS NOT NULL AND ai2.proposed_status IS NOT NULL
+                  AND approval_app2.status IS DISTINCT FROM ai2.proposed_status))
+    )`;
     predicates.push(hasOpenTask === "true" ? existsSql : `NOT ${existsSql}`);
   }
   if (search) {
@@ -92,7 +110,14 @@ export async function GET(req: NextRequest) {
               ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
               ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata,
               ec.suppression_reason, ec.suppression_rule,
-              (SELECT COUNT(*)::int FROM action_items ai2 WHERE ai2.email_communication_id = ec.id AND ai2.status IN ('open', 'in_progress')) AS open_task_count,
+              (SELECT COUNT(*)::int
+                 FROM action_items ai2
+                 LEFT JOIN applications approval_app2 ON approval_app2.id = ai2.application_id
+                WHERE ai2.email_communication_id = ec.id
+                  AND ai2.status IN ('open', 'in_progress')
+                  AND (ai2.type <> 'status_change_approval'
+                       OR (ai2.application_id IS NOT NULL AND ai2.proposed_status IS NOT NULL
+                           AND approval_app2.status IS DISTINCT FROM ai2.proposed_status))) AS open_task_count,
               j.title AS job_title, j.company AS company_name,
               COUNT(*) OVER (PARTITION BY ec.gmail_thread_id)::int AS message_count,
               ROW_NUMBER() OVER (PARTITION BY ec.gmail_thread_id ORDER BY ec.sent_at DESC, ec.id DESC) AS thread_row

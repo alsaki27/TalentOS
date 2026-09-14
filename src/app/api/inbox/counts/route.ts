@@ -35,19 +35,26 @@ export async function GET(req: NextRequest) {
       handovers_assigned_to_me: number; handovers_overdue: number;
     }>(
       `SELECT
-         COUNT(*) FILTER (WHERE type = 'status_change_approval' AND status IN ('open', 'in_progress'))::int AS pending_approvals,
-         COUNT(*) FILTER (WHERE type = 'status_change_approval' AND status IN ('open', 'in_progress') AND priority = 'urgent')::int AS urgent_approvals,
-         COUNT(*) FILTER (WHERE type = 'needs_reply' AND status IN ('open', 'in_progress'))::int AS needs_reply,
-         COUNT(*) FILTER (WHERE type = 'interview_followup' AND status IN ('open', 'in_progress'))::int AS interviews,
-         COUNT(*) FILTER (WHERE type = 'untracked_application' AND status IN ('open', 'in_progress'))::int AS untracked,
-         COUNT(*) FILTER (WHERE type = 'calendar_conflict' AND status IN ('open', 'in_progress'))::int AS conflicts,
-         COUNT(*) FILTER (WHERE status IN ('open', 'in_progress') AND escalated_at IS NOT NULL)::int AS escalated,
-         COUNT(*) FILTER (WHERE decision = 'approved' AND decided_at >= date_trunc('day', now()))::int AS approved_today,
-         COUNT(*) FILTER (WHERE decision = 'rejected' AND decided_at >= date_trunc('day', now()))::int AS rejected_today,
-         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND assigned_to_user_id = $2)::int AS handovers_assigned_to_me,
-         COUNT(*) FILTER (WHERE type = 'team_handover' AND status = 'open' AND assigned_to_user_id = $2 AND due_at < now())::int AS handovers_overdue
-       FROM action_items
-       WHERE ($1::uuid IS NULL OR candidate_id = $1)`,
+         COUNT(*) FILTER (WHERE ai.type = 'status_change_approval' AND ai.status IN ('open', 'in_progress')
+                               AND ai.application_id IS NOT NULL
+                               AND ai.proposed_status IS NOT NULL
+                               AND approval_app.status IS DISTINCT FROM ai.proposed_status)::int AS pending_approvals,
+         COUNT(*) FILTER (WHERE ai.type = 'status_change_approval' AND ai.status IN ('open', 'in_progress')
+                                AND ai.priority = 'urgent' AND ai.application_id IS NOT NULL
+                                AND ai.proposed_status IS NOT NULL
+                                AND approval_app.status IS DISTINCT FROM ai.proposed_status)::int AS urgent_approvals,
+         COUNT(*) FILTER (WHERE ai.type = 'needs_reply' AND ai.status IN ('open', 'in_progress'))::int AS needs_reply,
+         COUNT(*) FILTER (WHERE ai.type = 'interview_followup' AND ai.status IN ('open', 'in_progress'))::int AS interviews,
+         COUNT(*) FILTER (WHERE ai.type = 'untracked_application' AND ai.status IN ('open', 'in_progress'))::int AS untracked,
+         COUNT(*) FILTER (WHERE ai.type = 'calendar_conflict' AND ai.status IN ('open', 'in_progress'))::int AS conflicts,
+         COUNT(*) FILTER (WHERE ai.status IN ('open', 'in_progress') AND ai.escalated_at IS NOT NULL)::int AS escalated,
+         COUNT(*) FILTER (WHERE ai.decision = 'approved' AND ai.decided_at >= date_trunc('day', now()))::int AS approved_today,
+         COUNT(*) FILTER (WHERE ai.decision = 'rejected' AND ai.decided_at >= date_trunc('day', now()))::int AS rejected_today,
+         COUNT(*) FILTER (WHERE ai.type = 'team_handover' AND ai.status = 'open' AND ai.assigned_to_user_id = $2)::int AS handovers_assigned_to_me,
+         COUNT(*) FILTER (WHERE ai.type = 'team_handover' AND ai.status = 'open' AND ai.assigned_to_user_id = $2 AND ai.due_at < now())::int AS handovers_overdue
+       FROM action_items ai
+       LEFT JOIN applications approval_app ON approval_app.id = ai.application_id
+       WHERE ($1::uuid IS NULL OR ai.candidate_id = $1)`,
       [candidateFilter, context.profile.user_id],
     ),
     queryOne<{ relevant: number; awaiting_reply: number; hidden: number; total: number; last_message_at: string | null }>(

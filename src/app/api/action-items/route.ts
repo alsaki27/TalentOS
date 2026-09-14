@@ -23,6 +23,10 @@ export async function GET(req: NextRequest) {
      LEFT JOIN jobs j ON a.job_id = j.id
      LEFT JOIN email_communications ec ON ec.id = ai.email_communication_id
      WHERE ai.status = $1
+       AND (ai.type <> 'status_change_approval'
+            OR ai.decision IS NOT NULL
+            OR (ai.application_id IS NOT NULL AND ai.proposed_status IS NOT NULL
+                AND a.status IS DISTINCT FROM ai.proposed_status))
      ORDER BY
        CASE ai.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
        ai.created_at DESC

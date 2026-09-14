@@ -224,18 +224,22 @@ export async function GET(req: NextRequest) {
     var taskParams: unknown[] = [];
     var taskFilter = "";
     if (candidateId) {
-      taskFilter = " AND candidate_id = $1";
+      taskFilter = " AND ai.candidate_id = $1";
       taskParams.push(candidateId);
     }
     var emailTaskCountsRow = await queryOne<{ pending_approvals: number; needs_reply: number; interviews: number; untracked: number; total: number }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE type = 'status_change_approval')::int AS pending_approvals,
-         COUNT(*) FILTER (WHERE type = 'needs_reply')::int AS needs_reply,
-         COUNT(*) FILTER (WHERE type = 'interview_followup')::int AS interviews,
-         COUNT(*) FILTER (WHERE type = 'untracked_application')::int AS untracked,
-         COUNT(*)::int AS total
-       FROM action_items
-       WHERE status IN ('open', 'in_progress')${taskFilter}`,
+       `SELECT
+          COUNT(*) FILTER (WHERE ai.type = 'status_change_approval'
+                                AND ai.application_id IS NOT NULL
+                                AND ai.proposed_status IS NOT NULL
+                                AND approval_app.status IS DISTINCT FROM ai.proposed_status)::int AS pending_approvals,
+          COUNT(*) FILTER (WHERE ai.type = 'needs_reply')::int AS needs_reply,
+          COUNT(*) FILTER (WHERE ai.type = 'interview_followup')::int AS interviews,
+          COUNT(*) FILTER (WHERE ai.type = 'untracked_application')::int AS untracked,
+          COUNT(*)::int AS total
+        FROM action_items ai
+        LEFT JOIN applications approval_app ON approval_app.id = ai.application_id
+        WHERE ai.status IN ('open', 'in_progress')${taskFilter}`,
       taskParams
     );
     var emailTaskCounts = {

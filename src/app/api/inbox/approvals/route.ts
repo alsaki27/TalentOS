@@ -44,6 +44,14 @@ export async function GET(req: NextRequest) {
 
   const params: unknown[] = [];
   const predicates = ["ai.type = 'status_change_approval'", VIEW_PREDICATES[view]];
+  // A pending approval must represent a real transition. Decided rows stay
+  // visible for audit/history even though a successful approval leaves the
+  // application at the proposed status.
+  if (view === "pending") {
+    predicates.push("ai.application_id IS NOT NULL");
+    predicates.push("ai.proposed_status IS NOT NULL");
+    predicates.push("a.status IS DISTINCT FROM ai.proposed_status");
+  }
   const add = (value: unknown) => {
     params.push(value);
     return `$${params.length}`;
@@ -55,8 +63,9 @@ export async function GET(req: NextRequest) {
 
   const count = await queryOne<{ total: string }>(
     `SELECT COUNT(*)::text AS total
-       FROM action_items ai
-      WHERE ${whereSql}`,
+        FROM action_items ai
+        LEFT JOIN applications a ON a.id = ai.application_id
+       WHERE ${whereSql}`,
     params,
   );
 

@@ -50,10 +50,14 @@ export async function GET(req: NextRequest) {
     // endpoint rather than adding a second timer just for one more number.
     const inboxRow = await queryOne<{ pending_approvals: number; needs_reply: number }>(
       `SELECT
-         COUNT(*) FILTER (WHERE type = 'status_change_approval')::int AS pending_approvals,
-         COUNT(*) FILTER (WHERE type = 'needs_reply')::int AS needs_reply
-       FROM action_items
-       WHERE status IN ('open', 'in_progress')`
+         COUNT(*) FILTER (WHERE ai.type = 'status_change_approval'
+                               AND ai.application_id IS NOT NULL
+                               AND ai.proposed_status IS NOT NULL
+                               AND approval_app.status IS DISTINCT FROM ai.proposed_status)::int AS pending_approvals,
+         COUNT(*) FILTER (WHERE ai.type = 'needs_reply')::int AS needs_reply
+       FROM action_items ai
+       LEFT JOIN applications approval_app ON approval_app.id = ai.application_id
+       WHERE ai.status IN ('open', 'in_progress')`
     );
 
     return NextResponse.json({
