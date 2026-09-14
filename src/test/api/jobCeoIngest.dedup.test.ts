@@ -130,3 +130,43 @@ describe("POST /api/job-ceo/ingest — dedup by external_job_id", () => {
     expect(mocks.insertStaged).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/job-ceo/ingest — derives the new run's source from the job payload", () => {
+  // This endpoint is shared by every scraper (OpenJobData, Actalent,
+  // Broadstaff, any future one) — it used to hardcode source: "openjobdata"
+  // on every run it created regardless of who actually called it, so the Job
+  // CEO run history mislabeled every Actalent/Broadstaff run. One POST body
+  // is always one script's own batch (every job in it carries the same
+  // raw.source), so reading it off the first job is exact, not a guess.
+  beforeEach(() => {
+    mocks.checkAndRecordDedup.mockImplementation(async (_runId: string, sigs: { signature: string }[]) => {
+      return new Set(sigs.map((s) => s.signature));
+    });
+  });
+
+  it("creates the run with the posted job's raw.source", async () => {
+    await POST(req({ jobs: [ACTALENT_GIS_1] }));
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: "actalentservices" }));
+  });
+
+  it("uses the same source for a Broadstaff-tagged batch", async () => {
+    await POST(req({ jobs: [{ title: "Coax Splicer", company: "Broadstaff", external_job_id: "14226914", raw: { source: "broadstaffglobal" } }] }));
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: "broadstaffglobal" }));
+  });
+
+  it("falls back to 'openjobdata' when no job carries a raw.source", async () => {
+    await POST(req({ jobs: [{ title: "Fiber Engineer", company: "Some Co" }] }));
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: "openjobdata" }));
+  });
+
+  it("does not call createRun at all when the caller already supplied a runId", async () => {
+    await POST(req({ runId: "existing-run", jobs: [ACTALENT_GIS_1] }));
+    expect(mocks.createRun).not.toHaveBeenCalled();
+    expect(mocks.insertStaged).toHaveBeenCalledWith("existing-run", [ACTALENT_GIS_1]);
+  });
+
+  it("ignores a non-string or blank raw.source rather than passing it through", async () => {
+    await POST(req({ jobs: [{ title: "X", company: "Y", raw: { source: "   " } }] }));
+    expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: "openjobdata" }));
+  });
+});

@@ -759,14 +759,23 @@ export default function JobCeoPage() {
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Run ID</th>
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Status</th>
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Source</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Ingested</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Kept</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Researched</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Matched</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Logged</th>
-                <th className="text-right text-xs font-medium text-ink-soft p-2">Skipped</th>
+                {/* The shared .table th rule in globals.css sets text-align: left
+                    on every <th> in any .table-classed table across the app
+                    (used by 16+ other tables) - it wins over these Tailwind
+                    text-right/text-center classes on ties in cascade order, not
+                    specificity, which is why the header labels below rendered
+                    left-aligned while their numeric td's rendered right-aligned
+                    directly beneath them. Forcing alignment via inline style
+                    beats that rule for exactly these headers without touching
+                    the shared CSS every other table also depends on. */}
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Ingested</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Kept</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Researched</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Matched</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Logged</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "right" }}>Skipped</th>
                 <th className="text-left text-xs font-medium text-ink-soft p-2">Created</th>
-                <th className="text-center text-xs font-medium text-ink-soft p-2">Actions</th>
+                <th className="text-xs font-medium text-ink-soft p-2" style={{ textAlign: "center" }}>Actions</th>
               </tr>
             </thead>
             <tbody>

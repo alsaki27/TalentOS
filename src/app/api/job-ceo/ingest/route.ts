@@ -27,10 +27,24 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Create run if not provided
+    // Create run if not provided. This single endpoint is shared by every
+    // scraper (OpenJobData, Actalent, Broadstaff, and any future one) —
+    // "source" was previously hardcoded to "openjobdata" here regardless of
+    // who actually called it, so the Job CEO run history showed every
+    // Actalent/Broadstaff run mislabeled. Every caller already tags each
+    // job's raw.source with its true origin (confirmed: openjobdata_ingest.py
+    // sets raw.source: "openjobdata" the same way actalent_ingest.py sets
+    // "actalentservices" and broadstaff_ingest.py sets "broadstaffglobal") —
+    // one POST body is always one script's own batch, so every job in it
+    // carries the same source, and reading it off the first job is exact,
+    // not a guess. "openjobdata" remains the fallback only for a caller that
+    // sets no raw.source at all, preserving today's behavior for that case.
     let runId = body.runId;
     if (!runId) {
-      const run = await createRun({ triggerType: "cron", source: "openjobdata" });
+      const runSource = jobs
+        .map((j) => (j.raw && typeof j.raw === "object" ? (j.raw as Record<string, unknown>).source : undefined))
+        .find((s): s is string => typeof s === "string" && s.trim().length > 0);
+      const run = await createRun({ triggerType: "cron", source: runSource ?? "openjobdata" });
       runId = run.id;
     }
 
