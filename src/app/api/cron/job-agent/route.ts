@@ -3,7 +3,10 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getBatchProgress } from "@/server/repositories/jobAgentBatchRepository";
-import { startOrResumeNightlyBatch } from "@/server/services/jobAgentNightlyService";
+import {
+  isJobAgentNightlyEnabled,
+  startOrResumeNightlyBatch,
+} from "@/server/services/jobAgentNightlyService";
 import {
   recordJobAttempt,
   recordJobFailure,
@@ -29,6 +32,12 @@ function isUuid(value: string): boolean {
 export async function POST(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!isJobAgentNightlyEnabled()) {
+    return NextResponse.json(
+      { error: "Nightly Job Agent automation is disabled", code: "job_agent_nightly_disabled" },
+      { status: 503 },
+    );
   }
 
   const startedMs = Date.now();

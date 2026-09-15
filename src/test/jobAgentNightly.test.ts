@@ -11,6 +11,7 @@ import {
 } from "@/lib/jobAgentActorContracts";
 import { buildNightlyShardMatrix } from "@/lib/jobAgentNightlyPlan";
 import { classifyWithRegex } from "@/lib/ai/jobAgentClassifier";
+import { exactJobMatchKey } from "@/server/services/jobAgentService";
 
 describe("nightly Job Agent role and shard plan", () => {
   test("A-R are explicit nightly defaults and the five bundles partition them once", () => {
@@ -177,5 +178,14 @@ describe("nightly seniority policy", () => {
     });
     expect(result.tier).toBe("skip");
     expect(result.is_false_positive).toBe(true);
+  });
+});
+
+describe("historical Job Agent dedupe key", () => {
+  test("normalizes the same title/company/location the same way as the SQL lookup", () => {
+    expect(exactJobMatchKey("GIS  Analyst!", "Example, Inc.", "Denver, CO"))
+      .toBe("gis analyst|example inc|denver co");
+    expect(exactJobMatchKey("GIS Analyst", "Example Inc", "Denver CO"))
+      .toBe(exactJobMatchKey("GIS  Analyst!", "Example, Inc.", "Denver, CO"));
   });
 });

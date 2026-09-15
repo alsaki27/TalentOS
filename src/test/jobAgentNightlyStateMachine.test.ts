@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   buildNightlyShardMatrix: vi.fn(),
@@ -99,6 +99,8 @@ import type {
   JobAgentBatchShardRow,
 } from "@/server/repositories/jobAgentBatchRepository";
 import type { JobAgentRunRow } from "@/server/repositories/jobAgentRunRepository";
+
+const originalNightlyEnabled = process.env.JOB_AGENT_NIGHTLY_ENABLED;
 
 const SHARD_PLAN = [{
   shardKey: "indeed-ca",
@@ -232,6 +234,9 @@ function terminalRun(status: "succeeded" | "failed", id: string): JobAgentRunRow
 }
 
 beforeEach(() => {
+  // Unit tests exercise the retained implementation explicitly; production
+  // remains paused because the flag is unset/false there.
+  process.env.JOB_AGENT_NIGHTLY_ENABLED = "true";
   vi.resetAllMocks();
   mocks.buildNightlyShardMatrix.mockReturnValue(SHARD_PLAN);
   mocks.getNightlyDefaultGroups.mockReturnValue([
@@ -246,7 +251,23 @@ beforeEach(() => {
   mocks.listDivergedTerminalBatchRuns.mockResolvedValue([]);
 });
 
+afterEach(() => {
+  if (originalNightlyEnabled === undefined) delete process.env.JOB_AGENT_NIGHTLY_ENABLED;
+  else process.env.JOB_AGENT_NIGHTLY_ENABLED = originalNightlyEnabled;
+});
+
 describe("nightly batch identity and launch mode", () => {
+  test("is fully paused when the feature flag is disabled", async () => {
+    delete process.env.JOB_AGENT_NIGHTLY_ENABLED;
+
+    await expect(startOrResumeNightlyBatch({
+      invocationType: "scheduled",
+      businessDate: "2026-08-07",
+    })).rejects.toThrow("Nightly Job Agent automation is disabled");
+    expect(mocks.buildNightlyShardMatrix).not.toHaveBeenCalled();
+    expect(mocks.createOrGetBatch).not.toHaveBeenCalled();
+  });
+
   test("scheduled calls use the canonical business-date key and enable auto-import", async () => {
     const row = batch();
     mocks.getBatchByKey.mockResolvedValue(null);

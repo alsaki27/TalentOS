@@ -20,20 +20,18 @@ import {
   markNightlyRunFailed,
   markNightlyRunProcessing,
   markNightlyRunSucceeded,
+  isJobAgentNightlyEnabled,
 } from "@/server/services/jobAgentNightlyService";
 
 export const dynamic = "force-dynamic";
 
 const METADATA_GRACE_MS = 5 * 60 * 1000;
-// Was 30 minutes. Every outbound Apify call processApifyRunData() can make
-// (status check, dataset fetch) is now individually timeout-bounded (see
-// fetchApify() in jobAgentService.ts), so a hang can no longer swallow the
-// whole invocation silently - processing now either finishes or throws
-// within a couple of minutes at the very worst (large-dataset dedup +
-// classification included). 10 minutes keeps a comfortable safety margin
-// over that while cutting the worst-case "stuck with no real error" wait
-// from 30 minutes down to 10.
-const PROCESSING_LEASE_MS = 10 * 60 * 1000;
+// Dataset processing is now bounded by the Apify fetch timeouts and the
+// indexed historical-dedupe path. Keep a generous lease so a second poller
+// cannot reclaim a legitimately slow request while the first one is still
+// committing rows. A genuinely abandoned attempt is still recovered on the
+// next poll after 30 minutes and can enter the normal shard retry path.
+const PROCESSING_LEASE_MS = 30 * 60 * 1000;
 const MAX_DATASETS_PER_POLL = 1;
 
 function isAuthorized(req: NextRequest) {
@@ -103,6 +101,13 @@ async function handlePoll(req: NextRequest) {
   let datasetsClaimed = 0;
 
   for (const run of runningRuns) {
+    // The five-minute poller is shared with manual Job Agent runs. Keep it
+    // active, but do not poll, process, retry, or hand off paused nightly
+    // batches.
+    if (run.batch_id && !isJobAgentNightlyEnabled()) {
+      results.push({ runId: run.id, status: "nightly_disabled" });
+      continue;
+    }
     // A request can die after claiming processing. Fail that attempt after a
     // conservative lease and let the logical shard retry. Reopening the same
     // dataset would risk two processors running concurrently.
@@ -113,9 +118,6 @@ async function handlePoll(req: NextRequest) {
           ? Date.now() - new Date(processingStartedAt).getTime()
           : 0;
         if (processingStartedAt && Number.isFinite(processingAge) && processingAge >= PROCESSING_LEASE_MS) {
-          // Was a literal "30 minutes" even after PROCESSING_LEASE_MS was
-          // reduced to 10 (see its own comment above) - the message no
-          // longer matched the actual configured lease at all.
           const message = `Dataset processing lease expired after ${Math.round(PROCESSING_LEASE_MS / 60000)} minutes`;
           const recovered = await transitionRunStatus(run.id, "processing", {
             status: "failed",
@@ -240,7 +242,7 @@ async function handlePoll(req: NextRequest) {
   try {
     // This runs even when there are no active attempts: due retries and a ready
     // all-terminal batch still need to be launched/finalized.
-    await advanceActiveNightlyBatches();
+    if (isJobAgentNightlyEnabled()) await advanceActiveNightlyBatches();
   } catch (error) {
     advanceError = error instanceof Error ? error.message : String(error);
     console.error("[job-agent-poll] Nightly batch recovery failed:", error);

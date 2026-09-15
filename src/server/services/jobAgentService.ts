@@ -6,7 +6,7 @@
 import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/jobAgentConfigRepository";
 import { createRun, updateRunStatus, transitionRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
 import { rotateToken, markTokenError, deactivateToken } from "@/server/repositories/jobAgentTokenRepository";
-import { listAllJobsForFuzzyDedupe } from "@/server/repositories/jobsRepository";
+import { findJobsByExactMatchKeys } from "@/server/repositories/jobsRepository";
 import { normalizeUrlFingerprint } from "@/lib/jobUrlFingerprint";
 import { getTitlesForGroups, getGroupForSearchQuery, getGroupById, getGroupLabel, inferRoleGroupForTitle, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
 import { classifyJob } from "@/lib/ai/jobAgentClassifier";
@@ -34,6 +34,11 @@ const ACTOR_IDS: Record<ActorSource, string> = {
 
 const COST_PER_RESULT_USD = 0.001; // conservative average across actors
 const CLASSIFICATION_DELAY_MS = 300;
+// One small interactive batch is enough to use the configured AI route. Actor
+// datasets (including the smallest nightly Google shard) stay on the bounded
+// deterministic fallback unless an operator explicitly raises this through
+// JOB_AGENT_MAX_AI_CLASSIFICATION_ITEMS.
+const DEFAULT_MAX_AI_CLASSIFICATION_ITEMS = 15;
 
 // Every outbound Apify call now goes through fetchApify() (see below), which
 // enforces one of these. Root cause of the recurring Google/LinkedIn run
@@ -330,14 +335,21 @@ export async function processApifyRunData(
     const totalDupes = inRunDups + crossRunDups;
 
     // The cron poll invocation running this has its own bounded time budget.
-    // AI classification takes ~1-2s per batch of 15. For massive datasets
-    // (> 250 unique jobs), force regex fallback to guarantee completion and
-    // prevent hanging.
+    // AI classification performs several provider/database operations per job.
+    // Running it over a full actor dataset can outlive the serverless poll
+    // request even when every actor call itself succeeds. Keep AI for small
+    // interactive batches and use the deterministic, tested classifier for
+    // larger datasets; the staged row still records tier, seniority and
+    // keywords in both paths.
     const requestedAi = options.useAi ?? true;
-    const safeUseAi = requestedAi && (uniqueJobs.length <= 250);
+    const configuredAiLimit = Number(process.env.JOB_AGENT_MAX_AI_CLASSIFICATION_ITEMS ?? DEFAULT_MAX_AI_CLASSIFICATION_ITEMS);
+    const maxAiClassificationItems = Number.isFinite(configuredAiLimit) && configuredAiLimit >= 0
+      ? Math.floor(configuredAiLimit)
+      : DEFAULT_MAX_AI_CLASSIFICATION_ITEMS;
+    const safeUseAi = requestedAi && uniqueJobs.length <= maxAiClassificationItems;
     
     if (requestedAi && !safeUseAi) {
-      console.warn(`[jobAgentService] Dataset too large (${uniqueJobs.length} unique jobs). Falling back to regex classification to prevent serverless timeout.`);
+      console.warn(`[jobAgentService] Dataset has ${uniqueJobs.length} unique jobs (AI limit ${maxAiClassificationItems}). Falling back to regex classification to prevent serverless timeout.`);
     }
 
     const classifiedJobs = await classifyJobs(uniqueJobs, safeUseAi, options.roleGroups);
@@ -548,6 +560,15 @@ export function normalizeForFuzzyMatch(s: string | null): string {
   return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+/** Stable title/company/location key shared by the historical-job lookup. */
+export function exactJobMatchKey(
+  title: string | null,
+  company: string | null,
+  location: string | null,
+): string {
+  return [title, company, location].map(normalizeForFuzzyMatch).join("|");
+}
+
 function isNonUSLocation(loc: string | null): boolean {
   if (!loc) return false;
   const l = loc.toLowerCase();
@@ -601,8 +622,17 @@ async function dedupeAcrossRunsAndJobs(
   const existingStagedUrlHashes = urlHashes.length > 0
     ? await getSourceUrlHashes(urlHashes, excludeBatchId)
     : new Set<string>();
-  // Check final jobs table via fuzzy match
-  const existingJobs = await listAllJobsForFuzzyDedupe();
+  // Check only historical rows represented by this dataset. The previous
+  // implementation downloaded every job and scanned it for every candidate,
+  // which made a 500-row LinkedIn dataset exceed a serverless poll request.
+  // The normalized-key rule is unchanged; lookup and membership are now
+  // linear in the incoming dataset instead of quadratic in all history.
+  const existingJobs = await findJobsByExactMatchKeys(
+    jobs.map((job) => exactJobMatchKey(job.job_title, job.company_name, job.location)),
+  );
+  const existingJobKeys = new Set(
+    existingJobs.map((job) => exactJobMatchKey(job.title, job.company, job.location)),
+  );
 
   const uniqueJobs: NormalizedJob[] = [];
   let dc = 0;
@@ -616,13 +646,9 @@ async function dedupeAcrossRunsAndJobs(
     if (job.urlHash && existingStagedUrlHashes.has(job.urlHash)) {
       job.raw._duplicate = true; dc++; continue;
     }
-    // Layer 4: final jobs table fuzzy match
-    const nj = (s: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-    if (existingJobs.some((e) =>
-      nj(job.job_title) === nj(e.title) &&
-      nj(job.company_name) === nj(e.company) &&
-      nj(job.location) === nj(e.location)
-    )) {
+    // Layer 4: exact normalized title/company/location match in the final
+    // jobs table. The Set keeps the result deterministic and O(n).
+    if (existingJobKeys.has(exactJobMatchKey(job.job_title, job.company_name, job.location))) {
       job.raw._duplicate = true; dc++; continue;
     }
     uniqueJobs.push(job);
@@ -806,8 +832,20 @@ function toDateExcludedStagedJob(
 
 export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {
   try {
-    const res = await fetch(`${APIFY_BASE_URL}/user/me?token=${encodeURIComponent(token)}`);
-    if (!res.ok) { const text = await res.text().catch(() => ""); return { ok: false, error: `Apify returned ${res.status}` }; }
+    // Apify exposes the authenticated account resource at /users/me (plural).
+    // The former singular /user/me path always returned 404, so a valid token
+    // was incorrectly reported as unusable by the Job Agent UI.
+    const res = await fetchApify(
+      `${APIFY_BASE_URL}/users/me?token=${encodeURIComponent(token)}`,
+      undefined,
+      APIFY_STATUS_TIMEOUT_MS,
+      "Apify token validation",
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const detail = text.trim().replace(/\s+/g, " ").slice(0, 240);
+      return { ok: false, error: `Apify returned ${res.status}${detail ? `: ${detail}` : ""}` };
+    }
     return { ok: true };
   } catch (err: any) { return { ok: false, error: err.message ?? "Request failed" }; }
 }

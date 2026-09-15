@@ -46,8 +46,20 @@ import {
 
 export const NIGHTLY_TIMEZONE = "Asia/Dhaka";
 export const NIGHTLY_UTC_OFFSET_HOURS = 6;
+/**
+ * The nightly Apify -> Job CEO pipeline is opt-in. Leaving this variable
+ * unset (the current production default) keeps the feature fully paused while
+ * preserving all code and data paths for a future re-enable. Manual Job Agent
+ * runs do not use this flag.
+ */
+export const JOB_AGENT_NIGHTLY_ENABLED_ENV = "JOB_AGENT_NIGHTLY_ENABLED";
 const NIGHTLY_WINDOW_HOURS = 48;
 const NIGHTLY_LAUNCH_CONCURRENCY = 5;
+
+export function isJobAgentNightlyEnabled(): boolean {
+  const value = process.env[JOB_AGENT_NIGHTLY_ENABLED_ENV]?.trim().toLowerCase();
+  return value === "true" || value === "1" || value === "yes";
+}
 
 export interface NightlyWindow {
   businessDate: string;
@@ -267,6 +279,7 @@ async function launchClaimedShard(
 }
 
 export async function launchAvailableBatchShards(batchId: string): Promise<NightlyShardLaunchResult[]> {
+  if (!isJobAgentNightlyEnabled()) return [];
   const batch = await getBatchById(batchId);
   if (!batch) throw new Error(`Nightly batch not found: ${batchId}`);
   const claimed = await claimLaunchableShards(batchId, 28);
@@ -295,6 +308,9 @@ export async function launchAvailableBatchShards(batchId: string): Promise<Night
 export async function startOrResumeNightlyBatch(
   options: StartNightlyBatchOptions = {}
 ): Promise<StartNightlyBatchResult> {
+  if (!isJobAgentNightlyEnabled()) {
+    throw new Error("Nightly Job Agent automation is disabled");
+  }
   const window = getDhakaNightlyWindow(options.now ?? new Date(), options.businessDate);
   const matrix = buildNightlyShardMatrix();
   const invocationType = options.invocationType ?? "manual";
@@ -405,6 +421,7 @@ export async function markNightlyRunFailed(run: JobAgentRunRow, error: string): 
 }
 
 export async function finalizeReadyBatch(batchId: string): Promise<JobAgentBatchRow | null> {
+  if (!isJobAgentNightlyEnabled()) return getBatchById(batchId);
   const claimed = await claimBatchFinalization(batchId);
   if (!claimed) return getBatchById(batchId);
   const claimToken = claimed.finalization_claim_token;
@@ -459,6 +476,7 @@ export async function finalizeReadyBatch(batchId: string): Promise<JobAgentBatch
 
 /** Poller recovery: expire abandoned reservations, launch due retries, and finalize barriers. */
 export async function advanceActiveNightlyBatches(): Promise<void> {
+  if (!isJobAgentNightlyEnabled()) return;
   const divergedRuns = await listDivergedTerminalBatchRuns();
   for (const run of divergedRuns) {
     if (run.status === "succeeded") {

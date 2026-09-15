@@ -1,5 +1,5 @@
 // src/app/api/job-agent/configs/test/route.ts
-// POST -> test an Apify token by calling /v2/user/me
+// POST -> test an Apify token by calling Apify's authenticated /v2/users/me endpoint.
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";

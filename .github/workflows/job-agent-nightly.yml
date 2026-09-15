@@ -1,29 +1,38 @@
 name: Job Agent Nightly (Apify to Job CEO)
 
+# PAUSED (2026-09-15): Nightly Apify -> Job CEO automation is intentionally
+# disabled. The original triggers and jobs remain below for a future review;
+# restore the event block and set JOB_AGENT_NIGHTLY_ENABLED=true only when the
+# feature is explicitly re-enabled. The shared five-minute poller remains in
+# scheduled-jobs.yml for manual Job Agent runs and is independently gated from
+# paused nightly batches.
+
 env:
   TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
 
-on:
-  schedule:
-    # 18:00 UTC is 12:00 AM the following day in Asia/Dhaka (UTC+6).
-    - cron: '0 18 * * *'
-  # Manual dispatch is deliberately a dry run. Automatic approval is reserved
-  # for the scheduled midnight batch; an existing scheduled batch still resumes
-  # with its immutable auto-import setting.
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Start a dry test batch or recover an existing scheduled batch'
-        required: true
-        default: 'dry_run'
-        type: choice
-        options:
-          - dry_run
-          - recover
-      business_date:
-        description: 'Dhaka business date (YYYY-MM-DD); blank uses the current date'
-        required: false
-        type: string
+# Original event triggers are intentionally commented out while paused.
+# on:
+#   schedule:
+#     # 18:00 UTC is 12:00 AM the following day in Asia/Dhaka (UTC+6).
+#     - cron: '0 18 * * *'
+#   workflow_dispatch:
+#     inputs:
+#       mode:
+#         description: 'Start a dry test batch or recover an existing scheduled batch'
+#         required: true
+#         default: 'dry_run'
+#         type: choice
+#         options:
+#           - dry_run
+#           - recover
+#       business_date:
+#         description: 'Dhaka business date (YYYY-MM-DD); blank uses the current date'
+#         required: false
+#         type: string
+
+# An empty event list is valid workflow syntax and prevents both cron and
+# manual dispatch while preserving the complete job definition below.
+on: []
 
 # A delayed GitHub cron and a manual recovery invocation must never operate the
 # same nightly batch concurrently. The API is also idempotent by business date.

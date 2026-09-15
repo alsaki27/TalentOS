@@ -655,6 +655,34 @@ export async function listAllJobsForFuzzyDedupe(): Promise<{ title: string; comp
   );
 }
 
+/**
+ * Find only historical jobs whose normalized title/company/location key is
+ * present in the incoming candidate set. The Job Agent previously downloaded
+ * every historical row and compared each candidate with every row in
+ * JavaScript, which made larger LinkedIn datasets exceed the poll request
+ * window. This expression mirrors the application normalization exactly.
+ */
+export async function findJobsByExactMatchKeys(
+  matchKeys: string[],
+): Promise<{ title: string; company: string | null; location: string | null }[]> {
+  const keys = [...new Set(matchKeys.filter((key) => key.trim()))];
+  if (keys.length === 0) return [];
+
+  return query<{ title: string; company: string | null; location: string | null }>(
+    `SELECT title, company, location
+     FROM jobs
+     WHERE title IS NOT NULL
+       AND (
+         btrim(regexp_replace(lower(coalesce(title, '')), '[^a-z0-9]+', ' ', 'g'))
+         || '|' ||
+         btrim(regexp_replace(lower(coalesce(company, '')), '[^a-z0-9]+', ' ', 'g'))
+         || '|' ||
+         btrim(regexp_replace(lower(coalesce(location, '')), '[^a-z0-9]+', ' ', 'g'))
+       ) = ANY($1::text[])`,
+    [keys],
+  );
+}
+
 // ───────────────────────────────────────────────────────────────
 // Description Enricher (job_ceo_enricher) — backfills thin/missing
 // description_text on already-logged jobs, from any source. Capped at 3

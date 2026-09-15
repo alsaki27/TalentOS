@@ -76,4 +76,20 @@ describe("jobAgentService Apify calls — timeout handling", () => {
     const status = await checkApifyRunStatus("run-123", "token-abc");
     expect(status).toBe("SUCCEEDED");
   });
+
+  it("validates a token through Apify's authenticated /users/me resource", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { username: "demo-account" } }),
+    }) as unknown as typeof fetch;
+    global.fetch = fetchMock;
+
+    const { testApifyToken } = await import("@/server/services/jobAgentService");
+    await expect(testApifyToken("token-abc")).resolves.toEqual({ ok: true });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.apify.com/v2/users/me?token=token-abc",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
 });
