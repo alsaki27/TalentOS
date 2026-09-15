@@ -125,17 +125,27 @@ export async function GET(req: NextRequest) {
         WHERE ${whereSql}`,
       mainParams,
     ),
-    // Count threads per ai_category using the same filters but without the
-    // per-category predicate. Uses DISTINCT on gmail_thread_id to match the
-    // thread deduplication the list itself applies, ensuring chip counts match.
+    // Count threads per ai_category using the SAME representative-row logic
+    // as the thread list (most recent message per gmail_thread_id, thread_row=1).
+    // This ensures each chip count matches exactly how many threads would appear
+    // when that chip's filter is clicked — no over- or under-counting.
     query<{ category: string | null; count: number }>(
-      `SELECT ec.ai_category AS category, COUNT(DISTINCT ec.gmail_thread_id)::int AS count
-         FROM email_communications ec
-         JOIN candidates c ON c.id = ec.candidate_id
-         LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
-         LEFT JOIN jobs j ON j.id = a.job_id
-        WHERE ${categoryWhereSql}
-        GROUP BY ec.ai_category
+      `WITH thread_reps AS (
+         SELECT ec.ai_category,
+                ROW_NUMBER() OVER (
+                  PARTITION BY ec.gmail_thread_id
+                  ORDER BY ec.sent_at DESC, ec.id DESC
+                ) AS thread_row
+           FROM email_communications ec
+           JOIN candidates c ON c.id = ec.candidate_id
+           LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
+           LEFT JOIN jobs j ON j.id = a.job_id
+          WHERE ${categoryWhereSql}
+       )
+       SELECT ai_category AS category, COUNT(*)::int AS count
+         FROM thread_reps
+        WHERE thread_row = 1
+        GROUP BY ai_category
         ORDER BY count DESC`,
       catParams,
     ),

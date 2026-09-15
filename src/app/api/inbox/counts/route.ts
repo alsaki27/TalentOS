@@ -58,15 +58,48 @@ export async function GET(req: NextRequest) {
       [candidateFilter, context.profile.user_id],
     ),
     queryOne<{ relevant: number; awaiting_reply: number; hidden: number; total: number; last_message_at: string | null }>(
-      `SELECT
-         COUNT(*) FILTER (WHERE ai_relevant)::int AS relevant,
-         COUNT(*) FILTER (WHERE needs_reply AND replied_at IS NULL)::int AS awaiting_reply,
-         COUNT(*) FILTER (WHERE suppression_reason IS NOT NULL)::int AS hidden,
-         COUNT(*)::int AS total,
+      // Count at the THREAD level, not the email level, using the same
+      // representative-row logic (most recent message per gmail_thread_id)
+      // that the mail list itself uses. This ensures "Inbox (N)" in the tab
+      // matches the number of conversations the user actually sees.
+      `WITH thread_reps AS (
+         SELECT ec.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY ec.gmail_thread_id
+                  ORDER BY ec.sent_at DESC, ec.id DESC
+                ) AS thread_row
+           FROM email_communications ec
+           LEFT JOIN applications a  ON a.id  = ec.ai_matched_application_id
+           LEFT JOIN jobs         j  ON j.id  = a.job_id
+          WHERE ec.direction = 'inbound'
+            AND ($1::uuid IS NULL OR ec.candidate_id = $1)
+            AND ${clearanceExclusionSql("$2")}
+       )
+       SELECT
+         -- Threads visible in the default inbox view:
+         -- relevant, not suppressed, and not currently pending an approval action.
+         COUNT(*) FILTER (
+           WHERE thread_row = 1
+             AND ai_relevant IS DISTINCT FROM false
+             AND suppression_reason IS NULL
+             AND NOT EXISTS (
+               SELECT 1
+                 FROM action_items ai3
+                 JOIN applications approval_app3
+                   ON approval_app3.id = ai3.application_id
+                WHERE ai3.email_communication_id = thread_reps.id
+                  AND ai3.type = 'status_change_approval'
+                  AND ai3.status IN ('open', 'in_progress')
+                  AND ai3.proposed_status IS NOT NULL
+                  AND approval_app3.status IS DISTINCT FROM ai3.proposed_status
+             )
+         )::int AS relevant,
+         COUNT(*) FILTER (WHERE thread_row = 1 AND needs_reply AND replied_at IS NULL)::int AS awaiting_reply,
+         COUNT(*) FILTER (WHERE thread_row = 1 AND suppression_reason IS NOT NULL)::int AS hidden,
+         COUNT(*) FILTER (WHERE thread_row = 1)::int AS total,
          MAX(sent_at) AS last_message_at
-       FROM email_communications
-       WHERE direction = 'inbound' AND ($1::uuid IS NULL OR candidate_id = $1)`,
-      [candidateFilter],
+       FROM thread_reps`,
+      [candidateFilter, CLEARANCE_KEYWORDS],
     ),
     queryOne<{ total_drafts: number }>(
       `SELECT COUNT(*)::int AS total_drafts
