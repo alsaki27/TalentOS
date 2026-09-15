@@ -77,6 +77,7 @@ export default function InboxPage() {
   const [showHidden, setShowHidden] = useState(false);
   const [threads, setThreads] = useState<MailThread[]>([]);
   const [total, setTotal] = useState(0);
+  const [categoryCounts, setCategoryCounts] = useState<{ category: string | null; count: number }[]>([]);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [pageInput, setPageInput] = useState("");
@@ -114,6 +115,7 @@ export default function InboxPage() {
       if (!response.ok) throw new Error(data.error || "Could not load Gmail activity.");
       setThreads(data.threads || []);
       setTotal(Number(data.total || 0));
+      setCategoryCounts(Array.isArray(data.categoryCounts) ? data.categoryCounts : []);
       setPage(Number(data.page || nextPage));
       setTotalPages(Number(data.totalPages || 1));
     } catch (error) {
@@ -159,6 +161,7 @@ export default function InboxPage() {
         return [...newOnes, ...stillPresent];
       });
       setTotal(Number(data.total || 0));
+      if (Array.isArray(data.categoryCounts)) setCategoryCounts(data.categoryCounts);
       setTotalPages(Number(data.totalPages || 1));
     } catch {}
   }, [direction, search, candidateId, category, needsReply, showHidden, page, loading, activeTab]);
@@ -448,7 +451,11 @@ export default function InboxPage() {
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
             {(() => {
-              const totalRelevant = (counts?.categories ?? []).reduce((sum, c) => sum + c.count, 0);
+              // totalRelevant is the sum of ALL category buckets returned by the
+              // API (which uses the same filters as the thread list but without
+              // the per-category filter). This correctly includes null-category
+              // threads that the old counts.categories sum excluded.
+              const totalRelevant = categoryCounts.reduce((sum, c) => sum + c.count, 0);
               const chipStyle = (active: boolean) => ({
                 display: "inline-flex", alignItems: "center", gap: 6,
                 padding: "6px 12px", borderRadius: 999, fontSize: 12.5, cursor: "pointer",
@@ -463,7 +470,7 @@ export default function InboxPage() {
                     All categories <span style={{ opacity: 0.7 }}>({totalRelevant})</span>
                   </button>
                   {CATEGORIES.map((value) => {
-                    const count = counts?.categories.find((c) => c.category === value)?.count ?? 0;
+                    const count = categoryCounts.find((c) => c.category === value)?.count ?? 0;
                     return (
                       <button
                         key={value}
