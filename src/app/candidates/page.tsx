@@ -126,7 +126,7 @@ export default function CandidatesPage() {
   const filtersActive = search || stageFilter || tierFilter;
 
   return (
-    <>
+    <div className="candidates-page">
       <div className="page-header">
         <h1>Candidates</h1>
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add candidate</button>
@@ -235,7 +235,7 @@ export default function CandidatesPage() {
           onCreated={() => { setShowAdd(false); load(1, pageSize); }}
         />
       )}
-    </>
+    </div>
   );
 }
 

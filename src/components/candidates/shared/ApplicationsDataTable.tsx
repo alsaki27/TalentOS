@@ -132,16 +132,16 @@ export default function ApplicationsDataTable({
         <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
           <thead>
             <tr>
-              {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "12%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}
-              <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "12%" }}>Company {renderSortIndicator("company_name")}</th>
+              {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "10%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}
+              <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "10%" }}>Company {renderSortIndicator("company_name")}</th>
               <th onClick={function () { onSort("job_title"); }} style={{ ...TH_STYLE }}>Job Role {renderSortIndicator("job_title")}</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Job ID</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "7%" }}>Job ID</th>
               <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Source</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "10%" }}>Location</th>
-              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "8%" }}>Resume</th>
-              <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "12%" }}>Status {renderSortIndicator("status")}</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Location</th>
+              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "11%" }}>Resume</th>
+              <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "11%" }}>Status {renderSortIndicator("status")}</th>
               <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "8%" }}>Applied {renderSortIndicator("applied_at")}</th>
-              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "10%" }}>Actions</th>}
+              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "15%" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -328,7 +328,7 @@ export default function ApplicationsDataTable({
                   <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{formatDate(app.applied_at)}</td>
                   {!readOnly && (
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
-                      <div style={{ display: "inline-flex", gap: 4 }}>
+                      <div style={{ display: "inline-flex", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
                         {app.source_url && (
                           <button
                             onClick={function () { openCopilot(app); }}

@@ -274,7 +274,8 @@ body::before {
 /* Job CEO's Run History table has 11 columns of run/pipeline data - same
    full-bleed treatment as Application Queue, the AI Control Center, the
    Inbox, and Job Agent rather than the default 1100px content shell. */
-.page:has(.job-ceo-page) {
+.page:has(.job-ceo-page),
+.page:has(.candidates-page) {
   max-width: calc(100vw - 32px);
   padding-left: 16px;
   padding-right: 16px;
