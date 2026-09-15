@@ -78,6 +78,7 @@ export default function NavBar() {
     { href: "/communications/inbox", label: "Communications", show: true },
     { href: "/analytics", label: "Analytics", show: true },
     { href: "/chat", label: "Assistant", show: true },
+    { href: "/falood", label: "Falood AI", show: true },
     { href: "/mcp", label: "MCP Command Center", show: true },
     { href: "/import-sources", label: "Import Sources", show: canManageSources },
     { href: "/audit", label: "Audit Log", show: isAdmin },
@@ -121,7 +122,6 @@ export default function NavBar() {
         <Link href="/candidates" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Candidates</Link>
         <Link href="/candidate-dashboard" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Dashboard</Link>
         {canViewJobs && <Link href="/jobs" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Jobs</Link>}
-        <Link href="/falood" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors">Falood AI</Link>
         <Link href="/application-queue" className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1.5">
           Application Queue
           {notifications && (notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent) > 0 && (
@@ -138,19 +138,19 @@ export default function NavBar() {
             <span className="nav-badge bg-violet-500/20 text-violet-400">{notifications.inbox.pendingApprovals}</span>
           )}
         </Link>
-        <div className="nav-more relative" ref={moreRef}>
+        <div className="relative w-full lg:w-auto" ref={moreRef}>
           <button
-            className="nav-more-trigger text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center gap-1"
+            className="text-[13px] font-medium text-ink-soft hover:text-white transition-colors flex items-center justify-between lg:justify-start gap-1 w-full lg:w-auto text-left outline-none focus:outline-none ring-0 border-none bg-transparent"
             onClick={() => setMoreOpen((v) => !v)}
             aria-expanded={moreOpen}
             style={{ color: moreActive ? "var(--ink)" : undefined }}
           >
-            More <span className="text-[10px] opacity-70">▾</span>
+            More <span className="text-[10px] opacity-70">{moreOpen ? "▴" : "▾"}</span>
           </button>
           {moreOpen && (
-            <div className="nav-more-menu absolute top-8 left-0 min-w-[180px] bg-surface/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-[0_8px_32px_rgba(0,0,0,0.4)] p-1.5 flex flex-col z-50">
+            <div className="static lg:absolute lg:top-full lg:-left-2 mt-2 lg:mt-0 w-full lg:w-[400px] bg-surface backdrop-blur-xl border border-border rounded-xl shadow-glass p-2 grid grid-cols-1 lg:grid-cols-2 gap-1 z-50 max-h-[70vh] overflow-y-auto">
               {moreLinks.map((link) => (
-                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)} className="px-3 py-2 rounded-lg text-[13px] font-medium text-ink-soft hover:text-white hover:bg-white/5 transition-all">
+                <Link key={link.href} href={link.href} onClick={() => setMoreOpen(false)} className="px-3 py-2 rounded-md text-[13px] font-medium text-ink-soft hover:text-white hover:bg-white/5 transition-all">
                   {link.label}
                 </Link>
               ))}
