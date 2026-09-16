@@ -88,8 +88,11 @@ export function DateRangePicker({ dateStart, dateEnd, onChange }: DateRangePicke
     onChange("", "");
   }
 
+  // Keep the calendar in the page-content layer. The sticky global navigation
+  // (including its More menu) uses z-50 and must remain above content popovers
+  // when the two overlap.
   return (
-    <div className="relative" ref={containerRef} style={{ zIndex: 50 }}>
+    <div className="relative" ref={containerRef} style={{ zIndex: 10 }}>
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
