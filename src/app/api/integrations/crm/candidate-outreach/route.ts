@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import {
   CRM_RECRUITER_APPLICATION_RECENCY_DAYS,
