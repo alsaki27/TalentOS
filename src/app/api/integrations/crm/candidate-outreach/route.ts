@@ -197,7 +197,7 @@ export async function GET(req: NextRequest) {
       jobPageUrl: jobId ? `${appBase}/jobs/${encodeURIComponent(jobId)}` : null,
       tailoredResumeVersionId: resumeVersionId || null,
       tailoredResumeUrl: resumeVersionId
-        ? `${appBase}/falood/studio/application/${encodeURIComponent(resumeVersionId)}`
+        ? `${appBase}/falood/studio/open/application_resume_version/${encodeURIComponent(resumeVersionId)}`
         : null,
       resumeGenerationStatus: textValue(row.resume_generation_status) || null,
     },
