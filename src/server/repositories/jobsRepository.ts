@@ -3,7 +3,7 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
-import { computeContentIdentityKey } from "@/lib/jobContentIdentity";
+import { computeContentIdentityKey, computeTitleLocationKey } from "@/lib/jobContentIdentity";
 import { checkJobDuplicate, checkJobDuplicatesBatch, type JobDuplicateMatch } from "@/server/services/jobDuplicateGuard";
 import {
   checkContentDuplicate,
@@ -33,16 +33,33 @@ async function applyContentDuplicateCheck(
   const title = (row.title as string | null | undefined) ?? null;
   const company = (row.company as string | null | undefined) ?? null;
   const location = (row.location as string | null | undefined) ?? null;
-  const contentIdentityKey = computeContentIdentityKey({ title, company, location });
-  row.content_identity_key = contentIdentityKey;
-  if (!contentIdentityKey) return;
+  const url = ((row.apply_url as string | null | undefined) ?? (row.source_url as string | null | undefined)) ?? null;
+  const descriptionText =
+    ((row.description_text as string | null | undefined) ?? (row.raw_description as string | null | undefined)) ?? null;
 
-  const check = await checkContentDuplicate({ title, company, location, fingerprint });
+  // Both identities are always stamped, whether or not this row turns out to be
+  // a duplicate - they are what a LATER capture of the same posting will be
+  // matched against, so a row that is itself new still has to be findable.
+  stampIdentityKeys(row, { title, company, location, url });
+
+  const check = await checkContentDuplicate({ title, company, location, url, descriptionText, fingerprint });
   applyContentDuplicateResult(row, check);
 }
 
+/**
+ * Writes both identity columns onto a row about to be inserted. The primary key
+ * is null when the employer name is unusable (absent, or the scraping site's own
+ * name); the fallback key carries title+location in that case and always.
+ */
+function stampIdentityKeys(
+  row: Record<string, unknown>,
+  input: { title: string | null; company: string | null; location: string | null; url: string | null }
+): void {
+  row.content_identity_key = computeContentIdentityKey(input);
+  row.title_location_key = computeTitleLocationKey({ title: input.title, location: input.location });
+}
+
 function applyContentDuplicateResult(row: Record<string, unknown>, check: ContentDuplicateCheckResult): void {
-  row.content_identity_key = check.contentIdentityKey;
   if (!check.isContentDuplicate) return;
   row.is_active = false;
   row.content_duplicate_of = check.existing.id;
@@ -87,6 +104,7 @@ export interface JobRow {
   notes: string | null;
   is_active: boolean | null;
   content_identity_key: string | null;
+  title_location_key: string | null;
   content_duplicate_of: string | null;
   content_duplicate_reason: string | null;
   created_at: string | null;
@@ -570,10 +588,20 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
       title: r.title ?? null,
       company: r.company ?? null,
       location: r.location ?? null,
+      url: r.apply_url ?? r.source_url ?? null,
+      descriptionText: r.description_text ?? r.raw_description ?? null,
       fingerprint: r.apply_link_fingerprint ?? null,
     }))
   );
-  toInsert.forEach((row, i) => applyContentDuplicateResult(row, contentChecks[i]));
+  toInsert.forEach((row, i) => {
+    stampIdentityKeys(row, {
+      title: row.title ?? null,
+      company: row.company ?? null,
+      location: row.location ?? null,
+      url: row.apply_url ?? row.source_url ?? null,
+    });
+    applyContentDuplicateResult(row, contentChecks[i]);
+  });
 
   // Bulk-import rows can have heterogeneous column sets (e.g. one row has
   // salary fields, another doesn't) - union every column across the batch

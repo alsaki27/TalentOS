@@ -28,7 +28,11 @@
 //      and that assertion is never overridden here.
 
 import { query, execute } from "@/server/db/neon";
-import { computeContentIdentityKey } from "@/lib/jobContentIdentity";
+import {
+  computeContentIdentityKey,
+  computeTitleLocationKey,
+  companyNameAppearsInText,
+} from "@/lib/jobContentIdentity";
 import { extractPlatformNamespace } from "@/lib/jobUrlFingerprint";
 
 /**
@@ -92,6 +96,10 @@ export interface ContentDuplicateCandidate {
   title?: string | null;
   company?: string | null;
   location?: string | null;
+  /** The posting's url - lets a site name masquerading as the employer be rejected. */
+  url?: string | null;
+  /** The posting's description, used only to corroborate a fallback-path match. */
+  descriptionText?: string | null;
   /**
    * The candidate's own apply-link fingerprint. Used only to establish which
    * PLATFORM it came from - see resolveMatch for why a same-platform match is
@@ -151,8 +159,9 @@ export async function checkContentDuplicate(
     title: candidate.title,
     company: candidate.company,
     location: candidate.location,
+    url: candidate.url,
   });
-  if (!contentIdentityKey) return { isContentDuplicate: false, contentIdentityKey: null };
+  if (!contentIdentityKey) return checkTitleLocationFallback(candidate);
 
   // Only rows that are themselves independently identifiable (have their own
   // apply-link fingerprint) count toward the group - otherwise two rows with
@@ -169,6 +178,50 @@ export async function checkContentDuplicate(
   );
 
   return resolveMatch(candidate, contentIdentityKey, rows);
+}
+
+/**
+ * Fallback path for captures whose employer name is unusable - absent, or the
+ * scraping site's own name (see isSiteNameNotEmployer). Matches on title +
+ * location bucket, then demands independent corroboration before believing it:
+ * the matched posting's employer name must literally appear in THIS posting's
+ * description text.
+ *
+ * That corroboration is what keeps the weaker key precise. The real case it
+ * resolves: a GuidePoint Security posting captured from Indeed arrives with
+ * company "Indeed.com", but its description opens "GuidePoint Security provides
+ * trusted cybersecurity expertise..." - so the LinkedIn row's employer name is
+ * right there in the text, and the two are provably the same posting. Two
+ * genuinely different employers hiring the same title in the same city do not
+ * name each other in their descriptions, so they stay separate.
+ */
+async function checkTitleLocationFallback(
+  candidate: ContentDuplicateCandidate
+): Promise<ContentDuplicateCheckResult> {
+  const titleLocationKey = computeTitleLocationKey({ title: candidate.title, location: candidate.location });
+  if (!titleLocationKey || !candidate.descriptionText) {
+    return { isContentDuplicate: false, contentIdentityKey: null };
+  }
+
+  const rows = await query<ContentDuplicateMatch & { apply_link_fingerprint: string }>(
+    `SELECT id, title, company, location, apply_url, source_url, source, created_at, apply_link_fingerprint
+     FROM jobs
+     WHERE title_location_key = $1
+       AND apply_link_fingerprint IS NOT NULL
+       AND created_at >= NOW() - make_interval(days => $2)
+     ORDER BY created_at ASC`,
+    [titleLocationKey, CONTENT_DUPLICATE_CHECK_WINDOW_DAYS]
+  );
+
+  // Only postings whose OWN employer name is trustworthy can corroborate, and
+  // that name has to appear in this posting's description.
+  const corroborated = rows.filter((row) => companyNameAppearsInText(row.company, candidate.descriptionText));
+  const outcome = resolveMatch(candidate, titleLocationKey, corroborated);
+  // The fallback never claims the primary identity key; that column stays null
+  // for this row precisely because its company is unusable.
+  return outcome.isContentDuplicate
+    ? { isContentDuplicate: true, contentIdentityKey: outcome.contentIdentityKey, existing: outcome.existing }
+    : { isContentDuplicate: false, contentIdentityKey: null };
 }
 
 /**

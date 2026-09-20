@@ -161,3 +161,68 @@ describe("checkContentDuplicatesBatch", () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── The reported bug, at the guard level. The Indeed capture arrives with
+//    company "Indeed.com", so it has NO primary identity and must be resolved
+//    through the title+location fallback plus description corroboration.
+describe("checkContentDuplicate — fallback path for a site-name company", () => {
+  const CORRUPTED_INDEED = {
+    title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ or DC)",
+    company: "Indeed.com",
+    location: "GitLab Runners, Azure",
+    url: "https://www.indeed.com/viewjob?jk=8763525f8fdfc1b6",
+    fingerprint: "indeed:8763525f8fdfc1b6",
+    descriptionText:
+      "GuidePoint Security provides trusted cybersecurity expertise, solutions and services that help organizations make better decisions and minimize risk.",
+  };
+  const GOOD_LINKEDIN_ROW = {
+    id: "li-row",
+    title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
+    company: "GuidePoint Security",
+    location: "",
+    apply_url: "https://www.linkedin.com/jobs/view/4430748287",
+    source_url: null,
+    source: "extension",
+    created_at: "2026-09-20T12:28:09Z",
+    apply_link_fingerprint: "linkedin:4430748287",
+  };
+
+  it("flags the corrupted Indeed capture as a duplicate of the good LinkedIn row", async () => {
+    (query as any).mockResolvedValue([GOOD_LINKEDIN_ROW]);
+    const result = await checkContentDuplicate(CORRUPTED_INDEED);
+    expect(result.isContentDuplicate).toBe(true);
+    if (result.isContentDuplicate) expect(result.existing.id).toBe("li-row");
+  });
+
+  it("refuses when the description does NOT name the matched employer - no corroboration, no match", async () => {
+    (query as any).mockResolvedValue([GOOD_LINKEDIN_ROW]);
+    const result = await checkContentDuplicate({
+      ...CORRUPTED_INDEED,
+      descriptionText: "An unrelated employer is hiring for a similar role.",
+    });
+    expect(result.isContentDuplicate).toBe(false);
+  });
+
+  it("refuses without a description at all, and does not even query", async () => {
+    const result = await checkContentDuplicate({ ...CORRUPTED_INDEED, descriptionText: null });
+    expect(result.isContentDuplicate).toBe(false);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("still applies the same-platform veto on the fallback path", async () => {
+    (query as any).mockResolvedValue([
+      { ...GOOD_LINKEDIN_ROW, id: "indeed-row", apply_link_fingerprint: "indeed:aaaaaaaaaaaaaaaa" },
+    ]);
+    const result = await checkContentDuplicate(CORRUPTED_INDEED);
+    expect(result.isContentDuplicate).toBe(false);
+  });
+
+  it("refuses when two corroborating postings share the title+location - cannot tell which", async () => {
+    (query as any).mockResolvedValue([
+      GOOD_LINKEDIN_ROW,
+      { ...GOOD_LINKEDIN_ROW, id: "li-row-2", apply_link_fingerprint: "linkedin:9999999999" },
+    ]);
+    const result = await checkContentDuplicate(CORRUPTED_INDEED);
+    expect(result.isContentDuplicate).toBe(false);
+  });
+});

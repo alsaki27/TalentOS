@@ -41,7 +41,7 @@
 import { Client } from "@neondatabase/serverless";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { computeContentIdentityKey } from "../src/lib/jobContentIdentity";
+import { computeContentIdentityKey, computeTitleLocationKey } from "../src/lib/jobContentIdentity";
 import { extractPlatformNamespace } from "../src/lib/jobUrlFingerprint";
 import {
   CONTENT_DUPLICATE_CHECK_WINDOW_DAYS,
@@ -71,8 +71,11 @@ interface JobRow {
   title: string | null;
   company: string | null;
   location: string | null;
+  apply_url: string | null;
+  source_url: string | null;
   apply_link_fingerprint: string | null;
   content_identity_key: string | null;
+  title_location_key: string | null;
   source: string | null;
   created_at: string;
 }
@@ -87,11 +90,11 @@ async function main() {
   await client.connect();
 
   const colCheck = await client.query(
-    `SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND column_name = 'content_identity_key'`
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND column_name = 'title_location_key'`
   );
   const hasColumn = colCheck.rows.length > 0;
   if (!hasColumn) {
-    console.log("NOTE: migration 099 (content_identity_key/content_duplicate_of columns) has not run against this database yet.");
+    console.log("NOTE: migrations 099/101 (content_identity_key, title_location_key) have not run against this database yet.");
     console.log("This dry run still works (it computes everything in memory) but --apply cannot run until that migration deploys.\n");
   }
 
@@ -126,7 +129,8 @@ async function main() {
   }
 
   const { rows } = await client.query<JobRow>(
-    `SELECT id, title, company, location, apply_link_fingerprint, ${hasColumn ? "content_identity_key" : "NULL AS content_identity_key"}, source, created_at
+    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint,
+            ${hasColumn ? "content_identity_key, title_location_key" : "NULL AS content_identity_key, NULL AS title_location_key"}, source, created_at
      FROM jobs
      WHERE apply_link_fingerprint IS NOT NULL
        AND created_at >= NOW() - make_interval(days => $1)
@@ -136,22 +140,29 @@ async function main() {
   console.log(`Loaded ${rows.length} fingerprinted job rows from the last ${CONTENT_DUPLICATE_CHECK_WINDOW_DAYS} days (the same rolling window the live guard itself queries against - a row older than this can never be matched by a future capture either way).`);
 
   if (apply && !hasColumn) {
-    console.error("Refusing to --apply: migration 099 has not run yet, so content_identity_key/content_duplicate_of columns don't exist. Deploy the migration first.");
+    console.error("Refusing to --apply: migration 101 has not run yet, so title_location_key does not exist. Deploy the migrations first.");
     await client.end();
     process.exit(1);
   }
 
-  const keyUpdates: { id: string; key: string }[] = [];
+  // Both identity columns are recomputed. content_identity_key is null for a
+  // row whose company is unusable (the scraping site's own name) - such a row
+  // is found through title_location_key instead, which is why both are stamped.
+  const keyUpdates: { id: string; key: string | null; tlKey: string | null }[] = [];
   const byKey = new Map<string, JobRow[]>();
   for (const row of rows) {
-    const key = computeContentIdentityKey({ title: row.title, company: row.company, location: row.location });
+    const url = row.apply_url ?? row.source_url ?? null;
+    const key = computeContentIdentityKey({ title: row.title, company: row.company, location: row.location, url });
+    const tlKey = computeTitleLocationKey({ title: row.title, location: row.location });
+    if (row.content_identity_key !== key || row.title_location_key !== tlKey) {
+      keyUpdates.push({ id: row.id, key, tlKey });
+    }
     if (!key) continue;
-    if (row.content_identity_key !== key) keyUpdates.push({ id: row.id, key });
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push(row);
   }
 
-  console.log(`\ncontent_identity_key: ${keyUpdates.length} row(s) need it set/corrected out of ${rows.length}.`);
+  console.log(`\nidentity columns: ${keyUpdates.length} row(s) need updating out of ${rows.length}.`);
 
   // Distinct-posting groups (by fingerprint, oldest first - the query's
   // ORDER BY guarantees this) whose FINAL size is exactly 2.
@@ -209,14 +220,14 @@ async function main() {
     return;
   }
 
-  console.log("\nWriting content_identity_key...");
+  console.log("\nWriting identity columns...");
   for (let i = 0; i < keyUpdates.length; i += BATCH_SIZE) {
     const batch = keyUpdates.slice(i, i + BATCH_SIZE);
     await client.query(
-      `UPDATE jobs AS j SET content_identity_key = v.key
-       FROM (SELECT * FROM UNNEST($1::uuid[], $2::text[]) AS t(id, key)) AS v
+      `UPDATE jobs AS j SET content_identity_key = v.key, title_location_key = v.tl_key
+       FROM (SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[]) AS t(id, key, tl_key)) AS v
        WHERE j.id = v.id`,
-      [batch.map((u) => u.id), batch.map((u) => u.key)]
+      [batch.map((u) => u.id), batch.map((u) => u.key), batch.map((u) => u.tlKey)]
     );
     console.log(`  updated ${Math.min(i + BATCH_SIZE, keyUpdates.length)}/${keyUpdates.length}`);
   }

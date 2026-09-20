@@ -73,32 +73,106 @@ export function normalizeJobTitle(title: string | null | undefined): string {
   return basicNormalize(title);
 }
 
+// US states/territories plus the country names that show up in production
+// location strings. This is reference data, not tuning: it answers the single
+// question "does the part after the comma name a real region?", which is what
+// separates a genuine "City, ST" location from a fragment of description text
+// that merely happens to contain a comma.
+const REGION_NAMES = new Set([
+  "al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la","me","md",
+  "ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok","or","pa","ri","sc",
+  "sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc","pr","vi","gu","as","mp",
+  "alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware","florida",
+  "georgia","hawaii","idaho","illinois","indiana","iowa","kansas","kentucky","louisiana","maine",
+  "maryland","massachusetts","michigan","minnesota","mississippi","missouri","montana","nebraska",
+  "nevada","new hampshire","new jersey","new mexico","new york","north carolina","north dakota","ohio",
+  "oklahoma","oregon","pennsylvania","rhode island","south carolina","south dakota","tennessee","texas",
+  "utah","vermont","virginia","washington","west virginia","wisconsin","wyoming",
+  "district of columbia","puerto rico",
+  "us","usa","united states","united states of america","canada","uk","united kingdom","india",
+  "australia","germany","france","ireland","mexico","netherlands","spain","poland","brazil","japan",
+  "singapore","philippines","remote",
+]);
+
+/**
+ * Whether an extension-supplied company name is actually the name of the SITE
+ * it was scraped from rather than the employer.
+ *
+ * This is a real, observed corruption, not a hypothetical: the browser
+ * extension's generic extractor falls back to `og:site_name` / the last
+ * segment of `document.title` when it cannot find the employer, so a capture
+ * from Indeed arrives with company "Indeed.com" and one from hiring.cafe with
+ * "HiringCafe". Such a value must never participate in identity matching -
+ * every job captured from that site would otherwise share one "employer".
+ *
+ * Deliberately derived from the posting's OWN url rather than a list of known
+ * job boards, so it holds for any site, including ones added later.
+ */
+export function isSiteNameNotEmployer(
+  company: string | null | undefined,
+  url: string | null | undefined
+): boolean {
+  const normalizedCompany = normalizeCompanyName(company);
+  if (!normalizedCompany || !url) return false;
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  // Compare against the host and against its registrable-ish brand segment, so
+  // "Indeed.com" matches indeed.com and "HiringCafe" matches hiringcafe.com.
+  const hostNormalized = basicNormalize(host);
+  const labels = host.split(".").filter((l) => l.length > 1);
+  const brand = labels.length >= 2 ? labels[labels.length - 2] : labels[0];
+  const collapsed = normalizedCompany.replace(/ /g, "");
+  return (
+    normalizedCompany === hostNormalized ||
+    collapsed === host.replace(/\./g, "") ||
+    (!!brand && collapsed === brand)
+  );
+}
+
 const REMOTE_WORD = /\bremote\b|\bwork from home\b|\banywhere\b|\bnationwide\b/i;
 
 /**
  * The location bucket that participates in the identity key.
  *
- * Three cases, in priority order, each grounded in real production strings:
- *   "remote"  - either side mentions remote/work-from-home/anywhere. Platforms
- *               describe one remote posting wildly differently ("United States
- *               (Remote in VA, MD, PA, ...)" on LinkedIn, a bare "Remote" on
- *               Indeed, "Remote in VA, MD, ...; United States" on DailyRemote),
- *               so they all collapse to one bucket or a remote job could never
- *               be matched across platforms at all.
- *   "<city>"  - the text before the first comma, the near-universal convention
- *               ("Alton, IL" / "Alton, IL, US"; "Bay City, MI" / "Bay City,
- *               Michigan, USA"; "Boise, ID, USA" / "Boise, ID"). This is what
- *               separates an employer's genuinely distinct city openings.
- *   ""        - no city can be read (a bare "United States", "onsite / United
- *               States", or nothing at all). Unknown, deliberately not guessed.
+ * Takes the TITLE as well as the location field, because the location field is
+ * the least reliable thing the browser extension sends and the title is the
+ * most reliable. Confirmed live: capturing one GuidePoint Security posting from
+ * Indeed produced location "GitLab Runners, Azure" - a fragment of the
+ * description's CI/CD tool list - while the LinkedIn capture of the same
+ * posting produced an empty location. Both titles, however, read "...(Remote in
+ * VA, MD, PA, NC, DE, NJ, or DC)", so the title is what correctly identifies it
+ * as remote.
+ *
+ * Resolution order:
+ *   "remote"  - the title or the location says remote/work-from-home/anywhere.
+ *               Platforms phrase one remote posting wildly differently
+ *               ("United States (Remote in VA, MD, ...)", a bare "Remote",
+ *               "Remote in VA, MD, ...; United States"), so they must collapse
+ *               to one bucket or a remote job can never match across platforms.
+ *   "<city>"  - text before the first comma, but ONLY when what follows names a
+ *               real region (see REGION_NAMES). This is what separates a true
+ *               "Alton, IL" / "Bay City, Michigan, USA" from scraped junk like
+ *               "GitLab Runners, Azure" or "GIS, Mapping", both real captures.
+ *   ""        - nothing trustworthy. Deliberately not guessed.
  */
-export function computeLocationBucket(location: string | null | undefined): string {
+export function computeLocationBucket(
+  location: string | null | undefined,
+  title?: string | null
+): string {
+  if (REMOTE_WORD.test(title ?? "")) return "remote";
   const raw = (location ?? "").trim();
   if (!raw) return "";
   if (REMOTE_WORD.test(raw)) return "remote";
-  const [head, ...rest] = raw.split(",");
-  if (rest.length === 0) return "";
-  return basicNormalize(head);
+
+  const parts = raw.split(",").map((p) => basicNormalize(p)).filter(Boolean);
+  if (parts.length < 2) return "";
+  // Any following component naming a real region validates the first as a city.
+  const regionFollows = parts.slice(1).some((p) => REGION_NAMES.has(p));
+  return regionFollows ? parts[0] : "";
 }
 
 /**
@@ -138,9 +212,43 @@ export function computeContentIdentityKey(input: {
   title?: string | null;
   company?: string | null;
   location?: string | null;
+  /** The posting's own url, used to reject a site name masquerading as the employer. */
+  url?: string | null;
 }): string | null {
   const title = normalizeJobTitle(input.title);
   const company = normalizeCompanyName(input.company);
   if (!title || !company) return null;
-  return `${company}::${title}::${computeLocationBucket(input.location)}`;
+  // A site name is not an employer, so it must not form an identity - every
+  // job captured from that site would otherwise share one "company".
+  if (isSiteNameNotEmployer(input.company, input.url)) return null;
+  return `${company}::${title}::${computeLocationBucket(input.location, input.title)}`;
+}
+
+/**
+ * The weaker identity used when the employer name is unusable (absent, or the
+ * site's own name - see isSiteNameNotEmployer). Title plus location bucket
+ * only.
+ *
+ * On its own this is NOT sufficient evidence of a duplicate - two employers can
+ * post the same title in the same city. The guard therefore pairs it with a
+ * separate corroboration: the matched posting's employer name must literally
+ * appear in the candidate's description text. See jobContentDuplicateGuard.ts.
+ */
+export function computeTitleLocationKey(input: {
+  title?: string | null;
+  location?: string | null;
+}): string | null {
+  const title = normalizeJobTitle(input.title);
+  if (!title) return null;
+  return `${title}::${computeLocationBucket(input.location, input.title)}`;
+}
+
+/** Whether an employer name occurs in a job description, used as corroboration. */
+export function companyNameAppearsInText(
+  company: string | null | undefined,
+  text: string | null | undefined
+): boolean {
+  const name = normalizeCompanyName(company);
+  if (!name || name.length < 3 || !text) return false;
+  return basicNormalize(text).includes(name);
 }
