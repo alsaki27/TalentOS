@@ -48,9 +48,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 
   const actionItems = await query<any>(
     `SELECT ai.id, ai.type, ai.title, ai.description, ai.suggested_action, ai.priority, ai.status,
-            resolution_rule, resolution_kind, resolution_note, due_at,
-            resolved_at, ai.created_at, assigned_to_user_id,
-            proposed_status, proposed_from_status, ai_confidence, decision, decided_at
+            ai.resolution_rule, ai.resolution_kind, ai.resolution_note, ai.due_at,
+            ai.resolved_at, ai.created_at, ai.assigned_to_user_id,
+            ai.proposed_status, ai.proposed_from_status, ai.ai_confidence, ai.decision, ai.decided_at
        FROM action_items ai
        LEFT JOIN applications approval_app ON approval_app.id = ai.application_id
       WHERE ai.email_communication_id IN (SELECT id FROM email_communications WHERE gmail_thread_id = $1)

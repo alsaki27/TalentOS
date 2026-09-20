@@ -16,7 +16,7 @@ export interface EmailActionModalProps {
 
 type Tab = "details" | "attachments" | "team";
 
-function EmailBody({ bodyHtml, bodyText }: { bodyHtml: string | null | undefined; bodyText: string | null | undefined }) {
+function EmailBody({ bodyHtml, bodyText, loading }: { bodyHtml: string | null | undefined; bodyText: string | null | undefined; loading: boolean }) {
   if (bodyHtml) {
     // Sandboxed, srcDoc-rendered iframe: the standard safe way to show
     // untrusted HTML mail without pulling in a sanitization library - no
@@ -46,10 +46,18 @@ function EmailBody({ bodyHtml, bodyText }: { bodyHtml: string | null | undefined
       </div>
     );
   }
-  return <div style={{ padding: 24, color: "var(--muted)" }}>Loading email body...</div>;
+  // This only reads "Loading" while a fetch is genuinely in flight - once it
+  // resolves (success or failure) the label reflects the real end state
+  // instead of leaving the user staring at "Loading..." forever with no way
+  // to tell a stalled fetch apart from a message that simply has no body.
+  return (
+    <div style={{ padding: 24, color: "var(--muted)" }}>
+      {loading ? "Loading email body..." : "No email body available for this message."}
+    </div>
+  );
 }
 
-function ThreadMessage({ msg, expanded, onToggle }: { msg: any; expanded: boolean; onToggle: () => void }) {
+function ThreadMessage({ msg, expanded, onToggle, loading }: { msg: any; expanded: boolean; onToggle: () => void; loading: boolean }) {
   return (
     <div style={{ border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", backgroundColor: "var(--bg)" }}>
       <button
@@ -65,7 +73,7 @@ function ThreadMessage({ msg, expanded, onToggle }: { msg: any; expanded: boolea
       </button>
       {expanded && (
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <EmailBody bodyHtml={msg.body_html} bodyText={msg.body_text} />
+          <EmailBody bodyHtml={msg.body_html} bodyText={msg.body_text} loading={loading} />
         </div>
       )}
     </div>
@@ -86,23 +94,52 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(true);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
     setMounted(true);
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+
     fetch(`/api/gmail-communications/${thread.id}`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Failed to load this email (HTTP ${r.status}).`);
+        }
+        return r.json();
+      })
       .then((data) => {
+        if (cancelled) return;
         setDetail(data);
         // Most recent message expanded by default, per the redesign's
         // "full thread view" requirement.
-        const latest = data?.thread?.[data.thread.length - 1];
+        const latest = data?.thread?.length ? data.thread[data.thread.length - 1] : null;
         if (latest) setExpandedThreadIds(new Set([latest.id]));
+      })
+      .catch((err: any) => {
+        // Previously unhandled: a failed fetch here (network blip, session
+        // expiry, a transient 500) left `detail` at its initial null forever
+        // with no error shown - the email body area just said "Loading
+        // email body..." indefinitely with no way to tell a stuck fetch
+        // apart from one that never started. Surfacing the failure with a
+        // retry path replaces that silent hang with an actionable message.
+        if (!cancelled) setDetailError(err?.message || "Failed to load this email.");
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
       });
 
     fetch("/api/users?limit=100")
       .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setTeamMembers(Array.isArray(data) ? data : data.items ?? []));
-  }, [thread.id]);
+      .then((data) => setTeamMembers(Array.isArray(data) ? data : data.items ?? []))
+      .catch(() => {});
+
+    return () => { cancelled = true; };
+  }, [thread.id, retryNonce]);
 
   const candidateName = thread.candidate_name || "Unknown Candidate";
 
@@ -246,6 +283,12 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
 
           {error && <div className="alert error" style={{ marginBottom: 16 }}>{error}</div>}
           {successMessage && <div className="alert success" style={{ marginBottom: 16 }}>{successMessage}</div>}
+          {detailError && (
+            <div className="alert error" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <span>{detailError}</span>
+              <button className="btn outline sm" onClick={() => setRetryNonce((n) => n + 1)}>Retry</button>
+            </div>
+          )}
 
           {/* TAB: DETAILS */}
           {activeTab === "details" && (
@@ -337,13 +380,14 @@ export default function EmailActionModal({ thread, candidates, onClose, onUpdate
                         msg={msg}
                         expanded={expandedThreadIds.has(msg.id)}
                         onToggle={() => toggleThreadMessage(msg.id)}
+                        loading={detailLoading}
                       />
                     ))}
                   </div>
                 </div>
               ) : (
                 <div style={{ padding: 0, backgroundColor: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden", minHeight: "50vh", display: "flex", flexDirection: "column" }}>
-                  <EmailBody bodyHtml={detail?.message?.body_html} bodyText={detail?.message?.body_text} />
+                  <EmailBody bodyHtml={detail?.message?.body_html} bodyText={detail?.message?.body_text} loading={detailLoading} />
                 </div>
               )}
 
