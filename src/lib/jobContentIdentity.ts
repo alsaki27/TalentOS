@@ -9,34 +9,33 @@
 // jobContentDuplicateGuard.ts, which is where the real precision work
 // (avoiding false positives) is done and documented.
 //
-// ── Why "same normalized title + same normalized company" alone is NOT
-//    used as a duplicate signal (verified against live production data) ──
+// ── What identifies one real requisition, and why (all verified live) ──
 //
-// Real, confirmed CROSS-PLATFORM duplicates in production (same job, no
-// shared URL identifier, both still sitting in the table as separate rows
-// before this module existed): "GIS Technician-Planning" @ Elkhart County
-// Government (linkedin.com + indeed.com), "CADD Drafter" @ Electrical
-// Consultants, Inc. (linkedin.com + indeed.com), "NOC Network Analyst
-// (Government)" @ AT&T (indeed.com + linkedin.com), and ~27 more pairs
-// across indeed/linkedin/glassdoor/ziprecruiter/simplyhired/careerbuilder/
-// monster - in every one of these, company and title match EXACTLY once
-// normalized (case/punctuation only - no fuzzy matching was needed).
+// Confirmed CROSS-PLATFORM duplicates in production (same job, no shared URL
+// identifier, each stored as its own row before this module existed):
+// "GIS Technician-Planning" @ Elkhart County Government (linkedin + indeed),
+// "CADD Drafter" @ Electrical Consultants, Inc. (linkedin + indeed), "NOC
+// Network Analyst (Government)" @ AT&T (indeed + linkedin), "OSP Field
+// Engineer" @ Pearce Services (indeed + linkedin + greenhouse + simplyhired),
+// and dozens more. In every one, company and title match EXACTLY once
+// normalized for case and punctuation - no fuzzy matching is needed, and
+// none is done here, because fuzziness is what would cost precision.
 //
-// But identical normalized title+company is also produced by employers who
-// legitimately post many DISTINCT openings under one reused title - equally
-// real production data: Amazon has 9+ separate LinkedIn postings titled
+// Company + title alone is NOT enough, though: employers legitimately reuse
+// one title across many genuinely distinct openings. Actalent has 120
+// "Electrical Engineer" postings spread over 65 cities; Amazon has 9+
 // "Innovation and Design Engineer, Worldwide Design Engineering" across
-// Bellevue/Arlington/Nashville - different real requisitions, not one job
-// echoed 9 times. ABB has 10 separate Workday postings titled "Senior Field
-// Service Technician" (several even in the identical city, e.g. Bland, VA)
-// whose descriptions differ from each other by only a handful of characters
-// - a human reading two of them side by side could not tell they're
-// different jobs without the distinct requisition ID in the URL. So content
-// similarity, including description-text similarity, cannot safely
-// distinguish "cross-posted duplicate" from "templated distinct requisition"
-// on its own - this is why the guard (not this module) additionally
-// requires that the employer has exactly ONE other existing posting under
-// this identity, never merging when a company demonstrably reuses a title.
+// Bellevue/Arlington/Nashville. What separates those real openings from each
+// other is WHERE they are - so the location bucket is part of the identity
+// key (see computeContentIdentityKey below for the measured evidence).
+//
+// That still leaves one irreducibly ambiguous case: several distinct
+// requisitions in the SAME city under the SAME title - real example, 3 ABB
+// "Senior Field Service Technician" reqs all in Bland, VA, whose descriptions
+// differ by a handful of characters and which only the requisition id in the
+// URL distinguishes. No content signal can resolve that, so the guard
+// refuses to act there rather than guess. Description-text similarity was
+// evaluated against this same data and rejected for exactly that reason.
 
 const COMPANY_LEGAL_SUFFIXES = new Set([
   "inc", "incorporated", "llc", "llp", "ltd", "limited", "corp", "corporation",
@@ -74,47 +73,74 @@ export function normalizeJobTitle(title: string | null | undefined): string {
   return basicNormalize(title);
 }
 
+const REMOTE_WORD = /\bremote\b|\bwork from home\b|\banywhere\b|\bnationwide\b/i;
+
 /**
- * A stable "same real requisition, most likely" key. Returns null when
- * either side is missing/empty after normalization - a job with no title or
- * no company can't be identity-matched, and must never silently collide
- * with every other such job under an empty-string key.
+ * The location bucket that participates in the identity key.
+ *
+ * Three cases, in priority order, each grounded in real production strings:
+ *   "remote"  - either side mentions remote/work-from-home/anywhere. Platforms
+ *               describe one remote posting wildly differently ("United States
+ *               (Remote in VA, MD, PA, ...)" on LinkedIn, a bare "Remote" on
+ *               Indeed, "Remote in VA, MD, ...; United States" on DailyRemote),
+ *               so they all collapse to one bucket or a remote job could never
+ *               be matched across platforms at all.
+ *   "<city>"  - the text before the first comma, the near-universal convention
+ *               ("Alton, IL" / "Alton, IL, US"; "Bay City, MI" / "Bay City,
+ *               Michigan, USA"; "Boise, ID, USA" / "Boise, ID"). This is what
+ *               separates an employer's genuinely distinct city openings.
+ *   ""        - no city can be read (a bare "United States", "onsite / United
+ *               States", or nothing at all). Unknown, deliberately not guessed.
+ */
+export function computeLocationBucket(location: string | null | undefined): string {
+  const raw = (location ?? "").trim();
+  if (!raw) return "";
+  if (REMOTE_WORD.test(raw)) return "remote";
+  const [head, ...rest] = raw.split(",");
+  if (rest.length === 0) return "";
+  return basicNormalize(head);
+}
+
+/**
+ * The identity a real requisition is matched on: company + title + location
+ * bucket. Returns null when company or title is missing, so a job that
+ * cannot be identified never collides with every other such job under an
+ * empty key.
+ *
+ * ── Why the location bucket is part of the KEY, not a separate check ──
+ *
+ * It was originally a post-filter, with the guard additionally requiring that
+ * only ONE other posting shared company+title. Measured against live data,
+ * that combination failed in both directions:
+ *
+ *   * It missed nearly every real duplicate. "OSP Field Engineer" @ Pearce
+ *     Services had 11 postings across indeed/linkedin/greenhouse/simplyhired -
+ *     really 5 distinct city openings each captured twice ("Alton, IL" +
+ *     "Alton, IL, US", "Litchfield, IL" + "Litchfield, IL, US", ...). Because
+ *     the company+title group held 11 postings, the one-other-posting gate
+ *     refused to act and all 5 duplicate pairs were kept. Same story for
+ *     "Distribution Designer" @ Actalent ("Bay City, MI" + "Bay City,
+ *     Michigan, USA") and "Outside Plant Engineer" @ Verizon ("Miami, FL" +
+ *     "Miami, FL, US").
+ *   * It produced false positives. A loose location comparison accepted
+ *     "Rushville, IL, US" and "Pittsfield, IL, US" as the same job purely
+ *     because both contain the token "il" - two different branch openings.
+ *
+ * Putting the city in the key fixes both at once: Actalent's 120 "Electrical
+ * Engineer" postings spread over 65 cities become 65 single-posting identities
+ * with nothing to merge, while the two captures of the Alton, IL opening land
+ * on one identity. The remaining group-size gate in the guard then only has to
+ * handle the genuinely hard case - several distinct requisitions in the SAME
+ * city under the SAME title (real: 3 ABB "Senior Field Service Technician"
+ * reqs in Bland, VA) - where it correctly refuses to guess.
  */
 export function computeContentIdentityKey(input: {
   title?: string | null;
   company?: string | null;
+  location?: string | null;
 }): string | null {
   const title = normalizeJobTitle(input.title);
   const company = normalizeCompanyName(input.company);
   if (!title || !company) return null;
-  return `${company}::${title}`;
-}
-
-const REMOTE_WORD = /\bremote\b|\bwork from home\b|\banywhere\b|\bnationwide\b/i;
-
-/**
- * Whether two location strings are plausibly the SAME job's location,
- * rather than proof two postings are different jobs. Deliberately biased
- * toward "compatible": location text varies wildly by platform for the
- * identical posting (LinkedIn's "United States (Remote in VA, MD, ...)" vs
- * a bare "Remote" vs "IN, US" vs a full "City, ST, USA"), so this only
- * returns false on a genuine, unambiguous mismatch between two fully
- * specified, non-remote locations that share no common token - it is a
- * safety check to catch obvious mismatches, not a strict equality test.
- */
-export function areLocationsCompatible(
-  a: string | null | undefined,
-  b: string | null | undefined
-): boolean {
-  const na = basicNormalize(a ?? "");
-  const nb = basicNormalize(b ?? "");
-  if (!na || !nb) return true; // an absent location is never grounds to call two postings different
-  if (REMOTE_WORD.test(a ?? "") || REMOTE_WORD.test(b ?? "")) return true;
-  if (na === nb) return true;
-  const tokensA = new Set(na.split(" ").filter((t) => t.length > 1));
-  const tokensB = new Set(nb.split(" ").filter((t) => t.length > 1));
-  for (const t of tokensA) {
-    if (tokensB.has(t)) return true; // shares a city/state/country token, e.g. "fairfax" or "va"
-  }
-  return false;
+  return `${company}::${title}::${computeLocationBucket(input.location)}`;
 }

@@ -41,7 +41,8 @@
 import { Client } from "@neondatabase/serverless";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { computeContentIdentityKey, areLocationsCompatible } from "../src/lib/jobContentIdentity";
+import { computeContentIdentityKey } from "../src/lib/jobContentIdentity";
+import { extractPlatformNamespace } from "../src/lib/jobUrlFingerprint";
 import {
   CONTENT_DUPLICATE_CHECK_WINDOW_DAYS,
   CONTENT_IDENTITY_MATCH_SCORE,
@@ -143,7 +144,7 @@ async function main() {
   const keyUpdates: { id: string; key: string }[] = [];
   const byKey = new Map<string, JobRow[]>();
   for (const row of rows) {
-    const key = computeContentIdentityKey({ title: row.title, company: row.company });
+    const key = computeContentIdentityKey({ title: row.title, company: row.company, location: row.location });
     if (!key) continue;
     if (row.content_identity_key !== key) keyUpdates.push({ id: row.id, key });
     if (!byKey.has(key)) byKey.set(key, []);
@@ -163,14 +164,18 @@ async function main() {
     .filter((g) => g.distinct.length === 2);
 
   const dedupeUpdates: { id: string; existing: JobRow }[] = [];
-  const skippedIncompatibleLocation: { key: string; a: JobRow; b: JobRow }[] = [];
+  const skippedSamePlatform: { a: JobRow; b: JobRow }[] = [];
   for (const g of pairGroups) {
     const [original, newer] = g.distinct; // already oldest-first
-    if (areLocationsCompatible(original.location, newer.location)) {
-      dedupeUpdates.push({ id: newer.id, existing: original });
-    } else {
-      skippedIncompatibleLocation.push({ key: g.key, a: original, b: newer });
+    // Mirrors the live guard's RULE 2: two different ids on ONE platform is
+    // that platform asserting the postings are different. Never override it.
+    const nsA = extractPlatformNamespace(original.apply_link_fingerprint);
+    const nsB = extractPlatformNamespace(newer.apply_link_fingerprint);
+    if (nsA && nsB && nsA === nsB) {
+      skippedSamePlatform.push({ a: original, b: newer });
+      continue;
     }
+    dedupeUpdates.push({ id: newer.id, existing: original });
   }
 
   const templaterGroupSizes = [...byKey.entries()]
@@ -181,18 +186,18 @@ async function main() {
     .filter((g) => g.distinctCount >= 3)
     .sort((a, b) => b.distinctCount - a.distinctCount);
 
-  console.log(`\nConfirmed cross-platform duplicate PAIRS (exactly 2 distinct postings, compatible locations): ${dedupeUpdates.length}`);
+  console.log(`\nConfirmed cross-platform duplicate PAIRS (identical company+title+location, exactly 2 distinct postings, on different platforms): ${dedupeUpdates.length}`);
   for (const u of dedupeUpdates.slice(0, 15)) {
     console.log(`  "${u.existing.title}" @ ${u.existing.company} — job ${u.id} would be hidden as a duplicate of ${u.existing.id}`);
   }
   if (dedupeUpdates.length > 15) console.log(`  ... and ${dedupeUpdates.length - 15} more`);
 
-  console.log(`\nSkipped (2 distinct postings, but locations look like a genuine mismatch): ${skippedIncompatibleLocation.length}`);
-  for (const s of skippedIncompatibleLocation.slice(0, 5)) {
-    console.log(`  "${s.a.title}" @ ${s.a.company}: "${s.a.location}" vs "${s.b.location}"`);
+  console.log(`\nSkipped - both sides on the SAME platform, so that platform says they are different postings: ${skippedSamePlatform.length}`);
+  for (const sp of skippedSamePlatform.slice(0, 5)) {
+    console.log(`  "${sp.a.title}" @ ${sp.a.company}: ${sp.a.apply_link_fingerprint} vs ${sp.b.apply_link_fingerprint}`);
   }
 
-  console.log(`\nTemplater groups left untouched on purpose (3+ distinct real postings under one title+company): ${templaterGroupSizes.length}`);
+  console.log(`\nGroups left untouched on purpose (3+ distinct real postings under one company+title+location): ${templaterGroupSizes.length}`);
   for (const t of templaterGroupSizes.slice(0, 10)) {
     console.log(`  ${t.distinctCount} distinct postings  "${t.sample.title}" @ ${t.sample.company}`);
   }

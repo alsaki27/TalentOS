@@ -27,6 +27,7 @@ const linkedinRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   content_identity_key: computeContentIdentityKey({
     title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
     company: "GuidePoint Security",
+    location: "United States (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
   }),
   created_at: "2026-09-10T00:00:00Z",
   apply_link_fingerprint: "linkedin:4430748287",
@@ -104,14 +105,35 @@ describe("checkContentDuplicate — real false-positive-risk data must NOT be fl
     expect(result.isContentDuplicate).toBe(false);
   });
 
-  it("does not flag a same-title/company pair whose locations are an unambiguous mismatch", async () => {
-    (query as any).mockResolvedValue([linkedinRow({ location: "Austin, TX" })]);
+  it("refuses a match when both sides are on the SAME platform - that platform's two ids are its own assertion that they differ", async () => {
+    // Real case this protects: two Indeed postings for "Information Technology
+    // Support Technician" @ Prairieland FS with different jk values. Location
+    // mismatches are handled by the identity key itself (the query filters on
+    // it), so the guard's remaining job is exactly this rule.
+    (query as any).mockResolvedValue([
+      linkedinRow({ id: "indeed-existing", apply_link_fingerprint: "indeed:aaaaaaaaaaaaaaaa" }),
+    ]);
     const result = await checkContentDuplicate({
       title: linkedinRow().title,
       company: "GuidePoint Security",
-      location: "New York, NY",
+      location: "Remote",
+      fingerprint: "indeed:bbbbbbbbbbbbbbbb",
     });
     expect(result.isContentDuplicate).toBe(false);
+  });
+
+  it("still flags a match when the two sides are on DIFFERENT platforms", async () => {
+    (query as any).mockResolvedValue([
+      linkedinRow({ id: "li-existing", apply_link_fingerprint: "linkedin:4430748287" }),
+    ]);
+    const result = await checkContentDuplicate({
+      title: linkedinRow().title,
+      company: "GuidePoint Security",
+      location: "Remote",
+      fingerprint: "indeed:8763525f8fdfc1b6",
+    });
+    expect(result.isContentDuplicate).toBe(true);
+    if (result.isContentDuplicate) expect(result.existing.id).toBe("li-existing");
   });
 
   it("returns not-a-duplicate without querying when title or company is missing", async () => {

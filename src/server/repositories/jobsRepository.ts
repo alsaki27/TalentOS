@@ -15,7 +15,7 @@ import {
 
 function describeContentDuplicateReason(existing: { id: string; source: string | null; created_at: string | null }): string {
   const seen = existing.created_at ? new Date(existing.created_at).toISOString().slice(0, 10) : "an earlier date";
-  return `Auto-hidden: same company+title as job ${existing.id}${existing.source ? ` (source: ${existing.source})` : ""}, first captured ${seen}. Review and re-activate if this is actually a distinct opening.`;
+  return `Auto-hidden: same company, title and location as job ${existing.id}${existing.source ? ` (source: ${existing.source})` : ""}, first captured ${seen}. Review and re-activate if this is actually a distinct opening.`;
 }
 
 /**
@@ -26,15 +26,18 @@ function describeContentDuplicateReason(existing: { id: string; source: string |
  * see jobContentDuplicateGuard.ts for why a wrong content match must never
  * cost a real job its only row.
  */
-async function applyContentDuplicateCheck(row: Record<string, unknown>): Promise<void> {
+async function applyContentDuplicateCheck(
+  row: Record<string, unknown>,
+  fingerprint: string | null
+): Promise<void> {
   const title = (row.title as string | null | undefined) ?? null;
   const company = (row.company as string | null | undefined) ?? null;
   const location = (row.location as string | null | undefined) ?? null;
-  const contentIdentityKey = computeContentIdentityKey({ title, company });
+  const contentIdentityKey = computeContentIdentityKey({ title, company, location });
   row.content_identity_key = contentIdentityKey;
   if (!contentIdentityKey) return;
 
-  const check = await checkContentDuplicate({ title, company, location });
+  const check = await checkContentDuplicate({ title, company, location, fingerprint });
   applyContentDuplicateResult(row, check);
 }
 
@@ -485,7 +488,7 @@ export async function createJob(row: Record<string, unknown>): Promise<CreateJob
   }
 
   const enrichedRow: Record<string, unknown> = { ...row };
-  await applyContentDuplicateCheck(enrichedRow);
+  await applyContentDuplicateCheck(enrichedRow, fingerprint);
 
   const fullRow = await toSqlRow({ ...enrichedRow, apply_link_fingerprint: fingerprint });
   const cols = Object.keys(fullRow);
@@ -563,7 +566,12 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
   // in-batch pair, mirroring the same accepted non-goal already documented
   // above for same-batch fingerprint collisions.
   const contentChecks = await checkContentDuplicatesBatch(
-    toInsert.map((r) => ({ title: r.title ?? null, company: r.company ?? null, location: r.location ?? null }))
+    toInsert.map((r) => ({
+      title: r.title ?? null,
+      company: r.company ?? null,
+      location: r.location ?? null,
+      fingerprint: r.apply_link_fingerprint ?? null,
+    }))
   );
   toInsert.forEach((row, i) => applyContentDuplicateResult(row, contentChecks[i]));
 

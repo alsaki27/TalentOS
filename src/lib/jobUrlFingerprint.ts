@@ -139,6 +139,32 @@ export function extractCanonicalJobKey(rawUrl: string | null | undefined): strin
   return null;
 }
 
+/**
+ * The platform a fingerprint belongs to - "indeed", "linkedin",
+ * "greenhouse", or a bare hostname for URLs no platform matcher recognized.
+ *
+ * Used to answer one question precisely: are two postings on the SAME
+ * platform? If they are, and they still carry different fingerprints, then
+ * that platform has issued two different job ids for them - which is the
+ * platform itself asserting they are two different postings. That assertion
+ * is authoritative and must never be overridden by a content match (see
+ * jobContentDuplicateGuard.ts).
+ */
+export function extractPlatformNamespace(fingerprint: string | null | undefined): string | null {
+  if (!fingerprint || !fingerprint.trim()) return null;
+  const fp = fingerprint.trim();
+  const colon = fp.indexOf(":");
+  if (colon > 0) {
+    const prefix = fp.slice(0, colon);
+    // A canonical platform key's prefix is a bare token ("indeed"); a
+    // normalized-URL fingerprint's leading segment is a hostname or path
+    // ("careers.example.com/job?x=1:2"), which carries a dot or a slash.
+    if (!prefix.includes(".") && !prefix.includes("/")) return prefix;
+  }
+  const slash = fp.indexOf("/");
+  return slash > 0 ? fp.slice(0, slash) : fp;
+}
+
 export function normalizeUrlFingerprint(url: string | null | undefined): string {
   if (!url || !url.trim()) return "";
 

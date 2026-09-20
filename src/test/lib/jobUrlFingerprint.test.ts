@@ -8,6 +8,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeApplyLinkFingerprint,
   extractCanonicalJobKey,
+  extractPlatformNamespace,
   normalizeUrlFingerprint,
 } from "@/lib/jobUrlFingerprint";
 
@@ -156,5 +157,34 @@ describe("computeApplyLinkFingerprint", () => {
     const fp = computeApplyLinkFingerprint({ applyUrl: "https://careers.example.com/job/9876" });
     expect(fp).toBeTruthy();
     expect(fp).toContain("careers.example.com");
+  });
+});
+
+describe("extractPlatformNamespace", () => {
+  it("reads the platform off a canonical key", () => {
+    expect(extractPlatformNamespace("indeed:f2645064e02dfc3a")).toBe("indeed");
+    expect(extractPlatformNamespace("linkedin:4331177628")).toBe("linkedin");
+    expect(extractPlatformNamespace("greenhouse:2kvegas:7431835003")).toBe("greenhouse");
+    expect(extractPlatformNamespace("lever:cesiumastro:f4a34f38")).toBe("lever");
+  });
+
+  it("falls back to the hostname for a normalized-URL fingerprint", () => {
+    expect(extractPlatformNamespace("dailyremote.com/remote-job/application-security-engineer-5163929")).toBe("dailyremote.com");
+    expect(extractPlatformNamespace("simplyhired.com/job/8fbv3te484jk")).toBe("simplyhired.com");
+  });
+
+  it("does not mistake a hostname with a port or colon in the path for a platform token", () => {
+    // The prefix before ":" here contains dots, so it is a host, not a token.
+    expect(extractPlatformNamespace("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443/job/1")).toBe("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443");
+  });
+
+  it("returns null for absent input", () => {
+    expect(extractPlatformNamespace(null)).toBeNull();
+    expect(extractPlatformNamespace("   ")).toBeNull();
+  });
+
+  it("agrees for two ids on one platform and differs across platforms - the property the guard relies on", () => {
+    expect(extractPlatformNamespace("indeed:aaa")).toBe(extractPlatformNamespace("indeed:bbb"));
+    expect(extractPlatformNamespace("indeed:aaa")).not.toBe(extractPlatformNamespace("linkedin:123456"));
   });
 });
