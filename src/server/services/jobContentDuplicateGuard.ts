@@ -15,25 +15,18 @@
 // table, an admin can re-activate it with one UPDATE if this was wrong.
 //
 // Precision comes from requiring ALL of:
-//   1. An exact match on the content identity key - normalized company +
-//      normalized title + location bucket (see jobContentIdentity.ts, which
-//      documents why the location belongs in the key and the live data that
-//      proved it).
-//   2. Exactly ONE existing distinct posting (by apply_link_fingerprint)
-//      under that identity. Two or more means several real requisitions share
-//      one company+title+city and nothing in the content can say which this
-//      duplicates, so the guard refuses to act.
-//   3. The candidate and the match are NOT on the same platform. Two ids on
-//      one platform is that platform asserting they are different postings,
-//      and that assertion is never overridden here.
+//   1. Exact match on normalized company + normalized title.
+//   2. Exactly ONE other existing distinct posting (by apply_link_fingerprint)
+//      shares that identity within the lookback window - two or more means
+//      this employer demonstrably reuses the title across real distinct
+//      requisitions (confirmed in production: Amazon, ABB - see module doc
+//      in jobContentIdentity.ts) and this guard backs off entirely rather
+//      than guess which one, if any, the new posting duplicates.
+//   3. The two postings' locations are not an obvious mismatch (see
+//      areLocationsCompatible - biased toward "compatible" on purpose).
 
 import { query, execute } from "@/server/db/neon";
-import {
-  computeContentIdentityKey,
-  computeTitleLocationKey,
-  companyNameAppearsInText,
-} from "@/lib/jobContentIdentity";
-import { extractPlatformNamespace } from "@/lib/jobUrlFingerprint";
+import { computeContentIdentityKey, areLocationsCompatible } from "@/lib/jobContentIdentity";
 
 /**
  * Records a detected cross-platform duplicate pair in `job_duplicates` - a
@@ -92,80 +85,17 @@ export type ContentDuplicateCheckResult =
   | { isContentDuplicate: false; contentIdentityKey: string | null }
   | { isContentDuplicate: true; contentIdentityKey: string; existing: ContentDuplicateMatch };
 
-export interface ContentDuplicateCandidate {
+export async function checkContentDuplicate(candidate: {
   title?: string | null;
   company?: string | null;
   location?: string | null;
-  /** The posting's url - lets a site name masquerading as the employer be rejected. */
-  url?: string | null;
-  /** The posting's description, used only to corroborate a fallback-path match. */
-  descriptionText?: string | null;
-  /**
-   * The candidate's own apply-link fingerprint. Used only to establish which
-   * PLATFORM it came from - see resolveMatch for why a same-platform match is
-   * always refused.
-   */
-  fingerprint?: string | null;
-}
+}): Promise<ContentDuplicateCheckResult> {
+  const contentIdentityKey = computeContentIdentityKey({ title: candidate.title, company: candidate.company });
+  if (!contentIdentityKey) return { isContentDuplicate: false, contentIdentityKey: null };
 
-/**
- * Decides whether a candidate matches exactly one existing posting under the
- * same content identity, applying the two precision rules that cannot be
- * expressed in the identity key itself.
- */
-function resolveMatch(
-  candidate: ContentDuplicateCandidate,
-  contentIdentityKey: string,
-  rows: (ContentDuplicateMatch & { apply_link_fingerprint: string })[]
-): ContentDuplicateCheckResult {
-  // Collapse to DISTINCT existing postings. Several rows can share one
-  // fingerprint (the same posting captured twice); that is one posting.
-  const distinctByFingerprint = new Map<string, ContentDuplicateMatch & { apply_link_fingerprint: string }>();
-  for (const row of rows) {
-    if (!distinctByFingerprint.has(row.apply_link_fingerprint)) distinctByFingerprint.set(row.apply_link_fingerprint, row);
-  }
-  const distinctPostings = [...distinctByFingerprint.values()];
-
-  // RULE 1 - exactly one candidate to match, or refuse.
-  //   0  -> nothing to match yet.
-  //   2+ -> several distinct requisitions share this company+title+city (real:
-  //         3 ABB "Senior Field Service Technician" reqs in Bland, VA). Nothing
-  //         in the content can say which one, if any, this posting duplicates,
-  //         so the only correct action is none.
-  if (distinctPostings.length !== 1) return { isContentDuplicate: false, contentIdentityKey };
-
-  const only = distinctPostings[0];
-
-  // RULE 2 - never contradict the platform. If the existing posting and this
-  // candidate come from the SAME platform yet carry different fingerprints,
-  // then that platform has issued two different job ids for them, which is the
-  // platform itself asserting they are two different postings. That assertion
-  // is authoritative and a content match must not override it. Real example
-  // this rule rejects: two Indeed postings for "Information Technology Support
-  // Technician" @ Prairieland FS with different jk values.
-  const candidateNamespace = extractPlatformNamespace(candidate.fingerprint);
-  const existingNamespace = extractPlatformNamespace(only.apply_link_fingerprint);
-  if (candidateNamespace && existingNamespace && candidateNamespace === existingNamespace) {
-    return { isContentDuplicate: false, contentIdentityKey };
-  }
-
-  return { isContentDuplicate: true, contentIdentityKey, existing: only };
-}
-
-export async function checkContentDuplicate(
-  candidate: ContentDuplicateCandidate
-): Promise<ContentDuplicateCheckResult> {
-  const contentIdentityKey = computeContentIdentityKey({
-    title: candidate.title,
-    company: candidate.company,
-    location: candidate.location,
-    url: candidate.url,
-  });
-  if (!contentIdentityKey) return checkTitleLocationFallback(candidate);
-
-  // Only rows that are themselves independently identifiable (have their own
-  // apply-link fingerprint) count toward the group - otherwise two rows with
-  // no URL at all would each look like "a distinct posting" purely for
+  // Only rows that are themselves independently identifiable (have their
+  // own apply-link fingerprint) count toward the group - otherwise two rows
+  // with no URL at all would each look like "a distinct posting" purely for
   // lacking one.
   const rows = await query<ContentDuplicateMatch & { apply_link_fingerprint: string }>(
     `SELECT id, title, company, location, apply_url, source_url, source, created_at, apply_link_fingerprint
@@ -177,51 +107,24 @@ export async function checkContentDuplicate(
     [contentIdentityKey, CONTENT_DUPLICATE_CHECK_WINDOW_DAYS]
   );
 
-  return resolveMatch(candidate, contentIdentityKey, rows);
-}
+  const distinctByFingerprint = new Map<string, ContentDuplicateMatch>();
+  for (const row of rows) {
+    if (!distinctByFingerprint.has(row.apply_link_fingerprint)) distinctByFingerprint.set(row.apply_link_fingerprint, row);
+  }
+  const distinctPostings = [...distinctByFingerprint.values()];
 
-/**
- * Fallback path for captures whose employer name is unusable - absent, or the
- * scraping site's own name (see isSiteNameNotEmployer). Matches on title +
- * location bucket, then demands independent corroboration before believing it:
- * the matched posting's employer name must literally appear in THIS posting's
- * description text.
- *
- * That corroboration is what keeps the weaker key precise. The real case it
- * resolves: a GuidePoint Security posting captured from Indeed arrives with
- * company "Indeed.com", but its description opens "GuidePoint Security provides
- * trusted cybersecurity expertise..." - so the LinkedIn row's employer name is
- * right there in the text, and the two are provably the same posting. Two
- * genuinely different employers hiring the same title in the same city do not
- * name each other in their descriptions, so they stay separate.
- */
-async function checkTitleLocationFallback(
-  candidate: ContentDuplicateCandidate
-): Promise<ContentDuplicateCheckResult> {
-  const titleLocationKey = computeTitleLocationKey({ title: candidate.title, location: candidate.location });
-  if (!titleLocationKey || !candidate.descriptionText) {
-    return { isContentDuplicate: false, contentIdentityKey: null };
+  if (distinctPostings.length !== 1) {
+    // 0 -> nothing to match yet. 2+ -> this title+company is reused across
+    // genuinely different requisitions; never guess which one to merge into.
+    return { isContentDuplicate: false, contentIdentityKey };
   }
 
-  const rows = await query<ContentDuplicateMatch & { apply_link_fingerprint: string }>(
-    `SELECT id, title, company, location, apply_url, source_url, source, created_at, apply_link_fingerprint
-     FROM jobs
-     WHERE title_location_key = $1
-       AND apply_link_fingerprint IS NOT NULL
-       AND created_at >= NOW() - make_interval(days => $2)
-     ORDER BY created_at ASC`,
-    [titleLocationKey, CONTENT_DUPLICATE_CHECK_WINDOW_DAYS]
-  );
+  const only = distinctPostings[0];
+  if (!areLocationsCompatible(candidate.location, only.location)) {
+    return { isContentDuplicate: false, contentIdentityKey };
+  }
 
-  // Only postings whose OWN employer name is trustworthy can corroborate, and
-  // that name has to appear in this posting's description.
-  const corroborated = rows.filter((row) => companyNameAppearsInText(row.company, candidate.descriptionText));
-  const outcome = resolveMatch(candidate, titleLocationKey, corroborated);
-  // The fallback never claims the primary identity key; that column stays null
-  // for this row precisely because its company is unusable.
-  return outcome.isContentDuplicate
-    ? { isContentDuplicate: true, contentIdentityKey: outcome.contentIdentityKey, existing: outcome.existing }
-    : { isContentDuplicate: false, contentIdentityKey: null };
+  return { isContentDuplicate: true, contentIdentityKey, existing: only };
 }
 
 /**
@@ -232,14 +135,12 @@ async function checkTitleLocationFallback(
  * postings already committed to the table.
  */
 export async function checkContentDuplicatesBatch(
-  candidates: ContentDuplicateCandidate[]
+  candidates: { title?: string | null; company?: string | null; location?: string | null }[]
 ): Promise<ContentDuplicateCheckResult[]> {
-  const keys = candidates.map((c) =>
-    computeContentIdentityKey({ title: c.title, company: c.company, location: c.location })
-  );
+  const keys = candidates.map((c) => computeContentIdentityKey({ title: c.title, company: c.company }));
   const uniqueKeys = [...new Set(keys.filter((k): k is string => k !== null))];
 
-  const byKey = new Map<string, (ContentDuplicateMatch & { apply_link_fingerprint: string })[]>();
+  const byKey = new Map<string, Map<string, ContentDuplicateMatch>>();
   if (uniqueKeys.length > 0) {
     const rows = await query<ContentDuplicateMatch & { apply_link_fingerprint: string; content_identity_key: string }>(
       `SELECT id, title, company, location, apply_url, source_url, source, created_at, apply_link_fingerprint, content_identity_key
@@ -251,17 +152,23 @@ export async function checkContentDuplicatesBatch(
       [uniqueKeys, CONTENT_DUPLICATE_CHECK_WINDOW_DAYS]
     );
     for (const row of rows) {
-      if (!byKey.has(row.content_identity_key)) byKey.set(row.content_identity_key, []);
-      byKey.get(row.content_identity_key)!.push(row);
+      if (!byKey.has(row.content_identity_key)) byKey.set(row.content_identity_key, new Map());
+      const group = byKey.get(row.content_identity_key)!;
+      if (!group.has(row.apply_link_fingerprint)) group.set(row.apply_link_fingerprint, row);
     }
   }
 
-  // Same decision function as the single-row path, so the two can never drift
-  // apart on which matches are considered safe.
   return candidates.map((candidate, i) => {
     const contentIdentityKey = keys[i];
     if (!contentIdentityKey) return { isContentDuplicate: false, contentIdentityKey: null };
-    return resolveMatch(candidate, contentIdentityKey, byKey.get(contentIdentityKey) ?? []);
+
+    const distinctPostings = [...(byKey.get(contentIdentityKey)?.values() ?? [])];
+    if (distinctPostings.length !== 1) return { isContentDuplicate: false, contentIdentityKey };
+
+    const only = distinctPostings[0];
+    if (!areLocationsCompatible(candidate.location, only.location)) {
+      return { isContentDuplicate: false, contentIdentityKey };
+    }
+    return { isContentDuplicate: true, contentIdentityKey, existing: only };
   });
 }
-

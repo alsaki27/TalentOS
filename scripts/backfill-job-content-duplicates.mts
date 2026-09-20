@@ -41,13 +41,7 @@
 import { Client } from "@neondatabase/serverless";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import {
-  computeContentIdentityKey,
-  computeTitleLocationKey,
-  companyNameAppearsInText,
-  isSiteNameNotEmployer,
-} from "../src/lib/jobContentIdentity";
-import { extractPlatformNamespace } from "../src/lib/jobUrlFingerprint";
+import { computeContentIdentityKey, areLocationsCompatible } from "../src/lib/jobContentIdentity";
 import {
   CONTENT_DUPLICATE_CHECK_WINDOW_DAYS,
   CONTENT_IDENTITY_MATCH_SCORE,
@@ -76,12 +70,8 @@ interface JobRow {
   title: string | null;
   company: string | null;
   location: string | null;
-  apply_url: string | null;
-  source_url: string | null;
   apply_link_fingerprint: string | null;
   content_identity_key: string | null;
-  title_location_key: string | null;
-  description_text: string | null;
   source: string | null;
   created_at: string;
 }
@@ -96,25 +86,19 @@ async function main() {
   await client.connect();
 
   const colCheck = await client.query(
-    `SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND column_name = 'title_location_key'`
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'jobs' AND column_name = 'content_identity_key'`
   );
   const hasColumn = colCheck.rows.length > 0;
   if (!hasColumn) {
-    console.log("NOTE: migrations 099/101 (content_identity_key, title_location_key) have not run against this database yet.");
+    console.log("NOTE: migration 099 (content_identity_key/content_duplicate_of columns) has not run against this database yet.");
     console.log("This dry run still works (it computes everything in memory) but --apply cannot run until that migration deploys.\n");
   }
 
-  // --undo reverses every hide this system has made, using content_duplicate_of
-  // as the record of what it touched. It leaves the identity columns alone
-  // (harmless lookup keys) and DELETES the review-queue rows rather than
-  // marking them resolved.
-  //
-  // Deleting is deliberate: job_duplicates holds nothing but this detector's
-  // own findings, regenerable at any time by re-running detection. Marking them
-  // resolved instead was actively wrong - `resolved` means "a human dealt with
-  // this", and the re-detect insert is ON CONFLICT DO NOTHING, so a withdrawn
-  // finding stayed in the table as resolved and could never be re-raised even
-  // when it was still true.
+  // --undo reverses every hide this script has ever made, using
+  // content_duplicate_of as the record of what it touched. It deliberately
+  // does NOT clear content_identity_key (harmless lookup key) and does not
+  // delete the review-queue rows - it marks them resolved instead, so the
+  // history of "this was flagged and then un-flagged" survives.
   if (undo) {
     if (!hasColumn) {
       console.error("Nothing to undo: migration 099 has not run, so no hide could have been recorded.");
@@ -134,15 +118,14 @@ async function main() {
       `UPDATE jobs SET is_active = true, content_duplicate_of = NULL, content_duplicate_reason = NULL
        WHERE content_duplicate_of IS NOT NULL RETURNING id`
     );
-    const dropped = await client.query(`DELETE FROM job_duplicates RETURNING id`);
-    console.log(`Restored ${restored.rowCount} row(s) to is_active = true and cleared ${dropped.rowCount} review-queue row(s).`);
+    await client.query(`UPDATE job_duplicates SET resolved = true WHERE resolved = false`);
+    console.log(`Restored ${restored.rowCount} row(s) to is_active = true and marked the review queue resolved.`);
     await client.end();
     return;
   }
 
   const { rows } = await client.query<JobRow>(
-    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint, description_text,
-            ${hasColumn ? "content_identity_key, title_location_key" : "NULL AS content_identity_key, NULL AS title_location_key"}, source, created_at
+    `SELECT id, title, company, location, apply_link_fingerprint, ${hasColumn ? "content_identity_key" : "NULL AS content_identity_key"}, source, created_at
      FROM jobs
      WHERE apply_link_fingerprint IS NOT NULL
        AND created_at >= NOW() - make_interval(days => $1)
@@ -152,39 +135,22 @@ async function main() {
   console.log(`Loaded ${rows.length} fingerprinted job rows from the last ${CONTENT_DUPLICATE_CHECK_WINDOW_DAYS} days (the same rolling window the live guard itself queries against - a row older than this can never be matched by a future capture either way).`);
 
   if (apply && !hasColumn) {
-    console.error("Refusing to --apply: migration 101 has not run yet, so title_location_key does not exist. Deploy the migrations first.");
+    console.error("Refusing to --apply: migration 099 has not run yet, so content_identity_key/content_duplicate_of columns don't exist. Deploy the migration first.");
     await client.end();
     process.exit(1);
   }
 
-  // Both identity columns are recomputed. content_identity_key is null for a
-  // row whose company is unusable (the scraping site's own name) - such a row
-  // is found through title_location_key instead, which is why both are stamped.
-  const keyUpdates: { id: string; key: string | null; tlKey: string | null }[] = [];
+  const keyUpdates: { id: string; key: string }[] = [];
   const byKey = new Map<string, JobRow[]>();
-  const byTitleLocation = new Map<string, JobRow[]>();
-  const unusableCompanyRows: JobRow[] = [];
   for (const row of rows) {
-    const url = row.apply_url ?? row.source_url ?? null;
-    const key = computeContentIdentityKey({ title: row.title, company: row.company, location: row.location, url });
-    const tlKey = computeTitleLocationKey({ title: row.title, location: row.location });
-    if (row.content_identity_key !== key || row.title_location_key !== tlKey) {
-      keyUpdates.push({ id: row.id, key, tlKey });
-    }
-    if (tlKey) {
-      if (!byTitleLocation.has(tlKey)) byTitleLocation.set(tlKey, []);
-      byTitleLocation.get(tlKey)!.push(row);
-    }
-    if (!key) {
-      // No usable employer name - resolvable only through the fallback path.
-      if (tlKey) unusableCompanyRows.push(row);
-      continue;
-    }
+    const key = computeContentIdentityKey({ title: row.title, company: row.company });
+    if (!key) continue;
+    if (row.content_identity_key !== key) keyUpdates.push({ id: row.id, key });
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push(row);
   }
 
-  console.log(`\nidentity columns: ${keyUpdates.length} row(s) need updating out of ${rows.length}.`);
+  console.log(`\ncontent_identity_key: ${keyUpdates.length} row(s) need it set/corrected out of ${rows.length}.`);
 
   // Distinct-posting groups (by fingerprint, oldest first - the query's
   // ORDER BY guarantees this) whose FINAL size is exactly 2.
@@ -197,55 +163,14 @@ async function main() {
     .filter((g) => g.distinct.length === 2);
 
   const dedupeUpdates: { id: string; existing: JobRow }[] = [];
-  const skippedSamePlatform: { a: JobRow; b: JobRow }[] = [];
+  const skippedIncompatibleLocation: { key: string; a: JobRow; b: JobRow }[] = [];
   for (const g of pairGroups) {
     const [original, newer] = g.distinct; // already oldest-first
-    // Mirrors the live guard's RULE 2: two different ids on ONE platform is
-    // that platform asserting the postings are different. Never override it.
-    const nsA = extractPlatformNamespace(original.apply_link_fingerprint);
-    const nsB = extractPlatformNamespace(newer.apply_link_fingerprint);
-    if (nsA && nsB && nsA === nsB) {
-      skippedSamePlatform.push({ a: original, b: newer });
-      continue;
+    if (areLocationsCompatible(original.location, newer.location)) {
+      dedupeUpdates.push({ id: newer.id, existing: original });
+    } else {
+      skippedIncompatibleLocation.push({ key: g.key, a: original, b: newer });
     }
-    dedupeUpdates.push({ id: newer.id, existing: original });
-  }
-
-  // ── Fallback pairs: rows whose company is the scraping site's own name ──
-  // Same rules the live guard applies on this path: exactly one corroborating
-  // counterpart under the title+location key, on a different platform, whose
-  // employer name actually appears in this row's description text.
-  const fallbackUpdates: { id: string; existing: JobRow }[] = [];
-  const fallbackSkipped: { row: JobRow; reason: string }[] = [];
-  for (const row of unusableCompanyRows) {
-    if (!row.description_text) { fallbackSkipped.push({ row, reason: "no description to corroborate with" }); continue; }
-    const siblings = (byTitleLocation.get(row.title_location_key!) ?? []).filter(
-      (other) =>
-        other.id !== row.id &&
-        // Only a row with a TRUSTED employer name can corroborate.
-        !isSiteNameNotEmployer(other.company, other.apply_url ?? other.source_url) &&
-        companyNameAppearsInText(other.company, row.description_text)
-    );
-    const distinct = new Map<string, JobRow>();
-    for (const sib of siblings) if (!distinct.has(sib.apply_link_fingerprint!)) distinct.set(sib.apply_link_fingerprint!, sib);
-    if (distinct.size !== 1) { fallbackSkipped.push({ row, reason: `${distinct.size} corroborating counterparts, need exactly 1` }); continue; }
-    const counterpart = [...distinct.values()][0];
-    const nsA = extractPlatformNamespace(counterpart.apply_link_fingerprint);
-    const nsB = extractPlatformNamespace(row.apply_link_fingerprint);
-    if (nsA && nsB && nsA === nsB) { fallbackSkipped.push({ row, reason: "same platform" }); continue; }
-    // The row with the unusable company is always the one hidden: the row with
-    // a real employer name is the better record to keep.
-    fallbackUpdates.push({ id: row.id, existing: counterpart });
-  }
-  dedupeUpdates.push(...fallbackUpdates);
-
-  console.log(`
-Fallback pairs (company was the site name, employer confirmed from the description): ${fallbackUpdates.length}`);
-  for (const u of fallbackUpdates.slice(0, 10)) {
-    console.log(`  "${u.existing.title}" @ ${u.existing.company} — job ${u.id} would be hidden as a duplicate of ${u.existing.id}`);
-  }
-  if (fallbackSkipped.length) {
-    console.log(`  (${fallbackSkipped.length} site-name-company row(s) left alone: ${[...new Set(fallbackSkipped.map((f) => f.reason))].join("; ")})`);
   }
 
   const templaterGroupSizes = [...byKey.entries()]
@@ -256,18 +181,18 @@ Fallback pairs (company was the site name, employer confirmed from the descripti
     .filter((g) => g.distinctCount >= 3)
     .sort((a, b) => b.distinctCount - a.distinctCount);
 
-  console.log(`\nConfirmed cross-platform duplicate PAIRS (identical company+title+location, exactly 2 distinct postings, on different platforms): ${dedupeUpdates.length}`);
+  console.log(`\nConfirmed cross-platform duplicate PAIRS (exactly 2 distinct postings, compatible locations): ${dedupeUpdates.length}`);
   for (const u of dedupeUpdates.slice(0, 15)) {
     console.log(`  "${u.existing.title}" @ ${u.existing.company} — job ${u.id} would be hidden as a duplicate of ${u.existing.id}`);
   }
   if (dedupeUpdates.length > 15) console.log(`  ... and ${dedupeUpdates.length - 15} more`);
 
-  console.log(`\nSkipped - both sides on the SAME platform, so that platform says they are different postings: ${skippedSamePlatform.length}`);
-  for (const sp of skippedSamePlatform.slice(0, 5)) {
-    console.log(`  "${sp.a.title}" @ ${sp.a.company}: ${sp.a.apply_link_fingerprint} vs ${sp.b.apply_link_fingerprint}`);
+  console.log(`\nSkipped (2 distinct postings, but locations look like a genuine mismatch): ${skippedIncompatibleLocation.length}`);
+  for (const s of skippedIncompatibleLocation.slice(0, 5)) {
+    console.log(`  "${s.a.title}" @ ${s.a.company}: "${s.a.location}" vs "${s.b.location}"`);
   }
 
-  console.log(`\nGroups left untouched on purpose (3+ distinct real postings under one company+title+location): ${templaterGroupSizes.length}`);
+  console.log(`\nTemplater groups left untouched on purpose (3+ distinct real postings under one title+company): ${templaterGroupSizes.length}`);
   for (const t of templaterGroupSizes.slice(0, 10)) {
     console.log(`  ${t.distinctCount} distinct postings  "${t.sample.title}" @ ${t.sample.company}`);
   }
@@ -279,14 +204,14 @@ Fallback pairs (company was the site name, employer confirmed from the descripti
     return;
   }
 
-  console.log("\nWriting identity columns...");
+  console.log("\nWriting content_identity_key...");
   for (let i = 0; i < keyUpdates.length; i += BATCH_SIZE) {
     const batch = keyUpdates.slice(i, i + BATCH_SIZE);
     await client.query(
-      `UPDATE jobs AS j SET content_identity_key = v.key, title_location_key = v.tl_key
-       FROM (SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[]) AS t(id, key, tl_key)) AS v
+      `UPDATE jobs AS j SET content_identity_key = v.key
+       FROM (SELECT * FROM UNNEST($1::uuid[], $2::text[]) AS t(id, key)) AS v
        WHERE j.id = v.id`,
-      [batch.map((u) => u.id), batch.map((u) => u.key), batch.map((u) => u.tlKey)]
+      [batch.map((u) => u.id), batch.map((u) => u.key)]
     );
     console.log(`  updated ${Math.min(i + BATCH_SIZE, keyUpdates.length)}/${keyUpdates.length}`);
   }

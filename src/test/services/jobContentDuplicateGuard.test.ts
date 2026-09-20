@@ -27,7 +27,6 @@ const linkedinRow = (overrides: Partial<Record<string, unknown>> = {}) => ({
   content_identity_key: computeContentIdentityKey({
     title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
     company: "GuidePoint Security",
-    location: "United States (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
   }),
   created_at: "2026-09-10T00:00:00Z",
   apply_link_fingerprint: "linkedin:4430748287",
@@ -105,35 +104,14 @@ describe("checkContentDuplicate — real false-positive-risk data must NOT be fl
     expect(result.isContentDuplicate).toBe(false);
   });
 
-  it("refuses a match when both sides are on the SAME platform - that platform's two ids are its own assertion that they differ", async () => {
-    // Real case this protects: two Indeed postings for "Information Technology
-    // Support Technician" @ Prairieland FS with different jk values. Location
-    // mismatches are handled by the identity key itself (the query filters on
-    // it), so the guard's remaining job is exactly this rule.
-    (query as any).mockResolvedValue([
-      linkedinRow({ id: "indeed-existing", apply_link_fingerprint: "indeed:aaaaaaaaaaaaaaaa" }),
-    ]);
+  it("does not flag a same-title/company pair whose locations are an unambiguous mismatch", async () => {
+    (query as any).mockResolvedValue([linkedinRow({ location: "Austin, TX" })]);
     const result = await checkContentDuplicate({
       title: linkedinRow().title,
       company: "GuidePoint Security",
-      location: "Remote",
-      fingerprint: "indeed:bbbbbbbbbbbbbbbb",
+      location: "New York, NY",
     });
     expect(result.isContentDuplicate).toBe(false);
-  });
-
-  it("still flags a match when the two sides are on DIFFERENT platforms", async () => {
-    (query as any).mockResolvedValue([
-      linkedinRow({ id: "li-existing", apply_link_fingerprint: "linkedin:4430748287" }),
-    ]);
-    const result = await checkContentDuplicate({
-      title: linkedinRow().title,
-      company: "GuidePoint Security",
-      location: "Remote",
-      fingerprint: "indeed:8763525f8fdfc1b6",
-    });
-    expect(result.isContentDuplicate).toBe(true);
-    if (result.isContentDuplicate) expect(result.existing.id).toBe("li-existing");
   });
 
   it("returns not-a-duplicate without querying when title or company is missing", async () => {
@@ -159,70 +137,5 @@ describe("checkContentDuplicatesBatch", () => {
     expect(results[0].isContentDuplicate).toBe(true);
     expect(results[1].isContentDuplicate).toBe(false);
     expect(query).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ── The reported bug, at the guard level. The Indeed capture arrives with
-//    company "Indeed.com", so it has NO primary identity and must be resolved
-//    through the title+location fallback plus description corroboration.
-describe("checkContentDuplicate — fallback path for a site-name company", () => {
-  const CORRUPTED_INDEED = {
-    title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ or DC)",
-    company: "Indeed.com",
-    location: "GitLab Runners, Azure",
-    url: "https://www.indeed.com/viewjob?jk=8763525f8fdfc1b6",
-    fingerprint: "indeed:8763525f8fdfc1b6",
-    descriptionText:
-      "GuidePoint Security provides trusted cybersecurity expertise, solutions and services that help organizations make better decisions and minimize risk.",
-  };
-  const GOOD_LINKEDIN_ROW = {
-    id: "li-row",
-    title: "Application Security Engineer - Mid-Atlantic region (Remote in VA, MD, PA, NC, DE, NJ, or DC)",
-    company: "GuidePoint Security",
-    location: "",
-    apply_url: "https://www.linkedin.com/jobs/view/4430748287",
-    source_url: null,
-    source: "extension",
-    created_at: "2026-09-20T12:28:09Z",
-    apply_link_fingerprint: "linkedin:4430748287",
-  };
-
-  it("flags the corrupted Indeed capture as a duplicate of the good LinkedIn row", async () => {
-    (query as any).mockResolvedValue([GOOD_LINKEDIN_ROW]);
-    const result = await checkContentDuplicate(CORRUPTED_INDEED);
-    expect(result.isContentDuplicate).toBe(true);
-    if (result.isContentDuplicate) expect(result.existing.id).toBe("li-row");
-  });
-
-  it("refuses when the description does NOT name the matched employer - no corroboration, no match", async () => {
-    (query as any).mockResolvedValue([GOOD_LINKEDIN_ROW]);
-    const result = await checkContentDuplicate({
-      ...CORRUPTED_INDEED,
-      descriptionText: "An unrelated employer is hiring for a similar role.",
-    });
-    expect(result.isContentDuplicate).toBe(false);
-  });
-
-  it("refuses without a description at all, and does not even query", async () => {
-    const result = await checkContentDuplicate({ ...CORRUPTED_INDEED, descriptionText: null });
-    expect(result.isContentDuplicate).toBe(false);
-    expect(query).not.toHaveBeenCalled();
-  });
-
-  it("still applies the same-platform veto on the fallback path", async () => {
-    (query as any).mockResolvedValue([
-      { ...GOOD_LINKEDIN_ROW, id: "indeed-row", apply_link_fingerprint: "indeed:aaaaaaaaaaaaaaaa" },
-    ]);
-    const result = await checkContentDuplicate(CORRUPTED_INDEED);
-    expect(result.isContentDuplicate).toBe(false);
-  });
-
-  it("refuses when two corroborating postings share the title+location - cannot tell which", async () => {
-    (query as any).mockResolvedValue([
-      GOOD_LINKEDIN_ROW,
-      { ...GOOD_LINKEDIN_ROW, id: "li-row-2", apply_link_fingerprint: "linkedin:9999999999" },
-    ]);
-    const result = await checkContentDuplicate(CORRUPTED_INDEED);
-    expect(result.isContentDuplicate).toBe(false);
   });
 });

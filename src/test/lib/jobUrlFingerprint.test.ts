@@ -8,7 +8,6 @@ import { describe, it, expect } from "vitest";
 import {
   computeApplyLinkFingerprint,
   extractCanonicalJobKey,
-  extractPlatformNamespace,
   normalizeUrlFingerprint,
 } from "@/lib/jobUrlFingerprint";
 
@@ -157,48 +156,5 @@ describe("computeApplyLinkFingerprint", () => {
     const fp = computeApplyLinkFingerprint({ applyUrl: "https://careers.example.com/job/9876" });
     expect(fp).toBeTruthy();
     expect(fp).toContain("careers.example.com");
-  });
-});
-
-describe("extractPlatformNamespace", () => {
-  it("reads the platform off a canonical key", () => {
-    expect(extractPlatformNamespace("indeed:f2645064e02dfc3a")).toBe("indeed");
-    expect(extractPlatformNamespace("linkedin:4331177628")).toBe("linkedin");
-    expect(extractPlatformNamespace("greenhouse:2kvegas:7431835003")).toBe("greenhouse");
-    expect(extractPlatformNamespace("lever:cesiumastro:f4a34f38")).toBe("lever");
-  });
-
-  it("reduces a normalized-URL fingerprint to its brand label", () => {
-    expect(extractPlatformNamespace("dailyremote.com/remote-job/application-security-engineer-5163929")).toBe("dailyremote");
-    expect(extractPlatformNamespace("simplyhired.com/job/8fbv3te484jk")).toBe("simplyhired");
-  });
-
-  it("agrees across BOTH fingerprint forms of one platform - the real Bowman Consulting miss", () => {
-    // A LinkedIn job page yields a canonical key; a LinkedIn feed post yields a
-    // normalized-URL fingerprint. Both must read as "linkedin" or the
-    // same-platform veto cannot fire.
-    expect(extractPlatformNamespace("linkedin:4414040634")).toBe("linkedin");
-    expect(extractPlatformNamespace("linkedin.com/feed/update/urnliactivity7497664327231909888")).toBe("linkedin");
-    expect(extractPlatformNamespace("linkedin:4414040634"))
-      .toBe(extractPlatformNamespace("linkedin.com/feed/update/urnliactivity7497664327231909888"));
-  });
-
-  it("aligns an ATS host with its canonical platform token", () => {
-    expect(extractPlatformNamespace("job-boards.greenhouse.io/board/jobs/1")).toBe("greenhouse");
-    expect(extractPlatformNamespace("greenhouse:board:1")).toBe("greenhouse");
-  });
-
-  it("strips a port and uses the brand label for a deep ATS hostname", () => {
-    expect(extractPlatformNamespace("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443/job/1")).toBe("oraclecloud");
-  });
-
-  it("returns null for absent input", () => {
-    expect(extractPlatformNamespace(null)).toBeNull();
-    expect(extractPlatformNamespace("   ")).toBeNull();
-  });
-
-  it("agrees for two ids on one platform and differs across platforms - the property the guard relies on", () => {
-    expect(extractPlatformNamespace("indeed:aaa")).toBe(extractPlatformNamespace("indeed:bbb"));
-    expect(extractPlatformNamespace("indeed:aaa")).not.toBe(extractPlatformNamespace("linkedin:123456"));
   });
 });
