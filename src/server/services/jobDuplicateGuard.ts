@@ -19,11 +19,51 @@
 const DUPLICATE_CHECK_WINDOW_DAYS = 15;
 
 import { query, queryOne, execute } from "@/server/db/neon";
-import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
+import { computeApplyLinkFingerprint, extractAllIdentities } from "@/lib/jobUrlFingerprint";
 
 export interface JobDuplicateCandidate {
   applyUrl?: string | null;
   sourceUrl?: string | null;
+  /**
+   * Any other URL the capture observed for this one posting - most importantly
+   * the employer's real ATS apply link, which is what lets two different
+   * aggregators be recognized as carrying the same requisition.
+   */
+  identityUrls?: (string | null | undefined)[];
+}
+
+/** Every URL that could identify this candidate, deduped. */
+function candidateUrls(candidate: JobDuplicateCandidate): (string | null | undefined)[] {
+  return [candidate.applyUrl, candidate.sourceUrl, ...(candidate.identityUrls ?? [])];
+}
+
+/**
+ * TIER 2 - match on a shared per-posting identity, in particular an employer ATS
+ * requisition id reached from two different aggregators.
+ *
+ * This is exact, not heuristic: two URLs carrying the same Greenhouse/Lever/
+ * Workday requisition are the same posting by definition, which is why a match
+ * here is treated with the same certainty as the apply-link fingerprint and
+ * blocks the insert. Only per-posting ids participate (see extractAllIdentities -
+ * normalized whole-URL fingerprints are excluded precisely because several jobs
+ * captured from one search page would share one).
+ */
+async function checkIdentityOverlap(
+  candidate: JobDuplicateCandidate
+): Promise<JobDuplicateMatch | null> {
+  const identities = extractAllIdentities(candidateUrls(candidate)).map((i) => i.identity);
+  if (identities.length === 0) return null;
+
+  return queryOne<JobDuplicateMatch>(
+    `SELECT ${MATCH_COLUMNS} FROM jobs j
+     WHERE EXISTS (
+       SELECT 1 FROM job_identities ji
+       WHERE ji.job_id = j.id AND ji.identity = ANY($1)
+     )
+     AND j.created_at >= NOW() - make_interval(days => $2)
+     ORDER BY j.created_at ASC LIMIT 1`,
+    [identities, DUPLICATE_CHECK_WINDOW_DAYS]
+  );
 }
 
 export interface JobDuplicateMatch {
@@ -53,14 +93,21 @@ const MATCH_COLUMNS = "id, title, company, location, apply_url, source_url, sour
  */
 export async function checkJobDuplicate(candidate: JobDuplicateCandidate): Promise<DuplicateCheckResult> {
   const fingerprint = computeApplyLinkFingerprint({ applyUrl: candidate.applyUrl, sourceUrl: candidate.sourceUrl });
-  if (!fingerprint) return { isDuplicate: false, fingerprint: null };
 
-  const existing = await queryOne<JobDuplicateMatch>(
-    `SELECT ${MATCH_COLUMNS} FROM jobs
-     WHERE apply_link_fingerprint = $1 AND created_at >= NOW() - make_interval(days => $2)
-     ORDER BY created_at ASC LIMIT 1`,
-    [fingerprint, DUPLICATE_CHECK_WINDOW_DAYS]
-  );
+  const existing =
+    (fingerprint
+      ? await queryOne<JobDuplicateMatch>(
+          `SELECT ${MATCH_COLUMNS} FROM jobs
+           WHERE apply_link_fingerprint = $1 AND created_at >= NOW() - make_interval(days => $2)
+           ORDER BY created_at ASC LIMIT 1`,
+          [fingerprint, DUPLICATE_CHECK_WINDOW_DAYS]
+        )
+      : null) ??
+    // Falls through to the identity graph even when the fingerprint matched
+    // nothing - the same posting reached via a different aggregator has a
+    // different fingerprint but can still share a requisition id.
+    (await checkIdentityOverlap(candidate));
+
   if (!existing) return { isDuplicate: false, fingerprint };
 
   // A duplicate re-surfacing (e.g. a scraper re-crawling the same live
@@ -69,7 +116,13 @@ export async function checkJobDuplicate(candidate: JobDuplicateCandidate): Promi
   // (updateJobsLastSeenAtByUrls) already provided before consolidation.
   await execute("UPDATE jobs SET last_seen_at = NOW() WHERE id = $1", [existing.id]).catch(() => {});
 
-  return { isDuplicate: true, fingerprint, existing };
+  // A fingerprint is always present on a real match except when the row was
+  // recognized purely by identity overlap; fall back to the strongest identity so
+  // the caller still has a stable string to report and store.
+  const matchedFingerprint =
+    fingerprint ?? extractAllIdentities(candidateUrls(candidate))[0]?.identity ?? null;
+  if (!matchedFingerprint) return { isDuplicate: false, fingerprint };
+  return { isDuplicate: true, fingerprint: matchedFingerprint, existing };
 }
 
 /**
@@ -109,5 +162,31 @@ export async function checkJobDuplicatesBatch(
     return existing
       ? { isDuplicate: true, fingerprint, existing }
       : { isDuplicate: false, fingerprint };
+  });
+}
+
+/**
+ * Persists every identity a stored job can be recognized by. Called after the
+ * insert, since the rows reference the new job's id.
+ *
+ * Best-effort, for the same reason recordDuplicateForReview is: the job row is
+ * already committed, and throwing here would turn a degraded-but-correct state
+ * (this job simply won't be found by identity overlap) into a failed insert that
+ * loses a real job. Failures are logged so they are not silent.
+ */
+export async function recordJobIdentities(
+  jobId: string,
+  urls: (string | null | undefined)[]
+): Promise<void> {
+  const identities = extractAllIdentities(urls);
+  if (identities.length === 0) return;
+  await execute(
+    `INSERT INTO job_identities (job_id, identity, kind)
+     SELECT $1, t.identity, t.kind
+     FROM UNNEST($2::text[], $3::text[]) AS t(identity, kind)
+     ON CONFLICT (job_id, identity) DO NOTHING`,
+    [jobId, identities.map((i) => i.identity), identities.map((i) => i.kind)]
+  ).catch((err) => {
+    console.error("[jobDuplicateGuard] could not record job identities:", (err as Error).message ?? String(err));
   });
 }

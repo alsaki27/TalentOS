@@ -16,6 +16,7 @@ vi.mock("@/server/db/neon", () => ({
 vi.mock("@/server/services/jobDuplicateGuard", () => ({
   checkJobDuplicate: vi.fn(),
   checkJobDuplicatesBatch: vi.fn(),
+  recordJobIdentities: vi.fn(),
 }));
 
 vi.mock("@/server/services/jobContentDuplicateGuard", () => ({
@@ -23,12 +24,13 @@ vi.mock("@/server/services/jobContentDuplicateGuard", () => ({
   checkContentDuplicatesBatch: vi.fn(),
   recordDuplicateForReview: vi.fn(),
   CONTENT_IDENTITY_MATCH_SCORE: 0.95,
+  TITLE_LOCATION_MATCH_SCORE: 0.85,
 }));
 
 import { query, queryOne } from "@/server/db/neon";
 import { checkJobDuplicate, checkJobDuplicatesBatch } from "@/server/services/jobDuplicateGuard";
 import { checkContentDuplicate, checkContentDuplicatesBatch, recordDuplicateForReview } from "@/server/services/jobContentDuplicateGuard";
-import { createJob, createJobs } from "@/server/repositories/jobsRepository";
+import { createJob, createJobs, createJobFromParsedJD } from "@/server/repositories/jobsRepository";
 
 const ORIGINAL = {
   id: "job-linkedin-1",
@@ -54,8 +56,11 @@ describe("createJob — cross-platform content duplicate", () => {
   it("still INSERTS the row (never silently drops a real job) but marks it is_active=false with an audit trail", async () => {
     (checkContentDuplicate as any).mockResolvedValue({
       isContentDuplicate: true,
-      contentIdentityKey: "guidepoint security::application security engineer mid atlantic region remote in va md pa nc de nj or dc",
+      contentIdentityKey:
+        "guidepoint security::application security engineer mid atlantic region remote in va md pa nc de nj or dc::remote",
+      titleLocationKey: "application security engineer mid atlantic region remote in va md pa nc de nj or dc::remote",
       existing: ORIGINAL,
+      score: 0.95,
     });
     (queryOne as any).mockImplementation((sql: string, values: any[]) => {
       const cols = sql.match(/INSERT INTO jobs \(([^)]+)\)/)?.[1].split(", ") ?? [];
@@ -84,7 +89,7 @@ describe("createJob — cross-platform content duplicate", () => {
   });
 
   it("does not queue anything for review when the row was not stored as a duplicate", async () => {
-    (checkContentDuplicate as any).mockResolvedValue({ isContentDuplicate: false, contentIdentityKey: "some::key" });
+    (checkContentDuplicate as any).mockResolvedValue({ isContentDuplicate: false, contentIdentityKey: "a::b::c", titleLocationKey: "b::c" });
     (queryOne as any).mockResolvedValue({ id: "job-new", is_active: true, content_duplicate_of: null });
 
     await createJob({ title: "Brand New Role", company: "Some Co" });
@@ -93,7 +98,7 @@ describe("createJob — cross-platform content duplicate", () => {
   });
 
   it("leaves is_active untouched when no content duplicate is found", async () => {
-    (checkContentDuplicate as any).mockResolvedValue({ isContentDuplicate: false, contentIdentityKey: "some::key" });
+    (checkContentDuplicate as any).mockResolvedValue({ isContentDuplicate: false, contentIdentityKey: "a::b::c", titleLocationKey: "b::c" });
     (queryOne as any).mockImplementation((sql: string, values: any[]) => {
       const cols = sql.match(/INSERT INTO jobs \(([^)]+)\)/)?.[1].split(", ") ?? [];
       const row: Record<string, unknown> = {};
@@ -131,7 +136,13 @@ describe("createJobs — cross-platform content duplicate", () => {
       { isDuplicate: false, fingerprint: "indeed:8763525f8fdfc1b6" },
     ]);
     (checkContentDuplicatesBatch as any).mockResolvedValue([
-      { isContentDuplicate: true, contentIdentityKey: "guidepoint security::application security engineer", existing: ORIGINAL },
+      {
+        isContentDuplicate: true,
+        contentIdentityKey: "guidepoint security::application security engineer::remote",
+        titleLocationKey: "application security engineer::remote",
+        existing: ORIGINAL,
+        score: 0.95,
+      },
     ]);
     (query as any).mockImplementation((sql: string) => {
       if (sql.includes("information_schema.columns")) return Promise.resolve([]);
@@ -148,5 +159,59 @@ describe("createJobs — cross-platform content duplicate", () => {
     expect(result.inserted).toHaveLength(1);
     expect(result.inserted[0].is_active).toBe(false);
     expect(result.inserted[0].content_duplicate_of).toBe("job-linkedin-1");
+  });
+});
+
+describe("createJobFromParsedJD — no longer bypasses the content layer", () => {
+  it("runs the content check and stamps both identity keys, like every other creator", async () => {
+    // It used to carry its own INSERT with an explicit column list that omitted
+    // content_identity_key, and never called the content guard at all - so every
+    // pasted-JD job was permanently invisible to cross-platform matching, both as
+    // a candidate and as something a later capture could match against.
+    (checkContentDuplicate as any).mockResolvedValue({
+      isContentDuplicate: false,
+      contentIdentityKey: "acme::fiber engineer::austin",
+      titleLocationKey: "fiber engineer::austin",
+    });
+    let insertedCols: string[] = [];
+    (queryOne as any).mockImplementation((sql: string, values: any[]) => {
+      insertedCols = sql.match(/INSERT INTO jobs \(([^)]+)\)/)?.[1].split(", ") ?? [];
+      const row: Record<string, unknown> = {};
+      insertedCols.forEach((c, i) => (row[c] = values[i]));
+      return Promise.resolve({ id: "job-from-jd", ...row });
+    });
+
+    const outcome = await createJobFromParsedJD({
+      title: "Fiber Engineer",
+      company: "Acme",
+      location: "Austin, TX",
+      apply_url: "https://careers.acme.com/jobs/884213",
+    });
+
+    expect(checkContentDuplicate).toHaveBeenCalledTimes(1);
+    expect(insertedCols).toContain("content_identity_key");
+    expect(insertedCols).toContain("title_location_key");
+    expect(outcome.status).toBe("created");
+    if (outcome.status === "created") {
+      expect(outcome.job.content_identity_key).toBe("acme::fiber engineer::austin");
+      expect(outcome.job.title_location_key).toBe("fiber engineer::austin");
+    }
+  });
+
+  it("is blocked by the exact-identity layer just like createJob", async () => {
+    (checkJobDuplicate as any).mockResolvedValue({
+      isDuplicate: true,
+      fingerprint: "careers.acme.com:884213",
+      existing: ORIGINAL,
+    });
+
+    const outcome = await createJobFromParsedJD({
+      title: "Fiber Engineer",
+      company: "Acme",
+      apply_url: "https://careers.acme.com/jobs/884213",
+    });
+
+    expect(outcome.status).toBe("duplicate");
+    expect(queryOne).not.toHaveBeenCalled();
   });
 });

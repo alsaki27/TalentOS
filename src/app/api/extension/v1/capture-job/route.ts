@@ -17,7 +17,14 @@ export async function POST(request: NextRequest) {
     if (auth instanceof NextResponse) return auth;
     try {
       const body = await req.json();
-      const { title, applyUrl, jdText, company, location, sourceSite, salary, atsDetected, screenshotUrl } = body;
+      const {
+        title, applyUrl, jdText, company, location, salary, atsDetected, screenshotUrl,
+        // Previously destructured and then dropped on the floor. The extension has
+        // always sent these; consuming them is what lets the server tell a real
+        // employer from the site it was scraped off, and a real location from a
+        // fragment of the job description.
+        signals, isRemote, externalId, postedAt, employmentType, sourceUrl, identityUrls,
+      } = body;
 
       if (!title || !applyUrl || !jdText) {
         return extensionError("validation_error", "title, applyUrl, and jdText are required.", 400);
@@ -33,16 +40,35 @@ export async function POST(request: NextRequest) {
       // jobDuplicateGuard.ts) rather than a raw exact-string apply_url match
       // - the previous check missed the same posting reached via a link
       // that only differs by tracking params, case, or a trailing slash.
-      const outcome = await createJob({
-        title,
-        company: company ?? null,
-        location: location ?? null,
-        description_text: jdText,
-        apply_url: applyUrl,
-        source: "extension",
-        salary_range: salary ?? null,
-        notes: notes || null,
-      });
+      // Every URL this capture saw for the one posting. `identityUrls` is the
+      // employer's real ATS apply link when the page exposed one - that is the
+      // only signal that can prove two different aggregators are carrying the
+      // same requisition, so it is passed through to the identity graph.
+      const observedUrls: string[] = Array.isArray(identityUrls)
+        ? identityUrls.filter((u: unknown): u is string => typeof u === "string" && !!u.trim())
+        : [];
+
+      const outcome = await createJob(
+        {
+          title,
+          company: company ?? null,
+          location: location ?? null,
+          description_text: jdText,
+          apply_url: applyUrl,
+          source_url: typeof sourceUrl === "string" && sourceUrl.trim() ? sourceUrl : null,
+          source: "extension",
+          salary_range: salary ?? null,
+          employment_type: typeof employmentType === "string" ? employmentType : null,
+          posted_at: typeof postedAt === "string" && postedAt.trim() ? postedAt : null,
+          external_job_id: typeof externalId === "string" && externalId.trim() ? externalId : null,
+          notes: notes || null,
+        },
+        {
+          identityUrls: observedUrls,
+          signals: Array.isArray(signals) ? signals.filter((x: unknown) => typeof x === "string") : null,
+          isRemote: typeof isRemote === "boolean" ? isRemote : null,
+        }
+      );
 
       if (outcome.status === "duplicate") {
         return NextResponse.json({
@@ -61,4 +87,4 @@ export async function POST(request: NextRequest) {
 
 export async function OPTIONS(request: NextRequest) {
   return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
-}
+}

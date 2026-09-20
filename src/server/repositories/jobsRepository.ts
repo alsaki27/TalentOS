@@ -3,62 +3,143 @@
 
 import { query, queryOne, execute } from "@/server/db/neon";
 import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
-import { computeContentIdentityKey } from "@/lib/jobContentIdentity";
-import { checkJobDuplicate, checkJobDuplicatesBatch, type JobDuplicateMatch } from "@/server/services/jobDuplicateGuard";
+import { computeContentIdentityKey, computeTitleLocationKey } from "@/lib/jobContentIdentity";
+import {
+  checkJobDuplicate,
+  checkJobDuplicatesBatch,
+  recordJobIdentities,
+  type JobDuplicateMatch,
+} from "@/server/services/jobDuplicateGuard";
 import {
   checkContentDuplicate,
   checkContentDuplicatesBatch,
   recordDuplicateForReview,
-  CONTENT_IDENTITY_MATCH_SCORE,
+  type ContentDuplicateCandidate,
   type ContentDuplicateCheckResult,
 } from "@/server/services/jobContentDuplicateGuard";
 
-function describeContentDuplicateReason(existing: { id: string; source: string | null; created_at: string | null }): string {
+function describeContentDuplicateReason(
+  existing: { id: string; source: string | null; created_at: string | null },
+  basis: "company+title+location" | "title+location+description"
+): string {
   const seen = existing.created_at ? new Date(existing.created_at).toISOString().slice(0, 10) : "an earlier date";
-  return `Auto-hidden: same company+title as job ${existing.id}${existing.source ? ` (source: ${existing.source})` : ""}, first captured ${seen}. Review and re-activate if this is actually a distinct opening.`;
+  return `Auto-hidden: matched job ${existing.id}${existing.source ? ` (source: ${existing.source})` : ""} on ${basis}, first captured ${seen}. Review and re-activate if this is actually a distinct opening.`;
 }
 
 /**
- * Applies the cross-platform content-identity check to a row about to be
- * inserted, mutating it in place: always stamps content_identity_key, and
- * when the guard is confident enough, also sets is_active = false and
- * content_duplicate_of/content_duplicate_reason. Never blocks the insert -
- * see jobContentDuplicateGuard.ts for why a wrong content match must never
- * cost a real job its only row.
+ * Non-column metadata a capture can supply about how its fields were obtained.
+ * None of these are stored on `jobs`; they only inform identity resolution.
+ *
+ * `signals` and `isRemote` are produced by the browser extension today and were
+ * being discarded by the capture route - they are the difference between trusting
+ * a company value and correctly rejecting "Indeed.com" as an employer.
  */
-async function applyContentDuplicateCheck(row: Record<string, unknown>): Promise<void> {
-  const title = (row.title as string | null | undefined) ?? null;
-  const company = (row.company as string | null | undefined) ?? null;
-  const location = (row.location as string | null | undefined) ?? null;
-  const contentIdentityKey = computeContentIdentityKey({ title, company });
-  row.content_identity_key = contentIdentityKey;
-  if (!contentIdentityKey) return;
+export interface JobCaptureMeta {
+  /** Extra URLs observed for this one posting, e.g. the employer's ATS apply link. */
+  identityUrls?: (string | null | undefined)[];
+  /** Provenance of the extracted company ("og:site_name" / "title:last" are untrustworthy). */
+  signals?: string[] | null;
+  isRemote?: boolean | null;
+}
 
-  const check = await checkContentDuplicate({ title, company, location });
-  applyContentDuplicateResult(row, check);
+/**
+ * Reads every identity-relevant value off a row about to be inserted.
+ *
+ * Remoteness falls back to the existing `work_mode` column (added by migration
+ * 088, which already infers remote/hybrid/onsite for every creation path via a
+ * trigger) so non-extension sources get the same benefit without each one having
+ * to pass a flag.
+ */
+function identityInputs(row: Record<string, unknown>, meta?: JobCaptureMeta) {
+  const str = (v: unknown) => (v as string | null | undefined) ?? null;
+  const url = str(row.apply_url) ?? str(row.source_url);
+  return {
+    title: str(row.title),
+    company: str(row.company),
+    location: str(row.location),
+    url,
+    signals: meta?.signals ?? null,
+    isRemote: meta?.isRemote ?? (row.work_mode === "remote" ? true : null),
+    descriptionText: str(row.description_text) ?? str(row.raw_description),
+    urls: [str(row.apply_url), str(row.source_url), ...(meta?.identityUrls ?? [])],
+  };
+}
+
+/** The candidate shape the content guard expects, built from a pending row. */
+function contentCandidate(
+  row: Record<string, unknown>,
+  fingerprint: string | null,
+  meta?: JobCaptureMeta
+): ContentDuplicateCandidate {
+  const i = identityInputs(row, meta);
+  return {
+    title: i.title,
+    company: i.company,
+    location: i.location,
+    url: i.url,
+    signals: i.signals,
+    isRemote: i.isRemote,
+    descriptionText: i.descriptionText,
+    fingerprint,
+  };
+}
+
+/**
+ * Stamps both identity keys onto a row about to be inserted.
+ *
+ * Always runs, whether or not the row turns out to be a duplicate: these keys are
+ * what a LATER capture of the same posting is matched against, so a row that is
+ * itself brand new still has to be findable. This is the single place they are
+ * computed, so the three creation functions below cannot drift apart on it -
+ * which they previously had (createJobFromParsedJD stamped neither key, leaving
+ * every pasted-JD job permanently invisible to cross-platform matching).
+ */
+function stampIdentityKeys(row: Record<string, unknown>, meta?: JobCaptureMeta): void {
+  const i = identityInputs(row, meta);
+  row.content_identity_key = computeContentIdentityKey({
+    title: i.title,
+    company: i.company,
+    location: i.location,
+    url: i.url,
+    signals: i.signals,
+    isRemote: i.isRemote,
+  });
+  row.title_location_key = computeTitleLocationKey({
+    title: i.title,
+    location: i.location,
+    isRemote: i.isRemote,
+  });
 }
 
 function applyContentDuplicateResult(row: Record<string, unknown>, check: ContentDuplicateCheckResult): void {
-  row.content_identity_key = check.contentIdentityKey;
   if (!check.isContentDuplicate) return;
   row.is_active = false;
   row.content_duplicate_of = check.existing.id;
-  row.content_duplicate_reason = describeContentDuplicateReason(check.existing);
+  row.content_duplicate_reason = describeContentDuplicateReason(
+    check.existing,
+    check.contentIdentityKey ? "company+title+location" : "title+location+description"
+  );
 }
 
 /**
- * Logs every auto-hidden row into the `job_duplicates` review queue. Runs
- * AFTER the insert, since the queue references the new row's id, and reads
- * content_duplicate_of off the row the database actually returned rather
- * than the pre-insert object - so a row only ever gets queued if it really
- * was stored as a duplicate.
+ * After-insert bookkeeping, shared by every creation path: persist the row's
+ * identities so future captures can match on them, and log any auto-hide into the
+ * review queue.
+ *
+ * Reads content_duplicate_of off the row the DATABASE returned rather than the
+ * pre-insert object, so a row is only ever queued if it really was stored hidden.
  */
-async function recordInsertedContentDuplicates(rows: JobRow[]): Promise<void> {
-  await Promise.all(
-    rows
+async function recordPostInsert(
+  rows: JobRow[],
+  urlsById: Map<string, (string | null | undefined)[]>,
+  scoreById: Map<string, number>
+): Promise<void> {
+  await Promise.all([
+    ...rows.map((row) => recordJobIdentities(row.id, urlsById.get(row.id) ?? [row.apply_url, row.source_url])),
+    ...rows
       .filter((row) => row?.content_duplicate_of)
-      .map((row) => recordDuplicateForReview(row.content_duplicate_of!, row.id, CONTENT_IDENTITY_MATCH_SCORE))
-  );
+      .map((row) => recordDuplicateForReview(row.content_duplicate_of!, row.id, scoreById.get(row.id) ?? 0.95)),
+  ]);
 }
 
 export interface JobRow {
@@ -84,6 +165,7 @@ export interface JobRow {
   notes: string | null;
   is_active: boolean | null;
   content_identity_key: string | null;
+  title_location_key: string | null;
   content_duplicate_of: string | null;
   content_duplicate_reason: string | null;
   created_at: string | null;
@@ -221,57 +303,32 @@ async function toSqlRow(row: Record<string, unknown>): Promise<Record<string, un
  * don't share an apply link.
  */
 export async function createJobFromParsedJD(input: CreateJobInput): Promise<CreateJobOutcome> {
-  const fingerprint = computeApplyLinkFingerprint({ applyUrl: input.apply_url, sourceUrl: input.source_url });
-  if (fingerprint) {
-    const check = await checkJobDuplicate({ applyUrl: input.apply_url, sourceUrl: input.source_url });
-    if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
-  }
-
-  try {
-    const row = await queryOne<JobRow>(
-      `INSERT INTO jobs (
-        title, company, location, source, source_url, apply_url, apply_link_fingerprint,
-        raw_description, parsed_description, ai_extracted_at, ai_confidence_score,
-        employment_type, seniority_level, salary_min, salary_max,
-        salary_currency, salary_period, salary_range, notes, is_active
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        $8, $9, $10, $11,
-        $12, $13, $14, $15,
-        $16, $17, $18, $19, $20
-      ) RETURNING *`,
-      [
-        input.title ?? null,
-        input.company ?? null,
-        input.location ?? null,
-        input.source ?? "manual",
-        input.source_url ?? null,
-        input.apply_url ?? null,
-        fingerprint,
-        input.raw_description ?? null,
-        input.parsed_description ?? null,
-        input.ai_extracted_at ?? null,
-        input.ai_confidence_score ?? null,
-        input.employment_type ?? null,
-        input.seniority_level ?? null,
-        input.salary_min ?? null,
-        input.salary_max ?? null,
-        input.salary_currency ?? null,
-        input.salary_period ?? null,
-        input.salary_range ?? null,
-        input.notes ?? null,
-        input.is_active ?? true,
-      ]
-    );
-    if (!row) throw new Error("Failed to insert job");
-    return { status: "created", job: row };
-  } catch (err: any) {
-    if (isUniqueViolation(err) && fingerprint) {
-      const recheck = await checkJobDuplicate({ applyUrl: input.apply_url, sourceUrl: input.source_url });
-      if (recheck.isDuplicate) return { status: "duplicate", existing: recheck.existing, fingerprint: recheck.fingerprint };
-    }
-    throw err;
-  }
+  // Delegates to createJob rather than carrying its own INSERT. It previously had
+  // one, with an explicit column list that omitted content_identity_key and never
+  // called the content check at all - so every pasted-JD job was invisible to
+  // cross-platform duplicate matching, both as a candidate and as a match target.
+  // Routing through the one shared path makes that class of drift impossible.
+  return createJob({
+    title: input.title ?? null,
+    company: input.company ?? null,
+    location: input.location ?? null,
+    source: input.source ?? "manual",
+    source_url: input.source_url ?? null,
+    apply_url: input.apply_url ?? null,
+    raw_description: input.raw_description ?? null,
+    parsed_description: input.parsed_description ?? null,
+    ai_extracted_at: input.ai_extracted_at ?? null,
+    ai_confidence_score: input.ai_confidence_score ?? null,
+    employment_type: input.employment_type ?? null,
+    seniority_level: input.seniority_level ?? null,
+    salary_min: input.salary_min ?? null,
+    salary_max: input.salary_max ?? null,
+    salary_currency: input.salary_currency ?? null,
+    salary_period: input.salary_period ?? null,
+    salary_range: input.salary_range ?? null,
+    notes: input.notes ?? null,
+    is_active: input.is_active ?? true,
+  });
 }
 
 /**
@@ -474,18 +531,32 @@ export async function findJobByExternalIdAndSource(
  * the job: a developer writing a brand-new ingestion path gets it for free
  * just by calling createJob() instead of writing a raw INSERT.
  */
-export async function createJob(row: Record<string, unknown>): Promise<CreateJobOutcome> {
+export async function createJob(
+  row: Record<string, unknown>,
+  meta?: JobCaptureMeta
+): Promise<CreateJobOutcome> {
   const applyUrl = row.apply_url as string | null | undefined;
   const sourceUrl = row.source_url as string | null | undefined;
+  const identityUrls = meta?.identityUrls ?? [];
   const fingerprint = computeApplyLinkFingerprint({ applyUrl, sourceUrl });
 
-  if (fingerprint) {
-    const check = await checkJobDuplicate({ applyUrl, sourceUrl });
-    if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
-  }
+  // TIER 1 + 2 - exact identity. Blocks the insert: an apply-link fingerprint or
+  // a shared per-posting/requisition id is authoritative, not a guess.
+  const check = await checkJobDuplicate({ applyUrl, sourceUrl, identityUrls });
+  if (check.isDuplicate) return { status: "duplicate", existing: check.existing, fingerprint: check.fingerprint };
 
   const enrichedRow: Record<string, unknown> = { ...row };
-  await applyContentDuplicateCheck(enrichedRow);
+  stampIdentityKeys(enrichedRow, meta);
+
+  // TIER 3 - content identity. Never blocks; may mark the row hidden. Skipped
+  // entirely when no identity key could be built, since there is nothing to
+  // match on and the guard would only re-derive the same null.
+  let score = 0.95;
+  if (enrichedRow.content_identity_key || enrichedRow.title_location_key) {
+    const contentCheck = await checkContentDuplicate(contentCandidate(enrichedRow, fingerprint, meta));
+    applyContentDuplicateResult(enrichedRow, contentCheck);
+    if (contentCheck.isContentDuplicate) score = contentCheck.score;
+  }
 
   const fullRow = await toSqlRow({ ...enrichedRow, apply_link_fingerprint: fingerprint });
   const cols = Object.keys(fullRow);
@@ -496,11 +567,15 @@ export async function createJob(row: Record<string, unknown>): Promise<CreateJob
   try {
     const result = await queryOne<JobRow>(sql, values);
     if (!result) throw new Error("Failed to insert job");
-    await recordInsertedContentDuplicates([result]);
+    await recordPostInsert(
+      [result],
+      new Map([[result.id, [applyUrl, sourceUrl, ...identityUrls]]]),
+      new Map([[result.id, score]])
+    );
     return { status: "created", job: result };
   } catch (err: any) {
-    if (isUniqueViolation(err) && fingerprint) {
-      const recheck = await checkJobDuplicate({ applyUrl, sourceUrl });
+    if (isUniqueViolation(err)) {
+      const recheck = await checkJobDuplicate({ applyUrl, sourceUrl, identityUrls });
       if (recheck.isDuplicate) return { status: "duplicate", existing: recheck.existing, fingerprint: recheck.fingerprint };
     }
     throw err;
@@ -562,10 +637,15 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
   // hypothetical batch mixing multiple platforms in one call would miss an
   // in-batch pair, mirroring the same accepted non-goal already documented
   // above for same-batch fingerprint collisions.
+  toInsert.forEach((row) => stampIdentityKeys(row));
   const contentChecks = await checkContentDuplicatesBatch(
-    toInsert.map((r) => ({ title: r.title ?? null, company: r.company ?? null, location: r.location ?? null }))
+    toInsert.map((r) => contentCandidate(r, (r.apply_link_fingerprint as string | null) ?? null))
   );
-  toInsert.forEach((row, i) => applyContentDuplicateResult(row, contentChecks[i]));
+  const batchScores: number[] = toInsert.map((row, i) => {
+    applyContentDuplicateResult(row, contentChecks[i]);
+    const c = contentChecks[i];
+    return c.isContentDuplicate ? c.score : 0.95;
+  });
 
   // Bulk-import rows can have heterogeneous column sets (e.g. one row has
   // salary fields, another doesn't) - union every column across the batch
@@ -588,7 +668,13 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
 
   try {
     const inserted = await query<JobRow>(sql, values);
-    await recordInsertedContentDuplicates(inserted);
+    // Positional pairing is safe: a multi-row INSERT ... RETURNING preserves the
+    // order of the VALUES list, so inserted[i] is toInsert[i].
+    await recordPostInsert(
+      inserted,
+      new Map(inserted.map((r, i) => [r.id, [toInsert[i]?.apply_url ?? null, toInsert[i]?.source_url ?? null]])),
+      new Map(inserted.map((r, i) => [r.id, batchScores[i] ?? 0.95]))
+    );
     return { inserted, duplicates };
   } catch (err: any) {
     // Race backstop: the pre-check above and the unique index (once

@@ -9,6 +9,7 @@ vi.mock("@/server/db/neon", () => ({
 vi.mock("@/server/services/jobDuplicateGuard", () => ({
   checkJobDuplicate: vi.fn(),
   checkJobDuplicatesBatch: vi.fn(),
+  recordJobIdentities: vi.fn(),
 }));
 
 import { query, queryOne } from "@/server/db/neon";
@@ -46,6 +47,7 @@ describe("createJob", () => {
     const outcome = await createJob({ title: "New Job", apply_url: "https://company.com/apply/2" });
 
     expect(outcome).toEqual({ status: "created", job: { id: "job-2", title: "New Job" } });
+    // One INSERT. The duplicate layers read through query(), not queryOne().
     expect(queryOne).toHaveBeenCalledTimes(1);
   });
 
@@ -76,12 +78,15 @@ describe("createJob", () => {
     await expect(createJob({ title: "Broken" })).rejects.toMatchObject({ code: "42703" });
   });
 
-  it("skips the duplicate check entirely when the job has no apply_url or source_url", async () => {
+  it("still inserts a job with no links at all, and reports no duplicate", async () => {
+    // The identity check is now always consulted, because a capture can carry an
+    // employer ATS url even when apply_url/source_url are empty. With nothing to
+    // look up it resolves to "not a duplicate" without reading the database.
+    (checkJobDuplicate as any).mockResolvedValue({ isDuplicate: false, fingerprint: null });
     (queryOne as any).mockResolvedValue({ id: "job-3", title: "No Link" });
 
     const outcome = await createJob({ title: "No Link" });
 
-    expect(checkJobDuplicate).not.toHaveBeenCalled();
     expect(outcome.status).toBe("created");
   });
 });

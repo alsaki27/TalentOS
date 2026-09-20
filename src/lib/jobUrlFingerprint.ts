@@ -139,10 +139,120 @@ export function extractCanonicalJobKey(rawUrl: string | null | undefined): strin
   return null;
 }
 
+// ── Generic per-posting identity, for platforms with no dedicated matcher ──
+//
+// extractCanonicalJobKey above only knows six platforms. Everything else fell
+// straight through to whole-URL normalization, which is a weaker identity than
+// it looks: it keeps the slug, so one posting reached via two URL shapes (or
+// after the employer edits the title) produces two different fingerprints.
+// Real example - DailyRemote serves
+// /remote-job/application-security-engineer-mid-atlantic-region-...-5163929,
+// where only the trailing 5163929 is the posting's actual id.
+//
+// These two extractors find that id on ANY host without per-site code, which is
+// what makes duplicate detection work for a platform nobody has written a
+// matcher for yet. Both are deliberately conservative: collapsing two genuinely
+// different postings onto one key is the single failure mode this module must
+// never have, so an id is only accepted when its SHAPE says it is an id.
+
+/** Query params that name a posting's id on some site. Value shape is still checked. */
+const ID_PARAMS = new Set([
+  "jobid", "job_id", "jid", "id", "requisitionid", "requisition_id", "reqid", "req_id",
+  "vacancyid", "vacancy_id", "postingid", "posting_id", "jk", "vjk", "gh_jid", "offerid",
+]);
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** An id-shaped query-param VALUE: a long digit run, long hex, or a UUID. */
+function isIdLikeParamValue(value: string): boolean {
+  return /^\d{5,}$/.test(value) || /^[0-9a-f]{12,}$/i.test(value) || UUID_RE.test(value);
+}
+
+/**
+ * The posting id embedded in an arbitrary job URL, as "<host>:<id>", or null.
+ *
+ * Strictly shape-based, in priority order:
+ *   1. An id-shaped value on a param whose NAME means "job id".
+ *   2. A final path segment that is a UUID, >=12 hex chars, or ends in a run of
+ *      >=5 digits (which is how slugged urls carry their id).
+ * Anything else returns null and the caller falls back to normalizing the whole
+ * URL, exactly as before - so this can only ever add precision, never remove it.
+ */
+export function extractGenericJobKey(rawUrl: string | null | undefined): string | null {
+  if (!rawUrl || !rawUrl.trim()) return null;
+  let u: URL;
+  try {
+    u = new URL(rawUrl.trim());
+  } catch {
+    return null;
+  }
+  const host = hostOf(u);
+
+  for (const [key, value] of u.searchParams.entries()) {
+    if (!ID_PARAMS.has(key.toLowerCase())) continue;
+    const v = value.trim();
+    if (isIdLikeParamValue(v)) return `${host}:${v.toLowerCase()}`;
+  }
+
+  const segments = u.pathname.split("/").filter(Boolean);
+  const last = segments[segments.length - 1];
+  if (last) {
+    const seg = decodeURIComponent(last);
+    if (UUID_RE.test(seg)) return `${host}:${seg.toLowerCase()}`;
+    if (/^[0-9a-f]{12,}$/i.test(seg)) return `${host}:${seg.toLowerCase()}`;
+    // Trailing digit run, e.g. "...-mid-atlantic-region-5163929" -> 5163929.
+    const trailing = seg.match(/(?:^|[^0-9])(\d{5,})$/);
+    if (trailing) return `${host}:${trailing[1]}`;
+  }
+
+  return null;
+}
+
+/**
+ * The platform a fingerprint belongs to - "indeed", "linkedin", "greenhouse",
+ * or a host's brand label for anything else.
+ *
+ * Answers exactly one question: are two postings on the SAME platform? If they
+ * are and their fingerprints still differ, that platform has issued two
+ * different ids for them, which is the platform itself asserting they are two
+ * different postings. That assertion is authoritative and content matching must
+ * never override it (see jobContentDuplicateGuard.ts).
+ *
+ * Reducing a host to its brand label is required for correctness, not tidiness:
+ * a LinkedIn job page yields the canonical key "linkedin:4414040634" while a
+ * LinkedIn feed post yields the normalized-URL form
+ * "linkedin.com/feed/update/urnliactivity7497664327231909888". Both are
+ * LinkedIn, and the same-platform rule can only fire if they agree. A real pair
+ * of Bowman Consulting rows slipped through before this existed.
+ */
+export function extractPlatformNamespace(fingerprint: string | null | undefined): string | null {
+  if (!fingerprint || !fingerprint.trim()) return null;
+  const fp = fingerprint.trim();
+
+  const brandLabel = (host: string): string => {
+    const cleaned = host.replace(/:\d+$/, "");
+    const labels = cleaned.split(".").filter(Boolean);
+    return labels.length >= 2 ? labels[labels.length - 2] : cleaned;
+  };
+
+  const colon = fp.indexOf(":");
+  if (colon > 0) {
+    const prefix = fp.slice(0, colon);
+    // A canonical platform key's prefix is a bare token ("indeed", "greenhouse").
+    // A generic key's prefix is a hostname ("dailyremote.com:5163929").
+    if (!prefix.includes(".") && !prefix.includes("/")) return prefix;
+    return brandLabel(prefix);
+  }
+
+  // A normalized-URL fingerprint has no colon (they are stripped): host + path.
+  const slash = fp.indexOf("/");
+  return brandLabel(slash > 0 ? fp.slice(0, slash) : fp) || null;
+}
+
 export function normalizeUrlFingerprint(url: string | null | undefined): string {
   if (!url || !url.trim()) return "";
 
-  const canonical = extractCanonicalJobKey(url);
+  const canonical = extractCanonicalJobKey(url) ?? extractGenericJobKey(url);
   if (canonical) return canonical;
 
   try {
@@ -194,4 +304,74 @@ export function computeApplyLinkFingerprint(input: {
 
   const fingerprint = normalizeUrlFingerprint(input.applyUrl) || normalizeUrlFingerprint(input.sourceUrl);
   return fingerprint || null;
+}
+
+/**
+ * Whether a URL is a search/listing page rather than one posting.
+ *
+ * This matters because a listing URL is not an identity: several different jobs
+ * can be captured from one search page and would then share a fingerprint,
+ * making the hard-block duplicate check reject a real, distinct job. Confirmed
+ * in production - a row for "Construction Integration Manager" @ Electronic
+ * Environments was fingerprinted as
+ * "ziprecruiter.com/jobs-search?search=telecommunications manager&location=..."
+ * which identifies a query, not a posting.
+ *
+ * Only consulted when no posting id could be extracted, so a real posting URL
+ * that merely happens to sit under a /search/ path is unaffected.
+ */
+export function looksLikeSearchOrListingUrl(rawUrl: string | null | undefined): boolean {
+  if (!rawUrl || !rawUrl.trim()) return false;
+  let u: URL;
+  try {
+    u = new URL(rawUrl.trim());
+  } catch {
+    return false;
+  }
+  if (/(^|\/)(jobs-search|search|jobs-in|browse|results)(\/|$)/i.test(u.pathname)) return true;
+  for (const key of u.searchParams.keys()) {
+    if (/^(q|query|search|keywords?|searchterm|l|location)$/i.test(key)) return true;
+  }
+  return false;
+}
+
+export type JobIdentityKind = "platform" | "generic";
+
+export interface JobIdentity {
+  identity: string;
+  kind: JobIdentityKind;
+}
+
+/**
+ * Every per-posting identity derivable from a set of URLs belonging to ONE
+ * capture (its apply link, the page it was found on, and any employer-ATS link
+ * the page exposed).
+ *
+ * Why this exists: computeApplyLinkFingerprint returns a single winner, so a row
+ * whose apply_url is an aggregator but whose source_url is the employer's real
+ * ATS requisition stores only the aggregator key and DISCARDS the requisition
+ * identity. Confirmed live - a row with apply_url=indeed.com/viewjob?jk=... and
+ * source_url=grnh.se/... was stored as "indeed:..." with the Greenhouse identity
+ * thrown away. A shared requisition id is the one authoritative cross-platform
+ * signal there is, so all of them are kept and matched on overlap.
+ *
+ * Deliberately EXCLUDES normalized-whole-URL fingerprints. Those are not
+ * per-posting ids and would make two jobs captured from one search page look
+ * identical (see looksLikeSearchOrListingUrl).
+ */
+export function extractAllIdentities(urls: (string | null | undefined)[]): JobIdentity[] {
+  const byIdentity = new Map<string, JobIdentityKind>();
+  for (const url of urls) {
+    if (!url || !url.trim()) continue;
+    const platform = extractCanonicalJobKey(url);
+    if (platform) {
+      byIdentity.set(platform, "platform");
+      continue;
+    }
+    if (looksLikeSearchOrListingUrl(url)) continue;
+    const generic = extractGenericJobKey(url);
+    // "platform" already recorded for this string wins over a weaker kind.
+    if (generic && !byIdentity.has(generic)) byIdentity.set(generic, "generic");
+  }
+  return [...byIdentity.entries()].map(([identity, kind]) => ({ identity, kind }));
 }
