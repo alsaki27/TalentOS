@@ -41,7 +41,12 @@
 import { Client } from "@neondatabase/serverless";
 import { readFileSync } from "fs";
 import { resolve } from "path";
-import { computeContentIdentityKey, computeTitleLocationKey } from "../src/lib/jobContentIdentity";
+import {
+  computeContentIdentityKey,
+  computeTitleLocationKey,
+  companyNameAppearsInText,
+  isSiteNameNotEmployer,
+} from "../src/lib/jobContentIdentity";
 import { extractPlatformNamespace } from "../src/lib/jobUrlFingerprint";
 import {
   CONTENT_DUPLICATE_CHECK_WINDOW_DAYS,
@@ -76,6 +81,7 @@ interface JobRow {
   apply_link_fingerprint: string | null;
   content_identity_key: string | null;
   title_location_key: string | null;
+  description_text: string | null;
   source: string | null;
   created_at: string;
 }
@@ -135,7 +141,7 @@ async function main() {
   }
 
   const { rows } = await client.query<JobRow>(
-    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint,
+    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint, description_text,
             ${hasColumn ? "content_identity_key, title_location_key" : "NULL AS content_identity_key, NULL AS title_location_key"}, source, created_at
      FROM jobs
      WHERE apply_link_fingerprint IS NOT NULL
@@ -156,6 +162,8 @@ async function main() {
   // is found through title_location_key instead, which is why both are stamped.
   const keyUpdates: { id: string; key: string | null; tlKey: string | null }[] = [];
   const byKey = new Map<string, JobRow[]>();
+  const byTitleLocation = new Map<string, JobRow[]>();
+  const unusableCompanyRows: JobRow[] = [];
   for (const row of rows) {
     const url = row.apply_url ?? row.source_url ?? null;
     const key = computeContentIdentityKey({ title: row.title, company: row.company, location: row.location, url });
@@ -163,7 +171,15 @@ async function main() {
     if (row.content_identity_key !== key || row.title_location_key !== tlKey) {
       keyUpdates.push({ id: row.id, key, tlKey });
     }
-    if (!key) continue;
+    if (tlKey) {
+      if (!byTitleLocation.has(tlKey)) byTitleLocation.set(tlKey, []);
+      byTitleLocation.get(tlKey)!.push(row);
+    }
+    if (!key) {
+      // No usable employer name - resolvable only through the fallback path.
+      if (tlKey) unusableCompanyRows.push(row);
+      continue;
+    }
     if (!byKey.has(key)) byKey.set(key, []);
     byKey.get(key)!.push(row);
   }
@@ -193,6 +209,43 @@ async function main() {
       continue;
     }
     dedupeUpdates.push({ id: newer.id, existing: original });
+  }
+
+  // ── Fallback pairs: rows whose company is the scraping site's own name ──
+  // Same rules the live guard applies on this path: exactly one corroborating
+  // counterpart under the title+location key, on a different platform, whose
+  // employer name actually appears in this row's description text.
+  const fallbackUpdates: { id: string; existing: JobRow }[] = [];
+  const fallbackSkipped: { row: JobRow; reason: string }[] = [];
+  for (const row of unusableCompanyRows) {
+    if (!row.description_text) { fallbackSkipped.push({ row, reason: "no description to corroborate with" }); continue; }
+    const siblings = (byTitleLocation.get(row.title_location_key!) ?? []).filter(
+      (other) =>
+        other.id !== row.id &&
+        // Only a row with a TRUSTED employer name can corroborate.
+        !isSiteNameNotEmployer(other.company, other.apply_url ?? other.source_url) &&
+        companyNameAppearsInText(other.company, row.description_text)
+    );
+    const distinct = new Map<string, JobRow>();
+    for (const sib of siblings) if (!distinct.has(sib.apply_link_fingerprint!)) distinct.set(sib.apply_link_fingerprint!, sib);
+    if (distinct.size !== 1) { fallbackSkipped.push({ row, reason: `${distinct.size} corroborating counterparts, need exactly 1` }); continue; }
+    const counterpart = [...distinct.values()][0];
+    const nsA = extractPlatformNamespace(counterpart.apply_link_fingerprint);
+    const nsB = extractPlatformNamespace(row.apply_link_fingerprint);
+    if (nsA && nsB && nsA === nsB) { fallbackSkipped.push({ row, reason: "same platform" }); continue; }
+    // The row with the unusable company is always the one hidden: the row with
+    // a real employer name is the better record to keep.
+    fallbackUpdates.push({ id: row.id, existing: counterpart });
+  }
+  dedupeUpdates.push(...fallbackUpdates);
+
+  console.log(`
+Fallback pairs (company was the site name, employer confirmed from the description): ${fallbackUpdates.length}`);
+  for (const u of fallbackUpdates.slice(0, 10)) {
+    console.log(`  "${u.existing.title}" @ ${u.existing.company} — job ${u.id} would be hidden as a duplicate of ${u.existing.id}`);
+  }
+  if (fallbackSkipped.length) {
+    console.log(`  (${fallbackSkipped.length} site-name-company row(s) left alone: ${[...new Set(fallbackSkipped.map((f) => f.reason))].join("; ")})`);
   }
 
   const templaterGroupSizes = [...byKey.entries()]
