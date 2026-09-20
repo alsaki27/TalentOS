@@ -111,12 +111,12 @@ export default function NotificationBell() {
   return (
     <div className="relative" ref={panelRef}>
       <button
-        className="relative p-1.5 rounded-md hover:bg-bg transition-colors"
+        className="relative flex items-center justify-center w-11 h-11 rounded-md border border-transparent hover:border-border hover:bg-bg transition-colors"
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
         aria-expanded={open}
       >
-        <Bell className="w-4 h-4 text-ink-soft" />
+        <Bell className="w-[22px] h-[22px] text-ink-soft" />
         {unreadCount > 0 && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[10px] font-bold flex items-center justify-center">
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -125,7 +125,7 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute top-9 right-0 w-[360px] max-w-[90vw] bg-surface border border-border rounded-lg shadow-xl z-50 flex flex-col overflow-hidden">
+        <div className="notif-panel">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <span className="text-sm font-semibold text-ink">Notifications</span>
             <div className="flex items-center gap-2">

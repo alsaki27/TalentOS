@@ -1,96 +1,69 @@
 // src/app/NavBar.tsx
-// Internal team nav — hidden on /portal/* (candidate-facing) and /login.
-// Design: minimalistic modern admin top nav.
-// All visual styles driven from globals.css nav design tokens — zero hardcoded values.
+// Mobile: Logo + wordmark left | bell + hamburger right → full-width dropdown below.
+// Desktop: Logo | nav links + More dropdown | user section right.
+// NO Tailwind responsive classes — all breakpoints handled in globals.css via @media.
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ThemeToggle from "../components/ThemeToggle";
 import NotificationBell from "../components/NotificationBell";
 
 interface MeResponse {
-  profile: {
-    display_name: string;
-    email: string | null;
-    role: string;
-  };
+  profile: { display_name: string; email: string | null; role: string };
 }
-
 interface Notifications {
   queue: { overdue: number; pendingReview: number; urgent: number };
   followUps: { due: number };
   inbox?: { pendingApprovals: number; needsReply: number };
 }
 
-// ─── Skarion inline SVG logo ────────────────────────────────────────────────
 function SkarionLogo({ size = 22 }: { size?: number }) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 622 455"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      style={{ flexShrink: 0 }}
-    >
+    <svg width={size} height={size} viewBox="0 0 622 455"
+      xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ flexShrink: 0 }}>
       <g fill="currentColor">
-        <rect x="32.19" y="31.27" width="134.09" height="105.86" transform="rotate(-45,99.24,84.2)" />
-        <rect x="104.28" y="81.02" width="110" height="341.41" transform="rotate(-45,159.28,251.72)" />
-        <rect x="261" y="281" width="134.09" height="105.86" transform="rotate(-45,328.05,333.93)" />
+        <rect x="32.19"  y="31.27"  width="134.09" height="105.86" transform="rotate(-45,99.24,84.2)" />
+        <rect x="104.28" y="81.02"  width="110"    height="341.41" transform="rotate(-45,159.28,251.72)" />
+        <rect x="261"    y="281"    width="134.09" height="105.86" transform="rotate(-45,328.05,333.93)" />
       </g>
       <g fill="currentColor">
-        <rect x="469" y="316.57" width="134.09" height="105.86" transform="rotate(-45,536.05,369.5)" />
-        <rect x="406" y="25" width="110" height="341.41" transform="rotate(-45,461,195.71)" />
-        <rect x="222.28" y="84.02" width="134.09" height="105.86" transform="rotate(-45,289.33,136.95)" />
+        <rect x="469"    y="316.57" width="134.09" height="105.86" transform="rotate(-45,536.05,369.5)" />
+        <rect x="406"    y="25"     width="110"    height="341.41" transform="rotate(-45,461,195.71)" />
+        <rect x="222.28" y="84.02"  width="134.09" height="105.86" transform="rotate(-45,289.33,136.95)" />
       </g>
     </svg>
   );
 }
 
-// ─── Chevron ────────────────────────────────────────────────────────────────
-function ChevronDown({ open }: { open: boolean }) {
+function Chevron({ open }: { open: boolean }) {
   return (
-    <svg
-      width="10" height="10" viewBox="0 0 10 10"
-      fill="none" stroke="currentColor" strokeWidth="1.5"
-      strokeLinecap="round" strokeLinejoin="round"
+    <svg width="11" height="11" viewBox="0 0 11 11" fill="none"
+      stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"
       aria-hidden="true"
-      style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s ease", opacity: 0.6 }}
-    >
-      <path d="M1.5 3.5L5 7l3.5-3.5" />
+      style={{ transform: open ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s ease", flexShrink: 0 }}>
+      <path d="M1.5 3.5L5.5 7.5l4-4" />
     </svg>
   );
 }
 
-// ─── Hamburger ──────────────────────────────────────────────────────────────
-function HamburgerIcon({ open }: { open: boolean }) {
+function BurgerIcon({ open }: { open: boolean }) {
   return (
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor"
-      strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-      {open ? (
-        <>
-          <line x1="3" y1="3" x2="15" y2="15" />
-          <line x1="15" y1="3" x2="3" y2="15" />
-        </>
-      ) : (
-        <>
-          <line x1="2" y1="5" x2="16" y2="5" />
-          <line x1="2" y1="9" x2="16" y2="9" />
-          <line x1="2" y1="13" x2="13" y2="13" />
-        </>
-      )}
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none"
+      stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      {open
+        ? <><line x1="4" y1="4" x2="16" y2="16" /><line x1="16" y1="4" x2="4" y2="16" /></>
+        : <><line x1="2" y1="6" x2="18" y2="6" /><line x1="2" y1="10" x2="18" y2="10" /><line x1="2" y1="14" x2="14" y2="14" /></>
+      }
     </svg>
   );
 }
 
-// ─── Sign-out icon ──────────────────────────────────────────────────────────
 function SignOutIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      aria-hidden="true">
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
       <polyline points="16 17 21 12 16 7" />
       <line x1="21" y1="12" x2="9" y2="12" />
@@ -98,12 +71,10 @@ function SignOutIcon() {
   );
 }
 
-// ─── User / Account icon ────────────────────────────────────────────────────
 function UserIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-      aria-hidden="true">
+      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
       <circle cx="12" cy="7" r="4" />
     </svg>
@@ -112,171 +83,132 @@ function UserIcon() {
 
 export default function NavBar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [notifications, setNotifications] = useState<Notifications | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
 
-  const currentRole = me?.profile.role ?? "";
-  const canViewJobs = ["admin", "manager", "application_engineer"].includes(currentRole);
-  const canViewCompanies = ["admin", "manager"].includes(currentRole);
-  const isAdmin = currentRole === "admin";
-  const canManageSources = ["admin", "manager"].includes(currentRole);
+  const role       = me?.profile.role ?? "";
+  const canJobs    = ["admin", "manager", "application_engineer"].includes(role);
+  const canCo      = ["admin", "manager"].includes(role);
+  const isAdmin    = role === "admin";
+  const canSources = ["admin", "manager"].includes(role);
 
-  // Extract first name only from display_name
-  const rawName = me?.profile.display_name || me?.profile.email || "User";
+  const rawName   = me?.profile.display_name || me?.profile.email || "User";
   const firstName = rawName.includes(" ") ? rawName.split(" ")[0] : rawName;
 
-  function isActive(href: string) {
-    if (href === "/") return pathname === "/";
-    return !!pathname?.startsWith(href);
-  }
+  const isActive = (href: string) =>
+    href === "/" ? pathname === "/" : !!pathname?.startsWith(href);
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") return;
-    fetch("/api/auth/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setMe(data))
-      .catch(() => setMe(null));
-
-    async function loadBadgeCounts() {
-      const res = await fetch("/api/notifications", { cache: "no-store" });
-      if (res.ok) setNotifications(await res.json());
-    }
-    loadBadgeCounts();
-    const interval = setInterval(loadBadgeCounts, 60000);
-    return () => clearInterval(interval);
+    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+    const load = async () => {
+      const r = await fetch("/api/notifications", { cache: "no-store" });
+      if (r.ok) setNotifications(await r.json());
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => clearInterval(t);
   }, [pathname]);
 
-  useEffect(() => { setMoreOpen(false); setMobileOpen(false); }, [pathname]);
+  useEffect(() => {
+    setMoreOpen(false);
+    setMobileOpen(false);
+    setMobileMoreOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
-        setMoreOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
+    const h = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) setMoreOpen(false);
+    };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
   }, []);
 
-  if (pathname?.startsWith("/portal")) return null;
-  if (pathname === "/login") return null;
+  if (pathname?.startsWith("/portal") || pathname === "/login") return null;
 
-  async function logout() {
+  const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
-  }
+  };
 
-  // ─── Primary nav links ────────────────────────────────────────────────────
-  const primaryLinks = [
+  const primary = [
+    { href: "/candidates",          label: "Candidates",  show: true,     badge: 0, bc: "" },
+    { href: "/candidate-dashboard", label: "Dashboard",   show: true,     badge: 0, bc: "" },
+    { href: "/jobs",                label: "Jobs",        show: canJobs,  badge: 0, bc: "" },
     {
-      href: "/candidates", label: "Candidates", show: true,
-      badge: 0, badgeColor: "",
-    },
-    {
-      href: "/candidate-dashboard", label: "Dashboard", show: true,
-      badge: 0, badgeColor: "",
-    },
-    {
-      href: "/jobs", label: "Jobs", show: canViewJobs,
-      badge: 0, badgeColor: "",
-    },
-    {
-      href: "/application-queue", label: "App Queue", show: true,
+      href: "/application-queue", label: "App Queue", show: true, bc: "badge-danger",
       badge: notifications ? notifications.queue.overdue + notifications.queue.pendingReview + notifications.queue.urgent : 0,
-      badgeColor: "badge-danger",
     },
-    {
-      href: "/follow-ups", label: "Follow-ups", show: true,
-      badge: notifications?.followUps.due ?? 0,
-      badgeColor: "badge-warn",
-    },
-    {
-      href: "/inbox", label: "Inbox", show: true,
-      badge: notifications?.inbox?.pendingApprovals ?? 0,
-      badgeColor: "badge-accent",
-    },
-  ].filter((l) => l.show);
+    { href: "/follow-ups", label: "Follow-ups", show: true, badge: notifications?.followUps.due ?? 0, bc: "badge-warn" },
+    { href: "/inbox",      label: "Inbox",      show: true, badge: notifications?.inbox?.pendingApprovals ?? 0, bc: "badge-accent" },
+  ].filter(l => l.show);
 
-  // ─── "More" overflow links ────────────────────────────────────────────────
-  const moreLinks = [
-    { href: "/communications/inbox",  label: "Communications",         show: true },
-    { href: "/analytics",             label: "Analytics",              show: true },
-    { href: "/chat",                  label: "Assistant",              show: true },
-    { href: "/falood",                label: "Falood AI",              show: true },
-    { href: "/mcp",                   label: "MCP Command Center",     show: true },
-    { href: "/import-sources",        label: "Import Sources",         show: canManageSources },
-    { href: "/audit",                 label: "Audit Log",              show: isAdmin },
-    { href: "/ops",                   label: "System Health",          show: isAdmin },
-    { href: "/job-ceo",               label: "Job CEO",                show: canManageSources },
-    { href: "/job-agent",             label: "Job Agent",              show: canManageSources },
-    { href: "/job-agent/review",      label: "Job Agent Review",       show: canManageSources },
-    { href: "/job-agent/tokens",      label: "Job Agent Tokens",       show: isAdmin },
-    { href: "/candidate-job-matches", label: "Candidate Match Review", show: canViewJobs },
-    { href: "/admin/ai",              label: "AI Control Center",      show: isAdmin },
-    { href: "/admin/extension-keys",  label: "Extension API Keys",     show: isAdmin },
-    { href: "/ats-score",             label: "ATS Score Analysis",     show: true },
-    { href: "/resume-parsing-status", label: "Resume Parsing Status",  show: true },
-    { href: "/team",                  label: "Team",                   show: isAdmin },
-    { href: "/settings/webhooks",     label: "Webhooks",               show: isAdmin || me?.profile.role === "manager" },
-    { href: "/settings/billing",      label: "Billing",                show: isAdmin || me?.profile.role === "manager" },
-    { href: "/companies",             label: "Companies",              show: canViewCompanies },
-    { href: "/interviews",            label: "Interviews",             show: true },
-  ].filter((l) => l.show);
+  const more = [
+    { href: "/communications/inbox",  label: "Communications",        show: true },
+    { href: "/analytics",             label: "Analytics",             show: true },
+    { href: "/chat",                  label: "Assistant",             show: true },
+    { href: "/falood",                label: "Falood AI",             show: true },
+    { href: "/mcp",                   label: "MCP Command Center",    show: true },
+    { href: "/import-sources",        label: "Import Sources",        show: canSources },
+    { href: "/audit",                 label: "Audit Log",             show: isAdmin },
+    { href: "/ops",                   label: "System Health",         show: isAdmin },
+    { href: "/job-ceo",               label: "Job CEO",               show: canSources },
+    { href: "/job-agent",             label: "Job Agent",             show: canSources },
+    { href: "/job-agent/review",      label: "Job Agent Review",      show: canSources },
+    { href: "/job-agent/tokens",      label: "Job Agent Tokens",      show: isAdmin },
+    { href: "/candidate-job-matches", label: "Candidate Match Review", show: canJobs },
+    { href: "/admin/ai",              label: "AI Control Center",     show: isAdmin },
+    { href: "/admin/extension-keys",  label: "Extension API Keys",    show: isAdmin },
+    { href: "/ats-score",             label: "ATS Score Analysis",    show: true },
+    { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
+    { href: "/team",                  label: "Team",                  show: isAdmin },
+    { href: "/settings/webhooks",     label: "Webhooks",              show: isAdmin || role === "manager" },
+    { href: "/settings/billing",      label: "Billing",               show: isAdmin || role === "manager" },
+    { href: "/companies",             label: "Companies",             show: canCo },
+    { href: "/interviews",            label: "Interviews",            show: true },
+  ].filter(l => l.show);
 
-  const moreActive = moreLinks.some((l) => pathname?.startsWith(l.href));
+  const moreActive = more.some(l => pathname?.startsWith(l.href));
 
   return (
     <>
-      <nav className="topnav" style={{ position: "sticky", top: 0, zIndex: 50 }}>
+      {/* ══ TOP NAV BAR ══════════════════════════════════════════════════════ */}
+      <nav className="topnav">
 
-        {/* ── Left: Logo + Wordmark ─────────────────────────────────────── */}
+        {/* Logo — always visible on all screen sizes */}
         <Link href="/candidates" className="nav-brand">
           <SkarionLogo size={22} />
           <span className="nav-brand-wordmark">Skarion Tracker</span>
         </Link>
 
-        {/* ── Center: Primary nav links (desktop only) ──────────────────── */}
-        <div className="navlinks hidden lg:flex">
-          {primaryLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`nav-link${isActive(link.href) ? " active" : ""}`}
-            >
-              {link.label}
-              {link.badge > 0 && (
-                <span className={`nav-badge ${link.badgeColor}`}>
-                  {link.badge}
-                </span>
-              )}
+        {/* ── Desktop: center nav links (hidden on mobile via CSS) ─────────── */}
+        <div className="nav-desktop-links">
+          {primary.map(l => (
+            <Link key={l.href} href={l.href}
+              className={`nav-link${isActive(l.href) ? " active" : ""}`}>
+              {l.label}
+              {l.badge > 0 && <span className={`nav-badge ${l.bc}`}>{l.badge}</span>}
             </Link>
           ))}
-
-          {/* "More" mega-dropdown */}
           <div className="relative" ref={moreRef}>
             <button
               className={`nav-more-btn${moreActive ? " active" : ""}`}
-              onClick={() => setMoreOpen((v) => !v)}
+              onClick={() => setMoreOpen(v => !v)}
               aria-expanded={moreOpen}
-              aria-haspopup="true"
-            >
-              More
-              <ChevronDown open={moreOpen} />
+              aria-haspopup="true">
+              More <Chevron open={moreOpen} />
             </button>
             {moreOpen && (
               <div className="nav-dropdown">
-                {moreLinks.map((link) => (
-                  <Link
-                    key={link.href}
-                    href={link.href}
+                {more.map(l => (
+                  <Link key={l.href} href={l.href}
                     onClick={() => setMoreOpen(false)}
-                    className={`nav-dropdown-item${isActive(link.href) ? " active" : ""}`}
-                  >
-                    {link.label}
+                    className={`nav-dropdown-item${isActive(l.href) ? " active" : ""}`}>
+                    {l.label}
                   </Link>
                 ))}
               </div>
@@ -284,112 +216,97 @@ export default function NavBar() {
           </div>
         </div>
 
-        {/* ── Right: user section (desktop) ────────────────────────────── */}
-        <div className="nav-user hidden lg:flex">
-
-          {/* Theme toggle */}
+        {/* ── Desktop: right user section (hidden on mobile via CSS) ────────── */}
+        <div className="nav-desktop-user">
           <ThemeToggle />
-
           <div className="nav-user-separator" />
-
-          {/* First name → clicks to /account */}
           {me?.profile && (
             <Link href="/account" className="nav-user-account-btn" title="Account settings">
-              <UserIcon />
-              <span className="nav-user-name">{firstName}</span>
+              <UserIcon /><span className="nav-user-name">{firstName}</span>
             </Link>
           )}
-
-          {/* Notification bell — rightmost before sign out */}
           <NotificationBell />
-
           <div className="nav-user-separator" />
-
-          {/* Sign out with icon */}
-          <button onClick={logout} className="nav-signout" title="Sign out">
-            <SignOutIcon />
-            <span>Sign out</span>
+          <button onClick={logout} className="nav-signout">
+            <SignOutIcon /><span>Sign out</span>
           </button>
         </div>
 
-        {/* ── Mobile: compact right cluster ─────────────────────────────── */}
-        <div className="flex lg:hidden items-center gap-2">
-          <ThemeToggle />
+        {/* ── Mobile: bell + hamburger only (hidden on desktop via CSS) ─────── */}
+        <div className="nav-mobile-right">
           <NotificationBell />
           <button
-            className="nav-mobile-toggle"
+            className={`nav-burger${mobileOpen ? " is-open" : ""}`}
             aria-label={mobileOpen ? "Close menu" : "Open menu"}
             aria-expanded={mobileOpen}
-            onClick={() => setMobileOpen((v) => !v)}
-          >
-            <HamburgerIcon open={mobileOpen} />
+            onClick={() => setMobileOpen(v => !v)}>
+            <BurgerIcon open={mobileOpen} />
           </button>
         </div>
       </nav>
 
-      {/* ── Mobile drawer ─────────────────────────────────────────────────── */}
+      {/* ══ MOBILE FULL-WIDTH DROPDOWN (below navbar) ════════════════════════ */}
       {mobileOpen && (
-        <div className="nav-drawer lg:hidden">
+        <div className="mob-panel" role="dialog" aria-label="Navigation menu" aria-modal="true">
 
-          {/* User identity strip */}
+          {/* User strip */}
           {me?.profile && (
-            <Link
-              href="/account"
-              onClick={() => setMobileOpen(false)}
-              className="nav-drawer-user-strip"
-            >
-              <span className="nav-drawer-user-avatar">
-                {firstName.charAt(0).toUpperCase()}
+            <Link href="/account" className="mob-user-strip" onClick={() => setMobileOpen(false)}>
+              <span className="mob-avatar">{firstName.charAt(0).toUpperCase()}</span>
+              <span className="mob-user-info">
+                <span className="mob-user-name">{firstName}</span>
+                <span className="mob-user-role">{me.profile.role.replaceAll("_", " ")}</span>
               </span>
-              <span>
-                <span className="nav-drawer-user-name">{firstName}</span>
-                <span className="nav-drawer-user-role">{me.profile.role.replaceAll("_", " ")}</span>
-              </span>
+              <UserIcon />
             </Link>
           )}
 
-          <div className="nav-drawer-divider" />
+          <hr className="mob-hr" />
 
-          {/* Main links */}
-          <div className="nav-drawer-section-label">Navigation</div>
-          {primaryLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              onClick={() => setMobileOpen(false)}
-              className={`nav-drawer-link${isActive(link.href) ? " active" : ""}`}
-            >
-              <span>{link.label}</span>
-              {link.badge > 0 && (
-                <span className={`nav-badge ${link.badgeColor}`}>{link.badge}</span>
-              )}
+          {/* Primary links */}
+          <p className="mob-label">Navigation</p>
+          {primary.map(l => (
+            <Link key={l.href} href={l.href}
+              className={`mob-link${isActive(l.href) ? " active" : ""}`}
+              onClick={() => setMobileOpen(false)}>
+              <span>{l.label}</span>
+              {l.badge > 0 && <span className={`nav-badge ${l.bc}`}>{l.badge}</span>}
             </Link>
           ))}
 
-          <div className="nav-drawer-divider" />
+          <hr className="mob-hr" />
 
-          {/* More links */}
-          <div className="nav-drawer-section-label">More</div>
-          {moreLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              onClick={() => setMobileOpen(false)}
-              className={`nav-drawer-link${isActive(link.href) ? " active" : ""}`}
-            >
-              {link.label}
-            </Link>
-          ))}
+          {/* More collapsible */}
+          <button
+            className={`mob-more-btn${mobileMoreOpen ? " open" : ""}${moreActive ? " route-active" : ""}`}
+            onClick={() => setMobileMoreOpen(v => !v)}>
+            <span>More</span>
+            <span className="mob-more-count">{more.length}</span>
+            <Chevron open={mobileMoreOpen} />
+          </button>
 
-          <div className="nav-drawer-divider" />
+          {mobileMoreOpen && (
+            <div className="mob-more-list">
+              {more.map(l => (
+                <Link key={l.href} href={l.href}
+                  className={`mob-link mob-more-item${isActive(l.href) ? " active" : ""}`}
+                  onClick={() => setMobileOpen(false)}>
+                  {l.label}
+                </Link>
+              ))}
+            </div>
+          )}
 
-          {/* Sign out */}
-          <div className="nav-drawer-actions">
-            <button onClick={logout} className="nav-signout" style={{ width: "100%", justifyContent: "center" }}>
-              <SignOutIcon />
-              <span>Sign out</span>
+          <hr className="mob-hr" />
+
+          {/* Footer: theme + sign out */}
+          <div className="mob-footer">
+            <ThemeToggle />
+            <button onClick={logout} className="mob-signout">
+              <SignOutIcon /><span>Sign out</span>
             </button>
           </div>
+
         </div>
       )}
     </>
