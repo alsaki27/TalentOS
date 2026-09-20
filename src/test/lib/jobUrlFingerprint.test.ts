@@ -168,14 +168,28 @@ describe("extractPlatformNamespace", () => {
     expect(extractPlatformNamespace("lever:cesiumastro:f4a34f38")).toBe("lever");
   });
 
-  it("falls back to the hostname for a normalized-URL fingerprint", () => {
-    expect(extractPlatformNamespace("dailyremote.com/remote-job/application-security-engineer-5163929")).toBe("dailyremote.com");
-    expect(extractPlatformNamespace("simplyhired.com/job/8fbv3te484jk")).toBe("simplyhired.com");
+  it("reduces a normalized-URL fingerprint to its brand label", () => {
+    expect(extractPlatformNamespace("dailyremote.com/remote-job/application-security-engineer-5163929")).toBe("dailyremote");
+    expect(extractPlatformNamespace("simplyhired.com/job/8fbv3te484jk")).toBe("simplyhired");
   });
 
-  it("does not mistake a hostname with a port or colon in the path for a platform token", () => {
-    // The prefix before ":" here contains dots, so it is a host, not a token.
-    expect(extractPlatformNamespace("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443/job/1")).toBe("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443");
+  it("agrees across BOTH fingerprint forms of one platform - the real Bowman Consulting miss", () => {
+    // A LinkedIn job page yields a canonical key; a LinkedIn feed post yields a
+    // normalized-URL fingerprint. Both must read as "linkedin" or the
+    // same-platform veto cannot fire.
+    expect(extractPlatformNamespace("linkedin:4414040634")).toBe("linkedin");
+    expect(extractPlatformNamespace("linkedin.com/feed/update/urnliactivity7497664327231909888")).toBe("linkedin");
+    expect(extractPlatformNamespace("linkedin:4414040634"))
+      .toBe(extractPlatformNamespace("linkedin.com/feed/update/urnliactivity7497664327231909888"));
+  });
+
+  it("aligns an ATS host with its canonical platform token", () => {
+    expect(extractPlatformNamespace("job-boards.greenhouse.io/board/jobs/1")).toBe("greenhouse");
+    expect(extractPlatformNamespace("greenhouse:board:1")).toBe("greenhouse");
+  });
+
+  it("strips a port and uses the brand label for a deep ATS hostname", () => {
+    expect(extractPlatformNamespace("fa-exkk-saasfaprod1.fa.ocs.oraclecloud.com:443/job/1")).toBe("oraclecloud");
   });
 
   it("returns null for absent input", () => {

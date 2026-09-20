@@ -153,6 +153,7 @@ export function extractCanonicalJobKey(rawUrl: string | null | undefined): strin
 export function extractPlatformNamespace(fingerprint: string | null | undefined): string | null {
   if (!fingerprint || !fingerprint.trim()) return null;
   const fp = fingerprint.trim();
+
   const colon = fp.indexOf(":");
   if (colon > 0) {
     const prefix = fp.slice(0, colon);
@@ -161,8 +162,22 @@ export function extractPlatformNamespace(fingerprint: string | null | undefined)
     // ("careers.example.com/job?x=1:2"), which carries a dot or a slash.
     if (!prefix.includes(".") && !prefix.includes("/")) return prefix;
   }
+
   const slash = fp.indexOf("/");
-  return slash > 0 ? fp.slice(0, slash) : fp;
+  const host = (slash > 0 ? fp.slice(0, slash) : fp).replace(/:\d+$/, "");
+
+  // Reduce a hostname to its brand label so that both fingerprint forms of one
+  // platform agree. This is required for correctness, not tidiness: a LinkedIn
+  // job page yields the canonical key "linkedin:4414040634" while a LinkedIn
+  // feed post yields the normalized-URL form
+  // "linkedin.com/feed/update/urnliactivity7497664327231909888". Both are
+  // LinkedIn, and the same-platform rule in jobContentDuplicateGuard.ts can only
+  // fire if they resolve to the same namespace - a real pair of Bowman
+  // Consulting rows slipped through before this. It also aligns
+  // "job-boards.greenhouse.io" with the "greenhouse" token.
+  const labels = host.split(".").filter(Boolean);
+  if (labels.length >= 2) return labels[labels.length - 2];
+  return host || null;
 }
 
 export function normalizeUrlFingerprint(url: string | null | undefined): string {

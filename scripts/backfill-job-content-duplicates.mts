@@ -98,11 +98,17 @@ async function main() {
     console.log("This dry run still works (it computes everything in memory) but --apply cannot run until that migration deploys.\n");
   }
 
-  // --undo reverses every hide this script has ever made, using
-  // content_duplicate_of as the record of what it touched. It deliberately
-  // does NOT clear content_identity_key (harmless lookup key) and does not
-  // delete the review-queue rows - it marks them resolved instead, so the
-  // history of "this was flagged and then un-flagged" survives.
+  // --undo reverses every hide this system has made, using content_duplicate_of
+  // as the record of what it touched. It leaves the identity columns alone
+  // (harmless lookup keys) and DELETES the review-queue rows rather than
+  // marking them resolved.
+  //
+  // Deleting is deliberate: job_duplicates holds nothing but this detector's
+  // own findings, regenerable at any time by re-running detection. Marking them
+  // resolved instead was actively wrong - `resolved` means "a human dealt with
+  // this", and the re-detect insert is ON CONFLICT DO NOTHING, so a withdrawn
+  // finding stayed in the table as resolved and could never be re-raised even
+  // when it was still true.
   if (undo) {
     if (!hasColumn) {
       console.error("Nothing to undo: migration 099 has not run, so no hide could have been recorded.");
@@ -122,8 +128,8 @@ async function main() {
       `UPDATE jobs SET is_active = true, content_duplicate_of = NULL, content_duplicate_reason = NULL
        WHERE content_duplicate_of IS NOT NULL RETURNING id`
     );
-    await client.query(`UPDATE job_duplicates SET resolved = true WHERE resolved = false`);
-    console.log(`Restored ${restored.rowCount} row(s) to is_active = true and marked the review queue resolved.`);
+    const dropped = await client.query(`DELETE FROM job_duplicates RETURNING id`);
+    console.log(`Restored ${restored.rowCount} row(s) to is_active = true and cleared ${dropped.rowCount} review-queue row(s).`);
     await client.end();
     return;
   }
