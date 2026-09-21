@@ -48,7 +48,7 @@ function AuthForm() {
       return;
     }
 
-    const res = await fetch(mode === "signin" ? "/api/auth/login" : "/api/auth/signup", {
+    const res = await fetch(mode === "signin" ? "/api/signin" : "/api/auth/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

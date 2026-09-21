@@ -41,6 +41,7 @@ function isPublicPath(pathname: string) {
     pathname.startsWith("/api/public") ||
     pathname === "/api/health" ||
     pathname === "/api/bootstrap" ||
+    pathname === "/api/signin" ||
     pathname === "/api/skarion-ai" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||
