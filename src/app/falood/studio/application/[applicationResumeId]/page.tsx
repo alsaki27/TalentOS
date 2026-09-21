@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { exportAndDownloadResume } from "@/lib/falood/clientExport";
@@ -271,6 +271,19 @@ export default function ApplicationResumeStudioPage() {
 
   /* editing state */
   const [draftContent, setDraftContent] = useState<ResumeDocument | null>(null);
+  // Synchronous mutual-exclusion for saveDraft (a ref, not state, since it must
+  // be readable/settable instantly). Same root cause the base-resume studio
+  // already hit and fixed (see its persistBaseResume): this PATCH fully
+  // overwrites `content`, so two in-flight saves can complete out of order and
+  // let an older one silently clobber a newer edit - e.g. edit the tools list,
+  // click Save, edit again before the (now much slower, VPS-hosted) request
+  // returns, and the first request's stale content lands last. Confirmed as the
+  // cause of tool/skill edits reverting on reopen. isSavingContentRef ensures
+  // only one PATCH is ever in flight; pendingContentSaveRef ensures an edit that
+  // arrived during that PATCH is never dropped - it triggers exactly one
+  // follow-up save with the freshest draftContent once the current one clears.
+  const isSavingContentRef = useRef(false);
+  const pendingContentSaveRef = useRef(false);
   const [pageMetrics, setPageMetrics] = useState<ResumePageMetrics | null>(null);
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
@@ -748,19 +761,38 @@ export default function ApplicationResumeStudioPage() {
 
   async function saveDraft() {
     if (!applicationResumeId || !draftContent) return;
+
+    // Never let two content PATCHes race - see isSavingContentRef's
+    // declaration for why. The edit that arrived during the in-flight save is
+    // never lost: it's captured by draftContent (already up to date) and
+    // replayed by the pendingContentSaveRef check in the finally block below.
+    if (isSavingContentRef.current) {
+      pendingContentSaveRef.current = true;
+      return;
+    }
+
+    isSavingContentRef.current = true;
     setSaveStatus("saving");
-    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: draftContent }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setAppResume(updated);
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus(""), 2000);
-    } else {
-      setSaveStatus("error");
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: draftContent }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setAppResume(updated);
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+      } else {
+        setSaveStatus("error");
+      }
+    } finally {
+      isSavingContentRef.current = false;
+      if (pendingContentSaveRef.current) {
+        pendingContentSaveRef.current = false;
+        void saveDraft();
+      }
     }
   }
 
@@ -1552,7 +1584,9 @@ export default function ApplicationResumeStudioPage() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
             <h3 style={{ fontSize: 14, margin: 0 }}>Resume Preview</h3>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn" onClick={saveDraft}>Save Draft</button>
+              <button className="btn" onClick={saveDraft} disabled={saveStatus === "saving"}>
+                {saveStatus === "saving" ? "Saving…" : "Save Draft"}
+              </button>
               <button className="btn" onClick={submitForReview} disabled={appResume.status === "in_review" || appResume.status === "approved"}>
                 Submit for Review
               </button>
