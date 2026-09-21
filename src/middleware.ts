@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyJWT } from "@/server/auth/jwt";
-import { queryOne } from "@/server/db/neon";
-import { canAccessPath, getDefaultRouteForRole, normalizeUserRole } from "@/lib/auth";
+import { canAccessPath, getDefaultRouteForRole, normalizeUserRole } from "@/lib/auth-edge";
 
 const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 const CANDIDATE_TOKEN_COOKIE = "skarion_candidate_token";
@@ -53,27 +52,6 @@ function isPublicPath(pathname: string) {
   );
 }
 
-
-async function getVerifiedSession(token: string) {
-  const jwtPayload = await verifyJWT(token);
-  if (!jwtPayload) return null;
-
-  try {
-    const profile = await queryOne<{ user_id: string; role: string; is_active: boolean }>(
-      "SELECT user_id, role, is_active FROM profiles WHERE user_id = $1",
-      [jwtPayload.user_id]
-    );
-
-    if (!profile || !profile.is_active) return null;
-    return { userId: jwtPayload.user_id, role: normalizeUserRole(profile.role) };
-  } catch (error) {
-    // Authentication middleware must fail closed, but a transient database
-    // failure must not become a generic platform 500 for every route. Returning
-    // null lets the existing redirect/401 path handle the request safely.
-    console.error("[auth] session verification failed:", error instanceof Error ? error.message : String(error));
-    return null;
-  }
-}
 
 // Vercel Cron invokes this without a session cookie — gated by a bearer secret
 // instead. The route itself re-checks the same secret (defense in depth).
@@ -215,8 +193,7 @@ function isCandidatePortalPath(pathname: string) {
 async function getVerifiedCandidateSession(token: string) {
   const jwtPayload = await verifyJWT(token);
   if (!jwtPayload || jwtPayload.type !== "candidate") return null;
-  const candidate = await queryOne<{ id: string }>("SELECT id FROM candidates WHERE id = $1", [jwtPayload.user_id]);
-  return candidate ? { candidateId: candidate.id } : null;
+  return { candidateId: jwtPayload.user_id };
 }
 
 export async function middleware(req: NextRequest) {
@@ -272,18 +249,15 @@ export async function middleware(req: NextRequest) {
     response.cookies.delete("skarion_refresh_token");
     return response;
   }
-  let session = token ? await getVerifiedSession(token) : null;
-
-  // HTML pages are client shells; their data is still protected by the API
-  // handlers below. If the profile lookup has a transient failure, let a
-  // cryptographically valid session reach the shell so login does not bounce
-  // back to /login. API requests never use this fallback and remain fail-closed.
-  if (!session && token && !pathname.startsWith("/api")) {
-    const jwtPayload = await verifyJWT(token);
-    if (jwtPayload) {
-      session = { userId: jwtPayload.user_id, role: normalizeUserRole(jwtPayload.role) };
-    }
-  }
+  // Next.js middleware runs in the Edge runtime. Never query PostgreSQL here:
+  // node-postgres imports Node's `crypto` module, which Edge rejects before a
+  // connection is attempted and previously turned every valid session into a
+  // 401. The HMAC-signed, expiring JWT is the authentication boundary here;
+  // route handlers that need current profile state continue to verify it in the
+  // Node-compatible application runtime.
+  const session = tokenPayload && tokenPayload.type !== "candidate"
+    ? { userId: tokenPayload.user_id, role: normalizeUserRole(tokenPayload.role) }
+    : null;
   if (session) {
     if (!canAccessPath(session.role, pathname)) {
       if (pathname.startsWith("/api")) {

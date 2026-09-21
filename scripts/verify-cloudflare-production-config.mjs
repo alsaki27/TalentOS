@@ -88,6 +88,7 @@ function scanTrackedCredentialUris() {
 
 const wrangler = read("wrangler.toml");
 const workerEntry = read("worker-entry.mjs");
+const middleware = read("src/middleware.ts");
 const deployWorkflow = read(".github/workflows/deploy.yml");
 const packageJsonText = read("package.json");
 read("scripts/verify-cloudflare-live-deployment.mjs");
@@ -96,6 +97,16 @@ requireMatch(wrangler, /^name\s*=\s*"skarion-talent-os"\s*$/m, `Worker name must
 requireMatch(wrangler, /^main\s*=\s*"worker-entry\.mjs"\s*$/m, "Worker entrypoint must be worker-entry.mjs");
 requireMatch(wrangler, /assets\s*=\s*\{[^\n]*directory\s*=\s*"\.open-next\/assets"/, "Worker assets must come from the current OpenNext output");
 requireMatch(workerEntry, /from\s+["']\.\/\.open-next\/worker\.js["']/, "Worker entrypoint must wrap the current OpenNext output");
+
+// Next.js middleware is compiled for the Edge runtime. Importing the database
+// layer pulls in node-postgres (and Node's crypto module), which fails at
+// runtime and turns every otherwise-valid authenticated request into a 401.
+if (/from\s+["']@\/server\/db\//.test(middleware)) {
+  errors.push("src/middleware.ts must not import the database layer; Edge middleware authenticates with signed JWTs only");
+}
+if (/from\s+["']@\/lib\/auth["']/.test(middleware)) {
+  errors.push("src/middleware.ts must import @/lib/auth-edge, not the database-backed @/lib/auth module");
+}
 
 const hyperdriveBlocks = [...wrangler.matchAll(/^\[\[hyperdrive\]\]\s*$/gm)];
 if (hyperdriveBlocks.length !== 1) {
