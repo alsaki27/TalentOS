@@ -9,6 +9,8 @@ const crypto = globalThis.crypto;
 // Worker uses its runtime secret; tokens then verify during login but fail on
 // the next API request.
 function getJwtSecret() {
+  const runtimeSecret = (globalThis as { __TALENTOS_JWT_SECRET?: unknown }).__TALENTOS_JWT_SECRET;
+  if (typeof runtimeSecret === "string" && runtimeSecret.length > 0) return runtimeSecret;
   return process.env.JWT_SECRET ?? process.env.AI_KEYS_ENCRYPTION_SECRET ?? "";
 }
 

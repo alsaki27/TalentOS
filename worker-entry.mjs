@@ -25,6 +25,9 @@ function applyHyperdrive(env) {
 
 export default {
   async fetch(request, env, ctx) {
+    if (typeof env?.JWT_SECRET === "string" && env.JWT_SECRET.length > 0) {
+      globalThis.__TALENTOS_JWT_SECRET = env.JWT_SECRET;
+    }
     applyHyperdrive(env);
     const response = await worker.fetch(request, env, ctx);
     // Cloudflare Web Analytics injects a RUM beacon into HTML responses. The
