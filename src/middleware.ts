@@ -40,6 +40,7 @@ function isPublicPath(pathname: string) {
     isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||
     pathname === "/api/health" ||
+    pathname === "/api/session" ||
     pathname === "/api/skarion-ai" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||
@@ -56,13 +57,11 @@ async function getVerifiedSession(token: string) {
   const jwtPayload = await verifyJWT(token);
   if (!jwtPayload) return null;
 
-  const profile = await queryOne<{ user_id: string; role: string; is_active: boolean }>(
-    "SELECT user_id, role, is_active FROM profiles WHERE user_id = $1",
-    [jwtPayload.user_id]
-  );
-
-  if (!profile || !profile.is_active) return null;
-  return { userId: jwtPayload.user_id, role: normalizeUserRole(profile.role) };
+  // The JWT already contains the role issued at login. API handlers still
+  // re-check the active profile through requireCurrentUser(); keeping the
+  // database out of this hot path prevents a transient DB error from turning
+  // every protected page navigation into a platform 500.
+  return { userId: jwtPayload.user_id, role: normalizeUserRole(jwtPayload.role) };
 }
 
 // Vercel Cron invokes this without a session cookie — gated by a bearer secret

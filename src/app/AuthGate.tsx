@@ -31,7 +31,7 @@ export default function AuthGate() {
       }
 
       try {
-        const res = await fetch("/api/auth/me", { cache: "no-store" });
+        const res = await fetch("/api/session", { cache: "no-store" });
         if (cancelled) return;
         if (res.ok) {
           setChecked(true);
