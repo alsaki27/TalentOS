@@ -45,10 +45,15 @@ export interface JobCaptureMeta {
 /**
  * Reads every identity-relevant value off a row about to be inserted.
  *
- * Remoteness falls back to the existing `work_mode` column (added by migration
- * 088, which already infers remote/hybrid/onsite for every creation path via a
- * trigger) so non-extension sources get the same benefit without each one having
- * to pass a flag.
+ * Remoteness comes ONLY from the caller's explicit flag (and, inside
+ * computeLocationBucket, from the title and location text). It deliberately does
+ * NOT read the `work_mode` column, even though migration 088 populates that for
+ * every creation path: work_mode is maintained by a database trigger, so writing
+ * the identity keys re-fires the trigger, which can change work_mode, which
+ * changes the computed key - a feedback loop that leaves stored keys disagreeing
+ * with the code that reads them. That disagreement is precisely the failure that
+ * silently blinds the whole content guard, so identity is derived only from
+ * stable, caller-supplied values.
  */
 function identityInputs(row: Record<string, unknown>, meta?: JobCaptureMeta) {
   const str = (v: unknown) => (v as string | null | undefined) ?? null;
@@ -59,7 +64,7 @@ function identityInputs(row: Record<string, unknown>, meta?: JobCaptureMeta) {
     location: str(row.location),
     url,
     signals: meta?.signals ?? null,
-    isRemote: meta?.isRemote ?? (row.work_mode === "remote" ? true : null),
+    isRemote: meta?.isRemote ?? null,
     descriptionText: str(row.description_text) ?? str(row.raw_description),
     urls: [str(row.apply_url), str(row.source_url), ...(meta?.identityUrls ?? [])],
   };

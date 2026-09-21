@@ -49,8 +49,40 @@ cpu_ms = 30_000
 [observability]
 enabled = true
 
+# ───────────────────────────────────────────────────────────────
+# Hyperdrive — how the Worker reaches the self-hosted Postgres
+# ───────────────────────────────────────────────────────────────
+# TalentOS' database moved from Neon (reached over HTTP) to Postgres on a private
+# VPS, which a Worker can only reach over TCP. The Worker cannot verify that
+# server's self-signed certificate: pg-cloudflare calls
+# startTls({ secureTransport: "starttls" }) and Cloudflare's socket API accepts no
+# CA and no way to skip verification. Hyperdrive fixes that by connecting from
+# Cloudflare's network, and it pools connections to the origin, which matters here
+# because a Worker would otherwise dial Postgres once per unit of work.
+#
+# Create it once (the VPS credentials stay inside Cloudflare, not in this file):
+#
+#   npx wrangler hyperdrive create talentos-pg \
+#     --connection-string="postgresql://USER:PASSWORD@40.160.139.188:5432/talentos?sslmode=require"
+#
+# then paste the printed id below and uncomment the block. worker-entry.mjs copies
+# env.HYPERDRIVE.connectionString into process.env.DATABASE_URL, so no application
+# code needs to know Hyperdrive exists. Until the block is uncommented the Worker
+# falls back to the DATABASE_URL secret and connects directly, which will fail TLS
+# against a self-signed certificate — so this is required for production.
+#
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "<id printed by wrangler hyperdrive create>"
+
 # Secrets are set via `wrangler secret put`, not here:
-# DATABASE_URL, NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT
+# DATABASE_URL — the Postgres connection string. Used by Node scripts, CI and as
+#   the Worker's fallback; Hyperdrive overrides it at runtime when bound.
+#   src/server/db/neon.ts picks its driver from this value: a *.neon.tech host uses
+#   the Neon HTTP driver, anything else uses node-postgres over TCP. Switching
+#   databases is therefore a secret change, and so is rolling back.
+# NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT — legacy aliases, still read as a
+#   fallback for DATABASE_URL.
 # CRM_INTEGRATION_SECRET â€” server-to-server company directory access for Skarion CRM
 # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 # AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY

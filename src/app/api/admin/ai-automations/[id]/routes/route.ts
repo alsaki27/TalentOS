@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { query, execute } from "@/server/db/neon";
+import { query, sql } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -72,21 +72,23 @@ export async function PUT(
     }
   }
 
-  // 4. Replace all routes (best-effort: @neondatabase/serverless HTTP mode has
-  //    no transaction support, so this is DELETE + individual INSERTs without
-  //    atomicity. If any INSERT fails, the automation may be left with partial
-  //    or zero routes and silently fall back to the global chain. Low blast
-  //    radius — admin-only, low-frequency endpoint.)
-  await execute("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]);
-
+  // 4. Replace all routes atomically. This used to be a DELETE followed by
+  //    individual INSERTs with no atomicity, because the HTTP driver could not
+  //    open a transaction - so a failed INSERT could leave the automation with
+  //    partial or zero routes and silently fall back to the global chain. The
+  //    TCP driver gives a real BEGIN/COMMIT, so that hole is closed: either the
+  //    full new route set lands or the old one is left untouched.
   const userId = context?.profile.user_id;
-  for (const r of inputRoutes) {
-    await execute(
-      `INSERT INTO ai_automation_routes (automation_id, ai_key_id, provider, rank, updated_by)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [params.id, r.ai_key_id ?? null, r.provider ?? null, r.rank, userId]
-    );
-  }
+  await sql().transaction((tx) => [
+    tx.query("DELETE FROM ai_automation_routes WHERE automation_id = $1", [params.id]),
+    ...inputRoutes.map((r) =>
+      tx.query(
+        `INSERT INTO ai_automation_routes (automation_id, ai_key_id, provider, rank, updated_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [params.id, r.ai_key_id ?? null, r.provider ?? null, r.rank, userId]
+      )
+    ),
+  ]);
 
   // 5. Return updated routes
   const updated = await query(

@@ -36,6 +36,12 @@ const nextConfig = {
         ...config.resolve.alias,
         'docx': false,
         '@react-pdf/renderer': false,
+        // node-postgres can optionally use a libpq-backed native client. It is not
+        // installed (and could not run on Workers anyway), but pg's entry point
+        // still references it, which makes the build emit an unresolved-module
+        // warning. Aliasing it away keeps the pure-JS client, which is the one
+        // that actually works in both Node and the Worker.
+        'pg-native': false,
       };
     }
     return config;

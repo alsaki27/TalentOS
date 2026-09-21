@@ -108,10 +108,22 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Run Neon schema fixes (sql/neon_fixes/)
+      - name: Run schema fixes (sql/neon_fixes/)
+        # Directory name is historical; the database is now self-hosted Postgres.
+        # psql is fine against its self-signed certificate: libpq reads
+        # sslmode=require as "encrypt, do not verify", unlike node-postgres which
+        # treats it as verify-full (see src/server/db/neon.ts).
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_schema_fixes != true }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          # Fail loudly and specifically if the database is simply unreachable.
+          # The runner's IP is dynamic, so a host firewall that allow-lists
+          # addresses will block this step, and the bare psql error for that is
+          # easy to misread as a schema problem.
+          if ! psql "$DATABASE_URL" -c 'select 1' >/dev/null 2>&1; then
+            echo "::error::Cannot reach the database from this runner. If the VPS firewall restricts access by IP, GitHub Actions runners use dynamic addresses - either allow them, or run migrations from a host that is permitted."
+            exit 1
+          fi
           FAILED_FILES=""
           for f in sql/neon_fixes/*.sql; do
             echo "::group::Applying $f"

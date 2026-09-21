@@ -30,28 +30,11 @@
 //   npx tsx scripts/backfill-canonical-job-fingerprints.mts           # dry run, writes nothing
 //   npx tsx scripts/backfill-canonical-job-fingerprints.mts --apply   # performs the update
 
-import { Client } from "@neondatabase/serverless";
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { getDbClient } from "./lib/db.mjs";
 import { computeApplyLinkFingerprint } from "../src/lib/jobUrlFingerprint";
 
 const UNIQUE_INDEX_FROM = new Date("2026-09-06T00:00:00Z");
 const BATCH_SIZE = 500;
-
-let dbUrl = process.env.DATABASE_URL ?? "";
-try {
-  readFileSync(resolve(process.cwd(), ".env.local"), "utf-8")
-    .split("\n")
-    .forEach((line) => {
-      if (line.startsWith("DATABASE_URL=") && !dbUrl) dbUrl = line.split("=").slice(1).join("=").trim();
-    });
-} catch {
-  /* .env.local absent is fine when DATABASE_URL is already in the environment */
-}
-if (!dbUrl) {
-  console.error("DATABASE_URL not set (checked process.env and .env.local).");
-  process.exit(1);
-}
 
 const apply = process.argv.includes("--apply");
 
@@ -66,8 +49,7 @@ interface JobRow {
 }
 
 async function main() {
-  const client = new Client(dbUrl);
-  await client.connect();
+  const client = await getDbClient();
 
   const { rows } = await client.query<JobRow>(
     `SELECT id, title, company, apply_url, source_url, apply_link_fingerprint, created_at

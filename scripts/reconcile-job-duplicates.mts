@@ -29,9 +29,7 @@
 //   npx tsx scripts/reconcile-job-duplicates.mts --undo             # dry run of the reversal
 //   npx tsx scripts/reconcile-job-duplicates.mts --undo --apply     # un-hide everything this system hid, clear the queue
 
-import { Client } from "@neondatabase/serverless";
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { getDbClient } from "./lib/db.mjs";
 import {
   computeContentIdentityKey,
   computeTitleLocationKey,
@@ -44,21 +42,6 @@ import {
   CONTENT_IDENTITY_MATCH_SCORE,
   TITLE_LOCATION_MATCH_SCORE,
 } from "../src/server/services/jobContentDuplicateGuard";
-
-let dbUrl = process.env.DATABASE_URL ?? "";
-try {
-  readFileSync(resolve(process.cwd(), ".env.local"), "utf-8")
-    .split("\n")
-    .forEach((line) => {
-      if (line.startsWith("DATABASE_URL=") && !dbUrl) dbUrl = line.split("=").slice(1).join("=").trim();
-    });
-} catch {
-  /* .env.local absent is fine when DATABASE_URL is already in the environment */
-}
-if (!dbUrl) {
-  console.error("DATABASE_URL not set (checked process.env and .env.local).");
-  process.exit(1);
-}
 
 const apply = process.argv.includes("--apply");
 const dedupe = process.argv.includes("--dedupe");
@@ -82,7 +65,10 @@ interface JobRow {
 }
 
 const urlOf = (r: JobRow) => r.apply_url ?? r.source_url ?? null;
-const isRemoteOf = (r: JobRow) => (r.work_mode === "remote" ? true : null);
+// Deliberately NOT derived from work_mode - that column is trigger-maintained, so
+// reading it here would make the keys change every time they are written. See the
+// note on identityInputs() in jobsRepository.ts.
+const isRemoteOf = (_r: JobRow) => null;
 
 function keysFor(r: JobRow) {
   return {
@@ -107,8 +93,9 @@ function describeReason(existing: JobRow, basis: string): string {
 }
 
 async function main() {
-  const client = new Client(dbUrl);
-  await client.connect();
+  // Driver picked from the connection string, so this works against either
+  // database without an edit (see scripts/lib/db.mjs).
+  const client = await getDbClient();
 
   const cols = await client.query<{ column_name: string }>(
     `SELECT column_name FROM information_schema.columns
@@ -159,18 +146,23 @@ async function main() {
   }
 
   const { rows } = await client.query<JobRow>(
-    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint, description_text, source, created_at,
+    `SELECT id, title, company, location, apply_url, source_url, apply_link_fingerprint, source, created_at,
             ${present.has("work_mode") ? "work_mode" : "NULL AS work_mode"},
             ${present.has("content_identity_key") ? "content_identity_key" : "NULL AS content_identity_key"},
             ${present.has("title_location_key") ? "title_location_key" : "NULL AS title_location_key"}
      FROM jobs
-     WHERE apply_link_fingerprint IS NOT NULL
-       AND created_at >= NOW() - make_interval(days => $1)
+     WHERE created_at >= NOW() - make_interval(days => $1)
      ORDER BY created_at ASC, id ASC`,
     [CONTENT_DUPLICATE_CHECK_WINDOW_DAYS]
   );
+  // Every row in the window gets its keys stamped, including rows with no
+  // fingerprint: they cannot be a match TARGET (the guard requires one), but a
+  // stale key on them would become wrong the moment one is added, and leaving
+  // them unstamped makes "do the stored keys agree with the code" unverifiable.
+  // Pair detection below still considers only fingerprinted rows.
+  const fingerprinted = rows.filter((r) => r.apply_link_fingerprint !== null);
   console.log(
-    `Loaded ${rows.length} fingerprinted rows from the last ${CONTENT_DUPLICATE_CHECK_WINDOW_DAYS} days (the guard's own window).`
+    `Loaded ${rows.length} rows from the last ${CONTENT_DUPLICATE_CHECK_WINDOW_DAYS} days (the guard's own window); ${fingerprinted.length} carry a fingerprint.`
   );
 
   if (apply && !schemaReady) {
@@ -190,6 +182,7 @@ async function main() {
     if (row.content_identity_key !== contentIdentityKey || row.title_location_key !== titleLocationKey) {
       keyUpdates.push({ id: row.id, key: contentIdentityKey, tlKey: titleLocationKey });
     }
+    if (row.apply_link_fingerprint === null) continue; // stamped, but never a match target
     if (titleLocationKey) {
       if (!byTitleLocation.has(titleLocationKey)) byTitleLocation.set(titleLocationKey, []);
       byTitleLocation.get(titleLocationKey)!.push(row);
@@ -205,7 +198,7 @@ async function main() {
 
   // ── 2. identity graph ──────────────────────────────────────────────────────
   const identityRows: { jobId: string; identity: string; kind: string }[] = [];
-  for (const row of rows) {
+  for (const row of fingerprinted) {
     for (const i of extractAllIdentities([row.apply_url, row.source_url])) {
       identityRows.push({ jobId: row.id, identity: i.identity, kind: i.kind });
     }
