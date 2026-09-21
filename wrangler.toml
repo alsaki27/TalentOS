@@ -71,9 +71,9 @@ enabled = true
 # falls back to the DATABASE_URL secret and connects directly, which will fail TLS
 # against a self-signed certificate — so this is required for production.
 #
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "<id printed by wrangler hyperdrive create>"
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "30402bc671364a7686899a2bec4befb1"
 
 # Secrets are set via `wrangler secret put`, not here:
 # DATABASE_URL — the Postgres connection string. Used by Node scripts, CI and as
