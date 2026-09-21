@@ -20,7 +20,7 @@
     "cf:preview": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare preview",
     "cf:deploy": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy",
     "cf:typegen": "wrangler types worker-configuration.d.ts --env-interface CloudflareGeneratedEnv",
-    "cf:types:check": "wrangler types worker-configuration.d.ts --env-interface CloudflareGeneratedEnv --check"
+    "cf:types:check": "node scripts/verify-cloudflare-types.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
