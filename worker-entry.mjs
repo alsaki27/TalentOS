@@ -26,7 +26,20 @@ function applyHyperdrive(env) {
 export default {
   async fetch(request, env, ctx) {
     applyHyperdrive(env);
-    return worker.fetch(request, env, ctx);
+    const response = await worker.fetch(request, env, ctx);
+    // Cloudflare Web Analytics injects a RUM beacon into HTML responses. The
+    // beacon is routinely blocked by Brave/ad blockers as ERR_BLOCKED_BY_CLIENT
+    // and creates a noisy console error for every page load. The app already
+    // uses private/no-store HTML responses, so no-transform is safe here and
+    // tells the edge not to rewrite the response body.
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().includes("text/html")) return response;
+    const headers = new Headers(response.headers);
+    const cacheControl = headers.get("cache-control") ?? "private, no-store";
+    if (!/\bno-transform\b/i.test(cacheControl)) {
+      headers.set("cache-control", `${cacheControl}, no-transform`);
+    }
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };
 
