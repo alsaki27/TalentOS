@@ -251,7 +251,18 @@ export async function middleware(req: NextRequest) {
   if (isAiKeyReadinessAuthorized(req, pathname)) return NextResponse.next();
 
   const token = req.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
-  const session = token ? await getVerifiedSession(token) : null;
+  let session = token ? await getVerifiedSession(token) : null;
+
+  // HTML pages are client shells; their data is still protected by the API
+  // handlers below. If the profile lookup has a transient failure, let a
+  // cryptographically valid session reach the shell so login does not bounce
+  // back to /login. API requests never use this fallback and remain fail-closed.
+  if (!session && token && !pathname.startsWith("/api")) {
+    const jwtPayload = await verifyJWT(token);
+    if (jwtPayload) {
+      session = { userId: jwtPayload.user_id, role: normalizeUserRole(jwtPayload.role) };
+    }
+  }
   if (session) {
     if (!canAccessPath(session.role, pathname)) {
       if (pathname.startsWith("/api")) {

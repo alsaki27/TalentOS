@@ -33,7 +33,7 @@ export default function AuthGate() {
       try {
         const res = await fetch("/api/bootstrap", { cache: "no-store" });
         if (cancelled) return;
-        if (res.ok) {
+        if (res.ok || res.status !== 401) {
           setChecked(true);
           return;
         }
