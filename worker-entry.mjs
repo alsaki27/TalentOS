@@ -1,4 +1,4 @@
-import worker from "./.worker-next/index.mjs";
+import worker from "./.open-next/worker.js";
 
 // TalentOS' Postgres moved from Neon (HTTP) to a self-hosted server, which a
 // Worker can only reach over TCP. A Worker cannot verify that server's

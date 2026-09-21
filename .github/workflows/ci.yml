@@ -15,6 +15,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Validate Cloudflare production wiring
+        run: npm run cf:verify
+      - name: Verify generated Cloudflare types
+        run: npm run cf:types:check
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test

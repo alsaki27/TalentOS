@@ -1,6 +1,8 @@
 import { Pool } from '@neondatabase/serverless';
 
-const pool = new Pool({ connectionString: 'postgresql://neondb_owner:npg_Gj1bqgAwf0mE@ep-withered-leaf-at0ubn6s-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' });
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) throw new Error('DATABASE_URL is required');
+const pool = new Pool({ connectionString: databaseUrl });
 
 async function listActiveRuns() {
   try {

@@ -38,6 +38,10 @@ on:
         default: false
         type: boolean
 
+concurrency:
+  group: talentos-production-deploy
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
@@ -53,6 +57,12 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Validate Cloudflare production wiring
+        run: npm run cf:verify
+
+      - name: Verify generated Cloudflare types
+        run: npm run cf:types:check
 
       - name: Build for Cloudflare (OpenNext)
         run: npm run cf:build
@@ -108,6 +118,9 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Re-validate production wiring before deploy
+        run: npm run cf:verify -- --production
+
       - name: Run schema fixes (sql/neon_fixes/)
         # Directory name is historical; the database is now self-hosted Postgres.
         # psql is fine against its self-signed certificate: libpq reads
@@ -142,26 +155,12 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
 
-      - name: Deploy Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
-
-      - name: Set all Worker secrets (single bulk update)
-        # Was 7 separate steps, each running one-or-more sequential
-        # `wrangler secret put` calls (13 total). Each `secret put` creates
-        # and deploys its own new Worker version; running many back-to-back
-        # right after "Deploy Worker" races Cloudflare's own propagation of
-        # the just-deployed version and intermittently fails with "You
-        # attempted to modify a secret, but the latest version of your
-        # Worker isn't currently deployed" (confirmed live in CI - run
-        # #1051 failed on the 4th secret-put in the sequence, after 3 prior
-        # ones had already succeeded). `wrangler secret bulk` uploads every
-        # secret in one Cloudflare API call/version instead, which removes
-        # the race entirely rather than papering over one flaky step.
+      - name: Deploy Worker with secrets atomically
+        # Wrangler 4 uploads the Worker code, Wrangler bindings, and this
+        # secret file as one version. Secrets omitted here are preserved by
+        # Cloudflare; no follow-up secret mutation creates a second version.
         run: |
+          set -euo pipefail
           if [ -z "$JWT_SECRET" ] || [ -z "$AI_KEYS_ENCRYPTION_SECRET" ] || [ -z "$CRON_SECRET" ]; then
             echo "::error::JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET, and CRON_SECRET must be configured in GitHub Secrets."
             exit 1
@@ -176,6 +175,7 @@ jobs:
           fi
 
           SECRETS_FILE="$(mktemp)"
+          trap 'rm -f "$SECRETS_FILE"' EXIT
           jq -n \
             --arg database_url "$DATABASE_URL" \
             --arg jwt_secret "$JWT_SECRET" \
@@ -206,8 +206,7 @@ jobs:
             + (if $gmail_push_token != "" then {GMAIL_PUSH_TOKEN: $gmail_push_token} else {} end)
             + (if $gmail_pubsub_topic != "" then {GMAIL_PUBSUB_TOPIC: $gmail_pubsub_topic} else {} end)
             ' > "$SECRETS_FILE"
-          npx wrangler secret bulk "$SECRETS_FILE"
-          rm -f "$SECRETS_FILE"
+          npx wrangler deploy --secrets-file "$SECRETS_FILE" --message "TalentOS ${GITHUB_SHA}" --tag "$GITHUB_SHA"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -224,4 +223,11 @@ jobs:
           SKARION_CRM_API_URL: ${{ secrets.SKARION_CRM_API_URL }}
           GMAIL_PUSH_TOKEN: ${{ secrets.GMAIL_PUSH_TOKEN }}
           GMAIL_PUBSUB_TOPIC: ${{ secrets.GMAIL_PUBSUB_TOPIC }}
+
+      - name: Verify active Worker version and Hyperdrive binding
+        run: npm run cf:verify-live
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_SHA: ${{ github.sha }}
 

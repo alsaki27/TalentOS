@@ -9,7 +9,7 @@ compatibility_date = "2025-06-20"
 compatibility_flags = ["nodejs_compat"]
 
 # Workers + Assets: host static frontend files
-assets = { directory = ".worker-next/assets", binding = "ASSETS" }
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
 
 [vars]
 TALENTOS_BASE_URL = "https://talent.skarion.com"

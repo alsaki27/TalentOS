@@ -14,10 +14,13 @@
     "test:e2e": "playwright test",
     "build": "next build",
     "start": "next start",
-    "cf:build": "npx cloudflare",
-    "cf:preview": "npx cloudflare && npx wrangler dev",
-    "cf:deploy": "npx cloudflare && npx wrangler deploy",
-    "cf:typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts"
+    "cf:verify": "node scripts/verify-cloudflare-production-config.mjs",
+    "cf:verify-live": "node scripts/verify-cloudflare-live-deployment.mjs",
+    "cf:build": "npx opennextjs-cloudflare build",
+    "cf:preview": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare preview",
+    "cf:deploy": "npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy",
+    "cf:typegen": "wrangler types worker-configuration.d.ts --env-interface CloudflareGeneratedEnv",
+    "cf:types:check": "wrangler types worker-configuration.d.ts --env-interface CloudflareGeneratedEnv --check"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
@@ -75,7 +78,7 @@
     "vaul": "^1.1.2"
   },
   "devDependencies": {
-    "@opennextjs/cloudflare": "^0.2.0",
+    "@opennextjs/cloudflare": "^1.15.1",
     "@playwright/test": "^1.61.1",
     "@types/canvas-confetti": "^1.9.0",
     "@types/file-saver": "^2.0.7",
@@ -93,6 +96,6 @@
     "tailwindcss": "^3.4.19",
     "typescript": "^5.6.0",
     "vitest": "^4.1.10",
-    "wrangler": "^3.114.1"
+    "wrangler": "^4.135.0"
   }
 }
