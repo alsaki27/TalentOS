@@ -48,15 +48,22 @@ function AuthForm() {
       return;
     }
 
-    const res = await fetch(mode === "signin" ? "/api/signin" : "/api/auth/signup", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        password,
-        display_name: displayName,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(mode === "signin" ? "/api/signin" : "/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          display_name: displayName,
+        }),
+      });
+    } catch {
+      setLoadingMode("");
+      setError("The sign-in service could not be reached. Please disable browser blocking for this site and try again.");
+      return;
+    }
 
     setLoadingMode("");
     if (!res.ok) {
@@ -64,11 +71,15 @@ function AuthForm() {
       // after staff auth fails preserves staff auth and keeps the two cookies
       // completely separate.
       if (mode === "signin") {
-        const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-        if (candidateRes.ok) {
-          router.push("/portal");
-          router.refresh();
-          return;
+        try {
+          const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+          if (candidateRes.ok) {
+            router.push("/portal");
+            router.refresh();
+            return;
+          }
+        } catch {
+          // Fall through to the normal staff sign-in error below.
         }
       }
       const data = await res.json().catch(() => ({}));
