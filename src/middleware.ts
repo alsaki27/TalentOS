@@ -29,6 +29,10 @@ function isPortalAuthPublicPath(pathname: string) {
 
 function isPublicPath(pathname: string) {
   return (
+    // The home page is only a redirect to the login surface. Do not inspect a
+    // possibly stale session cookie here; a rotated/invalid token must never
+    // turn the public entry point into a 500 before the redirect can run.
+    pathname === "/" ||
     pathname === "/login" ||
     pathname === "/signup" ||
     pathname === "/privacy" ||
