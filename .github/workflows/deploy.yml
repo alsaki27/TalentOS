@@ -159,17 +159,14 @@ jobs:
         # Wrangler 4 uploads the Worker code, Wrangler bindings, and this
         # secret file as one version. Secrets omitted here are preserved by
         # Cloudflare; no follow-up secret mutation creates a second version.
-        # OpenNext asks Wrangler for local binding metadata while preparing a
-        # deploy. This value is only a deployment-process input; the Worker
-        # still uses the production HYPERDRIVE id from wrangler.toml at runtime.
+        # The OpenNext build has already completed above. Tell Wrangler that
+        # this is the final deploy invocation so it does not auto-launch the
+        # OpenNext deploy wrapper again (which would re-enter local Hyperdrive
+        # emulation and reject the production-only binding).
         run: |
           set -euo pipefail
           if [ -z "$JWT_SECRET" ] || [ -z "$AI_KEYS_ENCRYPTION_SECRET" ] || [ -z "$CRON_SECRET" ]; then
             echo "::error::JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET, and CRON_SECRET must be configured in GitHub Secrets."
-            exit 1
-          fi
-          if [ -z "$CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE" ]; then
-            echo "::error::TALENTOS_DATABASE_URL must be configured for OpenNext Hyperdrive deploy inspection."
             exit 1
           fi
           if [ -z "$GOOGLE_CLIENT_ID" ] || [ -z "$GOOGLE_CLIENT_SECRET" ]; then
@@ -217,8 +214,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OPEN_NEXT_DEPLOY: "true"
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
-          CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE: ${{ secrets.TALENTOS_DATABASE_URL }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           AI_KEYS_ENCRYPTION_SECRET: ${{ secrets.AI_KEYS_ENCRYPTION_SECRET }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
