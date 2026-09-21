@@ -252,6 +252,26 @@ export async function middleware(req: NextRequest) {
   if (isAiKeyReadinessAuthorized(req, pathname)) return NextResponse.next();
 
   const token = req.cookies.get(ACCESS_TOKEN_COOKIE)?.value;
+  // A token issued by an older build may no longer verify after a secret
+  // rotation. Clear it immediately so the browser does not keep sending a
+  // permanently-invalid cookie and turning every API call into a 401.
+  const tokenPayload = token ? await verifyJWT(token) : null;
+  if (token && !tokenPayload) {
+    if (pathname.startsWith("/api")) {
+      const response = NextResponse.json({ error: "Authentication required" }, { status: 401 });
+      response.cookies.delete(ACCESS_TOKEN_COOKIE);
+      response.cookies.delete("skarion_refresh_token");
+      return response;
+    }
+    const loginUrl = req.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    loginUrl.search = "";
+    loginUrl.searchParams.set("next", `${pathname}${search}`);
+    const response = NextResponse.redirect(loginUrl);
+    response.cookies.delete(ACCESS_TOKEN_COOKIE);
+    response.cookies.delete("skarion_refresh_token");
+    return response;
+  }
   let session = token ? await getVerifiedSession(token) : null;
 
   // HTML pages are client shells; their data is still protected by the API
