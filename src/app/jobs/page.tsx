@@ -315,7 +315,14 @@ export default function JobsPage() {
   useEffect(() => {
     fetch("/api/jobs/facets")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => { if (data) setFacets(data); })
+      .then((data) => {
+        if (!data || typeof data !== "object") return;
+        setFacets({
+          sources: Array.isArray(data.sources) ? data.sources : [],
+          employmentTypes: Array.isArray(data.employmentTypes) ? data.employmentTypes : [],
+          categories: Array.isArray(data.categories) ? data.categories : [],
+        });
+      })
       .catch(console.error);
     loadSavedSearches();
     fetch("/api/candidates?compact=1&pageSize=500")
