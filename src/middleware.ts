@@ -40,7 +40,7 @@ function isPublicPath(pathname: string) {
     isLegacyAnonymousPortalPath(pathname) ||
     pathname.startsWith("/api/public") ||
     pathname === "/api/health" ||
-    pathname === "/api/session" ||
+    pathname === "/api/bootstrap" ||
     pathname === "/api/skarion-ai" ||
     pathname === "/api/integrations/gmail/callback" ||
     pathname === "/api/integrations/talent-os/webhook" ||

@@ -104,7 +104,7 @@ export default function NavBar() {
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") return;
-    fetch("/api/session").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+    fetch("/api/bootstrap").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
     const load = async () => {
       const r = await fetch("/api/notifications", { cache: "no-store" });
       if (r.ok) setNotifications(await r.json());
