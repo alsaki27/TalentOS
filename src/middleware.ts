@@ -57,11 +57,21 @@ async function getVerifiedSession(token: string) {
   const jwtPayload = await verifyJWT(token);
   if (!jwtPayload) return null;
 
-  // The JWT already contains the role issued at login. API handlers still
-  // re-check the active profile through requireCurrentUser(); keeping the
-  // database out of this hot path prevents a transient DB error from turning
-  // every protected page navigation into a platform 500.
-  return { userId: jwtPayload.user_id, role: normalizeUserRole(jwtPayload.role) };
+  try {
+    const profile = await queryOne<{ user_id: string; role: string; is_active: boolean }>(
+      "SELECT user_id, role, is_active FROM profiles WHERE user_id = $1",
+      [jwtPayload.user_id]
+    );
+
+    if (!profile || !profile.is_active) return null;
+    return { userId: jwtPayload.user_id, role: normalizeUserRole(profile.role) };
+  } catch (error) {
+    // Authentication middleware must fail closed, but a transient database
+    // failure must not become a generic platform 500 for every route. Returning
+    // null lets the existing redirect/401 path handle the request safely.
+    console.error("[auth] session verification failed:", error instanceof Error ? error.message : String(error));
+    return null;
+  }
 }
 
 // Vercel Cron invokes this without a session cookie — gated by a bearer secret
