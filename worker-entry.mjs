@@ -25,8 +25,13 @@ function applyHyperdrive(env) {
 
 export default {
   async fetch(request, env, ctx) {
-    if (typeof env?.JWT_SECRET === "string" && env.JWT_SECRET.length > 0) {
-      globalThis.__TALENTOS_JWT_SECRET = env.JWT_SECRET;
+    const runtimeJwtSecret =
+      env?.JWT_SECRET ??
+      env?.AI_KEYS_ENCRYPTION_SECRET ??
+      process.env.JWT_SECRET ??
+      process.env.AI_KEYS_ENCRYPTION_SECRET;
+    if (typeof runtimeJwtSecret === "string" && runtimeJwtSecret.length > 0) {
+      globalThis.__TALENTOS_JWT_SECRET = runtimeJwtSecret;
     }
     applyHyperdrive(env);
     const response = await worker.fetch(request, env, ctx);
