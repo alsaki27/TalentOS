@@ -407,7 +407,7 @@ export default function CandidateProfilePage() {
   useEffect(() => { load(); }, [id]);
 
   useEffect(() => {
-    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+    fetch("/api/bootstrap").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
   }, []);
 
   useEffect(() => {

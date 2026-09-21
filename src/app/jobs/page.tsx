@@ -1741,7 +1741,7 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       })
       .catch(() => setCandidates([]));
     fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((r) => r.ok ? r.json() : null)
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);
@@ -2254,7 +2254,7 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
       })
       .catch(() => setCandidates([]));
     fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then(setUsers);
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);

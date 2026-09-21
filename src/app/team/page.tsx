@@ -89,7 +89,7 @@ export default function TeamPage() {
     try {
       const [usersRes, meRes] = await Promise.all([
         fetch("/api/users", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
+        fetch("/api/bootstrap", { cache: "no-store" }),
       ]);
       if (!usersRes.ok) {
         throw new Error("Could not load team members.");

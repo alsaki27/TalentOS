@@ -36,7 +36,7 @@ export default function JobAgentTokensPage() {
 
   async function loadAuth() {
     try {
-      const res = await fetch("/api/auth/me", { cache: "no-store" });
+      const res = await fetch("/api/bootstrap", { cache: "no-store" });
       if (res.ok) {
         const d = await res.json();
         setRole(d?.profile?.role ?? "");

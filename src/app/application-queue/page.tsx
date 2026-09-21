@@ -332,7 +332,7 @@ export default function ApplicationQueuePage() {
       const [queueRes, usersRes, meRes] = await Promise.all([
         fetch(`/api/application-queue?${buildParams(pn)}`, { cache: "no-store" }),
         fetch("/api/users", { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
+        fetch("/api/bootstrap", { cache: "no-store" }),
       ]);
       if (!queueRes.ok) throw new Error("Could not load queue.");
       const data = await queueRes.json();

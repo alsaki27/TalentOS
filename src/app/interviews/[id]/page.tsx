@@ -119,7 +119,7 @@ export default function InterviewDetailPage() {
     try {
       const [interviewRes, meRes, usersRes, consensusRes] = await Promise.all([
         fetch(`/api/interviews/${id}`, { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
+        fetch("/api/bootstrap", { cache: "no-store" }),
         fetch("/api/users", { cache: "no-store" }),
         fetch(`/api/interviews/${id}/scorecard`, { cache: "no-store" }),
       ]);

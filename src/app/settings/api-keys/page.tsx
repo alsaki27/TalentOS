@@ -55,7 +55,7 @@ export default function ApiKeysPage() {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => setMe(data))
       .catch(() => setMe(null));

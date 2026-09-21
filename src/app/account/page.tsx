@@ -34,7 +34,7 @@ export default function AccountPage() {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((res) => (res.ok ? res.json() : null))
       .then(setMe)
       .catch(() => setMe(null));

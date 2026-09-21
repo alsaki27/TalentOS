@@ -156,7 +156,7 @@ export default function ReviewPage() {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((r) => (r.ok ? r.json() : null))
       .then(setMe)
       .catch(() => setMe(null));

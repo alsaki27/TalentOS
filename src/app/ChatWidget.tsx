@@ -64,7 +64,7 @@ export default function ChatWidget() {
 
   useEffect(() => {
     if (pathname?.startsWith("/portal") || pathname === "/login") { setAuthed(false); return; }
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((res) => setAuthed(res.ok))
       .catch(() => setAuthed(false));
   }, [pathname]);
