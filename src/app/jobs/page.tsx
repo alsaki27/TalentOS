@@ -320,11 +320,11 @@ export default function JobsPage() {
     loadSavedSearches();
     fetch("/api/candidates?compact=1&pageSize=500")
       .then((r) => r.json())
-      .then((data) => setFilterCandidates(data.items ?? data))
+      .then((data) => setFilterCandidates(Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])))
       .catch(console.error);
     fetch("/api/users")
       .then((r) => (r.ok ? r.json() : []))
-      .then(setFilterUsers)
+      .then((data) => setFilterUsers(Array.isArray(data) ? data : []))
       .catch(console.error);
   }, []);
 
@@ -1735,12 +1735,12 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
       .then((r) => r.ok ? r.json() : [])
       .then((data) => {
-        const list = Array.isArray(data) ? data : (data.items || []);
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
         list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
         setCandidates(list);
       })
       .catch(() => setCandidates([]));
-    fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
+    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then((data) => setUsers(Array.isArray(data) ? data : []));
     fetch("/api/bootstrap")
       .then((r) => r.ok ? r.json() : null)
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
@@ -2248,12 +2248,12 @@ function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onC
     fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
-        const list = Array.isArray(data) ? data : data.items || [];
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
         list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
         setCandidates(list);
       })
       .catch(() => setCandidates([]));
-    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then(setUsers);
+    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then((data) => setUsers(Array.isArray(data) ? data : []));
     fetch("/api/bootstrap")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
