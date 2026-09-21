@@ -18,6 +18,7 @@ import worker from "./.open-next/worker.js";
 function applyHyperdrive(env) {
   const connectionString = env?.HYPERDRIVE?.connectionString;
   if (!connectionString) return;
+  globalThis.__TALENTOS_HYPERDRIVE_CONNECTION_STRING = connectionString;
   if (process.env.DATABASE_URL === connectionString) return; // already applied in this isolate
   process.env.DATABASE_URL = connectionString;
 }

@@ -53,8 +53,18 @@ const isNeon = (url: string) => /\.neon\.tech(?::|\/|$)/i.test(url);
 const onWorkers =
   typeof navigator !== "undefined" && (navigator as any)?.userAgent === "Cloudflare-Workers";
 
+function getWorkerHyperdriveUrl(): string | undefined {
+  const value = (globalThis as { __TALENTOS_HYPERDRIVE_CONNECTION_STRING?: unknown })
+    .__TALENTOS_HYPERDRIVE_CONNECTION_STRING;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function getDatabaseUrl(): string {
-  const raw = process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
+  // OpenNext can initialize the bundled server before the Worker fetch handler
+  // runs. Keep the request-time Hyperdrive binding in an isolate-local global
+  // as well as process.env so the database layer cannot fall back to the direct
+  // self-hosted Postgres URL when process.env is not writable/populated yet.
+  const raw = getWorkerHyperdriveUrl() ?? process.env.DATABASE_URL ?? process.env.NEON_DATABASE_URL;
   if (!raw) {
     console.error("[DB] FATAL: Missing DATABASE_URL");
     throw new Error(
