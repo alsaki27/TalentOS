@@ -440,7 +440,7 @@ export async function closeOrphanedStageRuns(workflowId?: string): Promise<numbe
      SET status = 'failed',
          error_code = 'orphaned_run',
          error_message = 'Stage invocation superseded after its workflow claim became stale',
-         completed_at = COALESCE(completed_at, NOW())
+         completed_at = COALESCE(sr.completed_at, NOW())
      FROM application_ai_workflows w
      WHERE sr.workflow_id = w.id
        AND sr.status = 'running'
