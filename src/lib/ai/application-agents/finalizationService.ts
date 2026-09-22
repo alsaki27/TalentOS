@@ -11,7 +11,7 @@
 //   a version row, or a version row without a packet). The activity log is
 //   best-effort — failure there does not roll back the core finalization.
 
-import { updateWorkflowStatus, listArtifacts } from "@/server/repositories/applicationAiWorkflowRepository";
+import { updateWorkflowStatus, listArtifacts, type ArtifactRow } from "@/server/repositories/applicationAiWorkflowRepository";
 import { query, queryOne, sql as getSql } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 import { finalResumeToStudioDocument } from "./finalResumeToStudioDocument";
@@ -24,8 +24,24 @@ import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArc
 import { computeFinalScores, resumeDocumentText } from "./finalResumeScoring";
 import type { JobAnalysisV1 } from "./schemas";
 
-export async function finalizeWorkflow(workflowId: string, expectedLockVersion?: number): Promise<string | null> {
-  const artifacts = await listArtifacts(workflowId);
+export async function finalizeWorkflow(
+  workflowId: string,
+  expectedLockVersion?: number,
+  preloadedArtifacts?: ArtifactRow[],
+): Promise<string | null> {
+  // Cloudflare Hyperdrive caches SELECT results (query-shape + params) for a
+  // short TTL. processWorkflowStage already ran this exact listArtifacts
+  // query moments earlier, before Final Polish's own artifact existed
+  // (previousArtifacts, fetched pre-stage). Calling listArtifacts() again
+  // here - right after creating that artifact, well inside the cache window
+  // - can replay that same stale pre-artifact result and make a genuinely
+  // successful Final Polish run look like "no artifact found." Confirmed
+  // live 2026-09-22: workflow marked failed ~1s after its own final_polish
+  // artifact row committed, moments after the VPS/Hyperdrive migration
+  // introduced caching that didn't exist against the old Neon endpoint. The
+  // caller already has the authoritative post-write artifact list in hand,
+  // so prefer that over re-querying through the cache.
+  const artifacts = preloadedArtifacts ?? (await listArtifacts(workflowId));
 
   const wf = await queryOne<{
     id: string; application_id: string; candidate_id: string; job_id: string | null; base_resume_id: string | null;

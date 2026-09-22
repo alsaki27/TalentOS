@@ -999,7 +999,12 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       // Only re-throw if the resume was NOT committed, so the outer catch can
       // apply the normal retry/fail logic without blowing away a valid resume.
       try {
-        await finalizeWorkflow(workflowId, lockVersion);
+        // Pass the artifact list we already hold (previousArtifacts + the
+        // one just created above) instead of letting finalizeWorkflow
+        // re-query through Hyperdrive's cache - see comment in
+        // finalizeWorkflow for why that re-query can miss this exact
+        // artifact.
+        await finalizeWorkflow(workflowId, lockVersion, [...previousArtifacts, artifact]);
       } catch (finalizeErr: any) {
         console.error(`[Workflow ${workflowId}] finalizeWorkflow threw:`, finalizeErr?.message ?? finalizeErr);
         // Check whether the core transaction committed despite the exception.
