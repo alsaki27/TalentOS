@@ -51,6 +51,7 @@ const COLUMNS: ColumnDef[] = [
 
 const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "job_lens", 2: "resume_forge", 3: "hiring_panel", 4: "final_polish", 5: "completed" };
 const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, job_lens: 1, resume_forge: 2, hiring_panel: 3, final_polish: 4, completed: 5 };
+const WORKFLOW_DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 
 // updateWorkflowStatus() sets `updated_at = NOW()` on every status/stage
 // transition (queued->running, stage advance, ->completed, ->failed) - so
@@ -90,6 +91,7 @@ export default function ResumeParsingStatusPage() {
   const [findingsOpen, setFindingsOpen] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState(3);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [moving, setMoving] = useState<string | null>(null);
@@ -100,11 +102,11 @@ export default function ResumeParsingStatusPage() {
     fetchActive();
     pollRef.current = setInterval(fetchActive, 6000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+  }, [days]);
 
   async function fetchActive() {
     try {
-      const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
+      const res = await fetch(`/api/application-ai-workflows/active?days=${days}`, { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
 
@@ -210,10 +212,35 @@ export default function ResumeParsingStatusPage() {
 
   return (
     <div className="resume-parsing-status-page" style={{ padding: "12px", width: "100%" }}>
-      <div className="page-header" style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
+      <div className="page-header" style={{ marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 360px", minWidth: 0 }}>
           <h1 style={{ fontSize: 24, margin: 0, fontWeight: 700 }}>AI Resume Parsing Status</h1>
           <span className="muted" style={{ fontSize: 14, display: "inline-block", marginTop: 4 }}>Kanban board — drag cards to manually override stage · auto-refresh every 6s</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, marginLeft: "auto", paddingTop: 1 }}>
+          <label htmlFor="workflow-days-filter" style={{ fontSize: 16, fontWeight: 600, whiteSpace: "nowrap" }}>Show last</label>
+          <select
+            id="workflow-days-filter"
+            aria-label="Workflow time range"
+            value={days}
+            onChange={(e) => { setLoading(true); setDays(Number(e.target.value)); }}
+            style={{
+              minWidth: 136,
+              minHeight: 42,
+              padding: "8px 12px",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              background: "var(--surface-2)",
+              color: "inherit",
+              fontSize: 16,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {WORKFLOW_DAY_OPTIONS.map((option) => (
+              <option key={option} value={option}>Last {option} day{option === 1 ? "" : "s"}</option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -221,7 +248,7 @@ export default function ResumeParsingStatusPage() {
 
       {!loading && workflows.length === 0 && (
         <div className="card" style={{ padding: 24, textAlign: "center" }}>
-          <p className="muted">No active or recent workflows. Log an application with a base resume to start one.</p>
+          <p className="muted">No workflows updated in the last {days} day{days === 1 ? "" : "s"}. Log an application with a base resume to start one.</p>
         </div>
       )}
 
