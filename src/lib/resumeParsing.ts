@@ -1047,7 +1047,11 @@ export function finalizeParsedResume(parsed: Partial<ParsedResume>, rawText: str
   return finalized;
 }
 
-export async function parseResumeTextWithProvider(rawText: string, provider: AiProvider | null): Promise<ParsedResume> {
+export async function parseResumeTextWithProvider(
+  rawText: string,
+  provider: AiProvider | null,
+  options: { propagateProviderErrors?: boolean } = {},
+): Promise<ParsedResume> {
   if (!provider) {
     // #region debug-point E:text-no-provider
     reportResumeParsingDebug("E", "raw text parse skipped because no provider is configured", {
@@ -1077,12 +1081,35 @@ export async function parseResumeTextWithProvider(rawText: string, provider: AiP
     { role: "user", content: [{ type: "text", text: `${PARSE_PROMPT}\n\n--- RESUME TEXT ---\n${rawText}\n--- END RESUME TEXT ---` }] },
   ];
 
+  let response: Awaited<ReturnType<AiProvider["send"]>>;
   try {
-    const response = await provider.send({
+    response = await provider.send({
       system: "You are a resume parser. Extract structured data and return ONLY raw JSON.",
       messages,
       tools: [],
     });
+  } catch (err: any) {
+    if (options.propagateProviderErrors) throw err;
+
+    // Preserve the historical direct-call behavior for callers that do not
+    // have a routing wrapper, while allowing parseResumeFields() to advance
+    // to the next configured provider when a provider is rate-limited.
+    // #region debug-point E:text-provider-error
+    reportResumeParsingDebug("E", "raw text provider request failed", {
+      rawTextLength: rawText.length,
+      rawText,
+      error: serializeDebugError(err),
+    });
+    // #endregion
+    logResumeParsingConsole("raw text provider request failed", {
+      rawTextLength: rawText.length,
+      rawText,
+      error: serializeDebugError(err),
+    });
+    return { skills: [], experience: [], education: [], certifications: [], raw_text: rawText, parse_error: err?.message ?? serializeDebugError(err) };
+  }
+
+  try {
 
     const text = textOf(response.content) ?? "";
     // #region debug-point B:text-provider-raw-response
@@ -1173,7 +1200,7 @@ export async function parseResumeFields(rawText: string, markdown?: string): Pro
   });
   try {
     const { result } = await callWithUsageTracking("resume_parsing", undefined, async (provider) => {
-      return parseResumeTextWithProvider(rawText, provider);
+      return parseResumeTextWithProvider(rawText, provider, { propagateProviderErrors: true });
     });
     return result;
   } catch (err: any) {
