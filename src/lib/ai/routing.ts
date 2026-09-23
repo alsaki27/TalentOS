@@ -120,32 +120,10 @@ async function checkRouteHealth(
 }
 
 function isKeyHealthBlocked(
-  keyRow: {
-    provider?: string | null;
-    status: AiKeyStatus;
-    last_failure_at?: string | null;
-    last_error?: string | null;
-    provider_config?: Record<string, unknown> | null;
-  },
+  keyRow: { provider?: string | null; status: AiKeyStatus; last_failure_at?: string | null },
 ): boolean {
   if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
-  if (keyRow.status === "quota_exhausted") {
-    // Google free-credit/quota exhaustion must fail closed. A cooldown retry
-    // can create billable calls after a trial or credit balance is gone. The
-    // admin must explicitly test/reset the key before it can be used again.
-    return keyRow.provider === "google_vertex_proxy" && keyRow.provider_config?.fail_closed_on_quota === true;
-  }
-  if (keyRow.status !== "rate_limited") return false;
-  if (
-    keyRow.provider === "google_vertex_proxy" &&
-    keyRow.provider_config?.fail_closed_on_quota === true &&
-    /quota|billing|credit expired|credits exhausted/i.test(keyRow.last_error ?? "")
-  ) {
-    // Older rows may have been classified as rate_limited before the
-    // quota-first classifier was deployed. Treat their persisted error text
-    // as exhausted too, so the guard is effective immediately after rollout.
-    return true;
-  }
+  if (keyRow.status !== "rate_limited" && keyRow.status !== "quota_exhausted") return false;
   // A transient status on the explicitly configured Vertex route must not
   // make the safety net disappear. The provider call is the source of truth;
   // its rate-limit result is persisted as next_retry_at and keeps workflows

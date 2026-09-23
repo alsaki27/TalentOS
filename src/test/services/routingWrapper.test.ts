@@ -155,30 +155,6 @@ describe("callWithUsageTracking error paths", () => {
     expect(resolved?.provider).toBe(routedProvider);
   });
 
-  it("fails closed for a quota-exhausted guarded Vertex key", async () => {
-    mockQuery.mockResolvedValueOnce([{
-      id: "vertex-route",
-      automation_id: "application_job_lens",
-      ai_key_id: null,
-      provider: "google_vertex_proxy",
-      rank: 1,
-      is_enabled: true,
-      model_override: "gemini-2.5-flash-lite",
-    }]);
-    mockListEnabledAiKeys.mockResolvedValueOnce([{
-      id: "vertex-a",
-      provider: "google_vertex_proxy",
-      status: "quota_exhausted",
-      provider_config: { fail_closed_on_quota: true },
-    }]);
-
-    const { getProviderForAutomation } = await import("@/lib/ai/routing");
-    const resolved = await getProviderForAutomation("application_job_lens");
-
-    expect(resolved).toBeNull();
-    expect(mockGetAiKeyWithDecryptedKey).not.toHaveBeenCalled();
-  });
-
   it("rotates across sibling OpenCode keys before leaving the route rank", async () => {
     const providerOne = { send: vi.fn() };
     const providerTwo = { send: vi.fn() };
