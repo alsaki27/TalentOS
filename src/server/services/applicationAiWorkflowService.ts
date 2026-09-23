@@ -926,7 +926,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         routingStateId: typeof (wf.config_snapshot as any)?.routingStateId === "string"
           ? (wf.config_snapshot as any).routingStateId
           : undefined,
-        maxProviderAttempts: 2,
+            // The active pipeline state has three provider routes (Vertex B,
+            // Vertex A, then OpenCode). Two attempts stopped after the two
+            // Vertex keys and made the tertiary route unreachable whenever
+            // both Vertex gateways were rate-limited.
+            maxProviderAttempts: 4,
       };
       // Each production provider enforces AgentOptions.timeout_ms with its
       // own AbortController. Let that error reach callWithUsageTracking so it
