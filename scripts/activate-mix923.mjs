@@ -153,8 +153,14 @@ async function main() {
   // The pinned VPS presents a self-signed certificate. Keep TLS enabled, but
   // avoid trusting an arbitrary CA by refusing any host other than the exact
   // expected address above. Production runtime secrets are not changed here.
+  const databaseUrl = new URL(DATABASE_URL);
+  // pg lets sslmode=require in the URL override the explicit ssl object. The
+  // VPS uses a self-signed certificate, so remove only that client-side flag
+  // and keep encrypted TLS with certificate verification disabled.
+  databaseUrl.searchParams.delete("sslmode");
+  databaseUrl.searchParams.delete("channel_binding");
   const pool = new Pool({
-    connectionString: DATABASE_URL,
+    connectionString: databaseUrl.toString(),
     max: 1,
     ssl: { rejectUnauthorized: false },
   });
