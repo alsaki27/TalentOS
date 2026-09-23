@@ -8,8 +8,9 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { queryOneMock, decryptSecretMock } = vi.hoisted(() => ({
+const { queryOneMock, executeMock, decryptSecretMock } = vi.hoisted(() => ({
   queryOneMock: vi.fn(),
+  executeMock: vi.fn().mockResolvedValue({ rowCount: 1 }),
   decryptSecretMock: vi.fn(),
 }));
 
@@ -20,7 +21,7 @@ vi.mock("@/server/db/index", () => ({
 vi.mock("@/server/db/neon", () => ({
   query: vi.fn().mockResolvedValue([]),
   queryOne: queryOneMock,
-  execute: vi.fn().mockResolvedValue({ rowCount: 1 }),
+  execute: executeMock,
 }));
 
 vi.mock("@/lib/supabase", () => ({
@@ -34,11 +35,12 @@ vi.mock("@/server/security/secretCrypto", () => ({
   isEncryptionAvailable: () => false,
 }));
 
-import { getAiKeyWithDecryptedKey } from "@/server/repositories/aiKeyRepository";
+import { getAiKeyWithDecryptedKey, recordAiKeyFailure } from "@/server/repositories/aiKeyRepository";
 
 describe("getAiKeyWithDecryptedKey", () => {
   beforeEach(() => {
     queryOneMock.mockReset();
+    executeMock.mockReset().mockResolvedValue({ rowCount: 1 });
     decryptSecretMock.mockReset();
   });
 
@@ -58,5 +60,13 @@ describe("getAiKeyWithDecryptedKey", () => {
     const result = await getAiKeyWithDecryptedKey("key-1");
 
     expect(result?.decrypted_key).toBe("sk-real-key");
+  });
+
+  it("classifies a combined Google rate-limit/quota response as quota exhausted", async () => {
+    await recordAiKeyFailure("vertex-a", "Google Vertex Proxy: rate limit or quota exceeded.");
+
+    const [, values] = executeMock.mock.calls[0];
+    expect(values[0]).toBe("quota_exhausted");
+    expect(values[5]).toBe("vertex-a");
   });
 });

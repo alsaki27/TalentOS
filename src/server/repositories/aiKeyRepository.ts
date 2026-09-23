@@ -475,12 +475,16 @@ export async function recordAiKeyFailure(id: string, error: string): Promise<voi
   const safeError = typeof error === "string" ? error : String(error ?? "Unknown provider error");
   const errLower = safeError.toLowerCase();
   let status: AiKeyStatus;
-  if (errLower.includes("unauthorized") || errLower.includes("401") || errLower.includes("invalid api key")) {
+  // Check quota/credit exhaustion before generic rate-limit wording. Google
+  // commonly returns "rate limit or quota exceeded" for an exhausted project;
+  // treating that as a 15-minute throttle would allow calls again after the
+  // cooldown and could spend money after free credits are gone.
+  if (errLower.includes("quota") || errLower.includes("billing") || errLower.includes("credit expired") || errLower.includes("credits exhausted")) {
+    status = "quota_exhausted";
+  } else if (errLower.includes("unauthorized") || errLower.includes("401") || errLower.includes("invalid api key")) {
     status = "invalid_credential";
   } else if (errLower.includes("rate limit") || errLower.includes("429")) {
     status = "rate_limited";
-  } else if (errLower.includes("quota") || errLower.includes("billing")) {
-    status = "quota_exhausted";
   } else {
     status = "failing";
   }

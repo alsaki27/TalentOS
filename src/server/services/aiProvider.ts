@@ -452,7 +452,15 @@ export async function getActiveProviderWithFallback(excludeKeyIds?: Set<string>)
   for (const key of dbKeys) {
     if (excludeKeyIds?.has(key.id)) continue;
     if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(key.status as any)) continue;
-    if (["rate_limited", "quota_exhausted"].includes(key.status as any)) {
+    const vertexQuotaGuarded = key.provider === "google_vertex_proxy" && key.provider_config?.fail_closed_on_quota === true;
+    if (
+      vertexQuotaGuarded &&
+      (key.status === "quota_exhausted" ||
+        (key.status === "rate_limited" && /quota|billing|credit expired|credits exhausted/i.test(key.last_error ?? "")))
+    ) {
+      continue;
+    }
+    if (key.status === "rate_limited") {
       const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
       if (Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000) continue;
     }
