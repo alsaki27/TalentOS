@@ -8,6 +8,7 @@ import ApplicationStatusChart from "@/components/candidates/shared/ApplicationSt
 import ApplicationSourceChart from "@/components/candidates/shared/ApplicationSourceChart";
 import ApplicationsDataTable from "@/components/candidates/shared/ApplicationsDataTable";
 import ApplicationNotesModal from "@/components/candidates/shared/ApplicationNotesModal";
+import { DISPLAY_GROUPS } from "@/lib/applicationDisplayStatus";
 
 interface CandidateOption {
   id: string;
@@ -59,12 +60,6 @@ interface DashboardData {
   selectedCandidateName: string | null;
   emailTaskCounts: EmailTaskCounts;
 }
-
-var DISPLAY_GROUPS: Record<string, string> = {
-  applied: "Applied", replied: "Screening", interview: "Interview",
-  offer: "Offer", rejected: "Rejected", withdrawn: "Rejected",
-  assigned: "Applied", stacked: "Applied", in_progress: "Applied",
-};
 
 var STATUS_ICONS: Record<string, string> = { Applied: "✅", "In Progress": "⏳", Screening: "📞", Interview: "🎯", Offer: "🏆", Rejected: "❌" };
 
@@ -122,14 +117,70 @@ function CandidateDashboardInner() {
   }
 
   async function handleStatusChange(applicationId: string, newStatus: string) {
+    var previousStatus = data?.applications.find(function (application) {
+      return application.application_id === applicationId;
+    })?.status;
+    if (previousStatus === undefined) return;
+    var rollbackStatus = previousStatus;
+
+    function shiftStatusCounts(counts: Record<string, number>, fromStatus: string, toStatus: string) {
+      var fromGroup = DISPLAY_GROUPS[fromStatus] || fromStatus;
+      var toGroup = DISPLAY_GROUPS[toStatus] || toStatus;
+      if (fromGroup === toGroup) return counts;
+      var next = { ...counts };
+      if (fromGroup in next) next[fromGroup] = Math.max(0, (next[fromGroup] || 0) - 1);
+      next[toGroup] = (next[toGroup] || 0) + 1;
+      return next;
+    }
+
+    // Update the visible row and summary cards before the network request.
+    // The PATCH is still authoritative; a failed request rolls this change back.
+    setData(function (previous) {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        statusCounts: shiftStatusCounts(previous.statusCounts, rollbackStatus, newStatus),
+        applications: previous.applications.map(function (application) {
+          return application.application_id === applicationId
+            ? { ...application, status: newStatus }
+            : application;
+        }),
+      };
+    });
+
     try {
       var res = await fetch("/api/applications/" + applicationId, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) throw new Error("Failed");
-      fetchData();
-    } catch (err) { console.error("Status change failed:", err); }
+      var updated = await res.json().catch(function () { return {}; });
+      setData(function (previous) {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          applications: previous.applications.map(function (application) {
+            return application.application_id === applicationId
+              ? { ...application, status: newStatus, applied_at: updated?.applied_at ?? application.applied_at }
+              : application;
+          }),
+        };
+      });
+    } catch (err) {
+      setData(function (previous) {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          statusCounts: shiftStatusCounts(previous.statusCounts, newStatus, rollbackStatus),
+          applications: previous.applications.map(function (application) {
+            return application.application_id === applicationId
+              ? { ...application, status: rollbackStatus }
+              : application;
+          }),
+        };
+      });
+      console.error("Status change failed:", err);
+    }
   }
 
   async function forceSyncEmails() {
