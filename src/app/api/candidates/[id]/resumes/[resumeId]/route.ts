@@ -4,27 +4,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
-import { deleteStorageFile } from "@/lib/storage";
+import { queryOne, execute } from "@/server/db/neon";
+import { deleteResumeFile } from "@/lib/resumeStorage";
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string; resumeId: string } }) {
   const currentUser = await getCurrentUserContext();
-  const { data: resume } = await supabase
-    .from("resumes")
-    .select("file_url, label, kind")
-    .eq("id", params.resumeId)
-    .eq("candidate_id", params.id)
-    .single();
 
-  const { error } = await supabase
-    .from("resumes")
-    .delete()
-    .eq("id", params.resumeId)
-    .eq("candidate_id", params.id);
+  let resume;
+  resume = await queryOne<{ file_url: string | null; label: string | null; kind: string | null }>(
+    'SELECT file_url, label, kind FROM resumes WHERE id = $1 AND candidate_id = $2',
+    [params.resumeId, params.id]
+  );
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await execute('DELETE FROM resumes WHERE id = $1 AND candidate_id = $2', [params.resumeId, params.id]);
 
-  await deleteStorageFile(resume?.file_url);
+  await deleteResumeFile(resume?.file_url);
 
   if (currentUser) {
     await logActivity({

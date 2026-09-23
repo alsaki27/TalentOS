@@ -6,12 +6,20 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { getActiveProvider } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { AiContentBlock, AiMessage, looksDegenerate, textOf, toolUsesOf } from "@/lib/ai/provider";
 import { executeTool, TOOLS } from "@/lib/ai/tools";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
+import {
+  listUserConversationIds,
+  countUserMessagesToday,
+  createConversation,
+  getPriorMessages,
+  insertUserMessage,
+  insertAssistantMessage,
+  insertToolMessage,
+  touchConversation,
+} from "@/server/repositories/chatRepository";
 
 const MAX_TOOL_ITERATIONS = 6;
 const MAX_HISTORY_TURNS = 40;
@@ -21,14 +29,7 @@ export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
-  const active = getActiveProvider();
-  if (!active) {
-    return NextResponse.json(
-      { error: "AI assistant is not configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY (see README)." },
-      { status: 503 },
-    );
-  }
-  const { provider } = active;
+  let providerName: string | undefined;
 
   const body = await req.json();
   const userMessage = String(body.message ?? "").trim();
@@ -43,40 +44,12 @@ export async function POST(req: NextRequest) {
   // Cost guardrail: this calls a paid, unsupervised external API. A per-user daily cap
   // bounds worst-case spend from a runaway client/script far more cheaply than discovering
   // the bill later.
-  let conversationIds: string[] = [];
-  if (isNeon()) {
-    const userConversations = await query<{ id: string }>(
-      "SELECT id FROM chat_conversations WHERE user_id = $1",
-      [context!.profile.user_id]
-    );
-    conversationIds = (userConversations ?? []).map((c) => c.id);
-  } else {
-    const { data: userConversations } = await supabase
-      .from("chat_conversations")
-      .select("id")
-      .eq("user_id", context!.profile.user_id);
-    conversationIds = (userConversations ?? []).map((c: any) => c.id as string);
-  }
+  const conversationIds = (await listUserConversationIds(context!.profile.user_id)).map((c) => c.id);
 
   if (conversationIds.length > 0) {
     const sinceMidnight = new Date();
     sinceMidnight.setHours(0, 0, 0, 0);
-    let messagesToday = 0;
-    if (isNeon()) {
-      const countRow = await queryOne<{ count: string }>(
-        "SELECT COUNT(*) as count FROM chat_messages WHERE role = $1 AND created_at >= $2 AND conversation_id = ANY($3)",
-        ["user", sinceMidnight.toISOString(), conversationIds]
-      );
-      messagesToday = parseInt(countRow?.count ?? "0", 10);
-    } else {
-      const { count } = await supabase
-        .from("chat_messages")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "user")
-        .gte("created_at", sinceMidnight.toISOString())
-        .in("conversation_id", conversationIds);
-      messagesToday = count ?? 0;
-    }
+    const messagesToday = await countUserMessagesToday(conversationIds, sinceMidnight.toISOString());
 
     if (messagesToday >= MAX_USER_MESSAGES_PER_DAY) {
       return NextResponse.json(
@@ -90,40 +63,10 @@ export async function POST(req: NextRequest) {
   const title = userMessage.slice(0, 60) || attachment?.name || "New conversation";
 
   if (!conversationId) {
-    if (isNeon()) {
-      const created = await queryOne<{ id: string }>(
-        "INSERT INTO chat_conversations (user_id, title) VALUES ($1, $2) RETURNING id",
-        [context!.profile.user_id, title]
-      );
-      if (!created) return NextResponse.json({ error: "Failed to create conversation" }, { status: 500 });
-      conversationId = created.id;
-    } else {
-      const { data: created, error } = await supabase
-        .from("chat_conversations")
-        .insert({ user_id: context!.profile.user_id, title })
-        .select("id")
-        .single();
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-      conversationId = created.id;
-    }
+    conversationId = await createConversation(context!.profile.user_id, title);
   }
 
-  let priorMessages: any[] = [];
-  if (isNeon()) {
-    priorMessages = await query(
-      "SELECT role, content, attachment_name, attachment_type, attachment_text FROM chat_messages WHERE conversation_id = $1 AND role = ANY($2) ORDER BY created_at ASC LIMIT $3",
-      [conversationId, ["user", "assistant"], MAX_HISTORY_TURNS]
-    );
-  } else {
-    const { data } = await supabase
-      .from("chat_messages")
-      .select("role, content, attachment_name, attachment_type, attachment_text")
-      .eq("conversation_id", conversationId)
-      .in("role", ["user", "assistant"])
-      .order("created_at", { ascending: true })
-      .limit(MAX_HISTORY_TURNS);
-    priorMessages = data ?? [];
-  }
+  const priorMessages = await getPriorMessages(conversationId, MAX_HISTORY_TURNS);
 
   const history: AiMessage[] = (priorMessages ?? []).map((m: any) => {
     let text = m.content as string;
@@ -149,46 +92,48 @@ export async function POST(req: NextRequest) {
 
   const messages: AiMessage[] = [...history, { role: "user", content: [{ type: "text", text: modelText }] }];
 
-  if (isNeon()) {
-    await execute(
-      "INSERT INTO chat_messages (conversation_id, role, content, attachment_url, attachment_name, attachment_type, attachment_text) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-      [conversationId, "user", userMessage || `Attached: ${attachment?.name}`, attachment?.url ?? null, attachment?.name ?? null, attachment?.type ?? null, attachment?.textContent ?? null]
-    );
-  } else {
-    await supabase.from("chat_messages").insert({
-      conversation_id: conversationId,
-      role: "user",
-      content: userMessage || `Attached: ${attachment?.name}`,
-      attachment_url: attachment?.url ?? null,
-      attachment_name: attachment?.name ?? null,
-      attachment_type: attachment?.type ?? null,
-      attachment_text: attachment?.textContent ?? null,
-    });
-  }
+  await insertUserMessage(
+    conversationId,
+    userMessage || `Attached: ${attachment?.name}`,
+    attachment?.url ?? null,
+    attachment?.name ?? null,
+    attachment?.type ?? null,
+    attachment?.textContent ?? null
+  );
 
+  // This prompt is sent to three different model families behind a single
+  // AiProvider interface (Anthropic, NVIDIA/Kimi, Gemini via the Vertex proxy),
+  // and the same wording has to work for all of them - written more explicitly
+  // than pure-Claude prompting would need, since smaller/cheaper models follow
+  // looser, more example-driven instructions less reliably than Claude does.
+  // The "when NOT to call a tool" section exists because of a real, reproduced
+  // failure: before Gemini's tool-calling was wired up correctly, asking "hi" or
+  // "are you vertex?" made it emit a literal {"tool_code": "print(talent.
+  // list_jobs())"} text block instead of answering - it had absorbed "use tools
+  // before answering questions about candidates/jobs/..." as "always look like
+  // you're using a tool," with no real mechanism to do so. Real tool-calling is
+  // wired up correctly now for all three providers, but a weaker model can still
+  // *choose* to call a tool needlessly even with the real mechanism available -
+  // fixing the plumbing doesn't fix the judgment call, so the prompt still needs
+  // to say this directly rather than assume it's now implied.
+  const today = new Date().toISOString().slice(0, 10);
   const systemPrompt = [
     "You are the internal data assistant for TalentOS, a candidate placement tracker.",
-    "Use the available tools to look up real data before answering questions about candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log — never guess or fabricate numbers.",
-    "Tool results are live, authoritative data pulled directly from this app's own database moments ago — not examples, hypotheticals, or data you lack access to. Trust and report them directly; do not hedge by claiming you can't access real-time data after a tool has just given you exactly that.",
+    MISSION_CONTEXT,
+    `Today's date is ${today}.`,
+    "",
+    "When to use a tool: call one of the tools below whenever answering would require real data from this app - candidates, jobs, applications (including priority/review status), companies, analytics, import sources, or the audit log. Never guess, estimate, or fabricate numbers, names, or counts - if a question needs real data and no tool fits, say so plainly instead of making something up.",
+    "When NOT to use a tool: greetings, small talk, questions about what you are or what you can do, and general help requests don't need a tool call - just answer directly in plain text. If you're not sure a tool is needed, it probably isn't - answer without one rather than calling something speculatively.",
+    "Call the fewest tools that actually answer the question - usually exactly one. Only call more than one if the question genuinely needs data from more than one source (e.g. comparing candidates against jobs).",
+    "Tool results are live, authoritative data pulled directly from this app's own database moments ago - not examples, hypotheticals, or data you lack access to. Trust and report them directly; do not hedge by claiming you can't access real-time data after a tool has just given you exactly that.",
     "Be concise. Use plain language, not raw JSON, in your final answer.",
     `The person you're talking to has the role: ${context!.profile.role}.`,
-  ].join(" ");
+  ].join("\n");
 
   // On failure, persist a visible error turn instead of leaving the transcript looking
   // like it silently dropped the user's message (which was already saved above).
   async function failWithVisibleError(message: string, status: number) {
-    if (isNeon()) {
-      await execute(
-        "INSERT INTO chat_messages (conversation_id, role, content) VALUES ($1, $2, $3)",
-        [conversationId, "assistant", `(error) ${message}`]
-      );
-    } else {
-      await supabase.from("chat_messages").insert({
-        conversation_id: conversationId,
-        role: "assistant",
-        content: `(error) ${message}`,
-      });
-    }
+    await insertAssistantMessage(conversationId!, `(error) ${message}`);
     return NextResponse.json({ conversation_id: conversationId, error: message }, { status });
   }
 
@@ -200,7 +145,11 @@ export async function POST(req: NextRequest) {
     iterations += 1;
     let aiResponse;
     try {
-      aiResponse = await provider.send({ system: systemPrompt, messages, tools: TOOLS });
+      const { result, providerName: pn } = await callWithUsageTracking("chat_assistant", { userId: context?.profile.user_id }, async (provider) => {
+        return provider.send({ system: systemPrompt, messages, tools: TOOLS });
+      });
+      aiResponse = result;
+      providerName = pn;
     } catch (err: any) {
       return failWithVisibleError(err.message ?? "AI request failed", 502);
     }
@@ -216,20 +165,9 @@ export async function POST(req: NextRequest) {
           ...lastToolCalls.map((t) => `\n${t.name}:\n${t.result}`),
         ].join("\n");
       }
-      if (isNeon()) {
-        await execute(
-          "INSERT INTO chat_messages (conversation_id, role, content) VALUES ($1, $2, $3)",
-          [conversationId, "assistant", finalText]
-        );
-        await execute(
-          "UPDATE chat_conversations SET updated_at = $1 WHERE id = $2",
-          [new Date().toISOString(), conversationId]
-        );
-      } else {
-        await supabase.from("chat_messages").insert({ conversation_id: conversationId, role: "assistant", content: finalText });
-        await supabase.from("chat_conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
-      }
-      return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: active.name });
+      await insertAssistantMessage(conversationId, finalText);
+      await touchConversation(conversationId, new Date().toISOString());
+      return NextResponse.json({ conversation_id: conversationId, reply: finalText, toolsUsed, provider: providerName ?? "unknown" });
     }
 
     messages.push({ role: "assistant", content: aiResponse.content });
@@ -238,21 +176,14 @@ export async function POST(req: NextRequest) {
     lastToolCalls = [];
     for (const toolUse of toolUsesOf(aiResponse.content)) {
       toolsUsed.push(toolUse.name);
-      const result = await executeTool(toolUse.name, toolUse.input, { role: context!.profile.role });
+      const result = await executeTool(toolUse.name, toolUse.input, {
+        role: context!.profile.role,
+        userId: context!.profile.user_id,
+        email: context!.profile.email,
+        displayName: context!.profile.display_name,
+      });
       lastToolCalls.push({ name: toolUse.name, result });
-      if (isNeon()) {
-        await execute(
-          "INSERT INTO chat_messages (conversation_id, role, tool_name, content) VALUES ($1, $2, $3, $4)",
-          [conversationId, "tool", toolUse.name, JSON.stringify({ input: toolUse.input, result })]
-        );
-      } else {
-        await supabase.from("chat_messages").insert({
-          conversation_id: conversationId,
-          role: "tool",
-          tool_name: toolUse.name,
-          content: JSON.stringify({ input: toolUse.input, result }),
-        });
-      }
+      await insertToolMessage(conversationId, toolUse.name, JSON.stringify({ input: toolUse.input, result }));
       toolResults.push({ type: "tool_result", toolUseId: toolUse.id, content: result });
     }
     messages.push({ role: "user", content: toolResults });

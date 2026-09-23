@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { syncCompanyDirectoryFromJobs } from "@/lib/companyDirectory";
-import { filterNewJobs } from "@/lib/jobDedup";
 import { requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query } from "@/server/db/neon";
+import { createJobs } from "@/server/repositories/jobsRepository";
+import { notifyBatchDuplicateSummary } from "@/lib/jobDuplicateNotify";
 
 export async function POST(req: NextRequest) {
   const { response } = await requirePublicApiScope(req, "jobs:import");
@@ -63,44 +61,24 @@ export async function POST(req: NextRequest) {
       } : {}),
     }));
 
-  const { newRows, duplicates } = await filterNewJobs(normalizedRows);
+  const { inserted, duplicates } = await createJobs(normalizedRows);
+  if (inserted.length) await syncCompanyDirectoryFromJobs(inserted);
 
-  let data: any[];
-  let error: any;
-
-  if (newRows.length) {
-    if (isNeon()) {
-      const cols = Object.keys(newRows[0]);
-      const values: any[] = [];
-      const placeholders: string[] = [];
-      let paramIdx = 1;
-      for (const row of newRows) {
-        const rowPlaceholders: string[] = [];
-        for (const col of cols) {
-          rowPlaceholders.push(`$${paramIdx++}`);
-          values.push((row as any)[col]);
-        }
-        placeholders.push(`(${rowPlaceholders.join(", ")})`);
-      }
-      const sql = `INSERT INTO jobs (${cols.join(", ")}) VALUES ${placeholders.join(", ")} RETURNING *`;
-      data = await query(sql, values);
-      error = null;
-    } else {
-      const res = await supabase.from("jobs").insert(newRows).select("*");
-      data = res.data ?? [];
-      error = res.error;
-    }
-  } else {
-    data = [];
-    error = null;
+  if (duplicates.length > 0) {
+    await notifyBatchDuplicateSummary({
+      runLabel: "public API job import",
+      runLink: "/jobs",
+      totalCandidates: rows.length,
+      duplicates: duplicates.map((d) => ({
+        attemptedTitle: d.input.title, attemptedCompany: d.input.company ?? null,
+        attemptedApplyUrl: d.input.apply_url ?? d.input.source_url ?? null, existing: d.existing,
+      })),
+    }).catch((err) => console.error("Public API import duplicate summary failed:", err));
   }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  if (data?.length) await syncCompanyDirectoryFromJobs(data);
-
   return NextResponse.json({
-    imported: data?.length ?? 0,
-    skipped: duplicates,
-    jobs: data ?? [],
+    imported: inserted.length,
+    skipped: duplicates.length,
+    jobs: inserted,
   }, { status: 201 });
 }

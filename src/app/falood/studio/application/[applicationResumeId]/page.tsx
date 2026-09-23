@@ -1,8 +1,15 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { exportAndDownloadResume } from "@/lib/falood/clientExport";
+import A4Preview from "@/components/resume/A4Preview";
+import SectionSidebar from "@/components/resume/SectionSidebar";
+import KeywordPanel from "@/components/resume/KeywordPanel";
+import { formatPageFitSummary } from "@/lib/scoreScale";
+import { MIN_UTILIZATION, MAX_UTILIZATION } from "@/lib/falood/pageFitThresholds";
+import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
 /* ──────────── interfaces ──────────── */
 
@@ -40,7 +47,6 @@ interface ApplicationResumeVersion {
   application_id?: string;
   status: "draft" | "in_review" | "approved" | "rejected";
   content: ResumeDocument;
-  fit_score?: number | null;
   recommendation?: string | null;
   source_type?: string | null;
   updated_at: string;
@@ -106,6 +112,8 @@ interface ResumeExport {
   file_name: string;
   file_path: string | null;
   storage_provider: string | null;
+  storage_url: string | null;
+  storage_item_id: string | null;
   file_size_bytes: number | null;
   status: "created" | "failed" | "deleted";
   error: string | null;
@@ -171,17 +179,18 @@ interface PacketData {
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-function estimatePages(content: ResumeDocument): number {
-  const text = JSON.stringify(content);
-  // Rough heuristic: ~2800 chars ≈ 1 page for a dense resume
-  return Math.max(1, Math.round((text.length / 2800) * 10) / 10);
-}
-
-function pageStatus(content: ResumeDocument): { label: string; color: string } {
-  const pages = estimatePages(content);
-  if (pages <= 1) return { label: `1 page — good`, color: "var(--accent)" };
-  if (pages <= 1.2) return { label: `${pages.toFixed(1)} pages — close`, color: "var(--warn)" };
-  return { label: `${pages.toFixed(1)} pages — over`, color: "var(--danger)" };
+/** Turns real, measured page-fit metrics (from renderResumePdfWithMetrics,
+ *  computed live client-side - see the pageMetrics effect below) into the
+ *  same {label, color} shape the toolbar badge used to get from the old
+ *  character-count heuristic (estimatePages/pageStatus, both removed). */
+function pageFitBadge(metrics: ResumePageMetrics | null): { label: string; color: string } {
+  const label = formatPageFitSummary(metrics);
+  if (!metrics) return { label, color: "var(--ink-soft)" };
+  if (!metrics.readable || metrics.overflow) return { label, color: "var(--danger)" };
+  if (metrics.contentUtilization < MIN_UTILIZATION || metrics.contentUtilization > MAX_UTILIZATION) {
+    return { label, color: "var(--warn)" };
+  }
+  return { label, color: "var(--accent)" };
 }
 
 const QUICK_COMMANDS = [
@@ -203,6 +212,39 @@ export default function ApplicationResumeStudioPage() {
   /* core data */
   const [appResume, setAppResume] = useState<ApplicationResumeVersion | null>(null);
   const [applicationId, setApplicationId] = useState<string | null>(null);
+  const [applicationStatus, setApplicationStatus] = useState<string | null>(null);
+  const [applicationProof, setApplicationProof] = useState<{ url: string | null; filename: string | null } | null>(null);
+  const [appActionLoading, setAppActionLoading] = useState<string | null>(null);
+
+  /* resizable pane widths, persisted so users can widen the Falood chat panel */
+  const [leftPaneWidth, setLeftPaneWidth] = useState(320);
+  const [rightPaneWidth, setRightPaneWidth] = useState(380);
+  useEffect(() => {
+    const storedLeft = Number(localStorage.getItem("studio_left_pane_width"));
+    const storedRight = Number(localStorage.getItem("studio_right_pane_width"));
+    if (storedLeft) setLeftPaneWidth(storedLeft);
+    if (storedRight) setRightPaneWidth(storedRight);
+  }, []);
+
+  function startPaneResize(pane: "left" | "right", e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = pane === "left" ? leftPaneWidth : rightPaneWidth;
+    let currentWidth = startWidth;
+    function onMove(moveEvent: MouseEvent) {
+      const delta = pane === "left" ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+      currentWidth = Math.min(600, Math.max(220, startWidth + delta));
+      if (pane === "left") setLeftPaneWidth(currentWidth);
+      else setRightPaneWidth(currentWidth);
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      localStorage.setItem(pane === "left" ? "studio_left_pane_width" : "studio_right_pane_width", String(currentWidth));
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
   const [targetJob, setTargetJob] = useState<TargetJob | null>(null);
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
@@ -213,6 +255,7 @@ export default function ApplicationResumeStudioPage() {
   const [draftPreview, setDraftPreview] = useState<ResumeDraft | null>(null);
   const [draftBuildResult, setDraftBuildResult] = useState<{ applied: number; skipped: number; warnings: string[] } | null>(null);
   const [generatingSuggestions, setGeneratingSuggestions] = useState(false);
+  const [bulkApplying, setBulkApplying] = useState(false);
   const [exports, setExports] = useState<ResumeExport[]>([]);
   const [exportingResume, setExportingResume] = useState(false);
   const [exportOptions, setExportOptions] = useState({ atsFriendly: true, onePage: false, includeProjects: true, includeSummary: true });
@@ -228,11 +271,29 @@ export default function ApplicationResumeStudioPage() {
 
   /* editing state */
   const [draftContent, setDraftContent] = useState<ResumeDocument | null>(null);
+  // Synchronous mutual-exclusion for saveDraft (a ref, not state, since it must
+  // be readable/settable instantly). Same root cause the base-resume studio
+  // already hit and fixed (see its persistBaseResume): this PATCH fully
+  // overwrites `content`, so two in-flight saves can complete out of order and
+  // let an older one silently clobber a newer edit - e.g. edit the tools list,
+  // click Save, edit again before the (now much slower, VPS-hosted) request
+  // returns, and the first request's stale content lands last. Confirmed as the
+  // cause of tool/skill edits reverting on reopen. isSavingContentRef ensures
+  // only one PATCH is ever in flight; pendingContentSaveRef ensures an edit that
+  // arrived during that PATCH is never dropped - it triggers exactly one
+  // follow-up save with the freshest draftContent once the current one clears.
+  const isSavingContentRef = useRef(false);
+  const pendingContentSaveRef = useRef(false);
+  const [pageMetrics, setPageMetrics] = useState<ResumePageMetrics | null>(null);
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [editTemp, setEditTemp] = useState<Record<string, any>>({});
 
   /* right pane tabs */
-  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat" | "packet">("suggestions");
+  const [rightTab, setRightTab] = useState<"suggestions" | "draft" | "export" | "chat" | "packet" | "keywords">("keywords");
+
+  /* Grammarly-style UI state */
+  const [activePreviewSection, setActivePreviewSection] = useState<string | null>(null);
+  const [aiActionLoading, setAiActionLoading] = useState<string | null>(null);
 
   /* packet state */
   const [packet, setPacket] = useState<PacketData | null>(null);
@@ -260,8 +321,72 @@ export default function ApplicationResumeStudioPage() {
       if (!res.ok) throw new Error("Failed to load application resume version");
       const ar: ApplicationResumeVersion = await res.json();
       setAppResume(ar);
-      setApplicationId((ar as any).application_id || (ar as any).applicationId || null);
-      setDraftContent(JSON.parse(JSON.stringify(ar.content)));
+      const resolvedApplicationId = (ar as any).application_id || (ar as any).applicationId || null;
+      setApplicationId(resolvedApplicationId);
+
+      // Neon returns JSONB columns as raw strings. The "deep clone" idiom
+      // JSON.parse(JSON.stringify(str)) returns the same string, not an object,
+      // so keywordMap's content.skills.some() crashes with TypeError. Parse
+      // string content into an object first; deep-clone objects as before.
+      let rawContent = ar.content;
+      if (typeof rawContent === "string") {
+        try { rawContent = JSON.parse(rawContent); } catch { /* leave as string, guard below catches it */ }
+      }
+
+      // Older AI workflows (finalized before the finalResumeToStudioDocument
+      // transformer was added) stored raw FinalResumeV1 as content, which has
+      // no "header" field and flat skills: string[] instead of skills: {id,
+      // title, skills}[]. The studio page and A4Preview crash accessing
+      // content.header.fullName. Detect and normalize: if content has no
+      // "header" field but has "skills" as a flat string array, it's a
+      // legacy FinalResumeV1 — construct a minimal ResumeDocument shell.
+      const legacy: any = rawContent;
+      if (legacy && typeof legacy === "object" && !legacy.header) {
+        rawContent = {
+          header: { fullName: (ar as any).candidate_name ?? "" },
+          summary: legacy.summary ? { id: "sum-legacy", text: legacy.summary } : undefined,
+          skills: Array.isArray(legacy.skills) && legacy.skills.length > 0 && typeof legacy.skills[0] === "string"
+            ? [{ id: "skg-legacy", title: "Skills", skills: legacy.skills }]
+            : Array.isArray(legacy.skills) ? legacy.skills : [],
+          experience: Array.isArray(legacy.experience)
+            ? legacy.experience.map((e: any, i: number) => ({
+                id: `exp-legacy-${i}`,
+                title: e.title ?? "",
+                company: e.company ?? "",
+                location: e.location,
+                startDate: e.startDate ?? "",
+                endDate: e.endDate,
+                bullets: Array.isArray(e.bullets)
+                  ? e.bullets.map((b: any, j: number) => ({ id: `b-legacy-${i}-${j}`, text: typeof b === "string" ? b : (b.text ?? "") }))
+                  : [],
+              }))
+            : [],
+          education: Array.isArray(legacy.education)
+            ? legacy.education.map((e: any, i: number) => ({
+                id: `edu-legacy-${i}`,
+                degree: e.degree ?? "",
+                school: e.school ?? "",
+                graduationDate: e.graduationDate ?? undefined,
+              }))
+            : [],
+          certifications: Array.isArray(legacy.certifications)
+            ? legacy.certifications.map((c: any, i: number) => ({ id: `cert-legacy-${i}`, name: typeof c === "string" ? c : (c.name ?? "") }))
+            : [],
+          projects: Array.isArray(legacy.projects)
+            ? legacy.projects.map((p: any, i: number) => ({
+                id: `proj-legacy-${i}`,
+                title: p.name ?? "",
+                description: p.description,
+                bullets: p.description ? [{ id: `pb-legacy-${i}`, text: p.description }] : [],
+              }))
+            : [],
+        };
+      }
+
+      setDraftContent(typeof rawContent === "object" && rawContent !== null
+        ? JSON.parse(JSON.stringify(rawContent))
+        : null
+      );
 
       const [jobRes, baseRes, candRes, kaRes, sugRes] = await Promise.all([
         fetch(`/api/target-jobs/${ar.target_job_id}`),
@@ -271,7 +396,10 @@ export default function ApplicationResumeStudioPage() {
         fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`),
       ]);
 
-      if (jobRes.ok) setTargetJob(await jobRes.json());
+      if (jobRes.ok) {
+        const jobData = await jobRes.json();
+        setTargetJob({ ...jobData, keywords: jobData.keywords ?? jobData.job_keywords ?? [] });
+      }
       if (baseRes.ok) setBaseResume(await baseRes.json());
       if (candRes.ok) setCandidate(await candRes.json());
       if (kaRes.ok) setKeywordApprovals(await kaRes.json());
@@ -285,17 +413,14 @@ export default function ApplicationResumeStudioPage() {
         const draftData = await draftRes.json();
         setDrafts(draftData.drafts ?? []);
       }
-      // Load exports
-      const exportRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
-      if (exportRes.ok) {
-        const exportData = await exportRes.json();
-        const appId = exportData.applicationId;
-        if (appId) {
-          const historyRes = await fetch(`/api/applications/${appId}/resume-exports`);
-          if (historyRes.ok) {
-            const historyData = await historyRes.json();
-            setExports(historyData.exports ?? []);
-          }
+      // Load export history using the same resolved application ID used by
+      // exports. This includes direct links, packet links, and legacy inferred
+      // links returned by the version endpoint.
+      if (resolvedApplicationId) {
+        const historyRes = await fetch(`/api/applications/${resolvedApplicationId}/resume-exports`);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setExports(historyData.exports ?? []);
         }
       }
     } catch (e: any) {
@@ -308,6 +433,54 @@ export default function ApplicationResumeStudioPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => { if (applicationId) loadPacket(); }, [applicationId]);
+
+  const loadApplicationStatus = useCallback(async () => {
+    if (!applicationId) return;
+    const res = await fetch(`/api/applications/${applicationId}`);
+    if (res.ok) {
+      const data = await res.json();
+      setApplicationStatus(data.status ?? null);
+      setApplicationProof({ url: data.proof_url ?? null, filename: data.proof_filename ?? null });
+    }
+  }, [applicationId]);
+
+  useEffect(() => { if (applicationId) loadApplicationStatus(); }, [applicationId, loadApplicationStatus]);
+
+  async function markApplicationApplied() {
+    if (!applicationId) return;
+    setAppActionLoading("applied");
+    try {
+      const res = await fetch(`/api/applications/${applicationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "applied", applied_at: new Date().toISOString() }),
+      });
+      if (res.ok) await loadApplicationStatus();
+    } finally {
+      setAppActionLoading(null);
+    }
+  }
+
+  function uploadApplicationProof() {
+    if (!applicationId) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setAppActionLoading("proof");
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(`/api/applications/${applicationId}/proof`, { method: "POST", body: fd });
+        if (res.ok) await loadApplicationStatus();
+      } finally {
+        setAppActionLoading(null);
+      }
+    };
+    input.click();
+  }
 
   async function refreshSuggestions() {
     if (!applicationResumeId) return;
@@ -459,9 +632,89 @@ export default function ApplicationResumeStudioPage() {
     return { approved, rejected, pending, warnings };
   }, [targetJob, keywordApprovals]);
 
-  /* ──────────── editing helpers ──────────── */
+  /* ──────────── keyword map for Grammarly-style UI ──────────── */
 
+  // Moved above keywordMap - it's referenced inside that useMemo (and in its
+  // dependency array) but was declared further down the file, after this hook,
+  // which is a real "used before declaration" error for a block-scoped const,
+  // not just a style nit.
   const content = draftContent ?? appResume?.content;
+
+  // Live, real page-fit metrics (renders through the actual PDF renderer,
+  // client-side only - dynamic import matches the established pattern for
+  // touching skarionPdfDocument.tsx from browser code) - replaces the old
+  // JSON.stringify(content).length/2800 character-count guess. Recomputes
+  // whenever the draft changes so the toolbar badge stays live as the user edits.
+  useEffect(() => {
+    let cancelled = false;
+    if (!content) {
+      setPageMetrics(null);
+      return;
+    }
+    (async () => {
+      try {
+        const [{ renderResumePdfWithMetrics }, { normalizeResumeContentForExport }] = await Promise.all([
+          import("@/lib/falood/skarionPdfDocument"),
+          import("@/lib/falood/clientExport"),
+        ]);
+        const { metrics } = renderResumePdfWithMetrics(normalizeResumeContentForExport(content));
+        if (!cancelled) setPageMetrics(metrics);
+      } catch {
+        if (!cancelled) setPageMetrics(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [content]);
+
+  const keywordMap = useMemo(() => {
+    if (!targetJob || !content || typeof content !== "object") return {};
+    const map: Record<string, string[]> = {};
+    const text = JSON.stringify(content).toLowerCase();
+
+    for (const k of targetJob.keywords) {
+      const sections: string[] = [];
+      const kw = k.keyword.toLowerCase();
+
+      if (content.summary?.text?.toLowerCase().includes(kw)) sections.push("summary");
+      if (content.skills.some((g) => g.skills.some((s) => s.toLowerCase().includes(kw)))) sections.push("skills");
+      if (content.experience.some((exp) =>
+        exp.title.toLowerCase().includes(kw) ||
+        exp.company.toLowerCase().includes(kw) ||
+        exp.bullets.some((b) => b.text.toLowerCase().includes(kw))
+      )) sections.push("experience");
+      if (content.education.some((edu) =>
+        edu.degree.toLowerCase().includes(kw) ||
+        edu.school.toLowerCase().includes(kw)
+      )) sections.push("education");
+      if ((content.certifications ?? []).some((c) => c.name.toLowerCase().includes(kw))) sections.push("certifications");
+      if ((content.projects ?? []).some((p) =>
+        p.title.toLowerCase().includes(kw) ||
+        p.bullets.some((b) => b.text.toLowerCase().includes(kw))
+      )) sections.push("projects");
+
+      if (sections.length > 0) {
+        map[k.keyword] = sections;
+      }
+    }
+    return map;
+  }, [targetJob, content]);
+
+  const suggestionsBySection = useMemo(() => {
+    const map: Record<string, { id: string; text: string; type: string; status: string }[]> = {};
+    for (const s of suggestions) {
+      const key = s.target_section;
+      if (!map[key]) map[key] = [];
+      map[key].push({
+        id: s.id,
+        text: s.proposed_text.slice(0, 80) + (s.proposed_text.length > 80 ? "…" : ""),
+        type: s.suggestion_type.replace("_", " "),
+        status: s.status,
+      });
+    }
+    return map;
+  }, [suggestions]);
+
+  /* ──────────── editing helpers ──────────── */
 
   function startEdit(section: string, initial: any) {
     setEditingSection(section);
@@ -508,19 +761,38 @@ export default function ApplicationResumeStudioPage() {
 
   async function saveDraft() {
     if (!applicationResumeId || !draftContent) return;
+
+    // Never let two content PATCHes race - see isSavingContentRef's
+    // declaration for why. The edit that arrived during the in-flight save is
+    // never lost: it's captured by draftContent (already up to date) and
+    // replayed by the pendingContentSaveRef check in the finally block below.
+    if (isSavingContentRef.current) {
+      pendingContentSaveRef.current = true;
+      return;
+    }
+
+    isSavingContentRef.current = true;
     setSaveStatus("saving");
-    const res = await fetch(`/api/application-resume-versions/${applicationResumeId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: draftContent }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      setAppResume(updated);
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus(""), 2000);
-    } else {
-      setSaveStatus("error");
+    try {
+      const res = await fetch(`/api/application-resume-versions/${applicationResumeId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: draftContent }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setAppResume(updated);
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+      } else {
+        setSaveStatus("error");
+      }
+    } finally {
+      isSavingContentRef.current = false;
+      if (pendingContentSaveRef.current) {
+        pendingContentSaveRef.current = false;
+        void saveDraft();
+      }
     }
   }
 
@@ -543,26 +815,22 @@ export default function ApplicationResumeStudioPage() {
   }
 
   async function downloadExport(format: "pdf" | "docx") {
-    if (!applicationResumeId) return;
+    if (!applicationResumeId || !content) return;
+    if (!applicationId) {
+      setError("This tailored resume is not linked to an application, so it cannot be archived.");
+      return;
+    }
     setExporting(format);
     try {
-      const res = await fetch(`/api/export/${format}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ applicationResumeId }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.error || `${format.toUpperCase()} export failed.`);
-        return;
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `resume.${format}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // Render once in the browser. The exact same blob is downloaded and then
+      // archived; archive failures are surfaced so the AE can retry.
+      await exportAndDownloadResume(
+        content,
+        format,
+        { applicationId, resumeVersionId: applicationResumeId }
+      );
+    } catch (err: any) {
+      setError(err?.message || `${format.toUpperCase()} export failed.`);
     } finally {
       setExporting(null);
     }
@@ -581,8 +849,9 @@ export default function ApplicationResumeStudioPage() {
         setLog((prev) => [...prev, { role: "warning", text: data.error ?? "Auto-fit failed." }]);
         return;
       }
+      const measured = formatPageFitSummary(data.metrics ?? null);
       if (data.fitsOnePage && data.actionsApplied.length === 0) {
-        setLog((prev) => [...prev, { role: "assistant", text: `Already fits on one page (${data.pages} page).` }]);
+        setLog((prev) => [...prev, { role: "assistant", text: `Already fits: ${measured}.` }]);
         return;
       }
       setPendingAction({
@@ -593,8 +862,8 @@ export default function ApplicationResumeStudioPage() {
       setLog((prev) => [...prev, {
         role: "assistant",
         text: data.fitsOnePage
-          ? `Now fits on one page. Applied: ${data.actionsApplied.join(", ")}. Review the proposed draft and click Apply.`
-          : `Still ${data.pages} pages after formatting adjustments (${data.actionsApplied.join(", ") || "none possible"}) — getting to one page from here means shortening or removing content, which needs your decision, not an automatic one.`,
+          ? `Now fits: ${measured}. Applied: ${data.actionsApplied.join(", ")}. Review the proposed draft and click Apply.`
+          : `Still ${measured} after formatting adjustments (${data.actionsApplied.join(", ") || "none possible"}) — getting to one page from here means shortening or removing content, which needs your decision, not an automatic one.`,
       }]);
     } finally {
       setFitting(false);
@@ -693,6 +962,52 @@ export default function ApplicationResumeStudioPage() {
       setError(e.message || "Failed to generate suggestions");
     } finally {
       setGeneratingSuggestions(false);
+    }
+  }
+
+  // Accepts and applies every pending, truth_status="verified" suggestion in one
+  // action instead of clicking "Accept & Apply" once per suggestion - the other
+  // top blocker (alongside bulk keyword approval) found in the volume-application
+  // audit. truth_status is computed server-side against the evidence bank, not
+  // self-reported by the model, so "verified" is a real safety gate here, not
+  // just an AI confidence claim - fabrication_risk/unverified suggestions are
+  // deliberately excluded and still need individual review.
+  //
+  // The accept step is batched into one PATCH call (the endpoint already
+  // supports an updates array). The apply step runs sequentially, not in
+  // parallel, because each apply reads-then-writes the same resume content -
+  // applying multiple suggestions concurrently risks one overwriting another's
+  // change instead of both landing.
+  async function handleBulkAcceptAndApply() {
+    if (!applicationResumeId) return;
+    const eligible = suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified");
+    if (eligible.length === 0) return;
+
+    setBulkApplying(true);
+    try {
+      await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-suggestions`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates: eligible.map((s) => ({ id: s.id, status: "accepted" })) }),
+      });
+
+      for (const s of eligible) {
+        await fetch(`/api/applications/${s.application_id}/resume-suggestions/${s.id}/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resume_version_id: applicationResumeId }),
+        });
+      }
+
+      await refreshSuggestions();
+      const arRes = await fetch(`/api/application-resume-versions/${applicationResumeId}`);
+      if (arRes.ok) {
+        const ar = await arRes.json();
+        setAppResume(ar);
+        setDraftContent(JSON.parse(JSON.stringify(ar.content)));
+      }
+    } finally {
+      setBulkApplying(false);
     }
   }
 
@@ -820,6 +1135,28 @@ export default function ApplicationResumeStudioPage() {
     setExportingResume(true);
     setError("");
     try {
+      // PDF/DOCX must use the browser renderer: it is the same high-fidelity
+      // document the AE sees, and it can upload that exact blob to SharePoint.
+      // The old server PDF route is intentionally disabled on Cloudflare and
+      // caused the right-pane PDF button to fail without an archive.
+      if (exportType === "pdf" || exportType === "docx") {
+        if (!content || !applicationId) {
+          throw new Error("This tailored resume is not linked to an application, so it cannot be archived.");
+        }
+        await exportAndDownloadResume(content, exportType, {
+          applicationId,
+          resumeVersionId: applicationResumeId,
+        });
+        const historyRes = await fetch(`/api/applications/${applicationId}/resume-exports`);
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          setExports(historyData.exports ?? []);
+        }
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus(""), 2000);
+        return;
+      }
+
       const res = await fetch(`/api/application-resume-versions/${applicationResumeId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -864,12 +1201,11 @@ export default function ApplicationResumeStudioPage() {
   }
 
   async function downloadExportById(exportId: string) {
-    const draftRes = await fetch(`/api/application-resume-versions/${applicationResumeId}/resume-drafts`);
-    if (!draftRes.ok) return;
-    const draftData = await draftRes.json();
-    const appId = draftData.applicationId;
-    if (!appId) return;
-    const res = await fetch(`/api/applications/${appId}/resume-exports/${exportId}/download`);
+    if (!applicationId) {
+      setError("This tailored resume is not linked to an application.");
+      return;
+    }
+    const res = await fetch(`/api/applications/${applicationId}/resume-exports/${exportId}/download`);
     if (res.ok) {
       const blob = await res.blob();
       const fileName = res.headers.get("Content-Disposition")?.match(/filename="([^"]+)"/)?.[1] ?? "resume";
@@ -879,6 +1215,9 @@ export default function ApplicationResumeStudioPage() {
       a.download = fileName;
       a.click();
       window.URL.revokeObjectURL(url);
+    } else {
+      const body = await res.json().catch(() => ({}));
+      setError(body.error || "Failed to download the archived export.");
     }
   }
 
@@ -940,6 +1279,134 @@ export default function ApplicationResumeStudioPage() {
     setLog((prev) => [...prev, { role: "assistant", text: "Applied to the draft. Remember to save!" }]);
   }
 
+  async function handleAISectionAction(section: string, action: string, prompt?: string) {
+    if (!applicationResumeId) return;
+    setAiActionLoading(`${section}:${action}`);
+    setLog((prev) => [...prev, { role: "user", text: `[AI] ${action} for ${section}${prompt ? `: ${prompt}` : ""}` }]);
+
+    try {
+      const res = await fetch("/api/falood/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "application_resume_tailoring",
+          applicationResumeId,
+          candidateId: appResume?.candidate_id,
+          conversationId,
+          message: `For the ${section} section: ${prompt ?? action}`,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLog((prev) => [...prev, { role: "warning", text: `AI action failed: ${data.error ?? "unknown error"}` }]);
+      } else {
+        setConversationId(data.conversationId);
+        setLog((prev) => [...prev, { role: "assistant", text: data.message }]);
+        if (data.action?.type === "update_resume_document" && data.action.newContent) {
+          setPendingAction(data.action);
+        }
+      }
+    } catch (e: any) {
+      setLog((prev) => [...prev, { role: "warning", text: `AI action error: ${e.message}` }]);
+    } finally {
+      setAiActionLoading(null);
+    }
+  }
+
+  function handleSectionUpdate(section: string, value: any) {
+    if (!draftContent) return;
+    const next = { ...draftContent };
+    switch (section) {
+      case "header":
+        next.header = { ...value };
+        break;
+      case "summary":
+        next.summary = value.text ? { id: draftContent.summary?.id ?? uid(), text: value.text } : undefined;
+        break;
+      case "skills":
+        next.skills = value.skills ?? value;
+        break;
+      case "experience":
+        next.experience = value.experience ?? value;
+        break;
+      case "education":
+        next.education = value.education ?? value;
+        break;
+      case "certifications":
+        next.certifications = value.certifications ?? value;
+        break;
+      case "projects":
+        next.projects = value.projects ?? value;
+        break;
+    }
+    setDraftContent(next);
+  }
+
+  async function handleApproveKeyword(keywordId: string) {
+    if (!candidateId) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordId, candidateId, decision: "approved" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to approve keyword", e);
+    }
+  }
+
+  // One request approving every evidence-backed pending keyword at once, instead
+  // of N individual clicks - this was the single biggest friction point found in
+  // the volume-application audit: a 30-50 keyword JD meant 30-50 clicks before
+  // suggestion generation could even start. The backend (/api/keyword-approvals)
+  // does the approvals in one batched call; KeywordPanel only offers this for
+  // keywords that already have supporting evidence, so it can't be used to
+  // silently wave through an unsupported claim.
+  async function handleBulkApproveKeywords(keywordIds: string[]) {
+    if (!candidateId || keywordIds.length === 0) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordIds, candidateId, decision: "approved" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to bulk-approve keywords", e);
+    }
+  }
+
+  async function handleRejectKeyword(keywordId: string) {
+    if (!candidateId) return;
+    try {
+      const res = await fetch("/api/keyword-approvals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywordId, candidateId, decision: "rejected" }),
+      });
+      if (res.ok) {
+        const kaRes = await fetch(`/api/keyword-approvals?candidateId=${candidateId}`);
+        if (kaRes.ok) setKeywordApprovals(await kaRes.json());
+      }
+    } catch (e) {
+      console.error("Failed to reject keyword", e);
+    }
+  }
+
+  function handleKeywordClick(keyword: string) {
+    const sections = keywordMap[keyword];
+    if (sections && sections.length > 0) {
+      setActivePreviewSection(sections[0]);
+    }
+  }
   /* ──────────── render guards ──────────── */
 
   if (loading) {
@@ -959,7 +1426,7 @@ export default function ApplicationResumeStudioPage() {
     );
   }
 
-  const pageInfo = pageStatus(content);
+  const pageInfo = pageFitBadge(pageMetrics);
   const statusBadgeClass =
     appResume.status === "approved"
       ? "badge-review-approved"
@@ -1033,7 +1500,28 @@ export default function ApplicationResumeStudioPage() {
           {saveStatus === "saving" && <span className="muted" style={{ fontSize: 12 }}>Saving…</span>}
           {saveStatus === "saved" && <span className="form-success" style={{ fontSize: 12 }}>Saved</span>}
           {saveStatus === "error" && <span className="form-error" style={{ fontSize: 12 }}>Error</span>}
+          {applicationId && (
+            <>
+              <span className={`badge badge-${applicationStatus}`}>{applicationStatus ?? "assigned"}</span>
+              {applicationProof?.url && (
+                <a href={applicationProof.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 11 }}>
+                  📎 {applicationProof.filename || "proof"}
+                </a>
+              )}
+              <button className="btn" onClick={uploadApplicationProof} disabled={appActionLoading === "proof"}>
+                {appActionLoading === "proof" ? "⟳" : "📎 Proof"}
+              </button>
+              <button
+                className="btn-primary"
+                onClick={markApplicationApplied}
+                disabled={appActionLoading === "applied" || applicationStatus === "applied"}
+              >
+                {appActionLoading === "applied" ? "⟳" : applicationStatus === "applied" ? "✅ Applied" : "Mark Applied"}
+              </button>
+            </>
+          )}
           <button className="btn" onClick={() => router.push(`/candidates/${candidateId}`)}>Save & Exit</button>
+          <Link className="btn" href={`/falood/cli-editor?type=application&id=${appResume.id}`}>CLI Editor</Link>
           <button
             className="btn-primary"
             onClick={createPacket}
@@ -1064,80 +1552,41 @@ export default function ApplicationResumeStudioPage() {
         className="studio-grid"
         style={{
           display: "grid",
-          gridTemplateColumns: "260px 1fr 340px",
-          gap: 16,
+          gridTemplateColumns: `${leftPaneWidth}px 6px 1fr 6px ${rightPaneWidth}px`,
+          gridTemplateRows: "calc(100vh - 140px)",
+          gap: 10,
           alignItems: "start",
         }}
       >
-        {/* ═══════ LEFT PANE: Job + Keywords ═══════ */}
-        <div className="left-pane card" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <div>
-            <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Target Job</h3>
-            <p style={{ fontSize: 14, fontWeight: 600, margin: 0 }}>{targetJob?.title}</p>
-            <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>
-              {targetJob?.company} {targetJob?.location ? `· ${targetJob.location}` : ""}
-            </p>
-            {appResume.fit_score !== null && appResume.fit_score !== undefined && (
-              <p style={{ fontSize: 12, margin: "6px 0 0" }}>
-                Fit score: <strong>{appResume.fit_score}%</strong>
-              </p>
-            )}
-            {appResume.recommendation && (
-              <span className="badge" style={{ marginTop: 6, display: "inline-block" }}>
-                {appResume.recommendation}
-              </span>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Approved keywords</h4>
-            {keywordGroups.approved.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>None approved yet.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.approved.map((k) => renderKeywordBadge(k))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Rejected keywords</h4>
-            {keywordGroups.rejected.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>None rejected.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.rejected.map((k) => renderKeywordBadge(k, true))}
-              </div>
-            )}
-          </div>
-
-          <div>
-            <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--ink-soft)" }}>Pending keywords</h4>
-            {keywordGroups.pending.length === 0 ? (
-              <p className="muted" style={{ fontSize: 12 }}>No pending keywords.</p>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.pending.map((k) => renderKeywordBadge(k))}
-              </div>
-            )}
-          </div>
-
-          {keywordGroups.warnings.length > 0 && (
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-              <h4 style={{ fontSize: 12, margin: "0 0 6px", color: "var(--danger)" }}>⚠ Evidence warnings</h4>
-              <div style={{ display: "flex", flexWrap: "wrap" }}>
-                {keywordGroups.warnings.map((k) => renderKeywordBadge(k))}
-              </div>
-            </div>
-          )}
+        {/* ═══════ LEFT PANE: Section Sidebar ═══════ */}
+        <div className="left-pane card" style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflow: "hidden" }}>
+          <SectionSidebar
+            content={content}
+            activeSection={activePreviewSection}
+            onSectionClick={(section) => setActivePreviewSection(section)}
+            onUpdateContent={handleSectionUpdate}
+            onAISectionAction={handleAISectionAction}
+            keywordMap={keywordMap}
+            suggestionsBySection={suggestionsBySection}
+          />
         </div>
 
-        {/* ═══════ CENTER PANE: Resume Editor ═══════ */}
-        <div className="center-pane card" style={{ position: "relative" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <h3 style={{ fontSize: 14, margin: 0 }}>Resume Editor</h3>
+        {/* Drag handle: left ↔ center */}
+        <div
+          className="pane-resize-handle"
+          onMouseDown={(e) => startPaneResize("left", e)}
+          style={{ height: "100%", cursor: "col-resize", background: "var(--border)", borderRadius: 3 }}
+          title="Drag to resize"
+        />
+
+        {/* ═══════ CENTER PANE: A4 Preview ═══════ */}
+        <div className="center-pane card" style={{ position: "relative", height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexShrink: 0 }}>
+            <h3 style={{ fontSize: 14, margin: 0 }}>Resume Preview</h3>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn" onClick={saveDraft}>Save Draft</button>
+              <button className="btn" onClick={saveDraft} disabled={saveStatus === "saving"}>
+                {saveStatus === "saving" ? "Saving…" : "Save Draft"}
+              </button>
               <button className="btn" onClick={submitForReview} disabled={appResume.status === "in_review" || appResume.status === "approved"}>
                 Submit for Review
               </button>
@@ -1152,372 +1601,33 @@ export default function ApplicationResumeStudioPage() {
               </button>
             </div>
           </div>
-
-          {/* Page break indicator */}
-          <div
-            style={{
-              position: "absolute",
-              left: 16,
-              right: 16,
-              top: 52 + 1050, // approximate 1-page mark in px
-              borderTop: "2px dashed var(--border)",
-              pointerEvents: "none",
-            }}
-            title="Approximate 1-page boundary"
-          />
-
-          {/* HEADER */}
-          <div style={{ marginBottom: 16 }}>
-            {editingSection === "header" ? (
-              <div className="field-group">
-                <input value={editTemp.fullName ?? ""} onChange={(e) => setEditTemp({ ...editTemp, fullName: e.target.value })} placeholder="Full name" />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-                  <input value={editTemp.location ?? ""} onChange={(e) => setEditTemp({ ...editTemp, location: e.target.value })} placeholder="Location" />
-                  <input value={editTemp.phone ?? ""} onChange={(e) => setEditTemp({ ...editTemp, phone: e.target.value })} placeholder="Phone" />
-                  <input value={editTemp.email ?? ""} onChange={(e) => setEditTemp({ ...editTemp, email: e.target.value })} placeholder="Email" />
-                  <input value={editTemp.linkedin ?? ""} onChange={(e) => setEditTemp({ ...editTemp, linkedin: e.target.value })} placeholder="LinkedIn" />
-                  <input value={editTemp.github ?? ""} onChange={(e) => setEditTemp({ ...editTemp, github: e.target.value })} placeholder="GitHub" />
-                  <input value={editTemp.portfolio ?? ""} onChange={(e) => setEditTemp({ ...editTemp, portfolio: e.target.value })} placeholder="Portfolio" />
-                </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("header")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("header", content.header)} style={{ cursor: "pointer" }}>
-                <h2 style={{ margin: "0 0 4px" }}>{content.header.fullName}</h2>
-                <p className="muted" style={{ fontSize: 12, margin: 0 }}>
-                  {[content.header.location, content.header.phone, content.header.email, content.header.linkedin, content.header.portfolio].filter(Boolean).join(" · ")}
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* SUMMARY */}
-          <div style={{ marginBottom: 16 }}>
-            {editingSection === "summary" ? (
-              <div className="field-group">
-                <textarea
-                  rows={4}
-                  value={editTemp.text ?? ""}
-                  onChange={(e) => setEditTemp({ text: e.target.value })}
-                  placeholder="Professional summary…"
-                />
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("summary")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("summary", { text: content.summary?.text ?? "" })} style={{ cursor: "pointer" }}>
-                <p style={{ fontSize: 13, margin: 0, lineHeight: 1.5 }}>{content.summary?.text ?? <span className="muted">No summary — click to add</span>}</p>
-              </div>
-            )}
-          </div>
-
-          {/* SKILLS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Technical Skills</h4>
-            {editingSection === "skills" ? (
-              <div>
-                {(editTemp.skills ?? []).map((s: any, idx: number) => (
-                  <div key={s.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <input
-                      value={s.title}
-                      onChange={(e) => {
-                        const next = [...(editTemp.skills ?? [])];
-                        next[idx] = { ...s, title: e.target.value };
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                      placeholder="Category title"
-                      style={{ marginBottom: 6 }}
-                    />
-                    <input
-                      value={s.skills.join(", ")}
-                      onChange={(e) => {
-                        const next = [...(editTemp.skills ?? [])];
-                        next[idx] = { ...s, skills: e.target.value.split(",").map((x: string) => x.trim()).filter(Boolean) };
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                      placeholder="Comma-separated skills"
-                    />
-                    <button
-                      className="btn-danger btn-compact"
-                      style={{ marginTop: 6 }}
-                      onClick={() => {
-                        const next = (editTemp.skills ?? []).filter((_: any, i: number) => i !== idx);
-                        setEditTemp({ ...editTemp, skills: next });
-                      }}
-                    >
-                      Remove category
-                    </button>
-                  </div>
-                ))}
-                <button
-                  className="btn btn-compact"
-                  onClick={() =>
-                    setEditTemp({
-                      ...editTemp,
-                      skills: [...(editTemp.skills ?? []), { id: uid(), title: "", skills: [] }],
-                    })
-                  }
-                >
-                  + Add category
-                </button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("skills")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("skills", { skills: content.skills })} style={{ cursor: "pointer" }}>
-                {content.skills.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No skills — click to add</p>
-                ) : (
-                  content.skills.map((s) => (
-                    <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      <strong>{s.title}:</strong> {s.skills.join(", ")}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* EXPERIENCE */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Professional Experience</h4>
-            {editingSection === "experience" ? (
-              <div>
-                {(editTemp.experience ?? []).map((exp: any, idx: number) => (
-                  <div key={exp.id} style={{ marginBottom: 10, padding: 10, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                      <input value={exp.title} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, title: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Title" />
-                      <input value={exp.company} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, company: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Company" />
-                      <input value={exp.location ?? ""} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, location: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Location" />
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input value={exp.startDate} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, startDate: e.target.value }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="Start" />
-                        <input value={exp.endDate ?? ""} onChange={(e) => { const next = [...(editTemp.experience ?? [])]; next[idx] = { ...exp, endDate: e.target.value || undefined }; setEditTemp({ ...editTemp, experience: next }); }} placeholder="End (or blank)" />
-                      </div>
-                    </div>
-                    <div style={{ marginBottom: 6 }}>
-                      {(exp.bullets ?? []).map((b: any, bIdx: number) => (
-                        <div key={b.id} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                          <input
-                            style={{ flex: 1 }}
-                            value={b.text}
-                            onChange={(e) => {
-                              const next = [...(editTemp.experience ?? [])];
-                              const bullets = [...(exp.bullets ?? [])];
-                              bullets[bIdx] = { ...b, text: e.target.value };
-                              next[idx] = { ...exp, bullets };
-                              setEditTemp({ ...editTemp, experience: next });
-                            }}
-                            placeholder="Bullet point"
-                          />
-                          <button
-                            className="btn-danger btn-compact"
-                            onClick={() => {
-                              const next = [...(editTemp.experience ?? [])];
-                              const bullets = (exp.bullets ?? []).filter((_: any, i: number) => i !== bIdx);
-                              next[idx] = { ...exp, bullets };
-                              setEditTemp({ ...editTemp, experience: next });
-                            }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        className="btn btn-compact"
-                        onClick={() => {
-                          const next = [...(editTemp.experience ?? [])];
-                          const bullets = [...(exp.bullets ?? []), { id: uid(), text: "" }];
-                          next[idx] = { ...exp, bullets };
-                          setEditTemp({ ...editTemp, experience: next });
-                        }}
-                      >
-                        + Bullet
-                      </button>
-                    </div>
-                    <button
-                      className="btn-danger btn-compact"
-                      onClick={() => {
-                        const next = (editTemp.experience ?? []).filter((_: any, i: number) => i !== idx);
-                        setEditTemp({ ...editTemp, experience: next });
-                      }}
-                    >
-                      Remove entry
-                    </button>
-                  </div>
-                ))}
-                <button
-                  className="btn btn-compact"
-                  onClick={() =>
-                    setEditTemp({
-                      ...editTemp,
-                      experience: [
-                        ...(editTemp.experience ?? []),
-                        { id: uid(), title: "", company: "", startDate: "", bullets: [] },
-                      ],
-                    })
-                  }
-                >
-                  + Add experience
-                </button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("experience")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("experience", { experience: content.experience })} style={{ cursor: "pointer" }}>
-                {content.experience.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No experience — click to add</p>
-                ) : (
-                  content.experience.map((exp) => (
-                    <div key={exp.id} style={{ marginBottom: 10 }}>
-                      <p style={{ fontSize: 13, margin: 0, fontWeight: 600 }}>
-                        {exp.title} — {exp.company} {exp.location ? `(${exp.location})` : ""}
-                      </p>
-                      <p className="muted" style={{ fontSize: 11, margin: "2px 0 4px" }}>
-                        {exp.startDate} – {exp.endDate ?? "Present"}
-                      </p>
-                      <ul style={{ fontSize: 12, margin: 0, paddingLeft: 16 }}>
-                        {exp.bullets.map((b) => (
-                          <li key={b.id}>{b.text}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* PROJECTS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Projects</h4>
-            {editingSection === "projects" ? (
-              <div>
-                {(editTemp.projects ?? []).map((proj: any, idx: number) => (
-                  <div key={proj.id} style={{ marginBottom: 10, padding: 10, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <input value={proj.title} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; next[idx] = { ...proj, title: e.target.value }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Project title" style={{ marginBottom: 6 }} />
-                    <input value={proj.description ?? ""} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; next[idx] = { ...proj, description: e.target.value }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Description (optional)" />
-                    <div style={{ marginTop: 6 }}>
-                      {(proj.bullets ?? []).map((b: any, bIdx: number) => (
-                        <div key={b.id} style={{ display: "flex", gap: 6, marginBottom: 4 }}>
-                          <input style={{ flex: 1 }} value={b.text} onChange={(e) => { const next = [...(editTemp.projects ?? [])]; const bullets = [...(proj.bullets ?? [])]; bullets[bIdx] = { ...b, text: e.target.value }; next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }} placeholder="Bullet point" />
-                          <button className="btn-danger btn-compact" onClick={() => { const next = [...(editTemp.projects ?? [])]; const bullets = (proj.bullets ?? []).filter((_: any, i: number) => i !== bIdx); next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }}>×</button>
-                        </div>
-                      ))}
-                      <button className="btn btn-compact" onClick={() => { const next = [...(editTemp.projects ?? [])]; const bullets = [...(proj.bullets ?? []), { id: uid(), text: "" }]; next[idx] = { ...proj, bullets }; setEditTemp({ ...editTemp, projects: next }); }}>+ Bullet</button>
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.projects ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, projects: next }); }}>Remove project</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, projects: [...(editTemp.projects ?? []), { id: uid(), title: "", bullets: [] }] })}>+ Add project</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("projects")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("projects", { projects: content.projects ?? [] })} style={{ cursor: "pointer" }}>
-                {(content.projects ?? []).length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No projects — click to add</p>
-                ) : (
-                  (content.projects ?? []).map((proj) => (
-                    <div key={proj.id} style={{ marginBottom: 8 }}>
-                      <p style={{ fontSize: 13, margin: 0, fontWeight: 600 }}>{proj.title}</p>
-                      {proj.description && <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>{proj.description}</p>}
-                      <ul style={{ fontSize: 12, margin: "4px 0 0", paddingLeft: 16 }}>
-                        {proj.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
-                      </ul>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* EDUCATION */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Education</h4>
-            {editingSection === "education" ? (
-              <div>
-                {(editTemp.education ?? []).map((edu: any, idx: number) => (
-                  <div key={edu.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <input value={edu.degree} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, degree: e.target.value }; setEditTemp({ ...editTemp, education: next }); }} placeholder="Degree" />
-                      <input value={edu.school} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, school: e.target.value }; setEditTemp({ ...editTemp, education: next }); }} placeholder="School" />
-                      <input value={edu.graduationDate ?? ""} onChange={(e) => { const next = [...(editTemp.education ?? [])]; next[idx] = { ...edu, graduationDate: e.target.value || undefined }; setEditTemp({ ...editTemp, education: next }); }} placeholder="Graduation date" />
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.education ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, education: next }); }}>Remove</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, education: [...(editTemp.education ?? []), { id: uid(), degree: "", school: "" }] })}>+ Add education</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("education")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("education", { education: content.education })} style={{ cursor: "pointer" }}>
-                {content.education.length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No education — click to add</p>
-                ) : (
-                  content.education.map((edu) => (
-                    <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      {edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* CERTIFICATIONS */}
-          <div style={{ marginBottom: 16 }}>
-            <h4 style={{ fontSize: 13, margin: "0 0 8px" }}>Certifications</h4>
-            {editingSection === "certifications" ? (
-              <div>
-                {(editTemp.certifications ?? []).map((cert: any, idx: number) => (
-                  <div key={cert.id} style={{ marginBottom: 8, padding: 8, border: "1px solid var(--border)", borderRadius: 6 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      <input value={cert.name} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, name: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Certification name" />
-                      <input value={cert.issuer ?? ""} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, issuer: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Issuer" />
-                      <input value={cert.date ?? ""} onChange={(e) => { const next = [...(editTemp.certifications ?? [])]; next[idx] = { ...cert, date: e.target.value }; setEditTemp({ ...editTemp, certifications: next }); }} placeholder="Date" />
-                    </div>
-                    <button className="btn-danger btn-compact" style={{ marginTop: 6 }} onClick={() => { const next = (editTemp.certifications ?? []).filter((_: any, i: number) => i !== idx); setEditTemp({ ...editTemp, certifications: next }); }}>Remove</button>
-                  </div>
-                ))}
-                <button className="btn btn-compact" onClick={() => setEditTemp({ ...editTemp, certifications: [...(editTemp.certifications ?? []), { id: uid(), name: "" }] })}>+ Add certification</button>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <button className="btn-primary" onClick={() => commitEdit("certifications")}>Save</button>
-                  <button className="btn" onClick={cancelEdit}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <div onClick={() => startEdit("certifications", { certifications: content.certifications ?? [] })} style={{ cursor: "pointer" }}>
-                {(content.certifications ?? []).length === 0 ? (
-                  <p className="muted" style={{ fontSize: 12 }}>No certifications — click to add</p>
-                ) : (
-                  (content.certifications ?? []).map((cert) => (
-                    <p key={cert.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      {cert.name} {cert.issuer ? `— ${cert.issuer}` : ""} {cert.date ? `(${cert.date})` : ""}
-                    </p>
-                  ))
-                )}
-              </div>
-            )}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <A4Preview
+              content={content}
+              highlights={targetJob?.keywords.map((k) => ({
+                keyword: k.keyword,
+                color: k.evidence === "strong" ? "#bbf7d0" : k.evidence === "weak" ? "#fef08a" : k.evidence === "missing" ? "#fecaca" : "#e2e8f0",
+              })) ?? []}
+              activeSection={activePreviewSection}
+              onSectionClick={(section) => setActivePreviewSection(section)}
+            />
           </div>
         </div>
 
-        {/* ═══════ RIGHT PANE: Falood ═══════ */}
-        <div className="right-pane card" style={{ display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", paddingBottom: 8 }}>
+        {/* Drag handle: center ↔ right (widen this to see more of the Falood chat) */}
+        <div
+          className="pane-resize-handle"
+          onMouseDown={(e) => startPaneResize("right", e)}
+          style={{ height: "100%", cursor: "col-resize", background: "var(--border)", borderRadius: 3 }}
+          title="Drag to resize"
+        />
+
+        {/* ═══════ RIGHT PANE: Tabs ═══════ */}
+        <div className="right-pane card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+          <div style={{ display: "flex", gap: 8, marginBottom: 10, borderBottom: "1px solid var(--border)", paddingBottom: 8, flexShrink: 0 }}>
+            <button className={rightTab === "keywords" ? "btn-primary" : "btn"} onClick={() => setRightTab("keywords")} style={{ flex: 1 }}>
+              Keywords
+            </button>
             <button className={rightTab === "suggestions" ? "btn-primary" : "btn"} onClick={() => setRightTab("suggestions")} style={{ flex: 1 }}>
               Suggestions
             </button>
@@ -1535,7 +1645,19 @@ export default function ApplicationResumeStudioPage() {
             </button>
           </div>
 
-          {rightTab === "suggestions" ? (
+          {rightTab === "keywords" ? (
+            <div style={{ flex: 1, overflowY: "auto" }}>
+              <KeywordPanel
+                keywords={targetJob?.keywords ?? []}
+                keywordApprovals={keywordApprovals}
+                onApproveKeyword={handleApproveKeyword}
+                onRejectKeyword={handleRejectKeyword}
+                onBulkApprove={handleBulkApproveKeywords}
+                onKeywordClick={handleKeywordClick}
+                keywordMap={keywordMap}
+              />
+            </div>
+          ) : rightTab === "suggestions" ? (
             <div style={{ flex: 1, overflowY: "auto" }}>
               <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
                 <button
@@ -1550,6 +1672,20 @@ export default function ApplicationResumeStudioPage() {
                   Refresh
                 </button>
               </div>
+
+              {suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified").length > 0 && (
+                <button
+                  className="btn-primary btn-compact"
+                  style={{ width: "100%", marginBottom: 10 }}
+                  onClick={handleBulkAcceptAndApply}
+                  disabled={bulkApplying}
+                  title="Accepts and applies every pending suggestion the system has already verified against the evidence bank. Fabrication-risk and unverified suggestions are left for individual review."
+                >
+                  {bulkApplying
+                    ? "Applying…"
+                    : `✓ Accept & Apply all verified (${suggestions.filter((s) => s.status === "pending" && s.truth_status === "verified").length})`}
+                </button>
+              )}
 
               {suggestions.length === 0 ? (
                 <p className="muted" style={{ fontSize: 12 }}>
@@ -1842,13 +1978,30 @@ export default function ApplicationResumeStudioPage() {
                       <p className="muted" style={{ fontSize: 11, margin: "2px 0 0" }}>
                         {new Date(ex.created_at).toLocaleDateString()} {new Date(ex.created_at).toLocaleTimeString()}
                       </p>
+                      {ex.storage_provider === "sharepoint" && ex.storage_item_id && (
+                        <p className="muted" style={{ fontSize: 10, margin: "2px 0 0" }}>
+                          SharePoint item: {ex.storage_item_id}
+                        </p>
+                      )}
                       {ex.status === "failed" && ex.error && (
                         <p style={{ fontSize: 11, color: "var(--danger)", margin: "4px 0 0" }}>{ex.error}</p>
                       )}
                       {ex.status !== "failed" && (
-                        <button className="btn btn-compact" style={{ marginTop: 6 }} onClick={() => downloadExportById(ex.id)}>
-                          Download
-                        </button>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                          <button className="btn btn-compact" onClick={() => downloadExportById(ex.id)}>
+                            Download
+                          </button>
+                          {ex.storage_url && ex.storage_provider === "sharepoint" && (
+                            <a
+                              className="btn btn-compact"
+                              href={ex.storage_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open SharePoint
+                            </a>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
@@ -2162,15 +2315,21 @@ export default function ApplicationResumeStudioPage() {
           }
           .studio-grid .left-pane,
           .studio-grid .center-pane,
-          .studio-grid .right-pane {
+          .studio-grid .right-pane,
+          .studio-grid .pane-resize-handle {
             display: none !important;
           }
         }
       `}</style>
       <style>{`
+        .pane-resize-handle:hover, .pane-resize-handle:active {
+          background: var(--accent) !important;
+        }
+      `}</style>
+      <style>{`
         @media (max-width: 1024px) {
           .mobile-tab-job .studio-grid .left-pane { display: flex !important; }
-          .mobile-tab-editor .studio-grid .center-pane { display: block !important; }
+          .mobile-tab-editor .studio-grid .center-pane { display: flex !important; }
           .mobile-tab-falood .studio-grid .right-pane { display: flex !important; }
         }
       `}</style>

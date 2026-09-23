@@ -1,9 +1,15 @@
-"use client";
-
 import Link from "next/link";
-import { Users, FileText, Wand2, CheckCircle } from "lucide-react";
+import { Users, FileText, Wand2, CheckCircle, PenTool } from "lucide-react";
+import { queryOne } from "@/server/db";
 
 const modules = [
+  {
+    title: "Resume Builder",
+    description:
+      "Create beautiful, ATS-optimized resumes with a live preview editor and 6 professional templates.",
+    href: "/falood/studio/base/new",
+    icon: PenTool,
+  },
   {
     title: "Candidate Profiles",
     description:
@@ -34,20 +40,33 @@ const modules = [
   },
 ];
 
-const stats = [
-  { label: "Candidates", value: 0 },
-  { label: "Base Resumes", value: 0 },
-  { label: "Target Jobs", value: 0 },
-  { label: "Pending Review", value: 0 },
-];
+export default async function FaloodPage() {
+  const statsRes = await queryOne<{
+    candidates: number;
+    base_resumes: number;
+    target_jobs: number;
+    pending_review: number;
+  }>(`
+    SELECT 
+      (SELECT COUNT(*) FROM candidates) as candidates,
+      (SELECT COUNT(*) FROM base_resumes) as base_resumes,
+      (SELECT COUNT(*) FROM target_jobs) as target_jobs,
+      (SELECT COUNT(*) FROM applications WHERE review_status = 'pending') as pending_review
+  `);
 
-export default function FaloodPage() {
+  const stats = [
+    { label: "Candidates", value: statsRes?.candidates ?? 0 },
+    { label: "Base Resumes", value: statsRes?.base_resumes ?? 0 },
+    { label: "Target Jobs", value: statsRes?.target_jobs ?? 0 },
+    { label: "Pending Review", value: statsRes?.pending_review ?? 0 },
+  ];
+
   return (
     <>
       <div className="page-header">
         <div>
           <h1>Falood AI</h1>
-          <p className="page-kicker">Resume & Application Studio</p>
+          <p className="page-kicker">Resume &amp; Application Studio</p>
         </div>
       </div>
 

@@ -1,0 +1,126 @@
+// src/server/repositories/gmailIntegrationRepository.ts
+// Data access for integration_accounts (provider='gmail' rows only). Tokens are
+// encrypted at rest using the same AES-256-GCM helper already used for AI API
+// keys (src/server/security/secretCrypto.ts) — encryptSecret/decryptSecret both
+// transparently handle already-plaintext legacy rows, so this is a safe retrofit
+// with no backfill migration required; each row upgrades to encrypted on its
+// next write (OAuth reconnect or token refresh).
+
+import { query, queryOne, execute } from "@/server/db/neon";
+import { encryptSecret, decryptSecret } from "@/server/security/secretCrypto";
+import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
+
+export interface GmailAccountRow {
+  id: string;
+  // Nullable since the shared-mailbox row (owner_type='shared_application_mailbox')
+  // has no single owning candidate - see listActiveSharedGmailAccount().
+  candidate_id: string | null;
+  email: string | null;
+  scopes: string[];
+  access_token: string;
+  refresh_token: string | null;
+  token_expires_at: string | null;
+  status: "active" | "revoked" | "error";
+  gmail_history_id: string | null;
+  gmail_backfill_page_token: string | null;
+  gmail_backfill_complete: boolean;
+}
+
+export async function listActiveCandidateGmailAccounts(includeErrors = false): Promise<GmailAccountRow[]> {
+  return query<GmailAccountRow>(
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
+     FROM integration_accounts
+     WHERE provider = 'gmail' AND owner_type = 'candidate' AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"} AND candidate_id IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM candidates c WHERE c.id = integration_accounts.candidate_id AND c.email_sync_paused = true)`
+  );
+}
+
+// Mirrors listActiveCandidateGmailAccounts() but for the single, system-wide
+// shared mailbox (unique-constrained: at most one active row). Retired
+// per-candidate accounts are left exactly as-is (see gmailSyncService.ts) -
+// listActiveCandidateGmailAccounts() below is kept fully intact, just no
+// longer called from the sync loop, so this is purely additive.
+export async function listActiveSharedGmailAccount(includeErrors = false): Promise<GmailAccountRow | null> {
+  // Fail closed when the deployment has not declared which mailbox is
+  // authoritative.  This prevents an old/shared row for another account from
+  // being selected just because it happens to be active in the database.
+  const sharedEmail = configuredSharedGmailEmail();
+  return queryOne<GmailAccountRow>(
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
+     FROM integration_accounts
+     WHERE provider = 'gmail' AND owner_type = 'shared_application_mailbox'
+       AND lower(email) = $1::text
+       AND status ${includeErrors ? "IN ('active', 'error')" : "= 'active'"}
+     ORDER BY updated_at DESC LIMIT 1`,
+    [sharedEmail],
+  );
+}
+
+export async function getDecryptedGmailAccount(id: string) {
+  const row = await queryOne<GmailAccountRow>(
+    `SELECT id, candidate_id, email, scopes, access_token, refresh_token, token_expires_at, status, gmail_history_id,
+            gmail_backfill_page_token, gmail_backfill_complete
+     FROM integration_accounts WHERE id = $1`,
+    [id]
+  );
+  if (!row) return null;
+  return {
+    ...row,
+    access_token: await decryptSecret(row.access_token),
+    refresh_token: row.refresh_token ? await decryptSecret(row.refresh_token) : null,
+  };
+}
+
+export async function saveEncryptedGmailTokens(params: {
+  id: string;
+  accessToken: string;
+  refreshToken?: string | null;
+  tokenExpiresAt: string | null;
+}) {
+  const encryptedAccess = await encryptSecret(params.accessToken);
+  if (params.refreshToken) {
+    const encryptedRefresh = await encryptSecret(params.refreshToken);
+    await execute(
+      `UPDATE integration_accounts SET access_token = $1, refresh_token = $2, token_expires_at = $3, status = 'active', sync_error = NULL, updated_at = now() WHERE id = $4`,
+      [encryptedAccess, encryptedRefresh, params.tokenExpiresAt, params.id]
+    );
+  } else {
+    await execute(
+      `UPDATE integration_accounts SET access_token = $1, token_expires_at = $2, status = 'active', sync_error = NULL, updated_at = now() WHERE id = $3`,
+      [encryptedAccess, params.tokenExpiresAt, params.id]
+    );
+  }
+}
+
+export async function markGmailAccountError(id: string, error: string) {
+  await execute(
+    `UPDATE integration_accounts SET status = 'error', sync_error = $1, updated_at = now() WHERE id = $2`,
+    [error.slice(0, 500), id]
+  );
+}
+
+export async function updateGmailHistoryId(id: string, historyId: string) {
+  await execute(
+    `UPDATE integration_accounts
+        SET gmail_history_id = $1::text, gmail_backfill_page_token = NULL, gmail_backfill_complete = true,
+            last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now()
+      WHERE id = $2::uuid`,
+    [historyId, id]
+  );
+}
+
+export async function updateGmailBackfillState(id: string, nextPageToken: string | null, complete: boolean) {
+  await execute(
+    `UPDATE integration_accounts
+        SET gmail_backfill_page_token = $1::text, gmail_backfill_complete = $2::boolean,
+            last_synced_at = now(), status = 'active', sync_error = NULL, updated_at = now()
+      WHERE id = $3::uuid`,
+    [nextPageToken, complete, id]
+  );
+}
+
+export async function saveGmailWatch(id: string, channelId: string, expiration: string, historyId: string) {
+  await execute(`UPDATE integration_accounts SET gmail_watch_channel_id=$1, gmail_watch_expiration=$2, gmail_history_id=COALESCE($3,gmail_history_id), updated_at=now() WHERE id=$4`, [channelId, expiration, historyId, id]);
+}

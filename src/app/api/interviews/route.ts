@@ -1,13 +1,18 @@
 // src/app/api/interviews/route.ts
-// GET  -> paginated/filterable list of interviews with candidate + job info
+// GET  -> paginated/filterable list of interviews with candidate + job info.
+//         Base table is applications.status = 'interview' (not interview_schedules alone) --
+//         most interview-stage applications were migrated/backfilled and never got a formal
+//         schedule row, so anchoring on interview_schedules hid them entirely. Each row is
+//         left-joined to its earliest interview_schedules row (if any) and flagged with
+//         has_transcript so the UI can filter interviews that still need a real transcript.
 // POST -> create an interview schedule with panel members
 
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
+
+const TRANSCRIPT_MARKERS = ["%[Interview Transcript Logged]%", "%[Interview Recording Logged]%"];
 
 export async function GET(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
@@ -22,152 +27,129 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get("search") || "").trim();
   const dateFrom = url.searchParams.get("dateFrom") || "";
   const dateTo = url.searchParams.get("dateTo") || "";
+  const hasTranscript = url.searchParams.get("hasTranscript") || ""; // "yes" | "no" | ""
 
-  if (isNeon()) {
-    const offset = (page - 1) * pageSize;
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let idx = 1;
+  const offset = (page - 1) * pageSize;
 
-    if (status) { conditions.push(`s.status = $${idx++}`); params.push(status); }
-    if (candidateId) { conditions.push(`a.candidate_id = $${idx++}`); params.push(candidateId); }
-    if (jobId) { conditions.push(`a.job_id = $${idx++}`); params.push(jobId); }
-    if (dateFrom) { conditions.push(`s.scheduled_at >= $${idx++}`); params.push(dateFrom); }
-    if (dateTo) { conditions.push(`s.scheduled_at <= $${idx++}`); params.push(`${dateTo}T23:59:59`); }
-    if (search) { conditions.push(`s.round_name ILIKE $${idx++}`); params.push(`%${search}%`); }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-
-    const countSql = `
-      SELECT COUNT(*) as count
-      FROM interview_schedules s
-      JOIN applications a ON s.application_id = a.id
-      ${whereClause}
-    `;
-    const countRow = await queryOne<{ count: string }>(countSql, params);
-    const total = parseInt(countRow?.count ?? "0", 10);
-
-    const dataSql = `
-      SELECT s.*,
-        jsonb_build_object(
-          'candidate_id', a.candidate_id,
-          'job_id', a.job_id,
-          'candidates', CASE WHEN c.id IS NOT NULL THEN jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email) END,
-          'jobs', CASE WHEN j.id IS NOT NULL THEN jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company) END
-        ) as applications
-      FROM interview_schedules s
-      JOIN applications a ON s.application_id = a.id
+  const rowsCte = `
+    WITH interview_rows AS (
+      SELECT
+        a.id AS application_id,
+        s.id AS schedule_id,
+        COALESCE(s.round_name, 'Not scheduled') AS round_name,
+        COALESCE(s.round_number, 1) AS round_number,
+        s.scheduled_at,
+        s.duration_minutes,
+        COALESCE(s.status, 'unscheduled') AS status,
+        s.location,
+        s.meeting_link,
+        a.candidate_id,
+        a.job_id,
+        c.id AS c_id, c.name AS c_name, c.email AS c_email,
+        j.id AS j_id, j.title AS j_title, j.company AS j_company,
+        (
+          EXISTS (
+            SELECT 1 FROM application_comments ac
+            WHERE ac.application_id = a.id
+              AND (ac.body ILIKE '${TRANSCRIPT_MARKERS[0]}' OR ac.body ILIKE '${TRANSCRIPT_MARKERS[1]}')
+          )
+          OR (a.notes ILIKE '${TRANSCRIPT_MARKERS[0]}' OR a.notes ILIKE '${TRANSCRIPT_MARKERS[1]}')
+        ) AS has_transcript
+      FROM applications a
+      LEFT JOIN LATERAL (
+        SELECT * FROM interview_schedules s2
+        WHERE s2.application_id = a.id
+        ORDER BY s2.scheduled_at ASC NULLS LAST
+        LIMIT 1
+      ) s ON true
       LEFT JOIN candidates c ON a.candidate_id = c.id
       LEFT JOIN jobs j ON a.job_id = j.id
-      ${whereClause}
-      ORDER BY s.scheduled_at ASC
-      OFFSET $${idx++} LIMIT $${idx++}
-    `;
-    const schedules = await query(dataSql, [...params, offset, pageSize]);
+      WHERE (a.status = 'interview' OR s.id IS NOT NULL)
+    )
+  `;
 
-    // Fetch panel members for each schedule
-    const scheduleIds = (schedules ?? []).map((s: any) => s.id as string);
-    let panelWithProfiles: any[] = [];
-    if (scheduleIds.length > 0) {
-      const panels = await query(
-        "SELECT * FROM interview_panel_members WHERE schedule_id = ANY($1)",
-        [scheduleIds]
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let idx = 1;
+
+  if (status) { conditions.push(`status = $${idx++}`); params.push(status); }
+  if (candidateId) { conditions.push(`candidate_id = $${idx++}`); params.push(candidateId); }
+  if (jobId) { conditions.push(`job_id = $${idx++}`); params.push(jobId); }
+  if (dateFrom) { conditions.push(`scheduled_at >= $${idx++}`); params.push(dateFrom); }
+  if (dateTo) { conditions.push(`scheduled_at <= $${idx++}`); params.push(`${dateTo}T23:59:59`); }
+  if (search) {
+    conditions.push(`(round_name ILIKE $${idx} OR c_name ILIKE $${idx} OR j_title ILIKE $${idx})`);
+    params.push(`%${search}%`);
+    idx++;
+  }
+  if (hasTranscript === "yes") conditions.push(`has_transcript = true`);
+  if (hasTranscript === "no") conditions.push(`has_transcript = false`);
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const countRow = await queryOne<{ count: string }>(
+    `${rowsCte} SELECT COUNT(*) as count FROM interview_rows ${whereClause}`,
+    params
+  );
+  const total = parseInt(countRow?.count ?? "0", 10);
+
+  const rows = await query<any>(
+    `${rowsCte} SELECT * FROM interview_rows ${whereClause} ORDER BY scheduled_at ASC NULLS LAST OFFSET $${idx++} LIMIT $${idx++}`,
+    [...params, offset, pageSize]
+  );
+
+  // Fetch panel members for the scheduled rows only
+  const scheduleIds = (rows ?? []).map((r: any) => r.schedule_id).filter(Boolean);
+  let panelBySchedule = new Map<string, any[]>();
+  if (scheduleIds.length > 0) {
+    const schedPlaceholders = scheduleIds.map((_: string, i: number) => `$${i + 1}`).join(", ");
+    const panels = await query(
+      `SELECT * FROM interview_panel_members WHERE schedule_id::text IN (${schedPlaceholders})`,
+      scheduleIds
+    );
+    const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
+    let profiles: any[] = [];
+    if (interviewerIds.length > 0) {
+      const profPlaceholders = interviewerIds.map((_: string, i: number) => `$${i + 1}`).join(", ");
+      profiles = await query(
+        `SELECT user_id, display_name, email FROM profiles WHERE user_id::text IN (${profPlaceholders})`,
+        interviewerIds
       );
-      const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
-      let profiles: any[] = [];
-      if (interviewerIds.length > 0) {
-        profiles = await query(
-          "SELECT user_id, display_name, email FROM profiles WHERE user_id = ANY($1)",
-          [interviewerIds]
-        );
-      }
-      const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
-      panelWithProfiles = (panels ?? []).map((pm: any) => ({
-        ...pm,
-        profile: profileById.get(pm.interviewer_id as string) ?? null,
-      }));
     }
-
-    const panelBySchedule = new Map<string, any[]>();
+    const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
+    const panelWithProfiles = (panels ?? []).map((pm: any) => ({
+      ...pm,
+      profile: profileById.get(pm.interviewer_id as string) ?? null,
+    }));
     for (const pm of panelWithProfiles) {
       const list = panelBySchedule.get(pm.schedule_id as string) ?? [];
       list.push(pm);
       panelBySchedule.set(pm.schedule_id as string, list);
     }
-
-    const items = (schedules ?? []).map((schedule: any) => ({
-      ...schedule,
-      panel: panelBySchedule.get(schedule.id) ?? [],
-    }));
-
-    return NextResponse.json({ items, total, page, pageSize });
   }
 
-  let dbQuery = supabase
-    .from("interview_schedules")
-    .select(`
-      *,
-      applications!inner(
-        candidate_id,
-        job_id,
-        candidates(id, name, email),
-        jobs(id, title, company)
-      )
-    `, { count: "exact" });
-
-  if (status) dbQuery = dbQuery.eq("status", status);
-  if (candidateId) dbQuery = dbQuery.eq("applications.candidate_id", candidateId);
-  if (jobId) dbQuery = dbQuery.eq("applications.job_id", jobId);
-  if (dateFrom) dbQuery = dbQuery.gte("scheduled_at", dateFrom);
-  if (dateTo) dbQuery = dbQuery.lte("scheduled_at", dateTo + "T23:59:59");
-  if (search) {
-    dbQuery = dbQuery.ilike("round_name", `%${search}%`);
-  }
-
-  const from = (page - 1) * pageSize;
-  const { data: schedules, error: dataErr, count } = await dbQuery
-    .order("scheduled_at", { ascending: true })
-    .range(from, from + pageSize - 1);
-
-  if (dataErr) return NextResponse.json({ error: dataErr.message }, { status: 500 });
-
-  // Fetch panel members for each schedule
-  const scheduleIds = (schedules ?? []).map((s: any) => s.id as string);
-  let panelWithProfiles: any[] = [];
-  if (scheduleIds.length > 0) {
-    const { data: panels } = await supabase
-      .from("interview_panel_members")
-      .select("*")
-      .in("schedule_id", scheduleIds);
-    const interviewerIds = (panels ?? []).map((p: any) => p.interviewer_id as string).filter(Boolean);
-    let profiles: any[] = [];
-    if (interviewerIds.length > 0) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("user_id, display_name, email")
-        .in("user_id", interviewerIds);
-      profiles = profs ?? [];
-    }
-    const profileById = new Map(profiles.map((p: any) => [p.user_id as string, p]));
-    panelWithProfiles = (panels ?? []).map((pm: any) => ({
-      ...pm,
-      profile: profileById.get(pm.interviewer_id as string) ?? null,
-    }));
-  }
-
-  const panelBySchedule = new Map<string, any[]>();
-  for (const pm of panelWithProfiles) {
-    const list = panelBySchedule.get(pm.schedule_id as string) ?? [];
-    list.push(pm);
-    panelBySchedule.set(pm.schedule_id as string, list);
-  }
-
-  const items = (schedules ?? []).map((schedule: any) => ({
-    ...schedule,
-    panel: panelBySchedule.get(schedule.id) ?? [],
+  const items = (rows ?? []).map((r: any) => ({
+    id: r.schedule_id ?? `app-${r.application_id}`,
+    schedule_id: r.schedule_id,
+    application_id: r.application_id,
+    round_name: r.round_name,
+    round_number: r.round_number,
+    scheduled_at: r.scheduled_at,
+    duration_minutes: r.duration_minutes,
+    status: r.status,
+    location: r.location,
+    meeting_link: r.meeting_link,
+    has_transcript: r.has_transcript,
+    applications: {
+      candidate_id: r.candidate_id,
+      job_id: r.job_id,
+      candidates: r.c_id ? { id: r.c_id, name: r.c_name, email: r.c_email } : null,
+      jobs: r.j_id ? { id: r.j_id, title: r.j_title, company: r.j_company } : null,
+    },
+    panel: r.schedule_id ? panelBySchedule.get(r.schedule_id) ?? [] : [],
   }));
 
-  return NextResponse.json({ items, total: count ?? 0, page, pageSize });
+  return NextResponse.json({ items, total, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -183,92 +165,36 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (isNeon()) {
-    const schedule = await queryOne(
-      `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [body.applicationId, body.roundNumber ?? 1, body.roundName, body.scheduledAt, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, "scheduled", context.profile.user_id]
-    );
-    if (!schedule) {
-      return NextResponse.json({ error: "Insert failed" }, { status: 500 });
-    }
-
-    // Insert panel members
-    const panel = Array.isArray(body.panel) ? body.panel : [];
-    if (panel.length > 0) {
-      const cols = ["schedule_id", "interviewer_id", "role", "status"];
-      const placeholders: string[] = [];
-      const values: any[] = [];
-      let idx = 1;
-      for (const p of panel) {
-        const rowPlaceholders: string[] = [];
-        for (const _ of cols) {
-          rowPlaceholders.push(`$${idx++}`);
-        }
-        placeholders.push(`(${rowPlaceholders.join(", ")})`);
-        values.push(schedule.id, p.interviewerId, p.role ?? "interviewer", "pending");
-      }
-      try {
-        await execute(
-          `INSERT INTO interview_panel_members (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`,
-          values
-        );
-      } catch (err: any) {
-        console.error("Panel insert error:", err.message);
-      }
-    }
-
-    await logActivity({
-      userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email || undefined,
-      type: "create",
-      description: `Scheduled interview: ${body.roundName}`,
-      entityType: "interview",
-      entityId: schedule.id,
-      entityName: body.roundName,
-      metadata: {
-        application_id: body.applicationId,
-        round_name: body.roundName,
-        scheduled_at: body.scheduledAt,
-      },
-    });
-
-    return NextResponse.json(schedule, { status: 201 });
-  }
-
-  const { data: schedule, error: scheduleErr } = await supabase
-    .from("interview_schedules")
-    .insert({
-      application_id: body.applicationId,
-      round_number: body.roundNumber ?? 1,
-      round_name: body.roundName,
-      scheduled_at: body.scheduledAt,
-      duration_minutes: body.durationMinutes ?? 60,
-      location: body.location ?? null,
-      meeting_link: body.meetingLink ?? null,
-      status: "scheduled",
-      created_by: context.profile.user_id,
-    })
-    .select()
-    .single();
-
-  if (scheduleErr || !schedule) {
-    return NextResponse.json({ error: scheduleErr?.message || "Insert failed" }, { status: 500 });
+  const schedule = await queryOne(
+    `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [body.applicationId, body.roundNumber ?? 1, body.roundName, body.scheduledAt, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, "scheduled", context.profile.user_id]
+  );
+  if (!schedule) {
+    return NextResponse.json({ error: "Insert failed" }, { status: 500 });
   }
 
   // Insert panel members
   const panel = Array.isArray(body.panel) ? body.panel : [];
   if (panel.length > 0) {
-    const { error: panelErr } = await supabase.from("interview_panel_members").insert(
-      panel.map((p: any) => ({
-        schedule_id: schedule.id,
-        interviewer_id: p.interviewerId,
-        role: p.role ?? "interviewer",
-        status: "pending",
-      }))
-    );
-    if (panelErr) {
-      // Best-effort; don't fail the whole request
-      console.error("Panel insert error:", panelErr.message);
+    const cols = ["schedule_id", "interviewer_id", "role", "status"];
+    const placeholders: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    for (const p of panel) {
+      const rowPlaceholders: string[] = [];
+      for (const _ of cols) {
+        rowPlaceholders.push(`$${idx++}`);
+      }
+      placeholders.push(`(${rowPlaceholders.join(", ")})`);
+      values.push(schedule.id, p.interviewerId, p.role ?? "interviewer", "pending");
+    }
+    try {
+      await execute(
+        `INSERT INTO interview_panel_members (${cols.join(", ")}) VALUES ${placeholders.join(", ")}`,
+        values
+      );
+    } catch (err: any) {
+      console.error("Panel insert error:", err.message);
     }
   }
 

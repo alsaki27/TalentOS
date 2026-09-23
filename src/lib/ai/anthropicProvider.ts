@@ -1,14 +1,14 @@
 // src/lib/ai/anthropicProvider.ts
 // Anthropic Messages API via raw fetch — no SDK dependency, consistent with how
 // every other external integration in this app (ATS fetchers, USAJobs, career-page
-// extractor) talks to its provider. Requires ANTHROPIC_API_KEY.
+// extractor) talks to its provider. Credentials are injected from Neon.
 
 import { AiContentBlock, AiMessage, AiProvider, AiResponse, AiTool } from "@/lib/ai/provider";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MODEL = "claude-sonnet-4-6";
-const MAX_TOKENS = 2048;
+const MAX_TOKENS = 8192;
 
 function toAnthropicContent(content: AiContentBlock[]): unknown[] {
   return content.map((block) => {
@@ -26,22 +26,28 @@ function fromAnthropicContent(content: any[]): AiContentBlock[] {
   });
 }
 
-export function getAnthropicProvider(): AiProvider | null {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+export function getAnthropicProvider(modelOverride?: string | null, apiKey?: string, apiUrl = ANTHROPIC_API_URL): AiProvider | null {
   if (!apiKey) return null;
 
   return {
-    async send({ system, messages, tools }) {
-      const res = await fetch(ANTHROPIC_API_URL, {
+    async send({ system, messages, tools, maxTokens, timeoutMs }) {
+      var controller = new AbortController();
+      var timer: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(function () { controller.abort(); }, timeoutMs);
+      }
+      try {
+      const res = await fetch(apiUrl, {
         method: "POST",
+        signal: controller.signal,
         headers: {
           "x-api-key": apiKey,
           "anthropic-version": ANTHROPIC_VERSION,
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: process.env.ANTHROPIC_MODEL || DEFAULT_MODEL,
-          max_tokens: MAX_TOKENS,
+          model: modelOverride || DEFAULT_MODEL,
+          max_tokens: maxTokens ?? MAX_TOKENS,
           system,
           messages: messages.map((m) => ({ role: m.role, content: toAnthropicContent(m.content) })),
           tools: tools.map((t): unknown => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
@@ -57,8 +63,12 @@ export function getAnthropicProvider(): AiProvider | null {
       const response: AiResponse = {
         content: fromAnthropicContent(data.content ?? []),
         stopReason: data.stop_reason ?? "end_turn",
+        usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
       };
       return response;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     },
   };
 }

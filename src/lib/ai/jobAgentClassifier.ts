@@ -1,0 +1,347 @@
+// src/lib/ai/jobAgentClassifier.ts
+// AI classification module for the Job Agent.
+// Reads its behavior from the AI Control Center (ai_agent_configs / ai_automation_routes
+// for automation_id = "job_categorization"). Falls back to a deterministic regex
+// classifier if AI is disabled, misconfigured, or fails at runtime.
+
+import { callWithUsageTracking } from "@/lib/ai/routing";
+import { textOf } from "@/lib/ai/provider";
+import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
+import { isTitleRelevantToGroup } from "@/lib/jobAgentRoleLibrary";
+
+const AUTOMATION_ID = "job_categorization";
+
+export interface ClassificationResult {
+  seniority: "entry" | "mid" | "senior" | "executive" | "unknown";
+  tier: "best" | "medium" | "worthy" | "skip";
+  tier_reason: string;
+  is_false_positive: boolean;
+  false_positive_reason: string | null;
+  relevance_score: number;
+  keywords: string[];
+}
+
+interface ClassifyInput {
+  title: string;
+  company_name?: string | null;
+  search_query: string;
+  role_group: string;
+  role_group_label: string;
+}
+
+const VALID_SENIORITY = new Set(["entry", "mid", "senior", "executive", "unknown"]);
+const VALID_TIER = new Set(["best", "medium", "worthy", "skip"]);
+
+const SENIOR_SIGNALS = /\b(senior|sr\.?|lead|principal|staff|director|expert|iii|iv|v|head of|chief)\b/i;
+const ENTRY_SIGNALS = /\b(entry.level|entry level|junior|jr\.?|associate|intern|trainee|graduate|new grad|level i\b|\bi\b$)/i;
+const MGR_EXCEPTION = /manager/i;
+
+const FALSE_POSITIVE_COMPANIES = new Set([
+  "splice", // music-tech company frequently matched by "Splice Engineer" query
+]);
+
+const DEFAULT_SYSTEM_PROMPT =
+  "You are a strict, literal job-posting classifier. Respond with raw JSON only.";
+
+const DEFAULT_USER_PROMPT_PREAMBLE = `You are a strict job-posting classifier for a recruiting agent. The agent searches Google Jobs with specific role titles and must decide whether each result is actually relevant.
+
+CRITICAL RULES:
+- Role groups "A" through "R" contain an explicitly approved title library, including several senior titles. Never assign "skip" solely because a title sounds senior, managerial, lead, principal, staff, director, expert, III, IV, V, head, or chief when the role is otherwise relevant to its selected group.
+- Seniority is still recorded for matching and review, but relevance and false-positive checks decide whether the job is kept.
+- Relevance / false positives: If the company name or job title clearly does not match the intended domain, set is_false_positive = true. Example: a "Splice Engineer" query returning a role at Splice (the music-tech company) is a false positive.
+- Industry: do NOT reject based on industry. Candidates relocate and industries vary.
+
+TIER DEFINITIONS:
+- best: direct title match + correct seniority + real domain fit + high confidence.
+- medium: reasonably relevant but slightly broader title or lower confidence.
+- worthy: tangential or hard-to-verify fit — keep for manual review.
+- skip: wrong seniority, false positive, or clearly unrelated role.
+
+Respond with ONLY this JSON object, no markdown fences, no other text:
+{"seniority":"entry"|"mid"|"senior"|"executive"|"unknown","tier":"best"|"medium"|"worthy"|"skip","tier_reason":"short reason","is_false_positive":boolean,"false_positive_reason":string|null,"relevance_score":number 0.00-1.00,"keywords":["max 4 precise skills"]}`;
+
+interface AgentConfigSnapshot {
+  systemPrompt: string | null;
+  userPromptPreamble: string | null;
+  temperature: number | null;
+  maxOutputTokens: number | null;
+  timeoutMs: number | null;
+  isActive: boolean;
+}
+
+// Module-level config cache — avoids a DB hit on every single job classification call.
+// Invalidates automatically after 5 minutes so admin AI Control Center changes take effect.
+let _configCache: AgentConfigSnapshot | null = null;
+let _configCacheExpiry = 0;
+const CONFIG_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+async function loadConfig(): Promise<AgentConfigSnapshot> {
+  // Return cached config if still valid — eliminates a DB roundtrip per job.
+  const now = Date.now();
+  if (_configCache && now < _configCacheExpiry) {
+    return _configCache;
+  }
+
+  try {
+    const row = await findAgentConfigByAutomationId(AUTOMATION_ID);
+    const snapshot: AgentConfigSnapshot = !row
+      ? {
+          systemPrompt: DEFAULT_SYSTEM_PROMPT,
+          userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
+          temperature: 0.2,
+          maxOutputTokens: 2048,
+          timeoutMs: null,
+          isActive: true,
+        }
+      : {
+          systemPrompt: row.system_prompt || DEFAULT_SYSTEM_PROMPT,
+          userPromptPreamble: row.system_prompt ? null : DEFAULT_USER_PROMPT_PREAMBLE,
+          temperature: row.temperature ?? 0.2,
+          maxOutputTokens: row.max_output_tokens ?? 2048,
+          timeoutMs: row.timeout_ms ?? null,
+          isActive: row.is_active,
+        };
+
+    _configCache = snapshot;
+    _configCacheExpiry = now + CONFIG_CACHE_TTL_MS;
+    return snapshot;
+  } catch (err) {
+    console.warn(`[jobAgentClassifier] Could not load ${AUTOMATION_ID} config:`, (err as Error).message);
+    // On error, return cached version if available (stale is better than crashing)
+    if (_configCache) return _configCache;
+    return {
+      systemPrompt: DEFAULT_SYSTEM_PROMPT,
+      userPromptPreamble: DEFAULT_USER_PROMPT_PREAMBLE,
+      temperature: 0.2,
+      maxOutputTokens: 2048,
+      timeoutMs: null,
+      isActive: true,
+    };
+  }
+}
+
+function buildPrompt(input: ClassifyInput, config: AgentConfigSnapshot): string {
+  const roleLine = `Role group: ${input.role_group} (${input.role_group_label})`;
+  const jobLines = [
+    "Job title:",
+    input.title,
+    input.company_name ? `Company name: ${input.company_name}` : null,
+    `Search query that produced this result: ${input.search_query}`,
+    roleLine,
+  ].filter(Boolean);
+
+  if (config.userPromptPreamble) {
+    return [config.userPromptPreamble, "", ...jobLines].join("\n");
+  }
+
+  // Admin-supplied system prompt only; keep the job facts in the user message.
+  return jobLines.join("\n");
+}
+
+function parseAiJson(raw: string): ClassificationResult {
+  const stripped = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  const parsed = JSON.parse(stripped);
+
+  const seniority = VALID_SENIORITY.has(parsed.seniority) ? parsed.seniority : "unknown";
+  const tier = VALID_TIER.has(parsed.tier) ? parsed.tier : "worthy";
+
+  return {
+    seniority,
+    tier,
+    tier_reason: typeof parsed.tier_reason === "string" ? parsed.tier_reason.trim() : "",
+    is_false_positive: parsed.is_false_positive === true,
+    false_positive_reason:
+      typeof parsed.false_positive_reason === "string" ? parsed.false_positive_reason.trim() : null,
+    relevance_score:
+      typeof parsed.relevance_score === "number"
+        ? Math.max(0, Math.min(1, parsed.relevance_score))
+        : 0.5,
+    keywords: Array.isArray(parsed.keywords)
+      ? parsed.keywords.map((k: any) => String(k).trim()).filter(Boolean).slice(0, 6)
+      : [],
+  };
+}
+
+/**
+ * AI classifier. Routes through the AI Control Center (automation_id = "job_categorization"),
+ * so the model/key/temperature can be changed from /admin/ai without editing code.
+ */
+export async function classifyWithAi(input: ClassifyInput): Promise<ClassificationResult> {
+  const config = await loadConfig();
+
+  if (!config.isActive) {
+    throw new Error(`Automation ${AUTOMATION_ID} is disabled in AI Control Center`);
+  }
+
+  const system = config.systemPrompt || DEFAULT_SYSTEM_PROMPT;
+  const userText = buildPrompt(input, config);
+
+  const { result, providerName, model, aiKeyId, routeRank } = await callWithUsageTracking(
+    AUTOMATION_ID,
+    undefined,
+    async (provider) => {
+      const response = await provider.send({
+        system,
+        messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
+        tools: [],
+        temperature: config.temperature ?? 0.2,
+        maxTokens: config.maxOutputTokens ?? 2048,
+        timeoutMs: config.timeoutMs ?? undefined,
+      });
+      return parseAiJson(textOf(response.content));
+    }
+  );
+
+  console.log(
+    `[jobAgentClassifier] classified "${input.title}" via ${providerName}${model ? `/${model}` : ""} ` +
+      `(key=${aiKeyId ?? "env"}, rank=${routeRank ?? "n/a"}) -> tier=${result.tier}`
+  );
+
+  return result;
+}
+
+/**
+ * Regex-based fallback classifier. Matches the handover's process_categorize_dedupe.js
+ * logic but returns the same ClassificationResult shape.
+ */
+export function classifyWithRegex(input: ClassifyInput): ClassificationResult {
+  const title = input.title;
+  const company = (input.company_name ?? "").toLowerCase();
+  const isOspFiber = input.role_group === "A";
+  const isDefaultRoleGroup = /^[A-R]$/.test(input.role_group.toUpperCase());
+
+  // False-positive company check
+  for (const fp of FALSE_POSITIVE_COMPANIES) {
+    if (company.includes(fp)) {
+      return {
+        seniority: "unknown",
+        tier: "skip",
+        tier_reason: `False-positive company match: ${fp}`,
+        is_false_positive: true,
+        false_positive_reason: `Company "${input.company_name}" matches known false-positive keyword "${fp}"`,
+        relevance_score: 0.05,
+        keywords: [],
+      };
+    }
+  }
+
+  // OSP / Fiber group: accept all seniority levels
+  if (isOspFiber) {
+    return {
+      seniority: "unknown",
+      tier: "best",
+      tier_reason: "OSP/Fiber group: all seniority levels wanted",
+      is_false_positive: false,
+      false_positive_reason: null,
+      relevance_score: 0.85,
+      keywords: deriveKeywords(title),
+    };
+  }
+
+  // Record seniority while preserving relevant roles explicitly configured in A-R.
+  const isSenior =
+    SENIOR_SIGNALS.test(title) ||
+    (MGR_EXCEPTION.test(title) && !/project manager-drafter/i.test(title));
+  const isEntry = ENTRY_SIGNALS.test(title);
+
+  if (isSenior && !isDefaultRoleGroup) {
+    return {
+      seniority: "senior",
+      tier: "skip",
+      tier_reason: "Senior/director/principal/manager title outside a configured A-R role group",
+      is_false_positive: false,
+      false_positive_reason: null,
+      relevance_score: 0.2,
+      keywords: [],
+    };
+  }
+
+  if (isDefaultRoleGroup && !isTitleRelevantToGroup(title, input.role_group)) {
+    return {
+      seniority: "unknown",
+      tier: "skip",
+      tier_reason: "Title is unrelated to the configured role group",
+      is_false_positive: true,
+      false_positive_reason: `Title "${title}" does not match role group ${input.role_group}`,
+      relevance_score: 0.05,
+      keywords: [],
+    };
+  }
+
+  if (isSenior) {
+    return {
+      seniority: "senior",
+      tier: "worthy",
+      tier_reason: "Relevant configured role; seniority recorded without automatic rejection",
+      is_false_positive: false,
+      false_positive_reason: null,
+      relevance_score: 0.65,
+      keywords: deriveKeywords(title),
+    };
+  }
+
+  if (isEntry) {
+    return {
+      seniority: "entry",
+      tier: "best",
+      tier_reason: "Entry-level signal in title",
+      is_false_positive: false,
+      false_positive_reason: null,
+      relevance_score: 0.9,
+      keywords: deriveKeywords(title),
+    };
+  }
+
+  return {
+    seniority: "unknown",
+    tier: "worthy",
+    tier_reason: "No clear seniority signal — keep for review",
+    is_false_positive: false,
+    false_positive_reason: null,
+    relevance_score: 0.6,
+    keywords: deriveKeywords(title),
+  };
+}
+
+function deriveKeywords(title: string): string[] {
+  const t = title.toLowerCase();
+  const keywords: string[] = [];
+  if (t.includes("autocad") || t.includes("cad")) keywords.push("AutoCAD");
+  if (t.includes("draft") || t.includes("drafter")) keywords.push("Drafting");
+  if (t.includes("osp") || t.includes("outside plant")) keywords.push("OSP");
+  if (t.includes("fiber") || t.includes("fibre")) keywords.push("Fiber");
+  if (t.includes("gis") || t.includes("geospatial")) keywords.push("GIS");
+  if (t.includes("splice")) keywords.push("Splicing");
+  if (t.includes("bim")) keywords.push("BIM");
+  if (t.includes("design")) keywords.push("Design");
+  return [...new Set(keywords)];
+}
+
+/**
+ * Classify a job. Uses AI by default; falls back to regex if AI fails or if
+ * opts.fallback is true.
+ */
+export async function classifyJob(
+  input: ClassifyInput,
+  opts: { useAi?: boolean; delayMs?: number } = {}
+): Promise<ClassificationResult> {
+  const useAi = opts.useAi ?? true;
+
+  if (useAi) {
+    try {
+      const result = await classifyWithAi(input);
+      if (opts.delayMs && opts.delayMs > 0) {
+        await new Promise((r) => setTimeout(r, opts.delayMs));
+      }
+      return result;
+    } catch (err) {
+      console.warn("[jobAgentClassifier] AI classification failed, falling back to regex:", (err as Error).message);
+    }
+  }
+
+  return classifyWithRegex(input);
+}

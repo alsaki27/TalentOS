@@ -8,17 +8,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const { data, error } = await supabase
-    .from("application_comments")
-    .select("*")
-    .eq("application_id", params.id)
-    .order("created_at", { ascending: false })
-    .limit(50);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await query<Record<string, any>>(
+    'SELECT * FROM application_comments WHERE application_id = $1 ORDER BY created_at DESC LIMIT 50',
+    [params.id]
+  );
   return NextResponse.json(data ?? []);
 }
 
@@ -39,30 +35,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const parentCommentId = body.parent_comment_id ? String(body.parent_comment_id) : null;
   if (parentCommentId) {
-    const { data: parent } = await supabase
-      .from("application_comments")
-      .select("id")
-      .eq("id", parentCommentId)
-      .eq("application_id", params.id)
-      .maybeSingle();
-    if (!parent) {
-      return NextResponse.json({ error: "parent_comment_id must belong to the same application" }, { status: 400 });
+      const parent = await queryOne<{ id: string }>(
+        'SELECT id FROM application_comments WHERE id = $1 AND application_id = $2',
+        [parentCommentId, params.id]
+      );
+      if (!parent) {
+        return NextResponse.json({ error: "parent_comment_id must belong to the same application" }, { status: 400 });
+      }
     }
-  }
 
-  const { data, error } = await supabase
-    .from("application_comments")
-    .insert({
-      application_id: params.id,
-      commenter_name: commenterName,
-      commenter_user_id: currentUser?.profile.user_id ?? null,
-      body: commentBody,
-      visible_to_candidate: Boolean(body.visible_to_candidate),
-      parent_comment_id: parentCommentId,
-    })
-    .select()
-    .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  let data;
+  data = await queryOne<Record<string, any>>(
+    `INSERT INTO application_comments (application_id, commenter_name, commenter_user_id, body, visible_to_candidate, parent_comment_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [params.id, commenterName, currentUser?.profile.user_id ?? null, commentBody, Boolean(body.visible_to_candidate), parentCommentId]
+  );
+
   return NextResponse.json(data, { status: 201 });
 }

@@ -6,6 +6,15 @@ import Link from "next/link";
 import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
+import { DateRangePicker } from "@/components/DateRangePicker";
+
+interface MatchScore {
+  job_id: string;
+  score: number;
+  breakdown: any;
+  candidate_id: string;
+  candidate_name: string;
+}
 
 interface Applicant {
   application_id: string;
@@ -39,10 +48,14 @@ interface Job {
   work_authorization: string | null;
   applicant_count: number;
   applicants: Applicant[];
+  content_duplicate_of: string | null;
+  content_duplicate_reason: string | null;
   raw_description?: string | null;
   parsed_description?: unknown | null;
+  source_url?: string | null;
   ai_extracted_at?: string | null;
   ai_confidence_score?: number | null;
+  match_scores?: MatchScore[];
 }
 
 const WORK_AUTH_LABELS: Record<string, string> = {
@@ -73,6 +86,13 @@ interface SavedJobSearch {
     employmentType?: string;
     category?: string;
     workAuthorization?: string;
+    workMode?: string;
+    dateStart?: string;
+    dateEnd?: string;
+    candidate?: string;
+    assignedBy?: string;
+    owner?: string;
+    score?: string;
     sort?: string;
   };
   is_shared: boolean;
@@ -149,15 +169,114 @@ function initials(name: string): string {
 
 const PAGE_SIZE = 50;
 
+function DualRangeSlider({
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  min: number;
+  max: number;
+  value: [number, number];
+  onChange: (val: [number, number]) => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef<"min" | "max" | null>(null);
+  const [localVal, setLocalVal] = useState<[number, number]>(value);
+
+  useEffect(() => {
+    setLocalVal(value);
+  }, [value[0], value[1]]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (localVal[0] !== value[0] || localVal[1] !== value[1]) {
+        onChange(localVal);
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [localVal[0], localVal[1]]);
+
+  useEffect(() => {
+    function handleMouseMove(e: MouseEvent) {
+      if (!isDragging.current || !trackRef.current) return;
+      const rect = trackRef.current.getBoundingClientRect();
+      const percent = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+      const val = Math.round((percent / 100) * (max - min) + min);
+
+      setLocalVal((prev) => {
+        if (isDragging.current === "min") return [Math.min(val, prev[1] - 1), prev[1]];
+        return [prev[0], Math.max(val, prev[0] + 1)];
+      });
+    }
+
+    function handleMouseUp() {
+      isDragging.current = null;
+    }
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [min, max]);
+
+  const getPercent = (val: number) => Math.round(((val - min) / (max - min)) * 100);
+
+  return (
+    <div ref={trackRef} style={{ position: "relative", width: "140px", height: "24px", marginTop: "14px", marginBottom: "4px", userSelect: "none" }}>
+      <div style={{ position: "absolute", borderRadius: "3px", height: "6px", backgroundColor: "#d1d5db", width: "100%", top: "50%", transform: "translateY(-50%)" }} />
+      <div style={{ position: "absolute", borderRadius: "3px", height: "6px", backgroundColor: "var(--accent, #2a6f4f)", top: "50%", transform: "translateY(-50%)", left: `${getPercent(localVal[0])}%`, width: `${getPercent(localVal[1]) - getPercent(localVal[0])}%` }} />
+
+      <div
+        style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", cursor: "pointer", zIndex: 2 }}
+        onMouseDown={(e) => {
+          if (!trackRef.current) return;
+          const rect = trackRef.current.getBoundingClientRect();
+          const percent = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+          const val = Math.round((percent / 100) * (max - min) + min);
+          const distMin = Math.abs(val - localVal[0]);
+          const distMax = Math.abs(val - localVal[1]);
+          if (distMin < distMax || (distMin === distMax && val < localVal[0])) {
+            setLocalVal([val, localVal[1]]);
+            isDragging.current = "min";
+          } else {
+            setLocalVal([localVal[0], val]);
+            isDragging.current = "max";
+          }
+        }}
+      />
+
+      <div
+        onMouseDown={() => { isDragging.current = "min"; }}
+        style={{ position: "absolute", width: "16px", height: "16px", borderRadius: "50%", backgroundColor: "#fff", border: "2px solid var(--accent, #2a6f4f)", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", top: "50%", transform: "translate(-50%, -50%)", left: `${getPercent(localVal[0])}%`, cursor: "grab", zIndex: 3 }}
+      >
+        <div style={{ position: "absolute", top: "-24px", transform: "translateX(-50%)", backgroundColor: "#374151", color: "white", padding: "2px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600", left: "50%" }}>{localVal[0]}</div>
+      </div>
+
+      <div
+        onMouseDown={() => { isDragging.current = "max"; }}
+        style={{ position: "absolute", width: "16px", height: "16px", borderRadius: "50%", backgroundColor: "#fff", border: "2px solid var(--accent, #2a6f4f)", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", top: "50%", transform: "translate(-50%, -50%)", left: `${getPercent(localVal[1])}%`, cursor: "grab", zIndex: 4 }}
+      >
+        <div style={{ position: "absolute", top: "-24px", transform: "translateX(-50%)", backgroundColor: "#374151", color: "white", padding: "2px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600", left: "50%" }}>{localVal[1]}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageInput, setPageInput] = useState("");
+  const [pageError, setPageError] = useState("");
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showImportAts, setShowImportAts] = useState(false);
   const [showApplyFor, setShowApplyFor] = useState<Job | null>(null);
+  const [showBulkApply, setShowBulkApply] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -167,6 +286,15 @@ export default function JobsPage() {
   const [employmentTypeFilter, setEmploymentTypeFilter] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [workAuthFilter, setWorkAuthFilter] = useState("");
+  const [workModeFilter, setWorkModeFilter] = useState("");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const [candidateFilter, setCandidateFilter] = useState("");
+  const [assignedByFilter, setAssignedByFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [scoreFilter, setScoreFilter] = useState<[number, number]>([0, 100]);
+  const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
+  const [filterUsers, setFilterUsers] = useState<TeamUser[]>([]);
   const [postedSort, setPostedSort] = useState<"" | "asc" | "desc">("");
   const [facets, setFacets] = useState<{ sources: string[]; employmentTypes: string[]; categories: string[] }>({ sources: [], employmentTypes: [], categories: [] });
   const [savedSearches, setSavedSearches] = useState<SavedJobSearch[]>([]);
@@ -174,6 +302,10 @@ export default function JobsPage() {
   const [saveSearchLabel, setSaveSearchLabel] = useState("");
   const [savedSearchError, setSavedSearchError] = useState("");
   const [pendingCategorization, setPendingCategorization] = useState(0);
+  const [addingTagForJobId, setAddingTagForJobId] = useState<string | null>(null);
+  const [newTagValue, setNewTagValue] = useState("");
+  const [dashboardTimeframe, setDashboardTimeframe] = useState("24");
+  const [dashboardStats, setDashboardStats] = useState<any>(null);
   const categorizingRef = useRef(false);
 
   // Debounce the free-text search box so it doesn't fire a request per keystroke.
@@ -183,9 +315,34 @@ export default function JobsPage() {
   }, [searchInput]);
 
   useEffect(() => {
-    fetch("/api/jobs/facets").then((r) => r.json()).then(setFacets);
+    fetch("/api/jobs/facets")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || typeof data !== "object") return;
+        setFacets({
+          sources: Array.isArray(data.sources) ? data.sources : [],
+          employmentTypes: Array.isArray(data.employmentTypes) ? data.employmentTypes : [],
+          categories: Array.isArray(data.categories) ? data.categories : [],
+        });
+      })
+      .catch(console.error);
     loadSavedSearches();
+    fetch("/api/candidates?compact=1&pageSize=500")
+      .then((r) => r.json())
+      .then((data) => setFilterCandidates(Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : [])))
+      .catch(console.error);
+    fetch("/api/users")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setFilterUsers(Array.isArray(data) ? data : []))
+      .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    fetch(`/api/jobs/dashboard-stats?timeframe=${dashboardTimeframe}`)
+      .then(r => r.json())
+      .then(data => { if (!data.error) setDashboardStats(data); })
+      .catch(console.error);
+  }, [dashboardTimeframe]);
 
   function buildParams(pageNum: number, pageSize: number) {
     const params = new URLSearchParams();
@@ -198,6 +355,13 @@ export default function JobsPage() {
     if (employmentTypeFilter) params.set("employmentType", employmentTypeFilter);
     if (categoryFilter) params.set("category", categoryFilter);
     if (workAuthFilter) params.set("workAuthorization", workAuthFilter);
+    if (workModeFilter) params.set("workMode", workModeFilter);
+    if (dateStart) params.set("dateStart", dateStart);
+    if (dateEnd) params.set("dateEnd", dateEnd);
+    if (candidateFilter) params.set("candidate", candidateFilter);
+    if (assignedByFilter) params.set("assignedBy", assignedByFilter);
+    if (ownerFilter) params.set("owner", ownerFilter);
+    if (scoreFilter[0] > 0 || scoreFilter[1] < 100) params.set("score", scoreFilter.join(","));
     if (postedSort) params.set("sort", postedSort === "asc" ? "posted_asc" : "posted_desc");
     return params;
   }
@@ -220,7 +384,7 @@ export default function JobsPage() {
   }
 
   // Any filter/search/sort change re-queries the server from page 1.
-  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, postedSort]);
+  useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, workModeFilter, postedSort, dateStart, dateEnd, candidateFilter, assignedByFilter, ownerFilter, scoreFilter]);
 
   // Drains the pending-categorization queue in small sequential batches, called right
   // after any import/create action and once on page load (in case a backlog already
@@ -238,11 +402,22 @@ export default function JobsPage() {
         const data = await res.json();
         remaining = data.remainingPending ?? 0;
         setPendingCategorization(remaining);
+        if (data.updatedJobs && data.updatedJobs.length > 0) {
+          setJobs((prev) => {
+            const jobsCopy = [...prev];
+            for (const updatedJob of data.updatedJobs) {
+              const idx = jobsCopy.findIndex((j) => j.id === updatedJob.id);
+              if (idx !== -1) {
+                jobsCopy[idx] = { ...jobsCopy[idx], ...updatedJob };
+              }
+            }
+            return jobsCopy;
+          });
+        }
         if (remaining > 0) await new Promise((r) => setTimeout(r, 400));
       }
     } finally {
       categorizingRef.current = false;
-      load(page);
     }
   }
 
@@ -250,8 +425,106 @@ export default function JobsPage() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  function goToPage(inputVal: string) {
+    const n = parseInt(inputVal);
+    if (isNaN(n) || n < 1) {
+      setPageError("Enter a valid page number");
+      return;
+    }
+    if (n > totalPages) {
+      setPageError(`Page must be 1–${totalPages}`);
+      return;
+    }
+    setPageError("");
+    setPageInput("");
+    load(n);
+  }
+
+  function renderPagination(options: { marginTop: number; marginBottom: number }) {
+    if (total <= 0) return null;
+    return (
+      <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: 6, marginTop: options.marginTop, marginBottom: options.marginBottom }}>
+        <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
+        {(() => {
+          const pages: Array<number | string> = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pages.push(i);
+          } else if (page <= 4) {
+            pages.push(1, 2, 3, 4, 5, "...", totalPages);
+          } else if (page >= totalPages - 3) {
+            pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+          } else {
+            pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
+          }
+          return pages.map((entry, index) => (
+            <button
+              key={`${entry}-${index}`}
+              className={entry === page ? "btn-primary" : ""}
+              onClick={() => typeof entry === "number" && entry !== page ? load(entry) : undefined}
+              disabled={loading || entry === "..."}
+              style={{
+                minWidth: 36, textAlign: "center",
+                cursor: entry === "..." || entry === page ? "default" : "pointer",
+                padding: "6px 12px", background: entry === "..." ? "transparent" : undefined,
+                border: entry === "..." ? "none" : undefined, opacity: entry === "..." ? 0.7 : undefined,
+              }}
+            >{entry}</button>
+          ));
+        })()}
+        <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+        <span className="muted" style={{ marginLeft: 16, fontSize: 13 }}>Page</span>
+        <input
+          type="number"
+          min={1}
+          max={totalPages}
+          value={pageInput}
+          onChange={(e) => { setPageInput(e.target.value); setPageError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") goToPage(pageInput); }}
+          placeholder={`1–${totalPages}`}
+          style={{ width: 70, padding: "5px 8px", fontSize: 13 }}
+        />
+        <button onClick={() => goToPage(pageInput)} style={{ padding: "5px 12px", fontSize: 13 }}>Go</button>
+        {pageError && <span className="form-error" style={{ fontSize: 12, marginLeft: 6 }}>{pageError}</span>}
+      </div>
+    );
+  }
+
   function togglePostedSort() {
     setPostedSort((prev) => (prev === "desc" ? "asc" : prev === "asc" ? "" : "desc"));
+  }
+
+  async function removeTag(job: Job, tagToRemove: string) {
+    const updatedTags = (job.category_tags || []).filter((t) => t !== tagToRemove);
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, category_tags: updatedTags } : j)));
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function addTag(job: Job) {
+    if (!newTagValue.trim()) {
+      setAddingTagForJobId(null);
+      return;
+    }
+    const updatedTags = [...(job.category_tags || []), newTagValue.trim()];
+    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, category_tags: updatedTags } : j)));
+    setAddingTagForJobId(null);
+    setNewTagValue("");
+    try {
+      await fetch(`/api/jobs/${job.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category_tags: updatedTags }),
+      });
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   function toggleOne(id: string) {
@@ -276,17 +549,32 @@ export default function JobsPage() {
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected job(s)? This also removes any applications logged against them.`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/jobs/${id}`, { method: "DELETE" })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "DELETE", table: "jobs", ids: Array.from(selected) })
+    });
     load(page);
   }
 
   async function removeAssignment(applicant: Applicant) {
     if (!confirm(`Remove ${applicant.name}'s assignment for this job?`)) return;
-    await fetch(`/api/applications/${applicant.application_id}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`/api/applications/${applicant.application_id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        alert(`Failed to remove assignment: ${err.error || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Error removing assignment: ${err.message}`);
+    }
     load(page);
   }
 
-  const filtersActive = search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter || workAuthFilter || postedSort;
+  const filtersActive =
+    search || sourceFilter || tierFilter || activeFilter || employmentTypeFilter || categoryFilter ||
+    workAuthFilter || workModeFilter || postedSort || dateStart || dateEnd || candidateFilter || assignedByFilter || ownerFilter ||
+    scoreFilter[0] > 0 || scoreFilter[1] < 100;
 
   function currentSavedFilters() {
     const filters: SavedJobSearch["filters"] = {};
@@ -297,6 +585,13 @@ export default function JobsPage() {
     if (employmentTypeFilter) filters.employmentType = employmentTypeFilter;
     if (categoryFilter) filters.category = categoryFilter;
     if (workAuthFilter) filters.workAuthorization = workAuthFilter;
+    if (workModeFilter) filters.workMode = workModeFilter;
+    if (dateStart) filters.dateStart = dateStart;
+    if (dateEnd) filters.dateEnd = dateEnd;
+    if (candidateFilter) filters.candidate = candidateFilter;
+    if (assignedByFilter) filters.assignedBy = assignedByFilter;
+    if (ownerFilter) filters.owner = ownerFilter;
+    if (scoreFilter[0] > 0 || scoreFilter[1] < 100) filters.score = scoreFilter.join(",");
     if (postedSort) filters.sort = postedSort === "asc" ? "posted_asc" : "posted_desc";
     return filters;
   }
@@ -310,6 +605,13 @@ export default function JobsPage() {
     setEmploymentTypeFilter("");
     setCategoryFilter("");
     setWorkAuthFilter("");
+    setWorkModeFilter("");
+    setDateStart("");
+    setDateEnd("");
+    setCandidateFilter("");
+    setAssignedByFilter("");
+    setOwnerFilter("");
+    setScoreFilter([0, 100]);
     setPostedSort("");
     setSavedSearchId("");
   }
@@ -330,6 +632,18 @@ export default function JobsPage() {
     setEmploymentTypeFilter(filters.employmentType ?? "");
     setCategoryFilter(filters.category ?? "");
     setWorkAuthFilter(filters.workAuthorization ?? "");
+    setWorkModeFilter(filters.workMode ?? "");
+    setDateStart(filters.dateStart ?? "");
+    setDateEnd(filters.dateEnd ?? "");
+    setCandidateFilter(filters.candidate ?? "");
+    setAssignedByFilter(filters.assignedBy ?? "");
+    setOwnerFilter(filters.owner ?? "");
+    if (filters.score) {
+      const [min, max] = filters.score.split(",").map(Number);
+      setScoreFilter([Number.isFinite(min) ? min : 0, Number.isFinite(max) ? max : 100]);
+    } else {
+      setScoreFilter([0, 100]);
+    }
     setPostedSort(filters.sort === "posted_asc" ? "asc" : filters.sort === "posted_desc" ? "desc" : "");
     setSavedSearchId(searchPreset.id);
   }
@@ -352,7 +666,30 @@ export default function JobsPage() {
     }
     setSaveSearchLabel("");
     setSavedSearches((current) => [data, ...current]);
-    setSavedSearchId(data.id);
+    clearFilters();
+  }
+
+  async function updateSavedSearch() {
+    setSavedSearchError("");
+    if (!savedSearchId) return;
+    
+    const res = await fetch(`/api/saved-job-searches/${savedSearchId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filters: currentSavedFilters() }),
+    });
+    
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setSavedSearchError(data.error || "Could not update search.");
+      return;
+    }
+    
+    setSavedSearches((current) => 
+      current.map(item => item.id === savedSearchId ? { ...item, filters: currentSavedFilters() } : item)
+    );
+    
+    clearFilters();
   }
 
   async function deleteSavedSearch() {
@@ -361,11 +698,12 @@ export default function JobsPage() {
     if (!preset || !confirm(`Delete saved search "${preset.label}"?`)) return;
     await fetch(`/api/saved-job-searches/${savedSearchId}`, { method: "DELETE" });
     setSavedSearches((current) => current.filter((item) => item.id !== savedSearchId));
-    setSavedSearchId("");
+    clearFilters();
   }
 
   async function exportCsv() {
     const res = await fetch(`/api/jobs?${buildParams(1, 100)}`);
+    if (!res.ok) return;
     const data = await res.json();
     const csv = toCsv(data.jobs ?? [], [
       "title", "company", "location", "source", "job_category", "category_relevance_score", "role_tier", "employment_type",
@@ -375,10 +713,10 @@ export default function JobsPage() {
   }
 
   return (
-    <>
+    <div className="jobs-page">
       <div className="page-header">
         <h1>Job masterlist</h1>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
           {pendingCategorization > 0 && (
             <span className="badge" title="AI categorization, salary cleanup, and work-authorization tagging running in the background">
               Categorizing {pendingCategorization} pending…
@@ -387,73 +725,235 @@ export default function JobsPage() {
           <button onClick={() => setShowImport(true)}>Import file</button>
           <button onClick={() => setShowImportAts(true)}>Import from ATS</button>
           <Link href="/import" className="btn">Universal Import</Link>
+          <button onClick={exportCsv}>Export CSV</button>
           <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add job</button>
         </div>
       </div>
 
-      <div className="filter-bar">
-        {savedSearches.length > 0 && (
-          <select
-            value={savedSearchId}
-            onChange={(e) => {
-              const preset = savedSearches.find((item) => item.id === e.target.value);
-              if (preset) applySavedSearch(preset); else setSavedSearchId("");
+      <div className="dashboard-section" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", background: "var(--surface-sunken)", padding: "12px 16px", borderRadius: "8px", marginBottom: "16px", border: "1px solid var(--border-soft)", gap: "16px" }}>
+        
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", flex: 1, flexWrap: "wrap" }}>
+          {/* Total Added Small Box */}
+          <div style={{ display: "flex", flexDirection: "column", background: "var(--surface)", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-soft)", minWidth: "90px" }}>
+            <span style={{ fontSize: "11px", color: "var(--ink-soft)", fontWeight: "600", textTransform: "uppercase" }}>Total Added</span>
+            <span style={{ fontSize: "16px", fontWeight: "700" }}>{dashboardStats ? dashboardStats.totalJobs : "-"}</span>
+          </div>
+
+          {/* Active Jobs Small Box */}
+          <div style={{ display: "flex", flexDirection: "column", background: "var(--surface)", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-soft)", minWidth: "90px" }}>
+            <span style={{ fontSize: "11px", color: "var(--ink-soft)", fontWeight: "600", textTransform: "uppercase" }}>Active Jobs</span>
+            <span style={{ fontSize: "16px", fontWeight: "700", color: "var(--accent)" }}>{dashboardStats ? dashboardStats.totalActive : "-"}</span>
+          </div>
+
+          {/* Breakdown by Source */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", borderLeft: "1px solid var(--border-soft)", paddingLeft: "12px", marginLeft: "4px" }}>
+            <span style={{ fontSize: "12px", color: "var(--ink-soft)", fontWeight: "500", marginRight: "4px" }}>Sources:</span>
+            {dashboardStats?.sourceBreakdown?.length > 0 ? (
+              dashboardStats.sourceBreakdown.map((s: any) => (
+                <div key={s.source} style={{ display: "flex", alignItems: "center", background: "var(--surface)", padding: "4px 8px", borderRadius: "6px", fontSize: "12px", fontWeight: "600", border: "1px solid var(--border-soft)", gap: "6px" }}>
+                  <span style={{ color: "var(--ink-soft)" }}>{s.source}</span>
+                  <span style={{ background: "var(--surface-sunken)", padding: "2px 6px", borderRadius: "4px", fontSize: "11px" }}>{s.count}</span>
+                </div>
+              ))
+            ) : (
+              <span style={{ fontSize: "12px", color: "var(--ink-soft)" }}>{dashboardStats ? "No data" : "Loading..."}</span>
+            )}
+          </div>
+        </div>
+
+        {/* Select Dropdown with custom chevron */}
+        <div style={{ position: "relative", minWidth: "140px" }}>
+          <select 
+            value={dashboardTimeframe} 
+            onChange={(e) => setDashboardTimeframe(e.target.value)}
+            style={{ 
+              appearance: "none",
+              WebkitAppearance: "none",
+              width: "100%",
+              padding: "8px 32px 8px 12px", 
+              borderRadius: "6px", 
+              border: "1px solid var(--border-soft)", 
+              background: "var(--surface)", 
+              fontWeight: "500", 
+              fontSize: "13px",
+              cursor: "pointer",
+              color: "var(--ink)"
             }}
           >
-            <option value="">Saved searches</option>
-            {savedSearches.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            <option value="24">Last 24 Hours</option>
+            <option value="48">Last 2 Days</option>
+            <option value="72">Last 3 Days</option>
+            <option value="120">Last 5 Days</option>
+            <option value="168">Last 7 Days</option>
           </select>
-        )}
-        <input placeholder="Search title, company, location…" value={searchInput} onChange={(e) => setSearchInput(e.target.value)} />
-        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
-          <option value="">All sources</option>
-          {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
-          <option value="">All tiers</option>
-          <option value="osp">OSP</option>
-          <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
-          <option value="adjacent_2">Adjacent 2 (Telecom)</option>
-        </select>
-        <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
-          <option value="">Active + inactive</option>
-          <option value="active">Active only</option>
-          <option value="inactive">Inactive only</option>
-        </select>
-        {facets.employmentTypes.length > 0 && (
-          <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
-            <option value="">All employment types</option>
-            {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        )}
-        {facets.categories.length > 0 && (
-          <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
-            <option value="">All categories</option>
-            {facets.categories.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        )}
-        <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
-          <option value="">Any work authorization</option>
-          <option value="no_sponsorship">No sponsorship</option>
-          <option value="sponsorship_available">Sponsorship available</option>
-          <option value="us_citizen_required">US citizen required</option>
-        </select>
-        {filtersActive && (
-          <button onClick={clearFilters}>
-            Clear filters
-          </button>
-        )}
-        <button onClick={exportCsv}>Export CSV</button>
-        <span className="muted" style={{ fontSize: 12 }}>{jobs.length} of {total}</span>
+          <svg 
+            xmlns="http://www.w3.org/2000/svg" 
+            width="14" 
+            height="14" 
+            viewBox="0 0 24 24" 
+            fill="none" 
+            stroke="currentColor" 
+            strokeWidth="2" 
+            strokeLinecap="round" 
+            strokeLinejoin="round" 
+            style={{ position: "absolute", right: "10px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "var(--ink-soft)" }}
+          >
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </div>
       </div>
 
-      <div className="filter-bar">
+      <div className="jobs-search-row">
+        <h3 className="jobs-search-title">Search Jobs</h3>
         <input
-          placeholder="Name current filters..."
-          value={saveSearchLabel}
-          onChange={(e) => setSaveSearchLabel(e.target.value)}
+          className="jobs-search-input"
+          placeholder="Search title, company, location…"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
         />
-        <button onClick={saveCurrentSearch} disabled={!filtersActive}>Save search</button>
+        {/* Result count lives with the search control it describes, instead of
+            being an unlabeled cell wedged into the filter grid. */}
+        <span className="jobs-result-count">
+          <strong>{jobs.length}</strong> of <strong>{total.toLocaleString()}</strong>
+          <span className="jobs-result-count-label">jobs</span>
+        </span>
+      </div>
+
+      <style>{`
+        .jobs-filters select,
+        .jobs-filters input {
+          width: 100% !important;
+        }
+      `}</style>
+      <div className="filter-bar jobs-filters" style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "12px", alignItems: "end", marginBottom: "16px" }}>
+        {savedSearches.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span>Saved Searches</span>
+            <select
+              value={savedSearchId}
+              onChange={(e) => {
+                const preset = savedSearches.find((item) => item.id === e.target.value);
+                if (preset) applySavedSearch(preset); else clearFilters();
+              }}
+            >
+              <option value="">Select</option>
+              {savedSearches.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Source</span>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}>
+            <option value="">All sources</option>
+            {facets.sources.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Tier</span>
+          <select value={tierFilter} onChange={(e) => setTierFilter(e.target.value)}>
+            <option value="">All tiers</option>
+            <option value="osp">OSP</option>
+            <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
+            <option value="adjacent_2">Adjacent 2 (Telecom)</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Status</span>
+          <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="active">Active only</option>
+            <option value="inactive">Inactive only</option>
+          </select>
+        </div>
+        {facets.employmentTypes.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <span>Employment Type</span>
+            <select value={employmentTypeFilter} onChange={(e) => setEmploymentTypeFilter(e.target.value)}>
+              <option value="">All employment types</option>
+              {facets.employmentTypes.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Category/Tag</span>
+          <input
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            placeholder="Search tags..."
+            style={{ minWidth: "120px" }}
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Relevance Score</span>
+          <DualRangeSlider min={0} max={100} value={scoreFilter} onChange={(val) => setScoreFilter(val)} />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Work Authorization</span>
+          <select value={workAuthFilter} onChange={(e) => setWorkAuthFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="no_sponsorship">No sponsorship</option>
+            <option value="sponsorship_available">Sponsorship available</option>
+            <option value="us_citizen_required">US citizen required</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Work Mode</span>
+          <select value={workModeFilter} onChange={(e) => setWorkModeFilter(e.target.value)}>
+            <option value="">All</option>
+            <option value="remote">Remote</option>
+            <option value="hybrid">Hybrid</option>
+            <option value="onsite">Onsite</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Created date</span>
+          <DateRangePicker
+            dateStart={dateStart}
+            dateEnd={dateEnd}
+            onChange={(s, e) => { setDateStart(s); setDateEnd(e); }}
+          />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Candidates</span>
+          <select value={candidateFilter} onChange={(e) => setCandidateFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterCandidates.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>Assigned by</span>
+          <select value={assignedByFilter} onChange={(e) => setAssignedByFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+          </select>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+          <span>App owner</span>
+          <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
+            <option value="">All</option>
+            {filterUsers.map((u) => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+          </select>
+        </div>
+        {filtersActive && (
+          <div className="jobs-filters-clear">
+            <button onClick={clearFilters}>Clear filters</button>
+          </div>
+        )}
+      </div>
+
+      <div className="filter-bar jobs-savebar">
+        {!savedSearchId && (
+          <input
+            placeholder="Name current filters..."
+            value={saveSearchLabel}
+            onChange={(e) => setSaveSearchLabel(e.target.value)}
+          />
+        )}
+        {!savedSearchId ? (
+          <button onClick={saveCurrentSearch} disabled={!filtersActive}>Save search</button>
+        ) : (
+          <button onClick={updateSavedSearch} disabled={!filtersActive}>Update search</button>
+        )}
         {savedSearchId && <button className="btn-danger" onClick={deleteSavedSearch}>Delete saved</button>}
         {savedSearchError && <span className="form-error">{savedSearchError}</span>}
       </div>
@@ -461,116 +961,213 @@ export default function JobsPage() {
       {selected.size > 0 && (
         <div className="bulk-bar">
           <span>{selected.size} selected</span>
+          <button onClick={() => setShowBulkApply(true)}>Log selected to candidate</button>
           <button className="btn-danger" onClick={deleteSelected}>Delete selected</button>
         </div>
       )}
+
+      {renderPagination({ marginTop: 0, marginBottom: 16 })}
 
       {loading ? (
         <TableSkeleton cols={8} />
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No jobs match these filters." : "No jobs yet. Add one manually or import a CSV."}</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
-              </th>
-              <th>Job</th>
-              <th>Company</th>
-              <th>Category</th>
-              <th>Tier</th>
-              <th style={{ cursor: "pointer" }} onClick={togglePostedSort}>
-                Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
-              </th>
-              <th>Applicants</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.map((job) => (
-              <tr key={job.id}>
-                <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
-                <td>
-                  <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
-                  <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
-                  {(job.salary_min || job.salary_max) ? (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {job.salary_currency ?? ""} {job.salary_min ?? "?"}–{job.salary_max ?? "?"}{job.salary_period ? `/${job.salary_period}` : ""}
-                    </div>
-                  ) : null}
-                  {job.work_authorization && job.work_authorization !== "unspecified" && (
-                    <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
-                  )}
-                </td>
-                <td className="muted">
-                  {job.company_id && job.company ? (
-                    <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
-                  ) : job.company || "—"}
-                </td>
-                <td>
-                  {job.category_status === "pending" ? (
-                    <span className="muted">Categorizing…</span>
-                  ) : job.category_status === "needs_review" ? (
-                    <>
-                      <span className="badge">Needs review</span>
-                      {job.ai_suggested_category && (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Suggested: {job.ai_suggested_category}</div>
-                      )}
-                    </>
-                  ) : job.category_status === "failed" ? (
-                    <span className="badge" title="AI categorization failed — check /ops">Failed</span>
-                  ) : job.job_category ? (
-                    <>
-                      <span className="badge">{job.job_category}</span>
-                      {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{job.category_relevance_score}% relevant</div>
-                      )}
-                    </>
-                  ) : <span className="muted">—</span>}
-                </td>
-                <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
-                <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
-                <td>
-                  <div style={{ marginBottom: 4 }}>
-                    <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
-                  </div>
-                  {job.applicants.length > 0 && (
-                    <div>
-                      {job.applicants.map((a) => (
-                        <button
-                          key={a.application_id}
-                          className="avatar-button"
-                          title={`${a.name} — ${a.status} (click to remove)`}
-                          onClick={() => removeAssignment(a)}
-                        >
-                          {a.avatar_url ? (
-                            <img className="avatar-circle" src={a.avatar_url} alt={a.name} />
-                          ) : (
-                            <span className="avatar-circle">{initials(a.name)}</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </td>
-                <td style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => setShowApplyFor(job)}>Log application</button>
-                  <button onClick={() => deleteOne(job.id)}>Delete</button>
-                </td>
+        <div className="table-shell jobs-table-shell">
+          <table className="table jobs-table" style={{ tableLayout: "fixed", width: "100%", wordWrap: "break-word" }}>
+            <thead>
+              {/* Widths are absolute, not percentages, and deliberately sized
+                  to sum to ~1054px total - comfortably inside any normal
+                  browser viewport so the table never needs horizontal
+                  scroll. .jobs-table caps at that same total (see CSS) so
+                  table-layout:fixed doesn't stretch columns to fill leftover
+                  container space. */}
+              <tr>
+                <th style={{ width: 36 }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={selected.size === jobs.length && jobs.length > 0} onChange={toggleAll} />
+                </th>
+                <th style={{ width: "30%" }}>Job</th>
+                <th style={{ width: "15%" }}>Company</th>
+                <th style={{ width: "20%" }}>Category</th>
+                <th style={{ width: 80 }}>Tier</th>
+                <th style={{ width: 84, cursor: "pointer" }} onClick={togglePostedSort}>
+                  Posted {postedSort === "desc" ? "▼" : postedSort === "asc" ? "▲" : ""}
+                </th>
+                <th style={{ width: 100 }}>Match Scores</th>
+                <th style={{ width: 104 }}>Applicants</th>
+                <th className="jobs-actions-head" style={{ width: 130 }}>Actions</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {jobs.map((job) => (
+                <tr key={job.id}>
+                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(job.id)} onChange={() => toggleOne(job.id)} /></td>
+                  <td>
+                    <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
+                    {job.source_url?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
+                    {job.content_duplicate_of && (
+                      // The cross-platform duplicate detector marks a match this
+                      // way (is_active=false + content_duplicate_of) but never
+                      // deletes or blocks it - it stays in this list, silently
+                      // indistinguishable from a real active job, unless flagged
+                      // here. That silence was the reported symptom: detection
+                      // was working, nothing surfaced that it had.
+                      <span
+                        className="badge badge-warning"
+                        style={{ marginLeft: 8, fontSize: 10, cursor: "help" }}
+                        title={job.content_duplicate_reason ?? `Auto-hidden as a duplicate of job ${job.content_duplicate_of}`}
+                      >
+                        Duplicate
+                      </span>
+                    )}
+                    <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
+                    {(job.salary_min || job.salary_max) ? (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {job.salary_currency ?? ""} {job.salary_min ?? "?"}–{job.salary_max ?? "?"}{job.salary_period ? `/${job.salary_period}` : ""}
+                      </div>
+                    ) : null}
+                    {job.work_authorization && job.work_authorization !== "unspecified" && (
+                      <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
+                    )}
+                  </td>
+                  <td className="muted">
+                    {job.company_id && job.company ? (
+                      <Link className="row-link" href={`/companies/${job.company_id}`}>{job.company}</Link>
+                    ) : job.company || "—"}
+                  </td>
+                  <td>
+                    {job.category_status === "pending" ? (
+                      <span className="muted">Categorizing…</span>
+                    ) : job.category_status === "failed" ? (
+                      <span className="badge" title="AI categorization failed">Failed</span>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px", alignItems: "flex-start" }}>
+                        {/* Without a width cap on the <td>, this flex-wrap never
+                            actually engages - a row with several/long tags (e.g.
+                            searching "osp") just keeps growing the column
+                            instead of wrapping, blowing the whole table past its
+                            scroll container's width and pushing the Actions
+                            column (Log application/Delete) off-screen to the
+                            right with no visible scrollbar cue. Confirmed live:
+                            table width jumped from 1050px (fits, no scroll) to
+                            1668px after searching "osp". */}
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                          {(job.category_tags || []).map((tag, idx) => (
+                            <span key={idx} className="badge" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                              {tag}
+                              <button
+                                onClick={() => removeTag(job, tag)}
+                                style={{ background: "none", border: "none", color: "inherit", padding: 0, margin: 0, fontSize: "10px", cursor: "pointer", opacity: 0.6 }}
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        {addingTagForJobId === job.id ? (
+                          <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+                            <input
+                              autoFocus
+                              value={newTagValue}
+                              onChange={(e) => setNewTagValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") addTag(job);
+                                else if (e.key === "Escape") setAddingTagForJobId(null);
+                              }}
+                              onBlur={() => addTag(job)}
+                              style={{ padding: "2px 4px", fontSize: "11px", width: "80px" }}
+                              placeholder="Type..."
+                            />
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setAddingTagForJobId(job.id); setNewTagValue(""); }}
+                            style={{ background: "none", border: "none", color: "var(--accent)", padding: 0, fontSize: "11px", cursor: "pointer", marginTop: "2px" }}
+                          >
+                            + Add tag
+                          </button>
+                        )}
+                        {job.category_relevance_score !== null && job.category_relevance_score !== undefined && (
+                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Score: {job.category_relevance_score}</div>
+                        )}
+                      </div>
+                    )}
+                  </td>
+                  <td>{job.role_tier ? <span className="badge">{job.role_tier}</span> : <span className="muted">—</span>}</td>
+                  <td className="muted">{job.posted_at ? new Date(job.posted_at).toLocaleDateString() : "—"}</td>
+                  <td>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
+                      {(job.match_scores || []).map((ms) => {
+                        const initials = ms.candidate_name ? ms.candidate_name.split(/\s+/).filter(Boolean).slice(0, 2).map((w: string) => w[0]?.toUpperCase()).join("") : "??";
+                        let color = "var(--ink-soft)";
+                        let displayScore = `${ms.score}%`;
+                        const isError = ms.score === -1;
+                        
+                        if (isError) {
+                          color = "var(--danger, #dc2626)";
+                          displayScore = "Error";
+                        } else if (ms.score >= 80) color = "var(--accent)";
+                        else if (ms.score >= 60) color = "var(--warn)";
+                        else color = "var(--danger, #dc2626)";
 
-      {total > 0 && (
-        <div className="filter-bar" style={{ justifyContent: "flex-end" }}>
-          <button onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
-          <span className="muted" style={{ fontSize: 12 }}>Page {page} of {totalPages}</span>
-          <button onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+                        const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : null;
+
+                        return (
+                          <span key={ms.candidate_id} className="badge" style={{ borderColor: color, color, cursor: isError && errorReason ? "help" : "default" }}>
+                            {initials}: {displayScore}
+                            {isError && errorReason && (
+                              <span style={{ position: "relative", marginLeft: 2 }}>
+                                <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger)", cursor: "help" }} title={errorReason}> ⓘ</span>
+                              </span>
+                            )}
+                          </span>
+                        );
+                      })}
+                      {(!job.match_scores || job.match_scores.length === 0) && <span className="muted">—</span>}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ marginBottom: 4 }}>
+                      <strong>{job.applicant_count}</strong> <span className="muted">linked</span>
+                    </div>
+                    {job.applicants.length > 0 && (
+                      <div className="jobs-applicant-stack">
+                        {job.applicants.map((a) => (
+                          <button
+                            key={a.application_id}
+                            className="avatar-button"
+                            title={`${a.name} — ${a.status} (click to remove)`}
+                            onClick={() => removeAssignment(a)}
+                          >
+                            {a.avatar_url ? (
+                              <img className="avatar-circle" src={a.avatar_url} alt={a.name} />
+                            ) : (
+                              <span className="avatar-circle">{initials(a.name)}</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  {/* The cell itself must stay display:table-cell - making the
+                      <td> a flex container takes it out of the table's column
+                      model, so its width is ignored and the buttons render on
+                      top of the Applicants column. The flex row lives in an
+                      inner wrapper instead. */}
+                  <td className="jobs-actions">
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <button className="btn-secondary" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => setShowApplyFor(job)}>Log application</button>
+                      <button className="btn-danger" style={{ fontSize: 12, padding: "6px 12px" }} onClick={() => deleteOne(job.id)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {renderPagination({ marginTop: 32, marginBottom: 0 })}
 
       {showAdd && (
         <AddJobModal onClose={() => setShowAdd(false)} onCreated={() => { setShowAdd(false); load(1); kickCategorization(); }} />
@@ -583,12 +1180,20 @@ export default function JobsPage() {
       )}
       {showApplyFor && (
         <LogApplicationModal
+          key={showApplyFor.id}
           job={showApplyFor}
           onClose={() => setShowApplyFor(null)}
           onLogged={() => { setShowApplyFor(null); load(page); }}
         />
       )}
-    </>
+      {showBulkApply && (
+        <BulkLogApplicationModal
+          jobs={jobs.filter((j) => selected.has(j.id))}
+          onClose={() => setShowBulkApply(false)}
+          onLogged={() => { setShowBulkApply(false); setSelected(new Set()); load(page); }}
+        />
+      )}
+    </div>
   );
 }
 
@@ -600,6 +1205,9 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   const [sourceUrl, setSourceUrl] = useState("");
   const [postedAt, setPostedAt] = useState("");
   const [applicantsCount, setApplicantsCount] = useState("");
+  const [descriptionText, setDescriptionText] = useState("");
+  const [rawPaste, setRawPaste] = useState("");
+  const [isParsing, setIsParsing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -616,6 +1224,7 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
         location,
         role_tier: roleTier || null,
         source_url: sourceUrl,
+        description_text: descriptionText || null,
         posted_at: postedAt || null,
         applicants_count: applicantsCount || null,
       }),
@@ -632,7 +1241,46 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Add job</h2>
+        <h2 style={{ marginBottom: 16 }}>Add job</h2>
+        
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 16, marginBottom: 20 }}>
+          <h3 style={{ margin: "0 0 8px 0", fontSize: 14, display: "flex", alignItems: "center", gap: 6 }}>✨ AI Auto Fill</h3>
+          <p style={{ margin: "0 0 12px 0", fontSize: 12, color: "var(--ink-soft)", lineHeight: 1.4 }}>Paste the full job posting below. AI will instantly extract the details for you to review and edit before submitting.</p>
+          <textarea
+            value={rawPaste}
+            onChange={(e) => setRawPaste(e.target.value)}
+            placeholder="Paste raw text from LinkedIn, Indeed, etc..."
+            style={{ width: "100%", height: 80, marginBottom: 12, padding: 12, borderRadius: 6, border: "1px solid var(--border)", fontFamily: "inherit", fontSize: 13, resize: "vertical", background: "var(--bg)", color: "var(--ink)" }}
+          />
+          <button
+            style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 6, fontWeight: 600, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--ink)", cursor: isParsing ? "wait" : "pointer", opacity: isParsing ? 0.7 : 1 }}
+            onClick={async () => {
+              if (!rawPaste.trim()) return;
+              setIsParsing(true);
+              setError("");
+              try {
+                const res = await fetch("/api/jobs/autofill-form", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text: rawPaste })
+                });
+                if (!res.ok) throw new Error("Failed to parse");
+                const data = await res.json();
+                if (data.title) setTitle(data.title);
+                if (data.company) setCompany(data.company);
+                if (data.location) setLocation(data.location);
+                if (data.description_text) setDescriptionText(data.description_text);
+              } catch (err: any) {
+                setError(err.message || "Error parsing text");
+              } finally {
+                setIsParsing(false);
+              }
+            }}
+            disabled={isParsing || !rawPaste.trim()}
+          >
+            {isParsing ? "Analyzing..." : "✨ Auto Fill Fields"}
+          </button>
+        </div>
         <div className="field-group">
           <label>Job title</label>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. OSP Designer" />
@@ -644,6 +1292,14 @@ function AddJobModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
         <div className="field-group">
           <label>Location</label>
           <input value={location} onChange={(e) => setLocation(e.target.value)} />
+        </div>
+        <div className="field-group">
+          <label>Job Description</label>
+          <textarea 
+            value={descriptionText} 
+            onChange={(e) => setDescriptionText(e.target.value)} 
+            style={{ width: "100%", height: 120, padding: 12, borderRadius: 6, border: "1px solid var(--border)", fontFamily: "inherit", fontSize: 13, resize: "vertical", background: "var(--surface)", color: "var(--ink)" }} 
+          />
         </div>
         <div className="field-group">
           <label>Role tier</label>
@@ -697,25 +1353,38 @@ function ImportFileModal({ onClose, onImported }: { onClose: () => void; onImpor
     setError("");
     setAnalysis(null);
     setResult(null);
-    const res = await fetch("/api/import/normalize/analyze", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename, content: text }),
-    });
-    setWorking(false);
-    const data = await res.json();
-    if (!res.ok) { setError(data.error || "Could not analyze file."); return; }
-    setAnalysis(data);
-    setMapping(data.mapping ?? {});
+    try {
+      const res = await fetch("/api/import/normalize/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename, content: text }),
+      });
+      setWorking(false);
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Could not analyze file."); return; }
+      setAnalysis(data);
+      setMapping(data.mapping ?? {});
+    } catch (err: any) {
+      setWorking(false);
+      setError(err.message || "Network error while analyzing file.");
+    }
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
     setFileName(file.name);
-    setContent(text);
-    analyze(file.name, text);
+    setContent("");
+    setAnalysis(null);
+    setResult(null);
+    setError("");
+    try {
+      const text = await file.text();
+      setContent(text);
+      analyze(file.name, text);
+    } catch (err: any) {
+      setError(err.message || "Could not read file.");
+    }
   }
 
   function fieldForHeader(header: string): SchemaField | "" {
@@ -746,21 +1415,26 @@ function ImportFileModal({ onClose, onImported }: { onClose: () => void; onImpor
 
     setWorking(true);
     setError("");
-    const res = await fetch("/api/import/normalize/commit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: fileName,
-        content,
-        mapping,
-        sourceLabel,
-        profileLabel: saveProfile ? profileLabel : undefined,
-      }),
-    });
-    setWorking(false);
-    const data = await res.json();
-    if (!res.ok) { setError(data.error || "Import failed."); return; }
-    setResult(data);
+    try {
+      const res = await fetch("/api/import/normalize/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: fileName,
+          content,
+          mapping,
+          sourceLabel,
+          profileLabel: saveProfile ? profileLabel : undefined,
+        }),
+      });
+      setWorking(false);
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || "Import failed."); return; }
+      setResult(data);
+    } catch (err: any) {
+      setWorking(false);
+      setError(err.message || "Network error during import.");
+    }
   }
 
   return (
@@ -1049,18 +1723,31 @@ function ImportAtsModal({ onClose, onImported }: { onClose: () => void; onImport
 }
 
 function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: () => void; onLogged: () => void }) {
-  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
+  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null; has_base_resume?: boolean }[]>([]);
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("assigned");
   const [resumeVariants, setResumeVariants] = useState<{ id: string; label: string; file_url: string; filename: string }[]>([]);
   const [resumeId, setResumeId] = useState("");
+  // Per-candidate base resume options/selection, keyed by candidate id - each
+  // selected candidate gets their own selector so a multi-select batch never
+  // shares one candidate's base resume with everyone else in the batch.
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<Record<string, { id: string; name: string; status: string }[]>>({});
+  const [selectedBaseResumeIds, setSelectedBaseResumeIds] = useState<Record<string, string>>({});
+  const [baseResumesLoading, setBaseResumesLoading] = useState<Record<string, boolean>>({});
+  // Per-candidate AI best-resume pick state
+  const [aiPickLoading, setAiPickLoading] = useState<Record<string, boolean>>({});
+  const [aiPickResults, setAiPickResults] = useState<Record<string, { best_resume_id: string; score: number | null; breakdown: any | null }>>({});
+  const [manuallyOverridden, setManuallyOverridden] = useState<Record<string, boolean>>({});
   const [assignedToUserId, setAssignedToUserId] = useState("");
   const [assignmentDueAt, setAssignmentDueAt] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [localScores, setLocalScores] = useState<MatchScore[]>(job.match_scores || []);
+  const [generatingScoreFor, setGeneratingScoreFor] = useState<string | null>(null);
+  const [expandedScoreError, setExpandedScoreError] = useState<string | null>(null);
   const assignmentOwners = [...users].sort((a, b) => {
     const aRank = a.role === "application_engineer" ? 0 : 1;
     const bRank = b.role === "application_engineer" ? 0 : 1;
@@ -1069,19 +1756,108 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
   });
 
   useEffect(() => {
-    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" }).then((r) => r.json()).then((data) => setCandidates(data.items ?? data));
-    fetch("/api/users").then((r) => r.ok ? r.json() : []).then(setUsers);
-    fetch("/api/auth/me")
+    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
+      .then((r) => r.ok ? r.json() : [])
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
+        setCandidates(list);
+      })
+      .catch(() => setCandidates([]));
+    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then((data) => setUsers(Array.isArray(data) ? data : []));
+    fetch("/api/bootstrap")
       .then((r) => r.ok ? r.json() : null)
       .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
   }, []);
 
   useEffect(() => {
     setResumeId("");
-    if (candidateIds.size !== 1) { setResumeVariants([]); return; }
-    const [candidateId] = Array.from(candidateIds);
-    fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    if (candidateIds.size !== 1) { setResumeVariants([]); }
+    else {
+      const [candidateId] = Array.from(candidateIds);
+      fetch(`/api/candidates/${candidateId}/resumes`).then((r) => r.json()).then(setResumeVariants);
+    }
+
+    // Fetch base resumes for every newly selected candidate (cached across
+    // toggles so re-checking a candidate doesn't re-fetch or reset their pick).
+    const toFetch = Array.from(candidateIds).filter((id) => !(id in candidateBaseResumes));
+    if (toFetch.length === 0) return;
+    setBaseResumesLoading((prev) => {
+      const next = { ...prev };
+      toFetch.forEach((id) => { next[id] = true; });
+      return next;
+    });
+    Promise.all(toFetch.map(async (id) => {
+      const data: { id: string; name: string; status: string }[] = await fetch(`/api/base-resumes?candidateId=${id}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .catch(() => []);
+      return [id, data] as const;
+    })).then((entries) => {
+      setCandidateBaseResumes((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id, data]) => { next[id] = data; });
+        return next;
+      });
+      setSelectedBaseResumeIds((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id, data]) => {
+          if (!next[id] && data.length > 0) next[id] = data[0].id;
+        });
+        return next;
+      });
+      setBaseResumesLoading((prev) => {
+        const next = { ...prev };
+        entries.forEach(([id]) => { next[id] = false; });
+        return next;
+      });
+
+      // Fire AI best-resume scoring in parallel for every newly fetched
+      // candidate that has 2+ resumes and hasn't been AI-scored yet.
+      entries.forEach(([id, data]) => {
+        if (data.length >= 2 && !(id in aiPickResults)) {
+          aiPickBestResume(id);
+        }
+      });
+    });
   }, [candidateIds]);
+
+  /**
+   * Calls POST /api/jobs/best-resume, gets the best-matching base resume for
+   * this candidate against the current job, and silently pre-selects it.
+   * Falls back gracefully — no error is surfaced to the user.
+   */
+  async function aiPickBestResume(candidateId: string) {
+    setAiPickLoading((prev) => ({ ...prev, [candidateId]: true }));
+    try {
+      const res = await fetch("/api/jobs/best-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: job.id, candidate_id: candidateId }),
+      });
+      if (!res.ok) return; // silent fail — default (first) resume stays selected
+      const data = await res.json();
+      if (!data.best_resume_id) return;
+      // Only update selection if the user hasn't already manually changed it
+      setManuallyOverridden((prev) => {
+        if (!prev[candidateId]) {
+          setSelectedBaseResumeIds((s) => ({ ...s, [candidateId]: data.best_resume_id }));
+          setAiPickResults((p) => ({
+            ...p,
+            [candidateId]: {
+              best_resume_id: data.best_resume_id,
+              score: data.score ?? null,
+              breakdown: data.breakdown ?? null,
+            },
+          }));
+        }
+        return prev;
+      });
+    } catch {
+      // Silently ignore network errors — the existing default selection stands
+    } finally {
+      setAiPickLoading((prev) => ({ ...prev, [candidateId]: false }));
+    }
+  }
 
   function toggleCandidate(id: string) {
     setCandidateIds((prev) => {
@@ -1091,13 +1867,60 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
     });
   }
 
+  async function generateScore(candidateId: string) {
+    setGeneratingScoreFor(candidateId);
+    setError("");
+    try {
+      const res = await fetch("/api/jobs/match-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: job.id,
+          candidate_id: candidateId,
+          base_resume_id: selectedBaseResumeIds[candidateId] || aiPickResults[candidateId]?.best_resume_id,
+        }),
+      });
+      if (res.ok) {
+        const newScore = await res.json();
+        setLocalScores((prev) => {
+          const filtered = prev.filter(s => s.candidate_id !== candidateId);
+          return [...filtered, { ...newScore, candidate_id: candidateId }];
+        });
+      } else {
+        const errorData = await res.json().catch(() => ({ error: "Failed to generate score" }));
+        const errorReason = errorData.error || "Failed to generate score";
+        setLocalScores((prev) => {
+          const filtered = prev.filter(s => s.candidate_id !== candidateId);
+          return [...filtered, {
+            job_id: job.id,
+            candidate_id: candidateId,
+            candidate_name: candidates.find(c => c.id === candidateId)?.name || "",
+            score: -1,
+            breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${errorReason}` },
+          }];
+        });
+      }
+    } catch (err: any) {
+      setLocalScores((prev) => {
+        const filtered = prev.filter(s => s.candidate_id !== candidateId);
+        return [...filtered, {
+          job_id: job.id,
+          candidate_id: candidateId,
+          candidate_name: candidates.find(c => c.id === candidateId)?.name || "",
+          score: -1,
+          breakdown: { skills_match: 0, experience_match: 0, reasoning: `Error: ${err.message || "Network error"}` },
+        }];
+      });
+    } finally {
+      setGeneratingScoreFor(null);
+    }
+  }
+
   async function submit() {
     if (candidateIds.size === 0) { setError("Select at least one candidate."); return; }
     setSaving(true);
     setError("");
     const selectedIds = Array.from(candidateIds);
-    const candidate = selectedIds.length === 1 ? candidates.find((c) => c.id === selectedIds[0]) : null;
-    const variant = resumeVariants.find((r) => r.id === resumeId);
     const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
     const assignmentStatus = status === "assigned" || status === "stacked";
     if (assignmentStatus && !assignedToUserId) {
@@ -1105,6 +1928,24 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
       setError("Choose an application owner for assigned or stacked tickets.");
       return;
     }
+
+    // Resolve each selected candidate's OWN base resume individually, using
+    // whatever they (or the default, most-recent one) picked in their own
+    // selector - logging multiple people at once previously sent one shared
+    // base_resume_id/resume for the whole batch (effectively only ever
+    // matching one candidate, if any), instead of using each person's own.
+    const candidateResumes: Record<string, { base_resume_id: string | null; resume_id: string | null; resume_url: string | null; resume_filename: string | null }> = {};
+    for (const id of selectedIds) {
+      const candidate = candidates.find((c) => c.id === id);
+      const variant = selectedIds.length === 1 ? resumeVariants.find((r) => r.id === resumeId) : undefined;
+      candidateResumes[id] = {
+        base_resume_id: selectedBaseResumeIds[id] ?? null,
+        resume_id: variant?.id ?? null,
+        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
+        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+      };
+    }
+
     const res = await fetch("/api/applications", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1112,9 +1953,8 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
         candidate_ids: selectedIds,
         job_id: job.id,
         status,
-        resume_id: variant?.id ?? null,
-        resume_url: variant?.file_url ?? candidate?.resume_url ?? null,
-        resume_filename: variant?.filename ?? candidate?.resume_filename ?? null,
+        candidate_resumes: candidateResumes,
+        source_type: "base_resume",
         assigned_by: currentUser?.display_name || currentUser?.email || null,
         assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
         assigned_by_user_id: currentUser?.user_id ?? null,
@@ -1132,82 +1972,548 @@ function LogApplicationModal({ job, onClose, onLogged }: { job: Job; onClose: ()
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Assign application - {job.title}</h2>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "95vw", maxWidth: "650px", padding: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid var(--border)", paddingBottom: "16px" }}>
+          <h2 style={{ margin: 0, fontSize: "1.25rem", color: "var(--ink)" }}>Assign application - <span style={{ color: "var(--accent)" }}>{job.title}</span></h2>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer", padding: "4px", borderRadius: "4px", display: "flex", alignItems: "center", justifyContent: "center" }} onMouseOver={(e) => e.currentTarget.style.color = "var(--ink)"} onMouseOut={(e) => e.currentTarget.style.color = "var(--ink-soft)"}>
+            <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24">
+              <path d="M18 6L6 18M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
 
         <div className="field-group">
-          <label>Candidates</label>
-          <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: "var(--radius)", padding: 8 }}>
-            {candidates.map((c) => (
-              <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, color: "var(--ink)", fontWeight: 400 }}>
-                <input
-                  type="checkbox"
-                  style={{ width: "auto" }}
-                  checked={candidateIds.has(c.id)}
-                  onChange={() => toggleCandidate(c.id)}
-                />
-                {c.name}{c.resume_filename ? "" : " (no resume uploaded)"}
-              </label>
-            ))}
+          <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Select Candidates</label>
+          <div style={{ maxHeight: "40vh", overflowY: "auto", padding: "4px 8px 4px 0", display: "flex", flexDirection: "column", gap: "8px" }}>
+            {candidates.map((c) => {
+              const ms = localScores.find(s => s.candidate_id === c.id);
+              let scoreColor = "var(--ink-soft)";
+              let displayScore = "Match: ??%";
+              const isError = ms && ms.score === -1;
+              
+              if (ms) {
+                if (isError) {
+                  scoreColor = "var(--danger, #dc2626)";
+                  displayScore = "Error";
+                } else if (ms.score >= 80) {
+                  scoreColor = "var(--accent)";
+                  displayScore = `Match: ${ms.score}%`;
+                } else if (ms.score >= 60) {
+                  scoreColor = "var(--warn)";
+                  displayScore = `Match: ${ms.score}%`;
+                } else {
+                  scoreColor = "var(--danger, #dc2626)";
+                  displayScore = `Match: ${ms.score}%`;
+                }
+              }
+
+              const alreadyApplied = job.applicants.some(a => a.candidate_id === c.id);
+              // /api/jobs/match-score only ever reads base_resumes (most recent
+              // by created_at) - resume_filename (the original uploaded file) is
+              // never consulted there. A candidate built entirely through Falood
+              // Studio with no raw upload still scores fine, so gate on either.
+              const noResume = !c.resume_filename && !c.has_base_resume;
+              const errorReason = isError ? (ms.breakdown?.reasoning || "Unknown error") : "";
+              const isExpanded = expandedScoreError === c.id;
+
+              return (
+                <div key={c.id} style={{ display: "flex", flexDirection: "column", padding: "12px 14px", borderRadius: "8px", backgroundColor: "var(--surface)", border: isExpanded && isError ? "1px solid var(--danger, #dc2626)" : "1px solid var(--border)", transition: "background 0.15s ease" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }} onMouseOver={(e) => {if(!alreadyApplied && !noResume) e.currentTarget.parentElement!.style.backgroundColor = "var(--bg)"}} onMouseOut={(e) => e.currentTarget.parentElement!.style.backgroundColor = "var(--surface)"}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--ink)", fontWeight: 500, fontSize: "0.95rem", flex: 1, cursor: (alreadyApplied || noResume) ? "not-allowed" : "pointer", userSelect: "none" }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: "16px", height: "16px", accentColor: "var(--accent)", cursor: (alreadyApplied || noResume) ? "not-allowed" : "pointer" }}
+                      checked={alreadyApplied || candidateIds.has(c.id)}
+                      disabled={alreadyApplied || noResume}
+                      onChange={() => {
+                        toggleCandidate(c.id);
+                        if (!candidateIds.has(c.id) && !ms && generatingScoreFor !== c.id) {
+                          generateScore(c.id);
+                        }
+                      }}
+                    />
+                    <span style={{ opacity: (alreadyApplied || noResume) ? 0.5 : 1 }}>
+                      {c.name}
+                      {alreadyApplied && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "var(--ink-soft)", marginLeft: "6px" }}>(Already applied)</span>}
+                      {noResume && <span style={{ fontSize: "0.8rem", fontWeight: 400, color: "var(--danger)", marginLeft: "6px" }}>(no resume)</span>}
+                    </span>
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  {ms ? (
+                    <>
+                      <span
+                        className="badge"
+                        style={{ borderColor: scoreColor, color: scoreColor, padding: "4px 8px", fontWeight: 600, cursor: isError ? "pointer" : "default" }}
+                        title={isError ? "Click for details" : (ms.breakdown?.reasoning || "")}
+                        onClick={() => { if (isError) setExpandedScoreError(isExpanded ? null : c.id); }}
+                      >
+                        {displayScore}
+                      </span>
+                      {isError && (
+                        <button
+                          type="button"
+                          disabled={generatingScoreFor === c.id}
+                          onClick={(e) => { e.stopPropagation(); generateScore(c.id); }}
+                          style={{ padding: "3px 8px", fontSize: "11px", borderRadius: "4px", border: "1px solid var(--accent)", background: "var(--surface)", color: "var(--accent)", cursor: "pointer", fontWeight: 500 }}
+                        >
+                          {generatingScoreFor === c.id ? "Retrying..." : "Retry"}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={generatingScoreFor === c.id}
+                      onClick={() => generateScore(c.id)}
+                      style={{ padding: "4px 10px", fontSize: "12px", borderRadius: "4px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--ink)", cursor: "pointer", display: "flex", alignItems: "center", gap: "4px", fontWeight: 500 }}
+                    >
+                      {generatingScoreFor === c.id ? "🤖 Generating..." : "🤖 Gen Score"}
+                    </button>
+                  )}
+                  </div>
+                  </div>
+                  {isExpanded && isError && (
+                    <div style={{ marginTop: "10px", padding: "10px 12px", backgroundColor: "rgba(220, 38, 38, 0.06)", borderRadius: "6px", border: "1px solid rgba(220, 38, 38, 0.2)", fontSize: "13px", color: "var(--danger, #dc2626)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px", fontWeight: 600 }}>
+                        <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                        Scoring error
+                      </div>
+                      <p style={{ margin: 0, lineHeight: 1.4 }}>{errorReason}</p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {candidates.some(c => !c.resume_filename && !c.has_base_resume) && (
+            <div style={{ color: "var(--danger, #dc2626)", fontSize: "13px", marginTop: "8px", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }}>
+              <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+              Candidates without a base resume cannot be assigned.
+            </div>
+          )}
+        </div>
+
+
+
+
+        {candidateIds.size > 0 && (
+          <div className="field-group" style={{ marginTop: "16px" }}>
+            <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+              Base Resume{candidateIds.size > 1 ? "s" : ""}
+            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+              {Array.from(candidateIds).map((id) => {
+                const candidate = candidates.find((c) => c.id === id);
+                const bases = candidateBaseResumes[id] ?? [];
+                const loading = baseResumesLoading[id];
+                return (
+                  <div key={id}>
+                    {candidateIds.size > 1 && (
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--ink-soft)", marginBottom: "4px" }}>
+                        {candidate?.name ?? id}
+                      </div>
+                    )}
+                    {loading ? (
+                      <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
+                    ) : bases.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        <div style={{ position: "relative" }}>
+                          <select
+                            value={selectedBaseResumeIds[id] ?? ""}
+                            onChange={(e) => {
+                              setSelectedBaseResumeIds((prev) => ({ ...prev, [id]: e.target.value }));
+                              // Mark as manually overridden so future AI updates don't clobber it
+                              setManuallyOverridden((prev) => ({ ...prev, [id]: true }));
+                            }}
+                            style={{
+                              width: "100%",
+                              padding: "8px 12px",
+                              borderRadius: "var(--radius)",
+                              border: aiPickResults[id] && !manuallyOverridden[id]
+                                ? "1px solid var(--accent)"
+                                : "1px solid var(--border)",
+                              transition: "border-color 0.2s ease",
+                            }}
+                          >
+                            {bases.map((br) => (
+                              <option key={br.id} value={br.id}>
+                                {br.name} ({br.status})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {/* AI scoring status chip */}
+                        {aiPickLoading[id] && bases.length >= 2 && (
+                          <div style={{
+                            display: "flex", alignItems: "center", gap: "5px",
+                            fontSize: "11.5px", color: "var(--ink-soft)",
+                            animation: "pulse 1.4s ease-in-out infinite",
+                          }}>
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                            AI scoring resumes…
+                          </div>
+                        )}
+                        {aiPickResults[id] && !aiPickLoading[id] && !manuallyOverridden[id] && (
+                          <div
+                            title={aiPickResults[id]?.breakdown?.reasoning ?? "AI selected the best-matching resume for this job"}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: "5px", alignSelf: "flex-start",
+                              fontSize: "11.5px", fontWeight: 600,
+                              color: "var(--accent)",
+                              backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
+                              border: "1px solid color-mix(in srgb, var(--accent) 30%, transparent)",
+                              borderRadius: "100px",
+                              padding: "2px 9px 2px 6px",
+                              cursor: "default",
+                            }}
+                          >
+                            <svg width="10" height="10" viewBox="0 0 20 20" fill="currentColor"><path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/></svg>
+                            AI Selected{aiPickResults[id]?.score != null ? ` — ${aiPickResults[id].score}% match` : ""}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warn)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                        <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                        No base resumes found for this candidate. The AI workflow will create one automatically.
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginTop: "20px" }}>
+          <div className="field-group">
+            <label>Status</label>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+              <option value="assigned">Assigned to apply</option>
+              <option value="stacked">Stacked / queued</option>
+              <option value="in_progress">In progress</option>
+              <option value="applied">Applied</option>
+              <option value="replied">Replied</option>
+              <option value="interview">Interview</option>
+              <option value="rejected">Rejected</option>
+              <option value="offer">Offer</option>
+            </select>
+          </div>
+          <div className="field-group">
+            <label>Assigned by</label>
+            <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)", backgroundColor: "var(--bg)" }} />
+          </div>
+          <div className="field-group">
+            <label>Application owner</label>
+            <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }}>
+              <option value="">-- Select owner --</option>
+              {assignmentOwners.map((user) => (
+                <option key={user.user_id} value={user.user_id}>
+                  {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group">
+            <label>Due date</label>
+            <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} style={{ width: "100%", padding: "8px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)" }} />
           </div>
         </div>
 
-        {candidateIds.size === 1 && resumeVariants.length > 0 && (
-          <div className="field-group">
-            <label>Resume version</label>
-            <select value={resumeId} onChange={(e) => setResumeId(e.target.value)}>
-              <option value="">Primary resume</option>
-              {resumeVariants.map((r) => (
-                <option key={r.id} value={r.id}>{r.label}</option>
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Assignment note</label>
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." style={{ width: "100%", padding: "10px 12px", borderRadius: "var(--radius)", border: "1px solid var(--border)", resize: "vertical", fontFamily: "inherit" }} />
+        </div>
+
+        {error && <p style={{ color: "var(--danger)", fontSize: "14px", marginTop: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+          <svg width="16" height="16" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+          {error}
+        </p>}
+
+        <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+          <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving || candidateIds.size === 0} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving || candidateIds.size === 0 ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving || candidateIds.size === 0 ? 0.7 : 1 }}>
+            {saving ? "Saving..." : `Create ${candidateIds.size} ticket${candidateIds.size !== 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Logs the same candidate against every selected job in one go - the bulk
+// "N selected -> Log selected to candidate" action. Single-candidate by
+// design (that's the whole point: many jobs, one person), unlike
+// LogApplicationModal's single-job/many-candidates shape, and skips its
+// per-job match-score UI since that doesn't cleanly generalize across
+// multiple jobs.
+function BulkLogApplicationModal({ jobs, onClose, onLogged }: { jobs: Job[]; onClose: () => void; onLogged: () => void }) {
+  const [candidates, setCandidates] = useState<{ id: string; name: string; resume_url: string | null; resume_filename: string | null }[]>([]);
+  const [users, setUsers] = useState<TeamUser[]>([]);
+  const [currentUser, setCurrentUser] = useState<TeamUser | null>(null);
+  const [candidateId, setCandidateId] = useState("");
+  const [status, setStatus] = useState("assigned");
+  const [assignedToUserId, setAssignedToUserId] = useState("");
+  const [assignmentDueAt, setAssignmentDueAt] = useState("");
+  const [assignmentNote, setAssignmentNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [results, setResults] = useState<{ job: Job; ok: boolean; message?: string }[] | null>(null);
+  // The chosen candidate's own base resumes, plus a per-job pick keyed by job
+  // id. Per-job (not one shared pick) because this modal logs many different
+  // jobs at once - a candidate with a "GIS" and a "Networking" base resume
+  // should be able to send the right one to each job in the same batch.
+  const [baseResumes, setBaseResumes] = useState<{ id: string; name: string; status: string }[]>([]);
+  const [baseResumesLoading, setBaseResumesLoading] = useState(false);
+  const [jobBaseResumeIds, setJobBaseResumeIds] = useState<Record<string, string>>({});
+  const jobIdsKey = jobs.map((j) => j.id).join(",");
+
+  useEffect(() => {
+    fetch("/api/candidates?compact=1&pageSize=200", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        list.sort((a: { name: string }, b: { name: string }) => (a.name || "").localeCompare(b.name || ""));
+        setCandidates(list);
+      })
+      .catch(() => setCandidates([]));
+    fetch("/api/users").then((r) => (r.ok ? r.json() : [])).then((data) => setUsers(Array.isArray(data) ? data : []));
+    fetch("/api/bootstrap")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: MeResponse | null) => setCurrentUser(data?.profile ?? null));
+  }, []);
+
+  // Load the selected candidate's base resumes and default every job to their
+  // most recent one (the API already returns created_at DESC). Keyed on the
+  // candidate so switching people can never carry the previous candidate's
+  // resume ids onto the new person's tickets.
+  useEffect(() => {
+    setJobBaseResumeIds({});
+    if (!candidateId) { setBaseResumes([]); return; }
+    let cancelled = false;
+    setBaseResumesLoading(true);
+    fetch(`/api/base-resumes?candidateId=${candidateId}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (cancelled) return;
+        const list: { id: string; name: string; status: string }[] = Array.isArray(data) ? data : [];
+        setBaseResumes(list);
+        if (list.length > 0) {
+          setJobBaseResumeIds(Object.fromEntries(jobs.map((j) => [j.id, list[0].id])));
+        }
+      })
+      .catch(() => { if (!cancelled) setBaseResumes([]); })
+      .finally(() => { if (!cancelled) setBaseResumesLoading(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candidateId, jobIdsKey]);
+
+  async function submit() {
+    if (!candidateId) { setError("Select a candidate."); return; }
+    const assignmentStatus = status === "assigned" || status === "stacked";
+    if (assignmentStatus && !assignedToUserId) {
+      setError("Choose an application owner for assigned or stacked tickets.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const candidate = candidates.find((c) => c.id === candidateId);
+    const assignedToUser = users.find((u) => u.user_id === assignedToUserId);
+
+    // Sequential, not Promise.all: this is a real write per job against a
+    // shared candidate+job uniqueness constraint - firing them all at once
+    // risks the same races /api/applications already guards against
+    // one-at-a-time (duplicate-application 409s, etc.), and per-job results
+    // are shown below either way so there's no UX cost to going one at a time.
+    const outcomes: { job: Job; ok: boolean; message?: string }[] = [];
+    for (const job of jobs) {
+      try {
+        const res = await fetch("/api/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            candidate_ids: [candidateId],
+            job_id: job.id,
+            status,
+            // Per-job resume pick, sent in the same per-candidate shape the
+            // single-job modal uses so the API stores it on the ticket and
+            // hands it to the AI tailoring workflow as the preferred resume.
+            candidate_resumes: {
+              [candidateId]: {
+                base_resume_id: jobBaseResumeIds[job.id] ?? baseResumes[0]?.id ?? null,
+                resume_url: candidate?.resume_url ?? null,
+                resume_filename: candidate?.resume_filename ?? null,
+              },
+            },
+            source_type: "base_resume",
+            assigned_by: currentUser?.display_name || currentUser?.email || null,
+            assigned_to: assignedToUser?.display_name || assignedToUser?.email || null,
+            assigned_by_user_id: currentUser?.user_id ?? null,
+            assigned_to_user_id: assignedToUserId || null,
+            assignment_due_at: assignmentDueAt || null,
+            assignment_note: assignmentNote || null,
+            next_action: assignmentStatus ? "Apply to this job" : null,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        outcomes.push({ job, ok: res.ok, message: res.ok ? undefined : data.error || "Something went wrong." });
+      } catch (err: any) {
+        outcomes.push({ job, ok: false, message: err?.message || "Network error" });
+      }
+    }
+    setSaving(false);
+    setResults(outcomes);
+    if (outcomes.every((o) => o.ok)) onLogged();
+  }
+
+  const failedCount = results ? results.filter((r) => !r.ok).length : 0;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: "95vw", maxWidth: "600px", padding: "24px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid var(--border)", paddingBottom: "16px" }}>
+          <h2 style={{ margin: 0, fontSize: "1.25rem", color: "var(--ink)" }}>
+            Log {jobs.length} job{jobs.length !== 1 ? "s" : ""} to one candidate
+          </h2>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--ink-soft)", cursor: "pointer" }}>✕</button>
+        </div>
+
+        {!candidateId && (
+          <div style={{ maxHeight: "20vh", overflowY: "auto", marginBottom: "16px", padding: "8px 10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
+            {jobs.map((j) => (
+              <div key={j.id} style={{ fontSize: "13px", padding: "2px 0", color: "var(--ink-soft)" }}>{j.title} — {j.company || "—"}</div>
+            ))}
+          </div>
+        )}
+
+        <div className="field-group">
+          <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>Candidate</label>
+          <select value={candidateId} onChange={(e) => setCandidateId(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            <option value="">Choose a candidate…</option>
+            {candidates.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {candidateId && (
+          <div className="field-group" style={{ marginTop: "16px" }}>
+            <label style={{ fontSize: "0.9rem", fontWeight: 600, color: "var(--ink)", marginBottom: "8px", display: "block" }}>
+              Base resume per job
+            </label>
+
+            {baseResumesLoading ? (
+              <div style={{ padding: "8px 12px", fontSize: "13px", color: "var(--ink-soft)" }}>Loading base resumes…</div>
+            ) : baseResumes.length === 0 ? (
+              <div style={{ padding: "10px 14px", fontSize: "13px", color: "var(--warn)", backgroundColor: "rgba(234, 179, 8, 0.08)", borderRadius: "var(--radius)", border: "1px solid rgba(234, 179, 8, 0.2)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <svg width="14" height="14" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd"></path></svg>
+                No base resumes found for this candidate. The AI workflow will create one automatically.
+              </div>
+            ) : (
+              <>
+                {baseResumes.length > 1 && jobs.length > 1 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const pick = e.target.value;
+                      if (!pick) return;
+                      setJobBaseResumeIds(Object.fromEntries(jobs.map((j) => [j.id, pick])));
+                    }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)", marginBottom: "10px" }}
+                  >
+                    <option value="">Set all {jobs.length} jobs to one resume…</option>
+                    {baseResumes.map((br) => (
+                      <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                    ))}
+                  </select>
+                )}
+
+                <div style={{ maxHeight: "26vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: "8px", padding: "10px", border: "1px solid var(--border)", borderRadius: "6px" }}>
+                  {jobs.map((j) => (
+                    <div key={j.id} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--ink)" }}>
+                        {j.title} <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>— {j.company || "—"}</span>
+                      </div>
+                      {baseResumes.length === 1 ? (
+                        <div style={{ fontSize: "12px", color: "var(--ink-soft)" }}>
+                          Using: {baseResumes[0].name} ({baseResumes[0].status})
+                        </div>
+                      ) : (
+                        <select
+                          value={jobBaseResumeIds[j.id] ?? ""}
+                          onChange={(e) => setJobBaseResumeIds((prev) => ({ ...prev, [j.id]: e.target.value }))}
+                          style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}
+                        >
+                          {baseResumes.map((br) => (
+                            <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Status</label>
+          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            <option value="assigned">Assigned</option>
+            <option value="stacked">Stacked</option>
+            <option value="applied">Applied</option>
+          </select>
+        </div>
+
+        {(status === "assigned" || status === "stacked") && (
+          <div className="field-group" style={{ marginTop: "16px" }}>
+            <label>Owner</label>
+            <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+              <option value="">Choose an owner…</option>
+              {users.map((u) => (
+                <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>
               ))}
             </select>
           </div>
         )}
 
-        <div className="field-group">
-          <label>Status</label>
-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="assigned">Assigned to apply</option>
-            <option value="stacked">Stacked / queued</option>
-            <option value="in_progress">In progress</option>
-            <option value="applied">Applied</option>
-            <option value="replied">Replied</option>
-            <option value="interview">Interview</option>
-            <option value="rejected">Rejected</option>
-            <option value="offer">Offer</option>
-          </select>
+        <div className="field-group" style={{ marginTop: "16px" }}>
+          <label>Due date (optional)</label>
+          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid var(--border)" }} />
         </div>
-        <div className="field-group">
-          <label>Assigned by</label>
-          <input value={currentUser?.display_name || currentUser?.email || ""} disabled placeholder="Current signed-in user" />
-        </div>
-        <div className="field-group">
-          <label>Application owner</label>
-          <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
-            <option value="">-- Select owner --</option>
-            {assignmentOwners.map((user) => (
-              <option key={user.user_id} value={user.user_id}>
-                {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field-group">
-          <label>Due date</label>
-          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
-        </div>
-        <div className="field-group">
+
+        <div className="field-group" style={{ marginTop: "16px" }}>
           <label>Assignment note</label>
-          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." />
+          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} placeholder="Instructions, candidate context, resume choice, etc." style={{ width: "100%", padding: "10px 12px", borderRadius: "6px", border: "1px solid var(--border)", resize: "vertical", fontFamily: "inherit" }} />
         </div>
 
-        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        {error && <p style={{ color: "var(--danger)", fontSize: "14px", marginTop: "12px" }}>{error}</p>}
 
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving..." : `Create ${candidateIds.size || ""} ticket${candidateIds.size === 1 ? "" : "s"}`}
+        {results && (
+          <div style={{ marginTop: "16px", padding: "10px 12px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            {failedCount === 0 ? (
+              <p style={{ margin: 0, color: "var(--accent)" }}>All {results.length} tickets created.</p>
+            ) : (
+              <>
+                <p style={{ margin: "0 0 6px", color: "var(--danger)" }}>{failedCount} of {results.length} failed:</p>
+                {results.filter((r) => !r.ok).map((r) => (
+                  <div key={r.job.id} style={{ fontSize: "13px", color: "var(--ink-soft)" }}>{r.job.title}: {r.message}</div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="modal-actions" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+          <button onClick={onClose} style={{ padding: "8px 16px", borderRadius: "6px", border: "1px solid var(--border)", background: "transparent", color: "var(--ink)", cursor: "pointer", fontWeight: 500 }}>
+            {results ? "Close" : "Cancel"}
           </button>
+          {(!results || failedCount > 0) && (
+            <button className="btn-primary" onClick={submit} disabled={saving || !candidateId} style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "var(--accent)", color: "white", cursor: saving || !candidateId ? "not-allowed" : "pointer", fontWeight: 600, opacity: saving || !candidateId ? 0.7 : 1 }}>
+              {saving ? "Logging..." : `Log ${jobs.length} ticket${jobs.length !== 1 ? "s" : ""}`}
+            </button>
+          )}
         </div>
       </div>
     </div>

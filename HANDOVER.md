@@ -1,372 +1,522 @@
-# Handover
+# TalentOS / Skarion Handover
 
-Single entry point for whoever is taking this project over. Read this first, then
-**[STATUS_REPORT.md](./STATUS_REPORT.md)** (point-in-time snapshot: what's done, what's
-left, prioritized next steps Ã¢â‚¬â€ written for the team picking this up to deploy), then
-[README.md](./README.md) (feature-by-feature reference) and [ROADMAP.md](./ROADMAP.md)
-(historical decisions and the *why* behind them). This file was last refreshed
-2026-06-19 — includes the Chunk 1 and Chunk 2 application workflow redesign changes.
+**Date:** 2026-08-07
+**Backend:** `alsaki27/TalentOS`
+**Extension:** `skarion-dev/talentos-copilot-extension`
+**Backend branch:** `neon-cloudflare-migration`
+**Live backend:** https://skarion-talent-os.skarion-talentos.workers.dev
 
-## There are two backends in this repo Ã¢â‚¬â€ read this before touching anything
+This is the takeover guide for the TalentOS application workflow, Candidate Portal, Gmail intelligence, AE work queue, and Chrome Copilot extension.
 
-1. **`/` (this Next.js app)** Ã¢â‚¬â€ the live, working product. Next.js 14 App Router, plain
-   CSS, Supabase (Postgres + Auth + Storage) as a monolith, accessed via the service-role
-   key server-side. This is what's actually deployed and in use today.
-2. **`/backend`** Ã¢â‚¬â€ a NestJS + TypeORM service, started by the team to migrate off
-   Supabase (Postgres stays, but the app layer moves to NestJS, auth moves to Clerk,
-   storage moves to SharePoint). **Explicit decision: keep both for now** Ã¢â‚¬â€ this is not a
-   cutover in progress, it's two things that exist side by side until the team decides
-   otherwise. See "Backend (NestJS) status" below for what's actually been verified there,
-   and `backend/MIGRATION.md` for the team's own notes on scope and remaining work.
+## 1. Product goal
 
-Don't assume code in one implies the other is current Ã¢â‚¬â€ they're maintained by different
-passes and the NestJS side is intentionally a partial port (see its own MIGRATION.md for
-the exact module list still missing).
+TalentOS connects three workflows:
 
-## Status snapshot (this refresh)
+1. A candidate signs in, secures the account with Google Authenticator, and optionally connects Gmail.
+2. Gmail is reviewed for recruiting activity only. AI ignores personal mail, job-alert noise, and marketing.
+3. AEs receive actionable tasks, can review source email, draft a reply, manually add missing applications, update stages, and resolve work with an audit note.
 
-- **Frontend** (`/`): package scripts now cover `typecheck`, `lint`, `test`, `build`, and `start`. GitHub Actions CI (`.github/workflows/ci.yml`) runs `npm ci`, typecheck, lint, and build on push/PR. The latest local verification target is `npm run typecheck`, `npm run lint`, and `npm run build`.
-- **Chunk 3 (2026-06-19)**: `POST /api/jobs/from-jd` is live. Parses a pasted JD via AI, runs a three-pass duplicate check (exact URL, exact normalized title+company+location, fuzzy Levenshtein), and creates a `pasted_jd` source job if clean. Maps salary, employment type, seniority, and all AI-extracted fields into the `jobs` table. Webhook + activity logging wired. Gated to `MASTER_DATA_MANAGER_ROLES` (admin/manager/recruiter).
-- **Chunk 3.5 (2026-06-19)**: Portability guardrails + admin AI API key manager. New `src/server/repositories/` abstractions (jobs, AI keys) prevent new feature routes from adding direct Supabase lock-in. Admin-only `/api/admin/ai-keys` CRUD + test routes. Keys encrypted with AES-256-GCM (`AI_KEYS_ENCRYPTION_SECRET`), fingerprinted, never returned to browser. `/ops` page gains an AI Providers panel. `getActiveProviderAsync()` supports DB-managed keys as fallback after env-based keys. Migration readiness doc added: `docs/migration-neon-cloudflare.md`.
-- **Chunk 4 (2026-06-19)**: Quick Application modal. Global "+ New Application" button in nav bar, visible to `APPLICATION_WORKER_ROLES` (admin, manager, recruiter, application_engineer). Reviewers excluded. 4-step modal: (1) candidate search/selection, (2) paste JD + auto-analyze via `/api/jobs/analyze`, (3) review job + handle duplicates via `/api/jobs/from-jd`, (4) create application via `/api/applications` with resume source, status, notes, and optional assignment. Ad-hoc path available (skip masterlist job). Uses API routes only — no direct Supabase calls in client code. Does not yet implement full resume source studio integration, keyword approval, or ATS suggestions.
-- **Backend** (`/backend`): `npm run typecheck` and `npm run build` both clean. Found and
-  fixed a real bug while verifying this: the root `tsconfig.json` had no exclusion for
-  `backend/`, so any `tsc --noEmit` run from the repo root was picking up NestJS decorator
-  syntax it can't parse and failing with 100+ spurious errors. Fixed by adding `"backend"`
-  to the root `exclude` array Ã¢â‚¬â€ if you ever see that error again, check this didn't get
-  reverted.
-- RLS is enabled on every Supabase table, with **zero policies** anywhere. Intentional Ã¢â‚¬â€
-  every frontend route goes through the service-role client, which bypasses RLS, so this
-  is a defense-in-depth placeholder, not active access control today.
-- This codebase was built by two AI agents (and now a human team) working concurrently in
-  the same working tree, no branches. Expect some quirks: two independent rebuilds of
-  `/import-sources` early on, a `sql/01_schema.sql` snapshot that lags the real migrations,
-  inconsistent comment style. No ongoing reason to preserve that split Ã¢â‚¬â€ treat the whole
-  tree as one codebase going forward.
+The Chrome extension lets an AE open a real ATS application, select the correct candidate, analyze the form, fill it with the correct resume/context, review changes, save corrections, and attach generated documents.
 
-## Schema change note (Chunk 1, 2026-06-19)
+## 2. Repository state
 
-The application workflow redesign foundation migration is applied:
-`supabase/migrations/20260619020000_chunk1_application_workflow_foundation.sql`
+Latest backend commit: `67735be` — “Flag and capture untracked candidate applications”
+Remote: `origin/neon-cloudflare-migration`
 
-Key changes:
-- `applications.job_id` is now **nullable** (was `NOT NULL` with a unique constraint on
-  `(candidate_id, job_id)`). A partial unique index preserves the no-duplicate rule for
-  masterlist-linked apps while allowing unlimited ad-hoc applications per candidate.
-- `applications` new columns: `adhoc_job_data` (JSONB), `adhoc_job_raw_text` (text),
-  `source_type` (`base_resume` | `original_resume` | `blank` | `manual`).
-- `jobs` new columns: `raw_description`, `parsed_description`, `ai_extracted_at`,
-  `ai_confidence_score` — for auto-creating jobs from pasted JDs in future chunks.
-- `application_resume_versions` new column: `source_type`.
-- New table: `job_duplicates` (for future deduplication engine).
+Recent backend milestones:
 
-Backward compatibility: all existing workflows (application creation with job_id, resume
-studio, jobs list, candidates list) continue working without changes. UI only adds
-defensive null handling for nullable `jobs` relations.
+| Commit | Result |
+|---|---|
+| `6a834fe` | Modernized responsive jobs workspace |
+| `bfe41aa` | Added Copilot action to application queue |
+| `162d24f` | Hardened malformed Copilot JSON handling |
+| `6ecf539` | Added tailored resume PDF fallback |
+| `0f7fbfe` | Added candidate email work queue and enrollment-date backfill |
+| `1b917a3` | Added MFA, Gmail labels/stars, interview extraction, and fixtures |
+| `975afb1` | Hardened MFA encryption and personal-email safeguards |
+| `9791b57` | Added drafts, retention, privacy, SLAs, conflicts, and workflow events |
+| `dde838a` | Synced applied status from Copilot extension |
+| `67735be` | Added untracked-application detection and AE manual application creation |
 
-## Environment variables — full reference (frontend, `/`)
+Recent extension milestones:
 
-| Variable | Required for | Status here | Notes |
-|---|---|---|---|
-| `SUPABASE_URL` | Everything | Ã¢Å“â€¦ set | Project URL from Supabase dashboard Ã¢â€ â€™ Settings Ã¢â€ â€™ API. |
-| `SUPABASE_SERVICE_ROLE_KEY` | Everything | Ã¢Å“â€¦ set | Full DB access, bypasses RLS. Never expose client-side, never commit. |
-| `NVIDIA_API_KEY` / `NVIDIA_MODEL` | `/chat`, AI digest | Ã¢Å“â€¦ set | Live-tested. See "AI provider" below for its known limitation. |
-| `SUPABASE_ANON_KEY` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Login (`/api/auth/login`) | not set | Required for password login; use the anon/publishable key from Supabase Project Settings > API. |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | `/chat`, AI digest (preferred provider) | Ã¢ÂÅ’ not set | Preferred over NVIDIA automatically once set Ã¢â‚¬â€ see "AI provider" below for why. |
-| `AI_PROVIDER` | optional override | Ã¢ÂÅ’ not set | `anthropic` or `nvidia`, forces a choice when both are set. |
-| `CRON_SECRET` | Scheduled jobs (`/api/cron/*`) | Ã¢ÂÅ’ not set | **Without this, scheduled cron jobs 401 silently, every day, forever.** Highest-impact missing config for a real deploy. |
-| `USAJOBS_API_KEY` / `USAJOBS_USER_AGENT` | USAJobs import | Ã¢ÂÅ’ not set | Free key from developer.usajobs.gov. |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_OAUTH_REDIRECT_URI` | Gmail integration | Ã¢ÂÅ’ not set | See `docs/integrations.md` for the full OAuth setup. |
-| `TEAMS_TALENT_OS_WEBHOOK_URL` | Outbound Teams notifications | Ã¢ÂÅ’ not set | No-ops cleanly (not an error) when absent. |
-| `TALENT_OS_WEBHOOK_SECRET` | Inbound webhook | Ã¢ÂÅ’ not set | Fails closed (401) without it. |
-| `CRAWLER_API_KEY` | Job crawler ingestion (`/api/integrations/crawler/jobs`, `/heartbeat`) | Ã¢ÂÅ’ not set | Bearer shared secret for an external crawler bot. Live-tested with a temporary local value Ã¢â‚¬â€ dedup, auth, and real-time push all confirmed working; reverted before handover. |
-| `RESUME_STORAGE_PROVIDER` | Resume upload backend | Ã¢ÂÅ’ not set (defaults to `supabase`) | **You'll be setting this to `sharepoint`** Ã¢â‚¬â€ see the dedicated section below before you do. |
-| `MS_CLIENT_ID` / `MS_CLIENT_SECRET` / `MS_TENANT_ID` / `SHAREPOINT_SITE_ID` / `SHAREPOINT_DRIVE_FOLDER` | SharePoint resume storage | Ã¢ÂÅ’ not set | See "Switching resume storage to SharePoint" below Ã¢â‚¬â€ required reading before flipping `RESUME_STORAGE_PROVIDER`. |
+| Commit | Result |
+|---|---|
+| `383b1ac` | Initial TalentOS Application Copilot |
+| `34b0ac7` | Linked Copilot to application records |
+| `49c80f7` | Added ATS browser fixture test suite |
+| `bfac18f` | Fixed linked application handoff |
+| `505939b` | Added tailored resume download |
+| `c6d4579` | Added resume fallback handling |
+| `543a9fd` | Added form submission status sync |
 
-`.env.example` now exists for the frontend. Keep it in sync whenever a new environment variable is introduced.
+## 3. Candidate authentication and Gmail flow
 
-## Cloud Supabase setup checklist
+### Candidate authentication
 
-Use this path for local development against the cloud Supabase project:
+1. Candidate signs in with password or Google OAuth.
+2. If MFA is enabled, TalentOS issues a short-lived pending-MFA cookie instead of a full session.
+3. Candidate enters a six-digit TOTP code.
+4. Recovery codes are hashed and one-time-use.
+5. Five invalid attempts cause a temporary lockout.
 
-1. Create `.env.local` from `.env.example`.
-2. In the Supabase dashboard, open **Project Settings > API**:
-   - Copy **Project URL** to `SUPABASE_URL`.
-   - Copy the **anon / publishable key** to both `SUPABASE_ANON_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-   - Copy the **service_role / secret key** to `SUPABASE_SERVICE_ROLE_KEY`. Never expose this client-side and never commit it.
-3. Apply migrations from this repo:
-   ```bash
-   npx supabase db push
-   ```
-   The source of truth is `supabase/migrations/`, not `sql/01_schema.sql`.
-4. Verify first-run readiness:
-   ```bash
-   npm run setup:check
-   ```
-5. Create the first internal user in Supabase **Authentication > Users** and set their password there.
-6. Create or update that user's TalentOS profile:
-   ```bash
-   npm run seed:admin
-   ```
-   The default email is `admin@skarion.local`; set `ADMIN_EMAIL=you@example.com` in `.env.local` to target a different existing Auth user.
-7. Start the app, check `GET /api/health`, then log in at `/login` and verify `/jobs` and `/candidates` load.
-## Switching resume storage to SharePoint Ã¢â‚¬â€ what you actually need
+Files:
 
-You said you'll use your team's real SharePoint as storage. The code
-(`src/lib/integrations/sharepoint.ts`, `src/lib/resumeStorage.ts`) is built and was
-tested as far as it honestly could be in this environment: confirmed the default
-(Supabase) path is unchanged, and confirmed SharePoint mode fails with a clear,
-specific error (e.g. "MS_TENANT_ID is required") rather than crashing or silently no-op'ing
-when credentials are missing. **What was not tested: a real upload/download against an
-actual SharePoint tenant** Ã¢â‚¬â€ there was no Microsoft 365 tenant available in this
-environment to test against. Before relying on it:
+- `src/server/auth/candidateAuth.ts`
+- `src/server/auth/totp.ts`
+- `src/app/api/portal/auth/mfa/route.ts`
+- `src/app/api/portal/auth/mfa/verify/route.ts`
+- `src/app/portal/login/page.tsx`
+- `src/app/portal/page.tsx`
 
-1. **Register an Azure AD app** (Azure Portal Ã¢â€ â€™ App registrations Ã¢â€ â€™ New registration).
-   Note the **Application (client) ID** and **Directory (tenant) ID** Ã¢â‚¬â€ these become
-   `MS_CLIENT_ID` and `MS_TENANT_ID`.
-2. **Create a client secret** under that app (Certificates & secrets) Ã¢â‚¬â€ this becomes
-   `MS_CLIENT_SECRET`. It expires (you choose 6/12/24 months) Ã¢â‚¬â€ whoever owns this needs a
-   calendar reminder to rotate it before expiry, or uploads will start failing with a
-   clear auth error (not silently).
-3. **Grant Microsoft Graph application permissions**: `Sites.ReadWrite.All` (or
-   `Files.ReadWrite.All` if scoping to one drive). This requires **admin consent** Ã¢â‚¬â€ your
-   M365 tenant admin has to click "Grant admin consent" in the Azure portal once.
-4. **Find your `SHAREPOINT_SITE_ID`** Ã¢â‚¬â€ the Graph API site identifier (not the site URL).
-   Easiest path: `GET https://graph.microsoft.com/v1.0/sites/{your-tenant}.sharepoint.com:/sites/{site-name}`
-   with a valid Graph token, and read the `id` field from the response.
-5. Set `RESUME_STORAGE_PROVIDER=sharepoint` plus the four vars above. **Test with one real
-   upload through `/candidates/[id]` before trusting it in production** Ã¢â‚¬â€ this is the one
-   piece of this handover that genuinely needs a human with real Microsoft 365 access to
-   validate, since no AI agent in this loop had that access.
-6. **Known limitation, not yet handled**: `src/lib/storage.ts`'s `deleteStorageFile()` only
-   knows how to clean up Supabase Storage URLs Ã¢â‚¬â€ it silently no-ops on a SharePoint URL
-   (doesn't error, but doesn't delete the file either). If you switch to SharePoint, old
-   resumes that get replaced will leak as orphaned files in your SharePoint drive until
-   someone adds a SharePoint-aware delete path. Not a security issue, just a slow-drip
-   storage-quota one.
+### Gmail onboarding
 
-## AI provider Ã¢â‚¬â€ the one nuance worth understanding before touching `/chat`
+1. Candidate enters the Skarion enrollment date.
+2. Candidate consents to Gmail access.
+3. OAuth requests `gmail.modify`, required for labels and stars.
+4. The callback records `email_consent_at`.
+5. Initial sync searches after the enrollment date; later syncs use Gmail history IDs.
+6. Paused candidates are skipped by the sync worker.
+7. Retention cleanup removes imported email/drafts past the candidate's retention period.
 
-Two providers behind one interface (`src/lib/ai/provider.ts`): `anthropicProvider.ts` and
-`nvidiaProvider.ts`. Only NVIDIA has ever been live-tested here (no Anthropic key was ever
-available). Confirmed across 6+ live request variations: NVIDIA's `moonshotai/kimi-k2.6`
-reliably calls a tool, but degenerates into repeated tokens a meaningful fraction of the
-time right after consuming the tool's result. Reliable for single-shot generation (no
-tool result to consume) Ã¢â‚¬â€ that's why the daily digest uses single-shot, not tool-calling.
-Two mitigations exist (penalty params + a `looksDegenerate()` fallback) but they reduce
-the failure rate, not eliminate it. **Prefer Anthropic once a key exists** Ã¢â‚¬â€
-`getActiveProvider()` already picks it first automatically, no code change needed.
+Files:
 
-## Security audit findings (frontend)
+- `src/lib/integrations/googleGmail.ts`
+- `src/lib/integrations/gmailApi.ts`
+- `src/app/api/integrations/gmail/callback/route.ts`
+- `src/server/services/gmailSyncService.ts`
+- `src/server/repositories/gmailIntegrationRepository.ts`
 
-- **Auth is sound.** `src/middleware.ts` blocks every route except an explicit allowlist
-  behind a verified Supabase session cookie. Two routes that look unguarded because they
-  live under the exempted `/api/auth/*` prefix (`password`, `me`) independently call
-  `getCurrentUserContext()` and 401 without a session Ã¢â‚¬â€ not actually open.
-- **Webhooks and bot-facing endpoints fail closed.** Gmail OAuth, the TalentOS inbound
-  webhook, and the job-crawler ingestion/heartbeat endpoints all reject every request when
-  their secret env var is unset, rather than allowing access. Confirmed by reading the
-  check in each, not assumed.
-- **New: a scoped public API key system** (`src/lib/publicApiAuth.ts`,
-  `/api/api-keys` for admin-only key management, `/api/public/*` for ~20 scoped routes
-  covering candidates/jobs/applications/companies/events/reminders/analytics). Reviewed
-  and it's solid: keys are SHA-256 hashed at rest (never stored or logged raw), scope-based
-  per-route authorization (`candidates:read` vs `jobs:write` etc., not all-or-nothing),
-  expiry + revocation supported, `last_used_at` tracked, key creation audit-logged, request
-  bodies go through an explicit field allowlist (`pickFields()`) rather than blind
-  mass-assignment. This is a reasonable integration surface for the NestJS backend or any
-  external tool to use instead of (or alongside) direct DB access.
-- **Role gating is now mostly implemented for the highest-risk paths.** The app gates admin/team/audit/ops routes, public API key management, master-data writes, destructive candidate/job/application actions, assignment changes, and application-engineer queue visibility. Remaining work is policy refinement and edge-case review, not a complete absence of role checks.
-- **Candidate self-login is still not implemented.** The candidate-facing experience is the magic-link portal, not an account/session dashboard.
-- **Gmail intelligence is still not implemented.** OAuth/linking exists, but classification of rejections, recruiter replies, interview invites, and status updates from email does not.
-- **Resume tailoring now exists for editable markdown drafts.** Admins/managers/recruiters can generate a tailored draft from a candidate base resume and job, save it as an `application_resume_versions` variant, and attach it to an application packet. Cover-letter generation and deeper automated truth scoring remain future work.
-- **RLS has no policies** Ã¢â‚¬â€ not a vulnerability today (nothing uses the anon key against
-  the DB directly), but don't mistake it for active protection if that ever changes.
+Existing Gmail users must reconnect after the `gmail.modify` scope change. A read-only token cannot write labels or stars.
 
-## Backend (NestJS, `/backend`) status
+## 4. Email intelligence and AE workflow
 
-Verified by re-running its own build tooling (not the frontend's) on 2026-06-18:
+Relevant recruiting messages can produce:
 
-- `npm run typecheck` and `npm run build` both pass cleanly.
-- Spot-checked entities against the **live** Supabase schema: `candidates`, `jobs`,
-  `profiles`, `application_comments` (including the `parent_comment_id` threaded-reply
-  column added this session), and `job_crawler_status` (the table added this session) all
-  match field-for-field. The team's own pass is staying in sync with frontend schema
-  changes, which is a good sign for two people working on related things in parallel.
-- `AuthorizationService.assertApplicationVisibility()` correctly ports the exact
-  application-engineer visibility rule from the live app (only see tickets assigned to
-  you, by id/email/display-name match).
+- Internal application timeline notes.
+- AE action items.
+- Gmail labels and stars.
+- High-confidence stage updates for approved categories.
+- Interview extraction and schedule creation.
+- Calendar-conflict tasks.
+- Untracked-application tasks.
 
-**Three real things to know before this goes anywhere near production data:**
+The system suppresses obvious personal messages before AI when known sender domains match commerce/delivery/travel/banking patterns plus order/receipt/delivery subjects. The prompt also excludes personal receipts, DoorDash/Uber Eats, shopping, shipping, rideshare, banking, medical, travel, social, account-security mail, Indeed/LinkedIn alerts, newsletters, and marketing.
 
-1. **Every entity carries `is_deleted`/`deleted_at` via `BaseEntity` Ã¢â‚¬â€ no live Supabase
-   table has those columns today.** Pointing this backend at the actual production
-   database will fail on any query touching those columns until a migration adds them.
-   There's no `src/database/migrations` folder yet Ã¢â‚¬â€ only `TYPEORM_SYNCHRONIZE`, which the
-   team's own `.env.example` notes correctly mark "only acceptable for throwaway local
-   databases." Don't run this against real data with synchronize on.
-2. **Auth provider is switching from Supabase Auth to Clerk**, and `profiles`' primary key
-   shape is changing (`user_id` = `auth.users.id` Ã¢â€ â€™ a new generated `id` + separate
-   `clerk_user_id` column). Self-acknowledged in `backend/MIGRATION.md` as needing a
-   one-time user-mapping script. No existing account can log into this backend until that
-   script exists and runs.
-3. **Most of the app isn't ported yet**, by the team's own list in `backend/MIGRATION.md`:
-   import sources/runs, saved searches, Gmail/Teams/TalentOS integrations, job crawler
-   ingestion (built and live-tested on the frontend this session Ã¢â‚¬â€ see README.md), AI
-   chat/digests, analytics, follow-ups, candidate portal, file storage. Implemented so far:
-   profiles, candidates, jobs, companies, applications, public-api-keys.
+### Untracked applications
 
-## Cost-efficient deployment Ã¢â‚¬â€ recommendations
+Application confirmations such as “Application received,” “Thank you for applying,” or “Successfully applied” are detected. If no matching TalentOS application exists, the system creates:
 
-Researched current (2026) pricing rather than assumed. Sources at the bottom.
+`Application found outside TalentOS`
 
-**Recommended baseline for a small internal team:**
+The AE enters company, job title, and optional application URL. TalentOS creates or reuses the job, creates the application with source type `email_confirmation`, links the task, and records an audit event.
 
-| Piece | Recommendation | Est. cost/mo |
+Files:
+
+- `src/lib/ai/emailTriage.ts`
+- `src/server/services/gmailSyncService.ts`
+- `src/app/api/action-items/[id]/add-application/route.ts`
+- `src/app/candidate-dashboard/page.tsx`
+
+### AE dashboard
+
+The Candidate Application Dashboard shows:
+
+- Candidate, job, company, and source email.
+- Priority, due time, and escalation state.
+- Open-email link.
+- Draft-reply action.
+- Take-over action.
+- Resolve action requiring an AE note.
+- Add-application action for untracked confirmations.
+
+Same-thread outbound mail can automatically resolve reply tasks. Manual AE resolution is audited.
+
+### Reply drafts
+
+`email_reply_draft` creates a reviewable draft only. It never sends email automatically.
+
+Files:
+
+- `src/lib/ai/emailReplyDraft.ts`
+- `src/app/api/action-items/[id]/draft-reply/route.ts`
+
+## 5. AI Control Center
+
+New candidate-workflow agents:
+
+| Automation ID | Purpose | Route |
 |---|---|---|
-| Frontend hosting | Vercel | $0 (Hobby) if usage stays personal/low-key, or **$20/seat (Pro)** Ã¢â‚¬â€ Vercel's Hobby tier is licensed for non-commercial use; an internal company tool used by paid staff is commercial use, so Pro is the compliant choice once this is a real team tool, not a side project. |
-| Frontend cron jobs | Already daily-only (`vercel.json`: import, backup, digest, job categorization) | $0 extra Ã¢â‚¬â€ Hobby restricts cron to once-daily schedules anyway, and this app never needed more than that, so no upgrade is forced by cron alone. Per-project cron limit was raised to 100 on every plan in Jan 2026, well above the cron entries this app uses. |
-| Database | **Keep the existing Supabase project** | $0 (Free tier: 500MB DB, 1GB storage, 50k MAUs) until you outgrow it, then $25/mo (Pro: 8GB DB, 100GB storage). Don't provision a second Postgres for the NestJS backend Ã¢â‚¬â€ point its `DATABASE_URL` at the same Supabase Postgres instance via its direct connection string (Settings Ã¢â€ â€™ Database Ã¢â€ â€™ Connection string), through the **pooler** connection (PgBouncer, included free) rather than the direct one, to stay well within the 60-direct/200-pooled connection limit on the free tier. |
-| NestJS backend hosting (compute only) | **Fly.io** (cheapest, sub-$2/mo for a small shared-CPU VM, pay-as-you-go) or **Railway** (simpler DX, $5/mo Hobby plan, usage-based) | $2Ã¢â‚¬â€œ5/mo |
-| Auth (if/when Clerk migration completes) | Clerk | $0 Ã¢â‚¬â€ free tier now covers 50,000 monthly active users (raised from 10k in 2026), comfortably covers an internal team + candidate logins for a long time. |
-| Resume storage | SharePoint (your existing M365 subscription) | $0 incremental Ã¢â‚¬â€ Graph API calls aren't separately billed; storage comes out of your existing SharePoint quota. |
+| `email_triage` | Relevance, category, match, reply need | Gemini 2.5 Flash Lite |
+| `email_interview_extraction` | Interview logistics | Gemini 2.5 Flash Lite |
+| `email_action_enrichment` | Reserved enrichment/label agent | Gemini 2.5 Flash Lite |
+| `email_reply_draft` | Reviewable recruiter reply | Gemini 2.5 Flash Lite |
 
-**Realistic total: $2Ã¢â‚¬â€œ7/month** if you stay on free tiers where eligible (Supabase Free,
-Clerk Free, Vercel Hobby if usage permits) plus cheap backend compute. **$25Ã¢â‚¬â€œ32/month** if
-you need Vercel Pro for commercial-use compliance and/or outgrow Supabase's free tier. Both
-are inexpensive for what this app does Ã¢â‚¬â€ the actual cost driver to watch is Supabase
-storage/database size as job-posting volume grows (LinkedIn imports can add up), not
-compute.
+New AI code must use `callWithUsageTracking`, have Control Center config/routes, strict JSON parsing, and human fallback.
 
-**One sequencing note:** don't pay for a second Postgres instance for the NestJS backend
-"just to get started" Ã¢â‚¬â€ reusing the Supabase Postgres connection string is both cheaper
-and avoids a future data-migration step between two live databases.
+The pre-existing `copilot_cover_letter` route was configured for Gemini 2.5 Pro before this work. Do not change that route without evaluating quality.
 
-Sources:
-- [Vercel Cron Jobs Ã¢â‚¬â€ Usage & Pricing](https://vercel.com/docs/cron-jobs/usage-and-pricing)
-- [Vercel Pricing](https://vercel.com/pricing)
-- [Cron jobs now support 100 per project on every plan](https://vercel.com/changelog/cron-jobs-now-support-100-per-project-on-every-plan)
-- [Railway vs Render vs Fly.io for Solo Developers in 2026](https://devtoolpicks.com/blog/railway-vs-render-vs-fly-io-solo-developers-2026)
-- [Fly.io vs Railway 2026](https://thesoftwarescout.com/fly-io-vs-railway-2026-which-developer-platform-should-you-deploy-on/)
-- [Supabase Pricing](https://supabase.com/pricing)
-- [Supabase Free Tier Limits 2026](https://aiagencyplus.com/supabase-free-tier-limits/)
-- [Clerk Pricing](https://clerk.com/pricing)
-- [Clerk Pricing Update Ã¢â‚¬â€ 50k Free MAU](https://saasprices.net/blog/clerk-free-plan-changes)
+## 6. Database migrations
 
-## Operational runbook (frontend)
+Apply these after the earlier email/Copilot migrations:
 
-- **First login on a fresh deploy**: no self-serve signup. Create the first user via
-- **First login on a fresh deploy**: no self-serve signup and no auto-promotion. Create
-  the first user in Supabase Authentication, then run `npm run seed:admin` to create or
-  update the matching `profiles` row before logging in at `/login`.
-  silently forever. Single highest-impact missing config right now.
-- **`npm run build` clobbers `.next`**, which `npm run dev` also uses Ã¢â‚¬â€ `rm -rf .next` and
-  restart the dev server after any production build.
-- **Migrations**: `supabase/migrations/*.sql`, applied in order via `npx supabase db push`.
-  `sql/01_schema.sql` is a convenience snapshot, not the source of truth Ã¢â‚¬â€ the migrations
-  folder is.
-- **Backups**: daily JSON snapshot to Supabase Storage (needs `CRON_SECRET`), plus an on-demand download on `/ops`. `src/lib/backup.ts` has restore helper functions (`parseBackupSnapshot`, `loadStoredBackupSnapshot`, `restoreBackupSnapshot`), and `/api/ops/restore` plus `/ops` provide an admin-only restore workflow. Restore upserts records and is not a full point-in-time database rollback.
-- **Deployment path**: Vercel + Supabase is the current architecture. Supabase remains database/auth/default storage. Cloudflare full-stack hosting is not configured; D1/R2 migration is not part of the current architecture.
+| Migration | Purpose |
+|---|---|
+| `sql/neon_fixes/055_candidate_email_workflow.sql` | Enrollment date, email notes, task resolution, dedupe |
+| `sql/neon_fixes/056_candidate_mfa_and_email_actions.sql` | MFA, Gmail write fields, interview agents |
+| `sql/neon_fixes/057_candidate_workflow_controls.sql` | Consent, pause/retention, SLAs, drafts, workflow events |
+| `sql/neon_fixes/058_email_confirmation_application_source.sql` | Allows `email_confirmation` application source |
 
-## Full route inventory (confirmed via build output)
+Required production configuration:
 
-23 page routes, 65+ API routes on the frontend (grew from ~60 with the public API key
-system and job crawler routes this session). See README.md for what each feature does;
-see "Backend status" above for what's mirrored in `/backend` so far.
+- `DATABASE_URL` or `NEON_DATABASE_URL`
+- `JWT_SECRET`
+- `AI_KEYS_ENCRYPTION_SECRET`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GMAIL_OAUTH_REDIRECT_URI`
+- `TALENTOS_BASE_URL`
+- `CRON_SECRET`
 
-## Where to go next
+MFA setup returns a controlled error if `AI_KEYS_ENCRYPTION_SECRET` is missing; it must not store an unencrypted TOTP secret.
 
-Read **[STATUS_REPORT.md](./STATUS_REPORT.md)** for the prioritized punch list. Read
-ROADMAP.md's "Next up" and "Explicitly deferred" sections before re-deciding something
-already deliberately scoped out Ã¢â‚¬â€ the reasoning for each deferral is written down, not
-just the decision.
+## 7. Manual test plan
 
+### Authentication and MFA
 
-## Chunk 8 (2026-06-20): Resume Draft Builder + Versioning from Accepted Suggestions
+1. Sign in without MFA and confirm `/portal` loads.
+2. Enable Google Authenticator from Account Security.
+3. Scan the URI/secret and confirm with a six-digit code.
+4. Sign out and confirm the next login requires MFA.
+5. Use a recovery code; confirm it works once only.
+6. Enter five invalid codes; confirm temporary lockout.
+7. Test password and Google OAuth login with MFA enabled.
+8. Remove encryption configuration in staging; confirm MFA setup fails safely.
 
-- `applicationResumeVersionsRepository.ts` — full data-access abstraction for `application_resume_versions` (find, list, create, update, clone, getCurrentDraft, markAsDraft, markAsFinal, attach to packet via `createOrUpdatePacket`).
-- `resumeDraftBuilderService.ts` — `buildResumeDraftFromAcceptedSuggestions()`: loads source content by `source_type` (base_resume / original_resume / blank / manual), applies only accepted suggestions with `truth_status !== fabrication_risk`, skips truth warnings / missing evidence / format improvements, creates a new draft `application_resume_versions` row or updates an existing draft. Never overwrites original or base resume content.
-- `applySuggestionToResume` in `resumeSuggestionService.ts` refactored to use repository functions instead of direct `supabase.from()` calls.
-- API routes: `GET /api/applications/[id]/resume-drafts`, `POST /api/applications/[id]/resume-drafts/build`, `PATCH /api/applications/[id]/resume-drafts/[versionId]`, `POST /api/applications/[id]/resume-drafts/[versionId]/attach`, and studio convenience routes via `application-resume-versions/[id]/resume-drafts`.
-- Studio UI: Draft tab with Build New Draft / Update Current Draft buttons, accepted/pending suggestion count, fabrication-risk warnings, draft list with status badges, draft preview panel, warnings display, and Attach to Packet button.
-- Activity logging on all draft operations (build, save, attach, suggestion application).
-- Build: clean. No new direct `supabase.from()` calls in new routes or client code.
+### Gmail consent/privacy
 
-Still deferred: PDF/DOCX export, cover letter generation, final packet generation, recruiter message generation.
+1. Connect a new Gmail account and confirm Google shows modify access.
+2. Confirm `email_consent_at` is populated.
+3. Confirm initial sync honors the enrollment date.
+4. Pause sync, run Gmail cron, and confirm the account is skipped.
+5. Resume sync and confirm it runs again.
+6. Change retention to 90 days and run cleanup.
+7. Delete imported history; confirm email records/drafts are deleted while applications remain.
+8. Revoke Gmail access and confirm the account enters reconnect/error state.
 
-## Chunk 9 (2026-06-21): DOCX/PDF Export + Final Resume Packet Formatting
+### Personal-email suppression
 
-- `application_resume_exports` table (migration with CHECK constraints on export_type and status).
-- `applicationResumeExportsRepository.ts` — create, find, list, markFailed, soft-delete.
-- `resumeExportService.ts` — wraps existing `renderResumeDocx` and `renderResumePdf` with export history tracking, safety checks (empty resume, fabrication-risk suggestions), ATS-friendly formatting (removes buzzwords), and professional file naming. `exportResumeAsDocx`, `exportResumeAsPdf`, `exportResumeAsMarkdown` all create export history records before generation and update with file size on success. Markdown renderer outputs clean structured text from ResumeDocument.
-- API routes: `GET /api/applications/[id]/resume-exports`, `POST /api/applications/[id]/resume-exports` (generates file + returns as download), `GET /api/applications/[id]/resume-exports/[exportId]/download` (regenerates on demand), and studio convenience route `POST /api/application-resume-versions/[id]/export`.
-- Studio UI: Export tab with Export DOCX / Export PDF / Preview Markdown buttons, ATS-friendly/include projects/include summary options, export history list with download buttons and failed status display.
-- Activity logging on all export operations (create, success, failure).
-- Build: clean. No new direct `supabase.from()` calls in new routes or client code.
+Use controlled messages for:
 
-## Chunk 10 (2026-06-22) — Application Packet Builder
+- DoorDash order receipt.
+- Amazon shipping notice.
+- Uber trip receipt.
+- Bank payment alert.
+- Medical appointment.
+- LinkedIn job alert.
+- Indeed “great fit” recommendation.
 
-The final v1 feature chunk. The internal workflow is now complete:
-- Quick Application → JD Analysis → Job Creation → Keyword Approval → Resume Suggestions → Draft Builder → Export → Packet Builder → Cover Letter → Recruiter Message → Review → Approve → Mark Sent.
+Expected: no AE task, application note, stage change, or recruiting Gmail label/star.
 
-New files:
-- `src/server/repositories/applicationPacketsRepository.ts`
-- `src/server/services/applicationPacketBuilderService.ts`
-- `src/server/services/applicationPacketAiService.ts`
-- `src/app/api/applications/[id]/packet/route.ts`
-- `src/app/api/applications/[id]/packet/cover-letter/route.ts`
-- `src/app/api/applications/[id]/packet/recruiter-message/route.ts`
-- `src/app/api/applications/[id]/packet/approve/route.ts`
-- `src/app/api/applications/[id]/packet/mark-sent/route.ts`
-- `supabase/migrations/20260622120000_application_packet_v1.sql`
-- `docs/deployment-readiness.md`
+### Recruiting workflow
 
-Updated files:
-- `src/app/falood/studio/application/[applicationResumeId]/page.tsx` — added Packet tab
-- `src/server/repositories/applicationPacketsRepository.ts` — fixed type error (offset + limit check)
+Test each with and without a matching TalentOS application:
 
-Deployment readiness: see `docs/deployment-readiness.md` for full env var list, security checklist, and smoke test.
+- Greenhouse confirmation.
+- Lever recruiter reply.
+- Workday status update.
+- Ashby scheduling email.
+- Zoho invitation.
+- Rejection.
+- Offer.
+- Reschedule/cancellation.
+- Forwarded recruiter email.
+- Missing date/timezone.
+- Application confirmation with no TalentOS match.
 
+Expected:
 
-## Migration Sprint (2026-07-07) — Neon + Cloudflare Infrastructure
+- Correct messages attach to the correct application.
+- Unmatched confirmations create `untracked_application`.
+- Interview messages are starred/labeled and create a task.
+- Missing logistics remain human-reviewable.
+- Duplicate sync does not create duplicate tasks/notes/schedules.
 
-**Strategy:** Hybrid Option A. Neon becomes the main app database. Supabase Auth and Storage remain temporarily. Full auth/storage independence is a future Phase 2 sprint.
+### AE queue
 
-### New files
-- `src/server/db/neon.ts` — Neon serverless driver adapter (Cloudflare-compatible)
-- `src/server/db/index.ts` — Database abstraction layer
-- `docs/neon-cloudflare-audit.md` — Full Supabase/Node-only API audit (comprehensive)
-- `docs/neon-migration-plan.md` — Migration order, extensions, schema import, verification SQL
-- `docs/supabase-to-neon-data-migration.md` — Export/import commands, security checklist
-- `docs/cloudflare-env-secrets.md` — All `wrangler secret put` commands, `.dev.vars` setup
-- `.env.example.production` — Production env template with Neon + Supabase auth vars
-- `wrangler.toml` — Cloudflare Workers config (`nodejs_compat`, `.worker-next` output)
+1. Open Candidate Application Dashboard.
+2. Confirm candidate/job/email details.
+3. Generate and edit a reply draft; confirm nothing is sent.
+4. Take over with a note.
+5. Try resolving without a note; confirm rejection.
+6. Resolve with a note; confirm task closure and audit event.
+7. Add a missing application; confirm job/application creation.
+8. Leave a task overdue, run Gmail cron, and confirm urgent escalation.
+9. Create overlapping interviews and confirm a calendar-conflict task.
 
-### Modified files
-- `src/server/security/secretCrypto.ts` — Rewrote with Web Crypto API (`crypto.subtle`). AES-256-GCM. Async. Compatible with Node.js and Cloudflare Workers.
-- `src/lib/webhookEngine.ts` — `crypto.createHmac` → `crypto.subtle.sign("HMAC", ...)`
-- `src/lib/publicApiAuth.ts` — `crypto.randomBytes`/`createHash` → `crypto.getRandomValues`/`crypto.subtle.digest`
-- `src/lib/apiKeyAuth.ts` — Added `await` for async hash function
-- `src/app/api/api-keys/route.ts` — Added `await` for async key generation/hash
-- `src/lib/resumeStorage.ts` — `Buffer` → `Uint8Array` parameter type
-- `src/lib/resumeParsing.ts` — `Buffer` → `Uint8Array` parameter type
-- `src/lib/integrations/sharepoint.ts` — `Buffer` → `Uint8Array`, pure JS base64url
-- `src/lib/integrations/googleGmail.ts` — `crypto.randomBytes` → `crypto.getRandomValues`, pure JS base64url decode
-- `src/lib/supabaseRLS.ts` — Import-time `createClient` → lazy-initialized proxy (fixes Cloudflare import crash)
-- `src/app/api/applications/[id]/proof/route.ts` — `Buffer.from` → `new Uint8Array`
-- `src/app/api/chat/attachments/route.ts` — `Buffer.from` → `new Uint8Array`
-- `src/app/api/candidates/[id]/photo/route.ts` — `Buffer.from` → `new Uint8Array`
-- `src/app/api/candidates/[id]/resumes/route.ts` — `Buffer.from` → `new Uint8Array`
-- `src/app/api/candidates/[id]/resume/route.ts` — `Buffer.from` → `new Uint8Array`
-- `src/server/repositories/aiKeyRepository.ts` — Added `await` for async crypto functions
-- `package.json` — Added `@neondatabase/serverless`, `@opennextjs/cloudflare`, `wrangler`. Added `cf:build`, `cf:preview`, `cf:deploy`, `cf:typegen` scripts.
+### Copilot extension
 
-### What remains
-- Repository migration (~120 files still use `supabase.from()`). Migrate incrementally.
-- Cloudflare preview (`npm run cf:preview`) — not yet tested.
-- Data export from Supabase and import to Neon — not yet done.
-- Cron job migration (4 jobs in `vercel.json`) — needs Cloudflare Cron Triggers or external scheduler.
-- PDF/DOCX export (`docx`, `@react-pdf/renderer`) are Node-only — need externalization or replacement.
-- Full Supabase Auth removal — Phase 2 sprint.
-- Full Supabase Storage removal — Phase 3 sprint (R2).
-- Build: `npm run typecheck` ✅, `npm run build` ✅. `npm run cf:build` not yet tested.
+1. Load the unpacked extension in Chrome.
+2. Configure the TalentOS API key.
+3. Test Greenhouse, Lever, Workday, Ashby, and Zoho forms.
+4. Confirm candidate/application handoff.
+5. Analyze, inspect, fill, manually correct, Save & Learn.
+6. Test malformed/aborted AI response recovery.
+7. Test tailored resume and cover-letter attachment fallback.
+8. Submit a form and confirm applied-status sync.
+
+## 8. Improvements still recommended
+
+### High priority
+
+1. Install Node and run `npm run typecheck`, `npm test`, `npm run lint`, and Playwright.
+2. Apply migrations in staging Neon before production.
+3. Add mocked Gmail API tests for list/get/modify/labels.
+4. Integrate Google Calendar for real attendee responses, cancellations, reminders, and conflicts. Current conflict detection uses TalentOS schedules only.
+5. Add a Gmail reconnect banner for old `gmail.readonly` scopes.
+6. Wire `email_action_enrichment` into the sync path or remove it until used; it is currently registered for future use.
+7. Add deterministic classification tests for personal receipts and application confirmations.
+
+### Medium priority
+
+1. Add AE assignment and configurable SLA/escalation notifications.
+2. Add recruiter contact extraction and deduplication.
+3. Add draft approval/save/send endpoints, with explicit AE confirmation before sending.
+4. Add “wrong application match” correction/rematch.
+5. Add candidate-visible consent/audit history.
+6. Add GDPR-style export/delete tooling and deletion reports.
+7. Add a richer workflow-event timeline UI.
+
+Safety rules:
+
+- Never auto-send AI email.
+- Never auto-change stages from ambiguous mail.
+- Never expose internal AI notes unless explicitly marked candidate-visible.
+- Never treat generic job alerts as applications.
+- Never store Gmail tokens or MFA secrets without encryption.
+
+## 9. Developer takeover
+
+Backend:
+
+~~~powershell
+cd C:\path\to\TalentOS
+git checkout neon-cloudflare-migration
+git pull origin neon-cloudflare-migration
+npm install
+npm run typecheck
+npm test
+npm run lint
+npm run build
+~~~
+
+Extension:
+
+~~~powershell
+cd C:\path\to\talentos-copilot-extension
+git checkout main
+git pull origin main
+npm install
+~~~
+
+Load the extension through `chrome://extensions` with Developer Mode enabled. Configure the TalentOS API base URL and extension API key.
+
+Debugging map:
+
+- Gmail sync: `src/server/services/gmailSyncService.ts`
+- Gmail OAuth/tokens: `src/lib/integrations/googleGmail.ts`, `src/server/repositories/gmailIntegrationRepository.ts`
+- Email triage: `src/lib/ai/emailTriage.ts`
+- Interview extraction: `src/lib/ai/emailInterviewExtraction.ts`
+- Reply drafts: `src/lib/ai/emailReplyDraft.ts`
+- AE queue: `src/app/candidate-dashboard/page.tsx`, `src/app/api/candidate-dashboard/route.ts`
+- Candidate MFA: `src/server/auth/candidateAuth.ts`, `src/server/auth/totp.ts`, `src/app/api/portal/auth/mfa/*`
+- Copilot: `src/app/api/extension/v1/copilot/*` and the extension repository
+- AI routing: `src/lib/ai/routing.ts`
+- AI Control Center: `src/app/admin/ai`, `src/app/api/admin/ai/*`
+
+Change discipline:
+
+1. Add migrations for schema changes.
+2. Register every AI automation in the Control Center.
+3. Use `callWithUsageTracking` only.
+4. Add strict parsing and human fallback.
+5. Add audit events and fixtures.
+6. Run typecheck/tests/build.
+7. Commit and push when coding is complete.
+
+## 10. Validation status
+
+## 11. Gmail Backfill Runner and Spare-PC Operations
+
+The spare Windows machine is the preferred high-throughput worker for Gmail backfills and future mailbox automation. It is reachable over SSH at `192.168.1.193` as user `saki-`, with the repository at `C:\JobSearch-Support-Talentos`.
+
+Runtime services:
+
+- `JobSearchApp`: support app on port `3100`.
+- `JobSearchNightly`: nightly cycle at 00:00.
+- `gateway/main.py`: LLM gateway on port `8787`.
+- Cloudflare tunnel: exposes the support service for TalentOS integration.
+
+TalentOS remains the source of truth for Gmail OAuth tokens, candidate ownership, imported messages, triage, application matching, and stage changes. The spare PC should invoke production sync; it must not write directly to Neon or run a second Gmail importer.
+
+Production sync endpoint:
+
+```text
+GET https://talent.skarion.com/api/cron/gmail-sync
+Authorization: Bearer <CRON_SECRET>
+```
+
+The runner must call the endpoint serially, continue while `gmail_backfill_complete=false`, stop on OAuth/token/database errors, and log only status, elapsed time, account scope, and count summaries—not tokens or message bodies. After backfill, it should continue at a low-frequency incremental-sync interval.
+
+Required production variables are separate from Google login credentials:
+
+```text
+GMAIL_CLIENT_ID
+GMAIL_CLIENT_SECRET
+CRON_SECRET
+TALENTOS_BASE_URL=https://talent.skarion.com
+```
+
+### Planned Gmail agents
+
+> AI agents are not part of the current Gmail sync dependency. Gmail ingestion,
+> pagination, deduplication, token refresh, suppression, and storage must work
+> deterministically before any AI classification or automation is enabled.
+
+### Current code-first Gmail sync
+
+The current Gmail system is a code-driven mailbox importer. Its responsibilities
+are intentionally separate from future AI work:
+
+- OAuth consent and refresh-token storage use `GMAIL_CLIENT_ID` and
+  `GMAIL_CLIENT_SECRET`, separate from Google login credentials.
+- `src/lib/integrations/gmailApi.ts` owns Gmail REST calls, profile lookup,
+  message listing, history listing, message retrieval, labels, and stars.
+- `src/server/services/gmailSyncService.ts` owns account selection, token
+  refresh, incremental history sync, paginated backfill, idempotent storage,
+  and sync error handling.
+- `src/server/repositories/gmailIntegrationRepository.ts` owns encrypted token
+  persistence, account state, history IDs, backfill page tokens, and completion
+  state.
+- `email_communications` is the durable imported-message store. Gmail message
+  IDs and thread IDs are the deduplication keys.
+- `/api/cron/gmail-sync` is the production worker entry point.
+- `/api/candidate-dashboard/force-sync` is the authenticated manual recovery
+  entry point.
+- `.github/workflows/scheduled-jobs.yml` invokes the production endpoint. Its
+  `TALENTOS_BASE_URL` must remain `https://talent.skarion.com`.
+
+### Sync state contract
+
+Every candidate Gmail account must have an observable state:
+
+```text
+active + gmail_backfill_complete=false  = backfill still running
+active + gmail_backfill_complete=true   = incremental sync eligible
+error                                    = sync paused until recovery
+revoked                                  = OAuth permission removed
+```
+
+The sync worker must never silently skip an account. A failed account needs a
+visible `sync_error`, an updated timestamp, and a retry path. Reconnecting Gmail
+must reset the history ID and backfill cursor only when a new OAuth grant is
+actually received.
+
+### Backfill and incremental rules
+
+1. Process one account at a time; never run concurrent syncs for the same
+   candidate.
+2. During backfill, consume `gmail_backfill_page_token` until Gmail returns no
+   next page token, then set `gmail_backfill_complete=true`.
+3. Store each message idempotently by `integration_account_id + gmail_message_id`.
+4. Preserve sent mail, received mail, thread IDs, timestamps, labels, unread,
+   important, and starred flags.
+5. After backfill, persist Gmail `historyId` and use history-based incremental
+   sync. If Gmail reports an expired history ID, restart a bounded backfill
+   rather than losing messages.
+6. Retry transient Gmail 429/5xx failures with bounded backoff. Do not retry
+   invalid OAuth credentials indefinitely.
+7. Never log access tokens, refresh tokens, full email bodies, or authorization
+   headers.
+
+### Candidate onboarding checklist
+
+For every candidate mailbox:
+
+1. Candidate completes Gmail consent from the candidate portal.
+2. Verify the account belongs to the intended candidate email.
+3. Verify the granted scope includes `gmail.modify` when labels/stars are
+   required.
+4. Confirm the account is `active` and `email_sync_paused=false`.
+5. Trigger the first backfill and record the starting count.
+6. Continue until `gmail_backfill_complete=true`.
+7. Confirm a later test email appears through incremental sync.
+8. Confirm duplicate sync runs do not increase the same Gmail message ID count.
+
+### Current operational recovery
+
+If a mailbox is stuck:
+
+```text
+1. Inspect integration_accounts.status, sync_error, last_synced_at,
+   gmail_history_id, gmail_backfill_page_token, and gmail_backfill_complete.
+2. If status=error because of deployment configuration, fix production secrets
+   first; do not delete the candidate's email history.
+3. Set the account active only after the root cause is fixed.
+4. Trigger /api/cron/gmail-sync serially until the cursor advances.
+5. Verify email_communications count, max(ingested_at), and newest sent_at.
+```
+
+The account must not be reset to a blank state merely because one sync request
+failed. Existing imported messages are retained and deduplicated on retry.
+
+### Future Gmail work, still code-first
+
+Before introducing AI agents, complete these deterministic improvements:
+
+- Add a per-account sync-run table with start/end time, page count, fetched,
+  inserted, duplicate, skipped, and error counts.
+- Add an admin Gmail health page showing every candidate account and its exact
+  cursor/backfill state.
+- Add a safe “Continue backfill” button for managers/admins.
+- Add a bounded worker loop on the spare PC or a dedicated scheduled runner;
+  keep one concurrency lock per Gmail account.
+- Add retention-aware cleanup that respects each candidate's privacy setting.
+- Add fixtures for expired history IDs, revoked consent, rate limits, duplicate
+  messages, malformed MIME parts, pagination interruption, and empty inboxes.
+- Add alerts when an active account has not synced for 30 minutes or remains in
+  backfill for an abnormal duration.
+- Add a reconciliation command comparing Gmail message IDs against
+  `email_communications` without importing personal content.
+
+Only after these code paths are reliable should future AI components be allowed
+to classify recruiting relevance, match applications, extract interviews, or
+create AE tasks. AI must consume stored messages; it must never be responsible
+for determining whether Gmail synchronization itself succeeded.
+
+Register every new agent in the AI Control Center and use the approved low-cost model route unless a human explicitly selects a higher-cost review run:
+
+- `GmailMessageClassifier`: deterministic suppression first, then recruiting relevance.
+- `GmailApplicationMatcher`: match messages to candidate/application/job.
+- `GmailStageUpdater`: propose or apply screening, interview, offer, rejected, and follow-up stages with evidence.
+- `GmailInterviewExtractor`: extract dates, timezone, links, recruiter, location, and deadlines.
+- `GmailAEActionPlanner`: create one deduplicated AE task with due date and evidence.
+- `GmailReplyDraftAgent`: draft replies; sending remains human-approved.
+
+Personal receipts, food delivery, shopping, banking, medical, travel, security alerts, job alerts, and generic job-board recommendations must be suppressed before AI matching. Suppressed mail must not create applications, notes, stage changes, or AE tasks.
+
+### Safe deployment warning
+
+Do not run `deploy.ps1` while unrelated Python processes are active. Its restart step terminates every `python.exe` process on the spare PC. Inspect Python processes and scheduled tasks first and deploy only during a maintenance window.
+
+### Validation checklist
+
+- Confirm the Cloudflare tunnel resolves to the intended spare-PC service.
+- Confirm schedulers target `https://talent.skarion.com`, not the old `workers.dev` hostname.
+- Confirm the Gmail account is active, error-free, and has `gmail.modify` scope.
+- Confirm pagination advances and eventually sets `gmail_backfill_complete=true`.
+- Confirm new mail is imported without duplicate Gmail message IDs.
+- Confirm suppressed mail creates no applications or AE tasks.
+- Confirm recruiter/interview mail is stored, matched to the correct application, and visible in the Gmail log.
+
+The latest source changes passed `git diff --check` before push. Runtime typecheck, unit tests, E2E tests, Gmail calls, and Neon migration execution still need to run in an environment with Node, dependencies, secrets, and database access. That is the receiving developer’s first action after pulling the branch.

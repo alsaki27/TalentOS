@@ -1,0 +1,420 @@
+import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
+import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
+
+export interface ResumeVersion {
+  id: string;
+  name: string;
+  timestamp: string;
+  resumeData: ResumeData;
+  chatHistory: any[];
+}
+
+interface ResumeState {
+  resumeData: ResumeData;
+  isEditing: boolean;
+  selectedSection: string | null;
+  chatHistory: any[];
+  jobDescription: string;
+  previewSuggestion: any | null;
+  versions: ResumeVersion[];
+}
+
+type ResumeAction =
+  | { type: 'UPDATE_PERSONAL_INFO'; payload: Partial<ResumeData['personalInfo']> }
+  | { type: 'UPDATE_SUMMARY'; payload: string }
+  | { type: 'UPDATE_EXPERIENCE'; payload: ResumeData['experience'] }
+  | { type: 'UPDATE_EDUCATION'; payload: ResumeData['education'] }
+  | { type: 'UPDATE_PROJECTS'; payload: ResumeData['projects'] }
+  | { type: 'UPDATE_SKILLS'; payload: ResumeData['skills'] }
+  | { type: 'UPDATE_CUSTOM_SECTIONS'; payload: ResumeData['customSections'] }
+  | { type: 'UPDATE_SECTIONS'; payload: ResumeData['sections'] }
+  | { type: 'UPDATE_COLORS'; payload: ResumeData['colors'] }
+  | { type: 'UPDATE_TEMPLATE'; payload: ResumeData['template'] }
+  | { type: 'UPDATE_PAGE_FORMAT'; payload: ResumeData['pageFormat'] }
+  | { type: 'UPDATE_FONT_SIZE'; payload: ResumeData['fontSize'] }
+  | { type: 'UPDATE_FONT_FAMILY'; payload: ResumeData['fontFamily'] }
+  | { type: 'UPDATE_PAGE_PADDING'; payload: ResumeData['pagePadding'] }
+  | { type: 'SET_EDITING'; payload: boolean }
+  | { type: 'SET_SELECTED_SECTION'; payload: string | null }
+  | { type: 'RESET_RESUME' }
+  | { type: 'IMPORT_RESUME_DATA'; payload: ResumeData }
+  | { type: 'SET_CHAT_HISTORY'; payload: any[] }
+  | { type: 'SET_JOB_DESCRIPTION'; payload: string }
+  | { type: 'SET_PREVIEW_SUGGESTION'; payload: any | null }
+  | { type: 'SET_VERSIONS'; payload: ResumeVersion[] }
+  | { type: 'RESTORE_VERSION'; payload: ResumeVersion };
+
+const initialResumeData: ResumeData = {
+  personalInfo: {
+    fullName: '',
+    jobTitle: '',
+    email: '',
+    phone: '',
+    location: '',
+    website: '',
+    linkedin: '',
+    github: '',
+    profileImage: '',
+    birthDate: ''
+  },
+  summary: '',
+  experience: [],
+  education: [],
+  projects: [],
+  skills: {
+    mode: 'simple',
+    simple: [],
+    categorized: []
+  },
+  customSections: [],
+  sections: DEFAULT_SECTIONS,
+  colors: DEFAULT_COLORS,
+  template: 'business-professional',
+  pageFormat: 'a4',
+  fontSize: DEFAULT_FONT_SIZE,
+  fontFamily: 'Inter',
+  pagePadding: DEFAULT_PAGE_PADDING
+};
+
+const initialState: ResumeState = {
+  resumeData: initialResumeData,
+  isEditing: false,
+  selectedSection: null,
+  chatHistory: [
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: 'Hi! Paste a job description (JD) here, and I will suggest tailored changes for your resume.'
+    }
+  ],
+  jobDescription: '',
+  previewSuggestion: null,
+  versions: [],
+};
+
+function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
+  switch (action.type) {
+    case 'UPDATE_PERSONAL_INFO':
+      return {
+        ...state,
+        resumeData: {
+          ...state.resumeData,
+          personalInfo: { ...state.resumeData.personalInfo, ...action.payload }
+        }
+      };
+    case 'UPDATE_SUMMARY':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, summary: action.payload }
+      };
+    case 'UPDATE_EXPERIENCE':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, experience: action.payload }
+      };
+    case 'UPDATE_EDUCATION':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, education: action.payload }
+      };
+    case 'UPDATE_PROJECTS':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, projects: action.payload }
+      };
+    case 'UPDATE_SKILLS':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, skills: action.payload }
+      };
+    case 'UPDATE_CUSTOM_SECTIONS':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, customSections: action.payload }
+      };
+    case 'UPDATE_SECTIONS':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, sections: action.payload }
+      };
+    case 'UPDATE_COLORS':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, colors: action.payload }
+      };
+    case 'UPDATE_TEMPLATE':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, template: action.payload }
+      };
+    case 'UPDATE_PAGE_FORMAT':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, pageFormat: action.payload }
+      };
+    case 'UPDATE_FONT_SIZE':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, fontSize: action.payload }
+      };
+    case 'UPDATE_FONT_FAMILY':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, fontFamily: action.payload }
+      };
+    case 'UPDATE_PAGE_PADDING':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, pagePadding: action.payload }
+      };
+    case 'SET_EDITING':
+      return { ...state, isEditing: action.payload };
+    case 'SET_SELECTED_SECTION':
+      return { ...state, selectedSection: action.payload };
+    case 'RESET_RESUME':
+      return { ...initialState, resumeData: initialResumeData };
+    case 'IMPORT_RESUME_DATA': {
+      const newData = { ...initialResumeData, ...action.payload };
+      // Normalize at the single funnel every load path goes through (base
+      // resume fetch, JSON import, AI-tailored seed data): a fontSize that
+      // isn't a valid number - e.g. a legacy named size like "medium" from
+      // before this field was point-based, or a hand-edited JSON import -
+      // would otherwise silently persist as-is and never coerce back to a
+      // usable value on its own.
+      if (typeof newData.fontSize !== 'number' || !Number.isFinite(newData.fontSize)) {
+        newData.fontSize = DEFAULT_FONT_SIZE;
+      }
+      if (newData.skills?.categorized) {
+        newData.skills.categorized = newData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `import-cat-${Date.now()}-${idx}`
+        }));
+      }
+      return { ...state, resumeData: newData };
+    }
+    case 'SET_CHAT_HISTORY':
+      return { ...state, chatHistory: action.payload };
+    case 'SET_JOB_DESCRIPTION':
+      return { ...state, jobDescription: action.payload };
+    case 'SET_PREVIEW_SUGGESTION':
+      return { ...state, previewSuggestion: action.payload };
+    case 'SET_VERSIONS':
+      return { ...state, versions: action.payload };
+    case 'RESTORE_VERSION': {
+      const restoredData = action.payload.resumeData;
+      if (restoredData.skills?.categorized) {
+        restoredData.skills.categorized = restoredData.skills.categorized.map((cat, idx) => ({
+          ...cat,
+          id: cat.id || `restore-cat-${Date.now()}-${idx}`
+        }));
+      }
+      return {
+        ...state,
+        resumeData: restoredData,
+        chatHistory: action.payload.chatHistory
+      };
+    }
+    default:
+      return state;
+  }
+}
+
+interface ResumeContextType {
+  state: ResumeState;
+  dispatch: React.Dispatch<ResumeAction>;
+  updatePersonalInfo: (data: Partial<ResumeData['personalInfo']>) => void;
+  updateSummary: (summary: string) => void;
+  updateExperience: (experience: ResumeData['experience']) => void;
+  updateEducation: (education: ResumeData['education']) => void;
+  updateProjects: (projects: ResumeData['projects']) => void;
+  updateSkills: (skills: ResumeData['skills']) => void;
+  updateCustomSections: (sections: ResumeData['customSections']) => void;
+  updateSections: (sections: ResumeData['sections']) => void;
+  updateColors: (colors: ResumeData['colors']) => void;
+  updateTemplate: (template: ResumeData['template']) => void;
+  updatePageFormat: (format: ResumeData['pageFormat']) => void;
+  updateFontSize: (fontSize: ResumeData['fontSize']) => void;
+  updateFontFamily: (fontFamily: ResumeData['fontFamily']) => void;
+  updatePagePadding: (pagePadding: ResumeData['pagePadding']) => void;
+  setEditing: (editing: boolean) => void;
+  setSelectedSection: (section: string | null) => void;
+  resetResume: () => void;
+  importResumeData: (data: ResumeData) => void;
+  exportResumeData: () => ResumeData;
+  setChatHistory: (history: any[]) => void;
+  setJobDescription: (jd: string) => void;
+  setPreviewSuggestion: (suggestion: any | null) => void;
+  setVersions: (versions: ResumeVersion[]) => void;
+  restoreVersion: (version: ResumeVersion) => void;
+}
+
+const ResumeContext = createContext<ResumeContextType | undefined>(undefined);
+
+export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [state, dispatch] = useReducer(resumeReducer, initialState);
+
+  const updatePersonalInfo = useCallback((data: Partial<ResumeData['personalInfo']>) => {
+    dispatch({ type: 'UPDATE_PERSONAL_INFO', payload: data });
+  }, []);
+
+  const updateSummary = useCallback((summary: string) => {
+    dispatch({ type: 'UPDATE_SUMMARY', payload: summary });
+  }, []);
+
+  const updateExperience = useCallback((experience: ResumeData['experience']) => {
+    dispatch({ type: 'UPDATE_EXPERIENCE', payload: experience });
+  }, []);
+
+  const updateEducation = useCallback((education: ResumeData['education']) => {
+    dispatch({ type: 'UPDATE_EDUCATION', payload: education });
+  }, []);
+
+  const updateProjects = useCallback((projects: ResumeData['projects']) => {
+    dispatch({ type: 'UPDATE_PROJECTS', payload: projects });
+  }, []);
+
+  const updateSkills = useCallback((skills: ResumeData['skills']) => {
+    dispatch({ type: 'UPDATE_SKILLS', payload: skills });
+  }, []);
+
+  const updateCustomSections = useCallback((sections: ResumeData['customSections']) => {
+    dispatch({ type: 'UPDATE_CUSTOM_SECTIONS', payload: sections });
+  }, []);
+
+  const updateSections = useCallback((sections: ResumeData['sections']) => {
+    dispatch({ type: 'UPDATE_SECTIONS', payload: sections });
+  }, []);
+
+  const updateColors = useCallback((colors: ResumeData['colors']) => {
+    dispatch({ type: 'UPDATE_COLORS', payload: colors });
+  }, []);
+
+  const updateTemplate = useCallback((template: ResumeData['template']) => {
+    dispatch({ type: 'UPDATE_TEMPLATE', payload: template });
+  }, []);
+
+  const updatePageFormat = useCallback((format: ResumeData['pageFormat']) => {
+    dispatch({ type: 'UPDATE_PAGE_FORMAT', payload: format });
+  }, []);
+
+  const updateFontSize = useCallback((fontSize: ResumeData['fontSize']) => {
+    dispatch({ type: 'UPDATE_FONT_SIZE', payload: fontSize });
+  }, []);
+
+  const updateFontFamily = useCallback((fontFamily: ResumeData['fontFamily']) => {
+    dispatch({ type: 'UPDATE_FONT_FAMILY', payload: fontFamily });
+  }, []);
+
+  const updatePagePadding = useCallback((pagePadding: ResumeData['pagePadding']) => {
+    dispatch({ type: 'UPDATE_PAGE_PADDING', payload: pagePadding });
+  }, []);
+
+  const setEditing = useCallback((editing: boolean) => {
+    dispatch({ type: 'SET_EDITING', payload: editing });
+  }, []);
+
+  const setSelectedSection = useCallback((section: string | null) => {
+    dispatch({ type: 'SET_SELECTED_SECTION', payload: section });
+  }, []);
+
+  const resetResume = useCallback(() => {
+    dispatch({ type: 'RESET_RESUME' });
+  }, []);
+
+  const importResumeData = useCallback((data: ResumeData) => {
+    dispatch({ type: 'IMPORT_RESUME_DATA', payload: data });
+  }, []);
+
+  const exportResumeData = useCallback((): ResumeData => {
+    return state.resumeData;
+  }, [state.resumeData]);
+
+  const setChatHistory = useCallback((history: any[]) => {
+    dispatch({ type: 'SET_CHAT_HISTORY', payload: history });
+  }, []);
+
+  const setJobDescription = useCallback((jd: string) => {
+    dispatch({ type: 'SET_JOB_DESCRIPTION', payload: jd });
+  }, []);
+
+  const setPreviewSuggestion = useCallback((suggestion: any | null) => {
+    dispatch({ type: 'SET_PREVIEW_SUGGESTION', payload: suggestion });
+  }, []);
+
+  const setVersions = useCallback((versions: ResumeVersion[]) => {
+    dispatch({ type: 'SET_VERSIONS', payload: versions });
+  }, []);
+
+  const restoreVersion = useCallback((version: ResumeVersion) => {
+    dispatch({ type: 'RESTORE_VERSION', payload: version });
+  }, []);
+
+  const value: ResumeContextType = useMemo(() => ({
+    state,
+    dispatch,
+    updatePersonalInfo,
+    updateSummary,
+    updateExperience,
+    updateEducation,
+    updateProjects,
+    updateSkills,
+    updateCustomSections,
+    updateSections,
+    updateColors,
+    updateTemplate,
+    updatePageFormat,
+    updateFontSize,
+    updateFontFamily,
+    updatePagePadding,
+    setEditing,
+    setSelectedSection,
+    resetResume,
+    importResumeData,
+    exportResumeData,
+    setChatHistory,
+    setJobDescription,
+    setPreviewSuggestion,
+    setVersions,
+    restoreVersion
+  }), [
+    state,
+    updatePersonalInfo,
+    updateSummary,
+    updateExperience,
+    updateEducation,
+    updateProjects,
+    updateSkills,
+    updateCustomSections,
+    updateSections,
+    updateColors,
+    updateTemplate,
+    updatePageFormat,
+    updateFontSize,
+    updateFontFamily,
+    updatePagePadding,
+    setEditing,
+    setSelectedSection,
+    resetResume,
+    importResumeData,
+    exportResumeData,
+    setChatHistory,
+    setJobDescription,
+    setPreviewSuggestion,
+    setVersions,
+    restoreVersion,
+  ]);
+
+  return (
+    <ResumeContext.Provider value={value}>
+      {children}
+    </ResumeContext.Provider>
+  );
+};
+
+export const useResume = () => {
+  const context = useContext(ResumeContext);
+  if (context === undefined) {
+    throw new Error('useResume must be used within a ResumeProvider');
+  }
+  return context;
+};

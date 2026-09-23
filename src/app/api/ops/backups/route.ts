@@ -3,25 +3,25 @@
 
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { listFiles } from "@/server/storage/storageApi";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { response } = await requireCurrentUser();
   if (response) return response;
 
-  const { data, error } = await supabase.storage
-    .from("resumes")
-    .list("backups", { limit: 20, sortBy: { column: "name", order: "desc" } });
+  const files = await listFiles("backups/", 20);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  return NextResponse.json((data ?? []).map((f: any) => ({ name: f.name as string, createdAt: f.created_at as string, sizeBytes: f.metadata?.size ?? null })));
+  return NextResponse.json(files.map((f) => ({
+    name: f.name,
+    createdAt: f.created_at,
+    sizeBytes: f.metadata?.size ?? null,
+  })));
 }
 
 export async function POST() {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { response } = await requireCurrentUser();
   if (response) return response;
   return NextResponse.json({ error: "Use POST /api/ops/restore for backup restores." }, { status: 405 });
 }

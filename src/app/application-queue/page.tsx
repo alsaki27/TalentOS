@@ -1,11 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import Pagination from "@/components/Pagination";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
+import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
+import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
+
+interface PageFitMetrics {
+  pageCount: number;
+  contentUtilization: number;
+  bottomWhitespaceInches: number;
+  overflow: boolean;
+  readable: boolean;
+  recommendation: "pass" | "trim" | "expand" | "manual_review";
+}
 
 interface QueueItem {
   id: string;
+  app_number: number | null;
   status: string;
   assigned_by: string | null;
   assigned_to: string | null;
@@ -17,13 +29,37 @@ interface QueueItem {
   review_status: "not_required" | "pending" | "approved" | "changes_requested";
   review_note: string | null;
   reviewed_at: string | null;
+  applied_at: string | null;
+  completed_at: string | null;
   next_action: string | null;
   proof_url: string | null;
   proof_filename: string | null;
   proof_uploaded_at: string | null;
   source_type: string | null;
-  candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null } | null;
-  jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null } | null;
+  ae_stage: "in_ai_pipeline" | "ready_for_review" | "ready_for_application" | "applied";
+  ae_stage_updated_at: string | null;
+  ae_stage_updated_by_name: string | null;
+  ae_reviewed_by_name: string | null;
+  ae_reviewed_at: string | null;
+  ae_applied_by_name: string | null;
+  ae_applied_at: string | null;
+  candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
+  jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null } | null;
+  workflow_status?: string | null;
+  workflow_id?: string | null;
+  workflow_stage?: number | null;
+  workflow_score?: number | null;
+  hiring_panel_ats_score?: number | null;
+  hiring_panel_recruiter_score?: number | null;
+  hiring_panel_role_fit_score?: number | null;
+  hiring_panel_truth_score?: number | null;
+  average_score?: number | null;
+  one_page_fit_score?: number | null;
+  page_fit_metrics?: PageFitMetrics | null;
+  workflow_resume_version_id?: string | null;
+  workflow_resume_title?: string | null;
+  base_resume_id?: string | null;
+  resume_generation_status?: string | null;
 }
 
 interface TeamUser {
@@ -33,112 +69,893 @@ interface TeamUser {
   role: string;
 }
 
-interface MeResponse {
-  profile: {
-    user_id: string;
-    role: string;
-  };
-}
-
 interface QueueStats {
   all: number;
   mine: number;
-  overdue: number;
-  pendingReview: number;
+  pendingAeReview: number;
+  pendingAeApplication: number;
+  aiPipeline: number;
+}
+
+type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow";
+
+const STATUS_ICONS: Record<string, string> = {
+  assigned: "📋",
+  stacked: "📚",
+  in_progress: "🔨",
+  applied: "✅",
+};
+
+function openCopilotForApplication(item: QueueItem) {
+  const sourceUrl = item.jobs?.source_url;
+  if (!sourceUrl) {
+    alert("This application log has no external application URL yet. Add the ATS URL to open Copilot.");
+    return;
+  }
+  const url = new URL(sourceUrl, window.location.origin);
+  url.hash = `talentos_application_id=${encodeURIComponent(item.id)}`;
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
+// AE hand-off funnel, replacing the old one-way "✅ Applied" button. Both AEs
+// and managers can move a ticket between any of these (see PATCH /api/applications/[id]),
+// which auto-advances in_ai_pipeline -> ready_for_review on its own once Final
+// Polish finishes; the rest is a manual toggle either role can drive.
+const AE_STAGE_LABELS: Record<string, string> = {
+  in_ai_pipeline: "🤖 In AI Pipeline",
+  ready_for_review: "🔍 Ready for AE Review",
+  ready_for_application: "📤 Ready for AE Application",
+  applied: "✅ AE Applied",
+};
+
+const STAGE_FILTER_LABELS: Record<string, string> = {
+  ...AE_STAGE_LABELS,
+  replied: "📞 Screening",
+  interview: "💬 Interview",
+  offer: "🎉 Offer",
+  rejected: "❌ Rejected",
+  withdrawn: "🚫 Withdrawn",
+};
+
+const AE_STAGE_STYLES: Record<string, { background: string; border: string; color: string }> = {
+  in_ai_pipeline: { background: "rgba(139,92,246,0.16)", border: "rgba(139,92,246,0.55)", color: "#c4b5fd" },
+  ready_for_review: { background: "rgba(245,158,11,0.16)", border: "rgba(245,158,11,0.55)", color: "#fbbf24" },
+  ready_for_application: { background: "rgba(14,165,233,0.16)", border: "rgba(14,165,233,0.55)", color: "#7dd3fc" },
+  applied: { background: "rgba(16,185,129,0.16)", border: "rgba(16,185,129,0.55)", color: "#6ee7b7" },
+};
+
+// Drag-to-resize column widths (persisted to localStorage) — order here
+// must match the <colgroup>/<th> order in the table below.
+// v2: the four single-ID columns were merged into two labeled ID columns, and
+// the remaining widths were rebalanced so the whole table fits a standard
+// desktop without a horizontal scrollbar at readable (non-shrunken) text
+// sizes. Bumping the key retires any v1 widths saved against the old column
+// set, which would otherwise pin users to the previous cramped layout.
+const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v2";
+const MIN_COLUMN_WIDTH = 50;
+const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
+  checkbox: 32,
+  candidate: 205,
+  job: 205,
+  aiPipeline: 158,
+  score: 100,
+  stage: 200,
+  owner: 120,
+  due: 78,
+  ticketJobIds: 162,
+  resumeIds: 162,
+  actions: 208,
+};
+const COLUMN_ORDER = [
+  "checkbox", "candidate", "job", "aiPipeline", "score", "stage", "owner", "due",
+  "ticketJobIds", "resumeIds", "actions",
+];
+
+/** Thin draggable strip pinned to a <th>'s right edge. Mouse-drag only
+ *  (matches this app's desktop-oriented admin-tool scope elsewhere). */
+function ColumnResizeHandle({ columnId, currentWidth, onResize }: { columnId: string; currentWidth: number; onResize: (id: string, width: number) => void }) {
+  function onMouseDown(e: React.MouseEvent) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = currentWidth;
+    function onMouseMove(ev: MouseEvent) {
+      onResize(columnId, startWidth + (ev.clientX - startX));
+    }
+    function onMouseUp() {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    }
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }
+  return (
+    <span
+      onMouseDown={onMouseDown}
+      title="Drag to resize column"
+      style={{
+        position: "absolute", top: 0, right: -3, bottom: 0, width: 6,
+        cursor: "col-resize", userSelect: "none", zIndex: 1,
+      }}
+    />
+  );
+}
+
+// current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens, resume_forge,
+// hiring_panel, final_polish) - it names the stage currently running/about to
+// run, not a count of completed stages. Confirmed live: this table previously
+// shifted every label by one (stage 1 shown as "Job Lens" while the actual
+// stage_run row was already application_resume_forge), making the whole batch
+// look stuck a step earlier than it actually was. "Queued" isn't a stage at
+// all - that's conveyed by the separate wfStatus badge next to this label.
+const WORKFLOW_LABELS: Record<number, string> = {
+  0: "🔍 Job Lens",
+  1: "📝 Resume Forge",
+  2: "👥 Hiring Panel",
+  3: "✨ Final Polish",
+};
+
+// same convention as src/app/candidates/page.tsx -- keep in sync if that one changes
+function initials(name: string): string {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
+}
+
+/** One labeled ID row with an explicit copy button (rather than a bare
+ *  click-anywhere-to-copy span) so the copy action is actually discoverable. */
+function CopyableId({ label, value }: { label: string; value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) {
+    return (
+      <div className="id-pair-row">
+        <span className="id-pair-label">{label}</span>
+        <span className="text-muted" style={{ fontSize: 12 }}>—</span>
+      </div>
+    );
+  }
+  return (
+    <div className="id-pair-row">
+      <span className="id-pair-label">{label}</span>
+      <span className="id-pair-value" title={value}>{value.slice(0, 8)}…</span>
+      <button
+        type="button"
+        className={copied ? "id-pair-copy copied" : "id-pair-copy"}
+        title={`Copy ${label} ID`}
+        aria-label={`Copy ${label} ID`}
+        onClick={() => {
+          navigator.clipboard?.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+      >
+        {copied ? "✓" : "⧉"}
+      </button>
+    </div>
+  );
 }
 
 export default function ApplicationQueuePage() {
+  const loadRequestRef = useRef(0);
   const [items, setItems] = useState<QueueItem[]>([]);
   const [users, setUsers] = useState<TeamUser[]>([]);
-  const [me, setMe] = useState<MeResponse | null>(null);
+  const [me, setMe] = useState<{ profile: { user_id: string; role: string } } | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, overdue: 0, pendingReview: 0 });
-  const [statusFilter, setStatusFilter] = useState("");
+  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+  const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
-  const [viewFilter, setViewFilter] = useState("all");
+  const [workModeFilter, setWorkModeFilter] = useState("");
+  const [viewFilter, setViewFilter] = useState<TabView>("all");
+  const [candidateFilter, setCandidateFilter] = useState("");
+  const [timeWindow, setTimeWindow] = useState("");
+  const [sort, setSort] = useState<"due" | "final_score" | "average_score">("due");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [filterCandidates, setFilterCandidates] = useState<{ id: string; name: string }[]>([]);
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [editing, setEditing] = useState<QueueItem | null>(null);
+  const [pageInput, setPageInput] = useState("");
+  const [pageError, setPageError] = useState("");
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOwnerId, setBulkOwnerId] = useState("");
-  const [actionId, setActionId] = useState("");
-  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [editing, setEditing] = useState<QueueItem | null>(null);
 
-  function buildParams(pageNum: number, size: number) {
-    const params = new URLSearchParams();
-    params.set("page", String(pageNum));
-    params.set("pageSize", String(size));
-    if (search) params.set("search", search);
-    if (statusFilter) params.set("status", statusFilter);
-    if (ownerFilter) params.set("owner", ownerFilter);
-    if (priorityFilter) params.set("priority", priorityFilter);
-    if (reviewFilter) params.set("review", reviewFilter);
-    if (viewFilter !== "all") params.set("view", viewFilter);
-    return params;
+  // "Transfer to candidate" — search-as-you-type against /api/candidates
+  // (same debounced pattern as searchInput/search below), not a preloaded
+  // <select>: filterCandidates caps at 500 rows and silently truncates,
+  // which is fine for a filter dropdown but not for picking a specific
+  // transfer target out of a full candidate list.
+  const [transferQuery, setTransferQuery] = useState("");
+  // compact=1 candidate search doesn't return email (see /api/candidates
+  // route.ts's `columns` branch) - id/name is all there is to show here.
+  const [transferResults, setTransferResults] = useState<{ id: string; name: string }[]>([]);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<{ id: string; name: string } | null>(null);
+  const [transferBusy, setTransferBusy] = useState(false);
+
+  const [expandedWorkflow, setExpandedWorkflow] = useState<string | null>(null);
+  const [workflowDetails, setWorkflowDetails] = useState<Record<string, any>>({});
+  const [faloodOpen, setFaloodOpen] = useState<string | null>(null);
+  const [faloodResumes, setFaloodResumes] = useState<Record<string, any[]>>({});
+
+  // Per-user drag-resizable column widths, persisted so the layout survives
+  // a reload. Loaded client-side only (localStorage isn't available during
+  // SSR) - starts from defaults, then overridden once mounted if a saved
+  // set exists.
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(DEFAULT_COLUMN_WIDTHS);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY);
+      if (saved) setColumnWidths((prev) => ({ ...prev, ...JSON.parse(saved) }));
+    } catch { /* ignore corrupt/unavailable storage */ }
+  }, []);
+  function resizeColumn(id: string, nextWidth: number) {
+    setColumnWidths((prev) => {
+      const next = { ...prev, [id]: Math.max(MIN_COLUMN_WIDTH, Math.round(nextWidth)) };
+      try { localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
   }
 
-  async function load(pageNum: number, size: number = pageSize) {
+  function buildParams(pn: number) {
+    const p = new URLSearchParams();
+    p.set("page", String(pn));
+    p.set("pageSize", String(pageSize));
+    if (search) p.set("search", search);
+    if (candidateFilter) p.set("candidate_id", candidateFilter);
+    if (stageFilter) p.set("stage", stageFilter);
+    if (ownerFilter) p.set("owner", ownerFilter);
+    if (priorityFilter) p.set("priority", priorityFilter);
+    if (reviewFilter) p.set("review", reviewFilter);
+    if (workModeFilter) p.set("work_mode", workModeFilter);
+    if (viewFilter !== "all") p.set("view", viewFilter);
+    if (timeWindow) p.set("time_window", timeWindow);
+    if (sort !== "due") {
+      p.set("sort", sort);
+      p.set("direction", sortDirection);
+    }
+    return p;
+  }
+
+  // isBackgroundPoll = true means this load was triggered by the silent
+  // auto-poll below, not a real filter change or user action - it must not
+  // clobber whatever the user currently has open (selections, expanded
+  // workflow row, Falood panel), or every poll tick collapses their UI.
+  async function load(pn: number = page, clearFeedback = true, isBackgroundPoll = false) {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
-    setFeedback(null);
+    if (clearFeedback) setFeedback(null);
     try {
-      const [queueRes, usersRes] = await Promise.all([
-        fetch(`/api/application-queue?${buildParams(pageNum, size)}`, { cache: "no-store" }),
+      const [queueRes, usersRes, meRes] = await Promise.all([
+        fetch(`/api/application-queue?${buildParams(pn)}`, { cache: "no-store" }),
         fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/bootstrap", { cache: "no-store" }),
       ]);
-      if (!queueRes.ok) throw new Error("Could not load application queue.");
+      if (!queueRes.ok) throw new Error("Could not load queue.");
       const data = await queueRes.json();
+      if (requestId !== loadRequestRef.current) return;
       const newTotal = data.total ?? 0;
-      const totalPages = Math.max(1, Math.ceil(newTotal / size));
-      if (pageNum > totalPages && pageNum > 1) {
-        setLoading(false);
-        return load(totalPages, size);
-      }
+      const tp = Math.max(1, Math.ceil(newTotal / pageSize));
+      if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
       setItems(data.items ?? []);
       setTotal(newTotal);
-      setStats(data.stats ?? { all: 0, mine: 0, overdue: 0, pendingReview: 0 });
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
-      const meRes = await fetch("/api/auth/me", { cache: "no-store" });
       if (meRes.ok) setMe(await meRes.json());
-      setSelected(new Set());
-      setPage(pageNum);
+      if (!isBackgroundPoll) {
+        setSelected(new Set());
+        setFaloodOpen(null);
+        setExpandedWorkflow(null);
+        setWorkflowDetails({});
+        setFaloodResumes({});
+      }
+      setPage(pn);
     } catch (err: any) {
-      setFeedback({ kind: "error", text: err.message || "Could not load application queue." });
+      if (requestId === loadRequestRef.current) setFeedback({ kind: "error", text: err.message || "Load failed." });
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
   }
 
-  // Any filter/search/view change re-queries from page 1.
-  useEffect(() => { load(1, pageSize); }, [search, statusFilter, ownerFilter, priorityFilter, reviewFilter, viewFilter, pageSize]);
+  // Real-time, in-place row updates - deliberately never call load() for
+  // these. load() replaces `items` wholesale and (outside isBackgroundPoll)
+  // resets selection/expanded-row UI state, which reads as a full page
+  // reload even though `page` itself doesn't change - exactly what made
+  // delete/retry/regenerate feel like they bounced the user back to the
+  // start. Patching `items` directly keeps scroll position, filters, and
+  // every other row's state untouched.
+  function removeItemsLocally(ids: string[]) {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setItems((prev) => prev.filter((i) => !idSet.has(i.id)));
+    setTotal((prev) => Math.max(0, prev - ids.length));
+  }
+  function patchItemLocally(id: string, patch: Partial<QueueItem>) {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+  }
 
-  const userById = new Map(users.map((user) => [user.user_id, user]));
-  const ownerName = (item: QueueItem) => {
-    const user = item.assigned_to_user_id ? userById.get(item.assigned_to_user_id) : null;
-    return user?.display_name || user?.email || item.assigned_to || "Unassigned";
+  // Refreshes only the top counters (ALL TICKETS / MINE / AE REVIEW PENDING /
+  // AE APPLICATION PENDING / AI PIPELINE) and the pagination total, never
+  // `items` - the thing that reads as a reload. Used after actions that need
+  // those counters to stay accurate (e.g. regenerate bumping the AI PIPELINE
+  // count) without paying load()'s wholesale-replace cost for it.
+  async function refreshStatsOnly() {
+    try {
+      const res = await fetch(`/api/application-queue?${buildParams(page)}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+      setTotal(data.total ?? 0);
+    } catch {}
+  }
+
+  var hasActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter || timeWindow);
+
+  function clearFilters() {
+    setSearchInput("");
+    setSearch("");
+    setCandidateFilter("");
+    setStageFilter("");
+    setOwnerFilter("");
+    setPriorityFilter("");
+    setReviewFilter("");
+    setWorkModeFilter("");
+    setTimeWindow("");
+  }
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (!transferQuery.trim()) { setTransferResults([]); return; }
+    const t = setTimeout(() => {
+      fetch(`/api/candidates?compact=1&pageSize=20&search=${encodeURIComponent(transferQuery.trim())}`, { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data) => setTransferResults(Array.isArray(data) ? data : (data.items ?? [])))
+        .catch(() => setTransferResults([]));
+    }, 300);
+    return () => clearTimeout(t);
+  }, [transferQuery]);
+
+  useEffect(() => {
+    fetch("/api/candidates?compact=1&pageSize=500")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setFilterCandidates(Array.isArray(data) ? data : (data.items ?? [])))
+      .catch(console.error);
+  }, []);
+
+  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
+
+  // Lightweight live-update: instead of re-fetching the whole queue (which
+  // resets scroll/selection and feels like a page reload), poll just the
+  // active-workflows list and patch matching rows in place by workflow_id.
+  // This is also what nudges genuinely stuck workflows forward — see
+  // /api/application-ai-workflows/active's own opportunistic-dispatch
+  // comment: a burst of tickets created together can sit at
+  // status='queued' indefinitely with nothing else to drive them, since
+  // the in-process chain-dispatch between stages doesn't reliably survive
+  // on Cloudflare Workers and the GitHub Actions cron safety net has been
+  // observed running 30-40 minutes apart instead of ~5. Anyone with this
+  // page open becomes a much faster safety net than the cron gap.
+
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      // Previously gated on itemsRef already showing an active
+      // workflow_status before even asking the server - a stale/incomplete
+      // initial snapshot (e.g. applications created via a different flow,
+      // or a race between application creation and this page's load) meant
+      // the poller silently never checked at all. Always poll instead; the
+      // request is cheap and this is what actually finds newly-queued work.
+      try {
+        const res = await fetch("/api/application-ai-workflows/active", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Server-side self-dispatch (the Worker fetching its own URL from
+        // within this same GET request) is unreliable in production -
+        // confirmed live, a batch of workflows sat queued for 5+ minutes
+        // despite this exact polling running the whole time. A real
+        // client-initiated POST never failed once in the same testing, so
+        // fire it directly instead of hoping the server-side one landed.
+        if (data.needsDispatch) {
+          fetch("/api/application-ai-workflows/dispatch", { method: "POST" }).catch(() => {});
+        }
+
+        const byWorkflowId = new Map((data.workflows ?? []).map((w: any) => [w.id, w]));
+
+        const needsAppRefresh: QueueItem[] = [];
+        setItems((prev) =>
+          prev.map((item) => {
+            if (!item.workflow_id) return item;
+            const wf: any = byWorkflowId.get(item.workflow_id);
+            if (!wf) return item;
+            const wasActive = item.workflow_status === "queued" || item.workflow_status === "running";
+            const nowTerminal = wf.status === "completed" || wf.status === "failed" || wf.status === "cancelled";
+            const justTransitionedToTerminal = wasActive && nowTerminal;
+            // "completed" specifically also needs a retry-until-it-lands check
+            // on every tick, not just the transition tick: the one-shot fetch
+            // below has no retry, and PipelineActions has a "Completed" badge
+            // fallback (meant only for the genuinely-shouldn't-happen case of
+            // a finished workflow with no resume at all) that silently becomes
+            // the resting state - no "Open in Studio", no "Regenerate" button -
+            // whenever resume_generation_status/workflow_resume_version_id
+            // haven't landed yet. Confirmed live: a card can sit stuck on the
+            // bare "Completed" badge indefinitely until a manual page reload
+            // if that one fetch attempt fails silently (network blip, etc.).
+            // Re-checking every tick self-heals instead of giving up after one try.
+            const stillMissingCompletionData =
+              wf.status === "completed" && (item.resume_generation_status !== "ready" || !item.workflow_resume_version_id);
+            if (justTransitionedToTerminal || stillMissingCompletionData) needsAppRefresh.push(item);
+            return {
+              ...item,
+              workflow_status: wf.status,
+              workflow_stage: wf.current_stage,
+              workflow_score: wf.match_score ?? item.workflow_score,
+            };
+          })
+        );
+
+        // A workflow that just finished (or is still missing its resume link -
+        // see stillMissingCompletionData above) needs its application row
+        // re-read (resume_generation_status, tailored_resume_version_id, proof
+        // fields aren't on the active-workflows list) - fetched per-row so
+        // only that card updates, not the whole grid.
+        for (const item of needsAppRefresh) {
+          fetch(`/api/applications/${item.id}`, { cache: "no-store" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((fresh) => {
+              if (!fresh) return;
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.id === item.id
+                    ? {
+                        ...it,
+                        resume_generation_status: fresh.resume_generation_status,
+                        workflow_resume_version_id: fresh.tailored_resume_version_id ?? it.workflow_resume_version_id,
+                      }
+                    : it
+                )
+              );
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const userMap = new Map(users.map((u) => [u.user_id, u]));
+  const ownerLabel = (item: QueueItem) => {
+    const u = item.assigned_to_user_id ? userMap.get(item.assigned_to_user_id) : null;
+    return u?.display_name || u?.email || item.assigned_to || "Unassigned";
   };
-  const assignedByName = (item: QueueItem) => {
-    const user = item.assigned_by_user_id ? userById.get(item.assigned_by_user_id) : null;
-    return user?.display_name || user?.email || item.assigned_by || "";
-  };
-  const owners = Array.from(new Map(items
-    .filter((item) => item.assigned_to_user_id || item.assigned_to)
-    .map((item) => [item.assigned_to_user_id ?? item.assigned_to ?? "", ownerName(item)])).entries())
-    .sort((a, b) => a[1].localeCompare(b[1]));
+  const assignmentOwners = [...users].sort((a, b) => ((a.role === "application_engineer" ? 0 : 1) - (b.role === "application_engineer" ? 0 : 1)) || (a.display_name || "").localeCompare(b.display_name || ""));
+  
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  function goToPage(inputVal: string) {
+    const n = parseInt(inputVal);
+    if (isNaN(n) || n < 1) {
+      setPageError("Enter a valid page number");
+      return;
+    }
+    if (n > totalPages) {
+      setPageError(`Page must be 1–${totalPages}`);
+      return;
+    }
+    setPageError("");
+    setPageInput("");
+    load(n);
+  }
+
+  function renderPagination(options: { marginTop: number; marginBottom: number }) {
+    if (total <= 0) return null;
+    return (
+      <div className="filter-bar" style={{ justifyContent: "center", alignItems: "center", gap: 6, marginTop: options.marginTop, marginBottom: options.marginBottom }}>
+        <button className="btn-compact" onClick={() => load(page - 1)} disabled={loading || page <= 1}>Prev</button>
+        {(() => {
+          const pages: Array<number | string> = [];
+          if (totalPages <= 7) {
+            for (let i = 1; i <= totalPages; i++) pages.push(i);
+          } else if (page <= 4) {
+            pages.push(1, 2, 3, 4, 5, "...", totalPages);
+          } else if (page >= totalPages - 3) {
+            pages.push(1, "...", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages);
+          } else {
+            pages.push(1, "...", page - 1, page, page + 1, "...", totalPages);
+          }
+          return pages.map((entry, index) => (
+            <button
+              key={`${entry}-${index}`}
+              className={`btn-compact ${entry === page ? "btn-primary" : ""}`}
+              onClick={() => typeof entry === "number" && entry !== page ? load(entry) : undefined}
+              disabled={loading || entry === "..."}
+              style={{
+                minWidth: 36, textAlign: "center",
+                cursor: entry === "..." || entry === page ? "default" : "pointer",
+                padding: "6px 12px", background: entry === "..." ? "transparent" : undefined,
+                border: entry === "..." ? "none" : undefined, opacity: entry === "..." ? 0.7 : undefined,
+              }}
+            >{entry}</button>
+          ));
+        })()}
+        <button className="btn-compact" onClick={() => load(page + 1)} disabled={loading || page >= totalPages}>Next</button>
+        <span className="text-muted" style={{ marginLeft: 16, fontSize: 13 }}>Page</span>
+        <input
+          className="input"
+          type="number"
+          min={1}
+          max={totalPages}
+          value={pageInput}
+          onChange={(e) => { setPageInput(e.target.value); setPageError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") goToPage(pageInput); }}
+          placeholder={`1–${totalPages}`}
+          style={{ width: 70, padding: "5px 8px", fontSize: 13 }}
+        />
+        <button className="btn-compact" onClick={() => goToPage(pageInput)} style={{ padding: "5px 12px", fontSize: 13 }}>Go</button>
+        {pageError && <span className="form-error" style={{ fontSize: 12, marginLeft: 6 }}>{pageError}</span>}
+      </div>
+    );
+  }
+  const selectedItems = items.filter(i => selected.has(i.id));
   const today = new Date().toISOString().slice(0, 10);
-  const canManageAssignments = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
-  const canApplyTicket = (item: QueueItem) => canManageAssignments || !["pending", "changes_requested"].includes(item.review_status);
-  const assignmentOwners = [...users].sort((a, b) => {
-    const aRank = a.role === "application_engineer" ? 0 : 1;
-    const bRank = b.role === "application_engineer" ? 0 : 1;
-    if (aRank !== bRank) return aRank - bRank;
-    return (a.display_name || a.email || "").localeCompare(b.display_name || b.email || "");
-  });
+  const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
 
-  const selectedItems = items.filter((item) => selected.has(item.id));
+  function toggleOne(id: string) {
+    setSelected(p => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function toggleAll() {
+    setSelected(p => p.size === items.length ? new Set() : new Set(items.map(i => i.id)));
+  }
+
+  async function setStatus(id: string, s: string) {
+    setActionLoading(`${id}:${s}`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null, event_note: s === "applied" ? "Submitted from queue." : null }) });
+      setActionLoading(null);
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      setFeedback({ kind: "success", text: s === "applied" ? "Marked applied." : "Updated." });
+      load(page, false);
+    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
+  }
+
+  async function changeAeStage(id: string, stage: string) {
+    setActionLoading(`${id}:ae_stage`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ae_stage: stage }) });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setActionLoading(null); setFeedback({ kind: "error", text: d.error || "Update failed." }); return; }
+      const updated = await res.json().catch(() => null);
+      setItems((prev) => prev.map((item) => item.id === id ? {
+        ...item,
+        ae_stage: updated?.ae_stage ?? stage,
+        status: updated?.status ?? item.status,
+        applied_at: updated && Object.prototype.hasOwnProperty.call(updated, "applied_at") ? updated.applied_at : item.applied_at,
+        completed_at: updated && Object.prototype.hasOwnProperty.call(updated, "completed_at") ? updated.completed_at : item.completed_at,
+        ae_stage_updated_at: updated?.ae_stage_updated_at ?? item.ae_stage_updated_at,
+        ae_stage_updated_by_name: updated?.ae_stage_updated_by_name ?? item.ae_stage_updated_by_name,
+        ae_applied_at: updated?.ae_applied_at ?? item.ae_applied_at,
+        ae_applied_by_name: updated?.ae_applied_by_name ?? item.ae_applied_by_name,
+      } : item));
+      setActionLoading(null);
+      setFeedback({ kind: "success", text: `Moved to "${AE_STAGE_LABELS[stage] ?? stage}".` });
+      load(page, false);
+    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message || "Network error." }); }
+  }
+
+  async function requestReview(item: QueueItem) {
+    setActionLoading(`${item.id}:review`);
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ review_status: "pending", review_note: item.review_note ?? "Ready for review.", event_note: "Sent for review." }) });
+      setActionLoading(null);
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setFeedback({ kind: "error", text: d.error || "Review request failed." }); return; }
+      setFeedback({ kind: "success", text: "Sent for review." });
+      load(page, false);
+    } catch (err: any) { setActionLoading(null); setFeedback({ kind: "error", text: err.message }); }
+  }
+
+  async function startWorkflow(item: QueueItem) {
+    setActionLoading(`${item.id}:workflow`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${item.id}/ai-workflow`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: d.error || "Workflow start failed." });
+        return;
+      }
+      const data = await res.json();
+      // Patch in place rather than reloading: seeds workflow_id/status
+      // immediately so the row shows "Queued" right away, and so the
+      // existing 6s active-workflows poller (which patches by workflow_id)
+      // picks this row up on its very next tick without a full refetch.
+      patchItemLocally(item.id, {
+        workflow_id: data.workflowId,
+        workflow_status: "queued",
+        workflow_stage: 0,
+        resume_generation_status: "queued",
+      });
+      setFeedback({ kind: "success", text: `AI pipeline started: ${data.workflowId}` });
+    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
+    finally { setActionLoading(null); }
+  }
+
+  // Restarts the full pipeline from stage 1 for an application that already
+  // has a generated resume - a fresh run, not a continuation. See
+  // regenerateAiWorkflowForApplication for why this hits a separate endpoint
+  // instead of reusing startWorkflow's.
+  async function regenerateWorkflow(item: QueueItem) {
+    if (!confirm("Regenerate this resume? This restarts the full AI pipeline from scratch and replaces the current tailored resume.")) return;
+    setActionLoading(`${item.id}:regenerate`);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/applications/${item.id}/ai-workflow/regenerate`, { method: "POST", credentials: "include" });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: d.error || "Regeneration failed." });
+        return;
+      }
+      const data = await res.json();
+      patchItemLocally(item.id, {
+        workflow_id: data.workflowId,
+        workflow_status: "queued",
+        workflow_stage: 0,
+        resume_generation_status: "queued",
+      });
+      // Counters only (AI PIPELINE count, etc.) - never items. load() here
+      // (even with isBackgroundPoll=true) still calls setItems(data.items)
+      // unconditionally, wholesale-replacing every row and reading as a full
+      // page reload despite the patchItemLocally() call right above it -
+      // confirmed live as exactly the "regenerate refreshes the page" report.
+      void refreshStatsOnly();
+      setFeedback({ kind: "success", text: `Regenerating from scratch: ${data.workflowId}` });
+    } catch (err: any) { setFeedback({ kind: "error", text: err.message || "Network error" }); }
+    finally { setActionLoading(null); }
+  }
+
+  async function fetchWorkflowDetails(item: QueueItem) {
+    if (!item.workflow_id) return;
+    if (workflowDetails[item.workflow_id]) {
+      setExpandedWorkflow(expandedWorkflow === item.workflow_id ? null : item.workflow_id);
+      return;
+    }
+    setExpandedWorkflow(item.workflow_id);
+    try {
+      const res = await fetch(`/api/application-ai-workflows/${item.workflow_id}?action=status`, { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setWorkflowDetails(p => ({ ...p, [item.workflow_id!]: data }));
+      }
+    } catch {}
+  }
+
+
+  async function uploadProof(item: QueueItem) {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setActionLoading(`${item.id}:proof`);
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: fd });
+      setActionLoading(null);
+      if (res.ok) { setFeedback({ kind: "success", text: "Proof uploaded." }); load(page, false); }
+      else { setFeedback({ kind: "error", text: "Upload failed." }); }
+    };
+    input.click();
+  }
+
+  async function bulkStatus(s: string) {
+    setFeedback(null);
+    try {
+      const res = await fetch("/api/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "PATCH",
+          table: "applications",
+          ids: Array.from(selectedItems).map(i => i.id),
+            updateData: { application_stage: s, ...(s === "applied" ? { ae_stage: "applied" } : {}), completed_at: s === "applied" ? new Date().toISOString() : null }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        setFeedback({ kind: "error", text: data.error || "Bulk update failed." });
+        return;
+      }
+      setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} updated; ${data.failed} failed.` : `${data.updated} applications updated.` });
+      setSelected(new Set());
+      load(page, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    }
+  }
+
+  async function bulkReassign() {
+    if (!bulkOwnerId) return;
+    const owner = users.find(u => u.user_id === bulkOwnerId);
+    try {
+      const res = await fetch("/api/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "PATCH",
+          table: "applications",
+          ids: Array.from(selectedItems).map(i => i.id),
+          updateData: { assigned_to_user_id: bulkOwnerId, assigned_to: owner?.display_name || owner?.email || null }
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status !== 207) {
+        setFeedback({ kind: "error", text: data.error || "Reassignment failed." });
+        return;
+      }
+      setBulkOwnerId("");
+      setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} reassigned; ${data.failed} failed.` : `${data.updated} applications reassigned to ${owner?.display_name || owner?.email || "the selected owner"}.` });
+      setSelected(new Set());
+      load(page, false);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    }
+  }
+
+  async function bulkDelete() {
+    if (!isManager || selected.size === 0) return;
+    if (!confirm(`Permanently delete ${selected.size} selected application logs?`)) return;
+    const res = await fetch("/api/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "DELETE", table: "applications", ids: Array.from(selected) }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 207) { setFeedback({ kind: "error", text: data.error || "Bulk delete failed." }); return; }
+    // The route reports exactly which ids succeeded (updatedIds) - remove
+    // precisely those in place, in place, even on a partial failure, rather
+    // than a full reload that would also reshuffle every other row.
+    const succeededIds: string[] = Array.isArray(data.updatedIds) ? data.updatedIds : [];
+    removeItemsLocally(succeededIds);
+    setSelected((prev) => { const next = new Set(prev); for (const id of succeededIds) next.delete(id); return next; });
+    setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} deleted; ${data.failed} failed.` : `${data.updated} applications deleted.` });
+  }
+
+  // "Transfer to candidate" - moves every selected ticket to a different
+  // candidate. Sequential (not Promise.all) so the per-ticket success/failure
+  // feedback stays trustworthy under partial failure - the explicit "without
+  // any kind of error or misinformation" requirement this feature was built
+  // for. Each successful transfer replaces that row in place (same table
+  // position) with the new application's identity and a freshly-started AI
+  // pipeline, matching /api/applications/[id]/transfer-candidate's contract.
+  async function bulkTransferCandidate() {
+    if (!transferTarget || selected.size === 0 || transferBusy) return;
+    const target = transferTarget;
+    if (!confirm(`Transfer ${selected.size} selected application${selected.size > 1 ? "s" : ""} to ${target.name}? Each ticket's current tailored resume and AI workflow will be replaced by a fresh pipeline run for ${target.name}.`)) return;
+    setTransferBusy(true);
+    setFeedback(null);
+    const targets = selectedItems;
+    let succeeded = 0;
+    let failed = 0;
+    const failMessages: string[] = [];
+    for (const item of targets) {
+      try {
+        const res = await fetch(`/api/applications/${item.id}/transfer-candidate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ candidateId: target.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          failed++;
+          failMessages.push(`${item.candidates?.name ?? item.id}: ${data.error || `HTTP ${res.status}`}`);
+          continue;
+        }
+        succeeded++;
+        const app = data.application;
+        patchItemLocally(item.id, {
+          id: app.id,
+          candidates: app.candidates,
+          status: app.status,
+          ae_stage: app.ae_stage,
+          workflow_id: null,
+          workflow_status: app.workflowStarted ? "queued" : null,
+          workflow_stage: app.workflowStarted ? 0 : null,
+          workflow_score: null,
+          hiring_panel_ats_score: null,
+          hiring_panel_recruiter_score: null,
+          hiring_panel_role_fit_score: null,
+          hiring_panel_truth_score: null,
+          average_score: null,
+          one_page_fit_score: null,
+          page_fit_metrics: null,
+          workflow_resume_version_id: null,
+          workflow_resume_title: null,
+          base_resume_id: null,
+          resume_generation_status: app.workflowStarted ? "queued" : null,
+        });
+        setSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(item.id);
+          return next;
+        });
+        if (!app.workflowStarted && app.workflowReason) {
+          failMessages.push(`${target.name}: ticket created but AI pipeline did not start (${app.workflowReason}).`);
+        }
+      } catch (err: any) {
+        failed++;
+        failMessages.push(`${item.candidates?.name ?? item.id}: ${err.message || "Network error"}`);
+      }
+    }
+    setTransferBusy(false);
+    setTransferTarget(null);
+    setTransferQuery("");
+    setTransferResults([]);
+    setTransferOpen(false);
+    if (failed === 0) {
+      setFeedback({ kind: "success", text: `${succeeded} application${succeeded > 1 ? "s" : ""} transferred to ${target.name}.` });
+    } else {
+      setFeedback({ kind: "error", text: `${succeeded} transferred, ${failed} issue${failed > 1 ? "s" : ""}: ${failMessages.join(" | ")}` });
+    }
+  }
+
+  async function removeTicket(item: QueueItem) {
+    if (!confirm(`Remove ${item.candidates?.name ?? "this ticket"}?`)) return;
+    setActionLoading(`${item.id}:remove`);
+    try {
+      const res = await fetch(`/api/applications/${item.id}`, { method: "DELETE" });
+      if (res.ok) {
+        removeItemsLocally([item.id]);
+        setFeedback({ kind: "success", text: "Removed." });
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Remove failed." });
+      }
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
+  function openFaloodDropdown(item: QueueItem) {
+    if (!item.candidates) return;
+    setFaloodOpen(item.id);
+    if (!faloodResumes[item.candidates.id]) {
+      fetch(`/api/base-resumes?candidateId=${item.candidates.id}`, { cache: "no-store" })
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setFaloodResumes(p => ({ ...p, [item.candidates!.id]: d ?? [] })))
+        .catch(() => {});
+    }
+  }
+
+  async function buildBaseResume(item: QueueItem) {
+    if (!item.candidates) return;
+    setActionLoading(`${item.id}:build_base`);
+    try {
+      const res = await fetch("/api/base-resumes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ candidateId: item.candidates.id, name: "Base Resume", targetIndustry: item.jobs?.job_category || "", targetRoles: item.jobs?.title ? [item.jobs.title] : [], startingSource: "blank" }) });
+      if (res.ok) {
+        const d = await res.json();
+        setFaloodResumes(p => ({ ...p, [item.candidates!.id]: [...(p[item.candidates!.id] ?? []), d] }));
+        setFeedback({ kind: "success", text: "Base resume created. Opening Studio…" });
+        openFaloodStudio("base_resume", d.id);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        setFeedback({ kind: "error", text: d.error || "Build failed." });
+      }
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    } finally {
+      setActionLoading(null);
+      setFaloodOpen(null);
+    }
+  }
+
+  function workflowStageLabel(stage: number | null | undefined): string {
+    if (stage === null || stage === undefined) return "-";
+    return WORKFLOW_LABELS[stage] || `Stage ${stage}`;
+  }
 
   function dueClass(date: string | null) {
     if (!date) return "";
@@ -147,478 +964,812 @@ export default function ApplicationQueuePage() {
     return "";
   }
 
-  function toggleOne(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleAll() {
-    setSelected((prev) => prev.size === items.length ? new Set() : new Set(items.map((item) => item.id)));
-  }
-
-  async function setStatus(id: string, status: string) {
-    setActionId(`${id}:${status}`);
-    setFeedback(null);
-    const res = await fetch(`/api/applications/${id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        status,
-        completed_at: status === "applied" ? new Date().toISOString() : null,
-        event_note: status === "applied" ? "Application submitted from queue." : null,
-      }),
-    });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not update ticket." });
-      return;
-    }
-    setFeedback({ kind: "success", text: status === "applied" ? "Application marked applied." : "Ticket updated." });
-    load(page, pageSize);
-  }
-
-  async function uploadProof(item: QueueItem, file: File | null) {
-    if (!file) return;
-    setActionId(`${item.id}:proof`);
-    setFeedback(null);
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch(`/api/applications/${item.id}/proof`, { method: "POST", body: formData });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not upload proof." });
-      return;
-    }
-    setFeedback({ kind: "success", text: "Proof uploaded." });
-    load(page, pageSize);
-  }
-
-  async function requestReview(item: QueueItem) {
-    setActionId(`${item.id}:review`);
-    setFeedback(null);
-    const res = await fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        review_status: "pending",
-        review_note: item.review_note ?? "Ready for manager review.",
-        event_note: "Application ticket sent for manager review.",
-      }),
-    });
-    setActionId("");
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setFeedback({ kind: "error", text: data.error || "Could not request review." });
-      return;
-    }
-    setFeedback({ kind: "success", text: "Sent for manager review." });
-    load(page, pageSize);
-  }
-
-  async function bulkStatus(status: string) {
-    await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        status,
-        completed_at: status === "applied" ? new Date().toISOString() : null,
-        event_note: status === "applied" ? "Bulk marked applied from queue." : "Bulk status update from queue.",
-      }),
-    })));
-    load(page, pageSize);
-  }
-
-  async function bulkReassign() {
-    if (!bulkOwnerId) return;
-    const owner = users.find((user) => user.user_id === bulkOwnerId);
-    await Promise.all(selectedItems.map((item) => fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        assigned_to_user_id: bulkOwnerId,
-        assigned_to: owner?.display_name || owner?.email || null,
-        event_note: "Bulk reassigned from queue.",
-      }),
-    })));
-    setBulkOwnerId("");
-    load(page, pageSize);
-  }
-
-  async function removeTicket(item: QueueItem) {
-    if (!confirm(`Remove this assignment${item.candidates ? ` for ${item.candidates.name}` : ""}?`)) return;
-    await fetch(`/api/applications/${item.id}`, { method: "DELETE", cache: "no-store" });
-    load(page, pageSize);
-  }
+  const statTabs: { key: TabView; label: string; count: number }[] = [
+    { key: "all", label: "All tickets", count: stats.all },
+    { key: "mine", label: "Mine", count: stats.mine },
+    { key: "ae_review", label: "AE Review pending", count: stats.pendingAeReview },
+    { key: "ae_application", label: "AE Application pending", count: stats.pendingAeApplication },
+    { key: "workflow", label: "AI Pipeline", count: stats.aiPipeline },
+  ];
 
   return (
-    <>
+    <div className="app-queue-page">
       <div className="page-header">
         <div>
           <h1>Application Queue</h1>
-          <div className="page-kicker">Assigned application work, review gates, and due tickets.</div>
+          <div className="page-kicker">Assigned tickets, AI agent pipeline, and review gates.</div>
         </div>
-        <button onClick={() => load(page, pageSize)} disabled={loading}>Refresh</button>
+        <div className="header-actions">
+          <button className="btn-outline" onClick={() => load(page)} disabled={loading}>
+            {loading ? "⟳" : "⟳ Refresh"}
+          </button>
+        </div>
       </div>
 
-      {feedback && <div className={`toast ${feedback.kind === "error" ? "toast-error" : ""}`}>{feedback.text}</div>}
+      {feedback && (
+        <div className={`alert ${feedback.kind === "error" ? "alert-error" : "alert-success"}`} style={{ marginBottom: 12 }}>
+          {feedback.text}
+          <button className="alert-close" onClick={() => setFeedback(null)}>×</button>
+        </div>
+      )}
 
       <div className="stats-strip">
-        <button className={`stat-button ${viewFilter === "all" ? "active" : ""}`} onClick={() => setViewFilter("all")}>
-          <span className="stat-label">All tickets</span>
-          <span className="stat-value">{stats.all}</span>
-        </button>
-        <button className={`stat-button ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>
-          <span className="stat-label">Mine</span>
-          <span className="stat-value">{stats.mine}</span>
-        </button>
-        <button className={`stat-button ${viewFilter === "overdue" ? "active" : ""}`} onClick={() => setViewFilter("overdue")}>
-          <span className="stat-label">Overdue / today</span>
-          <span className="stat-value">{stats.overdue}</span>
-        </button>
-        <button className={`stat-button ${viewFilter === "review" ? "active" : ""}`} onClick={() => setViewFilter("review")}>
-          <span className="stat-label">Review</span>
-          <span className="stat-value">{stats.pendingReview}</span>
-        </button>
+        {statTabs.map(t => (
+          <button key={t.key} className={`stat-button ${viewFilter === t.key ? "active" : ""}`} onClick={() => setViewFilter(t.key)}>
+            <span className="stat-label">{t.label}</span>
+            <span className="stat-value">{t.count}</span>
+          </button>
+        ))}
       </div>
 
-      <div className="workflow-panel">
       <div className="filter-bar">
-        <input placeholder="Search candidate, job, company..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="assigned">Assigned</option>
-          <option value="stacked">Stacked</option>
-          <option value="in_progress">In progress</option>
-        </select>
-        {owners.length > 0 && (
-          <select value={ownerFilter} onChange={(e) => setOwnerFilter(e.target.value)}>
-            <option value="">All owners</option>
-            {owners.map(([ownerValue, ownerLabel]) => <option key={ownerValue} value={ownerValue}>{ownerLabel}</option>)}
-          </select>
-        )}
-        <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)}>
-          <option value="">All priorities</option>
-          <option value="urgent">Urgent</option>
-          <option value="high">High</option>
-          <option value="normal">Normal</option>
-          <option value="low">Low</option>
-        </select>
-        <select value={reviewFilter} onChange={(e) => setReviewFilter(e.target.value)}>
-          <option value="">All review states</option>
-          <option value="not_required">No review</option>
-          <option value="pending">Pending review</option>
-          <option value="approved">Approved</option>
-          <option value="changes_requested">Changes requested</option>
-        </select>
-        <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
-      </div>
+        <div className="filter-group">
+          <div className="filter-field">
+            <span className="filter-label">🔍 Search</span>
+            <input className="input" placeholder="Name, job, company, location, or ID (C#10057, A#17395, J#19767)..." value={searchInput} onChange={e => setSearchInput(e.target.value)} />
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Candidate</span>
+            <select className="input" value={candidateFilter} onChange={e => setCandidateFilter(e.target.value)}>
+              <option value="">All candidates</option>
+              {filterCandidates.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Stage</span>
+            <select className="input" value={stageFilter} onChange={e => setStageFilter(e.target.value)} aria-label="Filter by application stage">
+              <option value="">All stages</option>
+              {Object.entries(STAGE_FILTER_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Owner</span>
+            <select className="input" value={ownerFilter} onChange={e => setOwnerFilter(e.target.value)}>
+              <option value="">All owners</option>
+              {users.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Priority</span>
+            <select className="input" value={priorityFilter} onChange={e => setPriorityFilter(e.target.value)}>
+              <option value="">All priorities</option>
+              <option value="urgent">Urgent</option>
+              <option value="high">High</option>
+              <option value="normal">Normal</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Review</span>
+            <select className="input" value={reviewFilter} onChange={e => setReviewFilter(e.target.value)}>
+              <option value="">All review</option>
+              <option value="not_required">No review</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="changes_requested">Changes requested</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Work Mode</span>
+            <select className="input" value={workModeFilter} onChange={e => setWorkModeFilter(e.target.value)}>
+              <option value="">All modes</option>
+              <option value="remote">Remote</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="onsite">Onsite</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Activity</span>
+            <select className="input" value={timeWindow} onChange={e => setTimeWindow(e.target.value)} aria-label="Filter by recent application log time">
+              <option value="">Any time</option>
+              <option value="12h">Past 12 hours</option>
+              <option value="24h">Past 24 hours</option>
+              <option value="3d">Past 3 days</option>
+              <option value="7d">Past 7 days</option>
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Sort</span>
+            <select
+              className="input"
+              value={sort}
+              onChange={e => {
+                const next = e.target.value as "due" | "final_score" | "average_score";
+                setSort(next);
+                setSortDirection(next === "due" ? "asc" : "desc");
+              }}
+              aria-label="Sort application queue"
+            >
+              <option value="due">Due date</option>
+              <option value="final_score">Final QA score</option>
+              <option value="average_score">Average of all scores</option>
+            </select>
+          </div>
+          {sort !== "due" && (
+            <button
+              className="btn-compact"
+              onClick={() => setSortDirection((d) => d === "desc" ? "asc" : "desc")}
+              title="Change score ordering"
+            >
+              {sortDirection === "desc" ? "High → low" : "Low → high"}
+            </button>
+          )}
+          <button
+            className="btn-outline btn-sm"
+            onClick={clearFilters}
+            disabled={!hasActiveFilters}
+            title="Clear all filters"
+          >
+            ✕ Clear filters
+          </button>
+        </div>
+        <span className="text-muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} / {total}</span>
       </div>
 
       {selected.size > 0 && (
         <div className="bulk-bar">
-          <span>{selected.size} selected</span>
-          <div>
-            <button className="btn-compact" onClick={() => bulkStatus("in_progress")}>Start selected</button>
-            <button
-              className="btn-primary btn-compact"
-              onClick={() => bulkStatus("applied")}
-              disabled={selectedItems.some((item) => !canApplyTicket(item))}
-              title={selectedItems.some((item) => !canApplyTicket(item)) ? "One or more selected tickets need manager review first." : undefined}
-            >
-              Mark applied
+          <span className="bulk-count">{selected.size} selected</span>
+          <div className="bulk-actions">
+            <button className="btn-compact" onClick={() => bulkStatus("in_progress")}>Start</button>
+            <button className="btn-primary btn-compact" onClick={() => bulkStatus("applied")}>Mark applied</button>
+            <select className="input" value={bulkOwnerId} onChange={e => setBulkOwnerId(e.target.value)} style={{ width: 200 }}>
+              <option value="">Reassign to...</option>
+              {assignmentOwners.map(u => (
+                <option key={u.user_id} value={u.user_id}>{u.display_name || u.email} ({u.role.replaceAll("_", " ")})</option>
+              ))}
+            </select>
+            <button className="btn-compact" onClick={bulkReassign} disabled={!bulkOwnerId}>Go</button>
+            <div style={{ position: "relative", width: 220 }}>
+              <input
+                className="input"
+                style={{ width: "100%" }}
+                placeholder="Transfer to candidate..."
+                value={transferTarget ? transferTarget.name : transferQuery}
+                onChange={(e) => {
+                  setTransferTarget(null);
+                  setTransferQuery(e.target.value);
+                  setTransferOpen(true);
+                }}
+                onFocus={() => setTransferOpen(true)}
+                onBlur={() => setTimeout(() => setTransferOpen(false), 150)}
+              />
+              {transferOpen && !transferTarget && transferQuery.trim() && (
+                <div
+                  className="dropdown-menu"
+                  style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 4, maxHeight: 220, overflowY: "auto" }}
+                >
+                  {transferResults.length === 0 ? (
+                    <div className="dropdown-header" style={{ padding: "8px 12px" }}>No matching candidates.</div>
+                  ) : (
+                    transferResults.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="dropdown-item"
+                        onMouseDown={(e) => { e.preventDefault(); setTransferTarget({ id: c.id, name: c.name }); setTransferOpen(false); }}
+                      >
+                        {c.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+            <button className="btn-compact" onClick={bulkTransferCandidate} disabled={!transferTarget || transferBusy}>
+              {transferBusy ? "Transferring…" : "Transfer"}
             </button>
-            {canManageAssignments && (
-              <>
-                <select value={bulkOwnerId} onChange={(e) => setBulkOwnerId(e.target.value)} style={{ width: 220 }}>
-                  <option value="">Reassign to...</option>
-                  {assignmentOwners.map((user) => (
-                    <option key={user.user_id} value={user.user_id}>{user.display_name || user.email}</option>
-                  ))}
-                </select>
-                <button className="btn-compact" onClick={bulkReassign} disabled={!bulkOwnerId}>Reassign</button>
-              </>
-            )}
+            {isManager && <button className="btn-compact" onClick={bulkDelete} style={{ borderColor: "#ef4444", color: "#fca5a5" }}>Delete selected</button>}
           </div>
         </div>
       )}
 
+      {renderPagination({ marginTop: 0, marginBottom: 16 })}
+
       {loading ? (
-        <div className="loading-panel">Loading application queue...</div>
+        <div className="loading-panel" style={{ padding: "40px 0", textAlign: "center", color: "var(--ink-soft)" }}>Loading...</div>
       ) : total === 0 ? (
-        <div className="empty">No assigned application tickets.</div>
+        <div className="empty-state" style={{ padding: "40px 0", textAlign: "center", color: "var(--ink-soft)" }}>No application tickets found.</div>
       ) : (
         <div className="table-shell">
-        <table className="table table-compact">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
-              </th>
-              <th>Candidate</th>
-              <th>Job</th>
-              <th>Status</th>
-              <th>Source</th>
-              <th>Priority</th>
-              <th>Review</th>
-              <th>Owner</th>
-              <th>Due</th>
-              <th>Assignment</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr key={item.id}>
-                <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
-                <td className="cell-main">
-                  {item.candidates ? (
-                    <>
-                      <Link className="row-link" href={`/candidates/${item.candidates.id}`}>{item.candidates.name}</Link>
-                      <div className="muted" style={{ fontSize: 12 }}>{item.candidates.email || item.candidates.phone}</div>
-                      {item.candidates.resume_url && (
-                        <a href={item.candidates.resume_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Resume</a>
-                      )}
-                    </>
-                  ) : "—"}
-                </td>
-                <td className="cell-main">
-                  {item.jobs ? (
-                    <>
-                      <Link className="row-link" href={`/jobs/${item.jobs.id}`}>{item.jobs.title}</Link>
-                      <div className="muted" style={{ fontSize: 12 }}>{item.jobs.company || "—"} {item.jobs.location ? `• ${item.jobs.location}` : ""}</div>
-                      {item.jobs.job_category && <span className="badge">{item.jobs.job_category}</span>}
-                      {item.jobs.source_url && <div><a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Posting</a></div>}
-                    </>
-                  ) : (
-                    <>
-                      <span className="muted">Ad-hoc job</span>
-                      <div className="muted" style={{ fontSize: 12 }}>No linked job</div>
-                    </>
-                  )}
-                </td>
-                <td><span className={`badge badge-${item.status}`}>{item.status}</span></td>
-                <td><SourceTypeBadge sourceType={item.source_type} /></td>
-                <td><span className={`badge badge-priority-${item.priority}`}>{item.priority}</span></td>
-                <td><span className={`badge badge-review-${item.review_status}`}>{item.review_status.replaceAll("_", " ")}</span></td>
-                <td>
-                  <div>{ownerName(item)}</div>
-                  {assignedByName(item) && <div className="muted" style={{ fontSize: 12 }}>from {assignedByName(item)}</div>}
-                </td>
-                <td className={item.assignment_due_at ? dueClass(item.assignment_due_at) : "muted"}>
-                  {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString() : "—"}
-                </td>
-                <td className="muted">
-                  <div>{item.assignment_note || item.next_action || "No note"}</div>
-                  {item.proof_url ? (
-                    <a href={item.proof_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>
-                      Proof: {item.proof_filename || "view"}
-                    </a>
-                  ) : (
-                    <span style={{ fontSize: 12 }}>No proof uploaded</span>
-                  )}
-                </td>
-                <td>
-                  <div className="action-group">
-                  <button className="btn-compact" onClick={() => setStatus(item.id, "in_progress")} disabled={actionId === `${item.id}:in_progress`}>
-                    {actionId === `${item.id}:in_progress` ? "Starting..." : "Start"}
-                  </button>
-                  <button className="btn-compact" onClick={() => requestReview(item)} disabled={actionId === `${item.id}:review`}>
-                    {actionId === `${item.id}:review` ? "Sending..." : "Review"}
-                  </button>
-                  <button
-                    className="btn-primary btn-compact"
-                    onClick={() => setStatus(item.id, "applied")}
-                    disabled={!canApplyTicket(item) || actionId === `${item.id}:applied`}
-                    title={!canApplyTicket(item) ? "Manager review must be approved first." : undefined}
-                  >
-                    {actionId === `${item.id}:applied` ? "Saving..." : "Applied"}
-                  </button>
-                  <label className="btn-compact" style={{ cursor: "pointer" }}>
-                    {actionId === `${item.id}:proof` ? "Uploading..." : "Proof"}
-                    <input
-                      type="file"
-                      accept="image/*,.pdf"
-                      onChange={(e) => uploadProof(item, e.target.files?.[0] ?? null)}
-                      disabled={actionId === `${item.id}:proof`}
-                      style={{ display: "none" }}
-                    />
-                  </label>
-                  {canManageAssignments && <button className="btn-compact" onClick={() => setEditing(item)}>Edit</button>}
-                  {canManageAssignments && <button className="btn-danger btn-compact" onClick={() => removeTicket(item)}>Remove</button>}
-                  </div>
-                </td>
+          <table className="table table-compact" style={{ tableLayout: "fixed" }}>
+            <colgroup>
+              {COLUMN_ORDER.map((id) => (
+                <col key={id} style={{ width: columnWidths[id] ?? DEFAULT_COLUMN_WIDTHS[id] }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {[
+                  { id: "checkbox", label: <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} /> },
+                  { id: "candidate", label: "Candidate" },
+                  { id: "job", label: "Job" },
+                  { id: "aiPipeline", label: "AI Pipeline" },
+                  { id: "score", label: "Scores" },
+                  { id: "stage", label: "Stage" },
+                  { id: "owner", label: "Owner" },
+                  { id: "due", label: "Due" },
+                  { id: "ticketJobIds", label: "Ticket / Job" },
+                  { id: "resumeIds", label: "Resume IDs" },
+                  { id: "actions", label: "Actions" },
+                ].map((col) => (
+                  <th key={col.id} style={{ position: "relative", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {col.label}
+                    <ColumnResizeHandle columnId={col.id} currentWidth={columnWidths[col.id] ?? DEFAULT_COLUMN_WIDTHS[col.id]} onResize={resizeColumn} />
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map(item => (
+                <tr key={item.id} className={expandedWorkflow === item.id ? "row-expanded" : ""}>
+                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
+                  
+                  <td className="cell-main">
+                    {item.candidates ? (
+                      <>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                          {item.candidates.avatar_url ? (
+                            <img className="avatar-circle" src={item.candidates.avatar_url} alt={item.candidates.name} />
+                          ) : (
+                            <span className="avatar-circle">{initials(item.candidates.name)}</span>
+                          )}
+                          <Link className="row-link" href={`/candidates/${item.candidates.id}`}>{item.candidates.name}</Link>
+                        </div>
+                        {(item.candidates.candidate_number != null || item.app_number != null) && (
+                          <div className="ref-chip-row">
+                            {item.candidates.candidate_number != null && (
+                              <span className="ref-chip ref-chip-candidate" title={`Candidate number ${item.candidates.candidate_number}`}>C#{item.candidates.candidate_number}</span>
+                            )}
+                            {item.app_number != null && (
+                              <span className="ref-chip" title={`Application number ${item.app_number}`}>A#{item.app_number}</span>
+                            )}
+                          </div>
+                        )}
+                        <div className="text-muted" style={{ fontSize: 12 }}>{item.candidates.email || item.candidates.phone || ""}</div>
+                        <div style={{ display: "flex", gap: 8, fontSize: 12 }}>
+                          {item.candidates.resume_url && <a href={item.candidates.resume_url} target="_blank" rel="noreferrer">Uploaded Resume</a>}
+                        </div>
+                      </>
+                    ) : <span className="text-muted">—</span>}
+                  </td>
+
+                  <td className="cell-main">
+                    {item.jobs ? (
+                      <>
+                        <Link className="row-link" href={`/jobs/${item.jobs.id}`}>{item.jobs.title}</Link>
+                        {item.jobs.job_number != null && (
+                          <div className="ref-chip-row">
+                            <span className="ref-chip ref-chip-job" title={`Job number ${item.jobs.job_number}`}>J#{item.jobs.job_number}</span>
+                          </div>
+                        )}
+                        <div className="text-muted" style={{ fontSize: 12 }}>
+                          {item.jobs.company || "—"} {item.jobs.location ? `• ${item.jobs.location}` : ""}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
+                          {item.jobs.job_category && <span className="badge badge-info cell-category-badge">{item.jobs.job_category}</span>}
+                          {item.jobs.source_url && !item.jobs.source_url.includes("example.com") && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Posting</a>}
+                        </div>
+                      </>
+                    ) : <span className="text-muted">Ad-hoc</span>}
+                  </td>
+
+                  <td>
+                    <PipelineActions item={item} actionLoading={actionLoading}
+                      onStartWorkflow={startWorkflow}
+                      onRegenerate={regenerateWorkflow}
+                      onFetchDetails={fetchWorkflowDetails}
+                      onReview={async (wfId: string, action: string) => {
+                        setActionLoading(`${item.id}:${action}`);
+                        try {
+                          const res = await fetch(`/api/application-ai-workflows/${wfId}/review`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action }),
+                          });
+                          if (!res.ok) {
+                            const d = await res.json().catch(() => ({}));
+                            alert(d.error || `${action} failed`);
+                            return;
+                          }
+                          // Patch in place, mirroring exactly what the route
+                          // just wrote server-side for each action - no reload.
+                          if (action === "approve") {
+                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 3, resume_generation_status: "resume_review" });
+                          } else if (action === "reject") {
+                            patchItemLocally(item.id, { workflow_status: "failed", resume_generation_status: "failed" });
+                          } else if (action === "reject_and_restart") {
+                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 0, resume_generation_status: "queued" });
+                          }
+                        } catch (err: any) { alert(err.message); }
+                        finally { setActionLoading(null); }
+                      }}
+                      expandedWorkflow={expandedWorkflow}
+                      workflowDetails={workflowDetails}
+                      workflowStageLabel={workflowStageLabel}
+                    />
+                    {expandedWorkflow === item.workflow_id && item.workflow_id && (
+                      <div className="workflow-detail" style={{ marginTop: 8, padding: 8, background: "var(--surface-2)", borderRadius: 6, fontSize: 12 }}>
+                        {item.workflow_status === "failed" && workflowDetails[item.workflow_id]?.workflow?.last_error && (() => {
+                          const lastError: string = workflowDetails[item.workflow_id].workflow.last_error;
+                          const classification = classifyWorkflowFailure(lastError);
+                          return (
+                            <div style={{ padding: 8, background: "rgba(211, 38, 30, 0.12)", color: "var(--danger)", borderRadius: 4 }}>
+                              <strong>Why this failed:</strong> {classification?.reason ?? lastError}
+                              {classification && classification.category !== "other" && (
+                                <details style={{ marginTop: 6 }}>
+                                  <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.8 }}>Technical details</summary>
+                                  <div style={{ fontSize: 11, marginTop: 4, opacity: 0.85 }}>{lastError}</div>
+                                </details>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {(item.workflow_stage ?? 0) >= 2 && (
+                          <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
+                        )}
+                        <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
+                          View full pipeline in Status page →
+                        </Link>
+                      </div>
+                    )}
+                  </td>
+
+                  <td>
+                    <QueueScoreCell item={item} />
+                  </td>
+
+                  <td>
+                    <select
+                      value={item.ae_stage}
+                      disabled={actionLoading === `${item.id}:ae_stage`}
+                      onChange={(e) => changeAeStage(item.id, e.target.value)}
+                      title={item.ae_stage_updated_by_name ? `Last moved by ${item.ae_stage_updated_by_name}${item.ae_stage_updated_at ? " on " + new Date(item.ae_stage_updated_at).toLocaleString() : ""}` : undefined}
+                      style={{
+                        width: "100%", minWidth: 0, fontSize: 13, fontWeight: 700, padding: "8px 8px",
+                        background: AE_STAGE_STYLES[item.ae_stage]?.background,
+                        border: `1px solid ${AE_STAGE_STYLES[item.ae_stage]?.border}`,
+                        color: AE_STAGE_STYLES[item.ae_stage]?.color,
+                        borderRadius: 8,
+                      }}
+                    >
+                      {/* No per-option background/color here on purpose: the dropdown
+                          list is a native OS popup, not part of the page, and it
+                          doesn't composite the translucent AE_STAGE_STYLES tints the
+                          same way the closed control does — that left every option
+                          except the selected one rendering as unreadable near-black
+                          text on near-black. The global `select option` rule (solid
+                          surface background + solid ink text) is reliably readable. */}
+                      {Object.entries(AE_STAGE_LABELS).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                    {item.ae_stage_updated_at && (
+                      <div className="queue-stage-meta queue-stage-meta-changed">
+                        Last changed {item.ae_stage_updated_by_name ? `by ${item.ae_stage_updated_by_name} ` : ""}on {new Date(item.ae_stage_updated_at).toLocaleString()}
+                      </div>
+                    )}
+                    {item.ae_reviewed_by_name && (
+                      <div className="queue-stage-meta queue-stage-meta-reviewed" title={item.ae_reviewed_at ? new Date(item.ae_reviewed_at).toLocaleString() : undefined}>
+                        Reviewed by {item.ae_reviewed_by_name}
+                      </div>
+                    )}
+                    {item.ae_applied_by_name && (
+                      <div className="queue-stage-meta queue-stage-meta-applied" title={item.ae_applied_at ? new Date(item.ae_applied_at).toLocaleString() : undefined}>
+                        Applied by {item.ae_applied_by_name}
+                      </div>
+                    )}
+                  </td>
+
+                  <td>
+                    <div style={{ fontWeight: 500, fontSize: 13 }}>{ownerLabel(item)}</div>
+                    {item.assigned_by && <div className="text-muted" style={{ fontSize: 12 }}>by {item.assigned_by}</div>}
+                  </td>
+
+                  <td className={item.assignment_due_at ? dueClass(item.assignment_due_at) : "text-muted"} style={{ fontSize: 13 }}>
+                    {item.assignment_due_at ? new Date(item.assignment_due_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—"}
+                  </td>
+
+                  <td>
+                    <CopyableId label="Ticket" value={item.id} />
+                    <CopyableId label="Job" value={item.jobs?.id ?? null} />
+                  </td>
+                  <td>
+                    <CopyableId label="Base" value={item.base_resume_id ?? null} />
+                    <CopyableId label="Tailored" value={item.workflow_resume_version_id ?? null} />
+                  </td>
+
+                  <td>
+                    <div className="action-group" style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {(item.jobs?.source_url || item.id) && (
+                        <button
+                          className="btn-compact btn-sm"
+                          onClick={() => openCopilotForApplication(item)}
+                          title="Open the ATS page with this application linked to TalentOS Copilot"
+                          style={{ background: "rgba(16,185,129,0.12)", borderColor: "rgba(16,185,129,0.35)", color: "#10b981" }}
+                        >
+                          🧠 Copilot
+                        </button>
+                      )}
+                      <div className="dropdown-wrapper">
+                        <button className="btn-compact btn-outline btn-sm" onClick={() => faloodOpen === item.id ? setFaloodOpen(null) : openFaloodDropdown(item)} disabled={!item.candidates}>
+                          🎨 Studio ▾
+                        </button>
+                        {faloodOpen === item.id && item.candidates && (
+                          <div className="dropdown-menu">
+                            <div className="dropdown-header">Base resumes for {item.candidates.name}</div>
+                            {(faloodResumes[item.candidates.id] ?? []).length === 0 ? (
+                              <button className="dropdown-item" onClick={() => buildBaseResume(item)} disabled={actionLoading === `${item.id}:build_base`}>
+                                {actionLoading === `${item.id}:build_base` ? "Building..." : "+ Build base resume"}
+                              </button>
+                            ) : (
+                              (faloodResumes[item.candidates.id] ?? []).map((br: any) => (
+                                <button key={br.id} className="dropdown-item" onClick={() => { openFaloodStudio("base_resume", br.id); setFaloodOpen(null); }}>
+                                  {br.name || "Untitled"}
+                                </button>
+                              ))
+                            )}
+                            <div className="dropdown-divider" />
+                            <button className="dropdown-item muted" onClick={() => { setStatus(item.id, "in_progress"); setFaloodOpen(null); }} disabled={!item.assigned_to_user_id}>
+                              {item.assigned_to_user_id ? "Mark in progress only" : "Assign owner first"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <button className="btn-compact btn-sm" onClick={() => requestReview(item)} disabled={actionLoading === `${item.id}:review` || item.workflow_status === "failed" || !item.base_resume_id || !item.workflow_resume_version_id} title={item.workflow_status === "failed" ? "Workflow failed" : (!item.base_resume_id || !item.workflow_resume_version_id ? "Missing artifacts" : "")}>
+                        {actionLoading === `${item.id}:review` ? "⟳" : "🔍 Review"}
+                      </button>
+
+                      <button className="btn-compact btn-sm" onClick={() => uploadProof(item)} disabled={actionLoading === `${item.id}:proof` || item.workflow_status === "failed" || !item.base_resume_id || !item.workflow_resume_version_id}>
+                        {actionLoading === `${item.id}:proof` ? "⟳" : "📎 Proof"}
+                      </button>
+
+                      {isManager && (
+                        <>
+                          <button className="btn-compact btn-sm" onClick={() => setEditing(item)}>✏️</button>
+                          <button className="btn-danger btn-sm" onClick={() => removeTicket(item)} disabled={actionLoading === `${item.id}:remove`} title="Remove this application">
+                            {actionLoading === `${item.id}:remove` ? "⟳" : "🗑"}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+
+      {renderPagination({ marginTop: 16, marginBottom: 0 })}
 
       {editing && (
-        <EditTicketModal
-          item={editing}
-          users={users}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(page, pageSize); }}
-        />
+        <div className="modal-overlay" onClick={() => setEditing(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Edit{editing.candidates ? ` — ${editing.candidates.name}` : ""}</h2>
+            <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+              <div className="field-group">
+                <label>Owner</label>
+                <select className="input" value={editing.assigned_to_user_id || ""} onChange={e => setEditing({ ...editing, assigned_to_user_id: e.target.value, assigned_to: users.find(u => u.user_id === e.target.value)?.display_name || "" })}>
+                  <option value="">Unassigned</option>
+                  {assignmentOwners.map(u => <option key={u.user_id} value={u.user_id}>{u.display_name || u.email}</option>)}
+                </select>
+              </div>
+              <div className="field-group">
+                <label>Due date</label>
+                <input className="input" type="date" value={editing.assignment_due_at || ""} onChange={e => setEditing({ ...editing, assignment_due_at: e.target.value })} />
+              </div>
+              <div className="field-group">
+                <label>Priority</label>
+                <select className="input" value={editing.priority} onChange={e => setEditing({ ...editing, priority: e.target.value as any })}>
+                  <option value="low">Low</option>
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+              </div>
+              <div className="field-group">
+                <label>Review status</label>
+                <select className="input" value={editing.review_status} onChange={e => setEditing({ ...editing, review_status: e.target.value as any })}>
+                  <option value="not_required">No review</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="changes_requested">Changes requested</option>
+                </select>
+              </div>
+              <div className="field-group">
+                <label>Note</label>
+                <textarea className="input" rows={3} value={editing.assignment_note || ""} onChange={e => setEditing({ ...editing, assignment_note: e.target.value })} />
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button className="btn-outline" onClick={() => setEditing(null)}>Cancel</button>
+              <button className="btn-primary" onClick={async () => {
+                const res = await fetch(`/api/applications/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ assigned_to_user_id: editing.assigned_to_user_id || null, assigned_to: editing.assigned_to || null, assignment_due_at: editing.assignment_due_at || null, priority: editing.priority, review_status: editing.review_status, assignment_note: editing.assignment_note || null }) });
+                if (res.ok) { setEditing(null); load(page, false); setFeedback({ kind: "success", text: "Saved." }); }
+                else { setFeedback({ kind: "error", text: "Save failed." }); }
+              }}>Save</button>
+            </div>
+          </div>
+        </div>
       )}
-
-      {total > 0 && (
-        <Pagination
-          page={page}
-          pageSize={pageSize}
-          total={total}
-          onPageChange={(newPage) => load(newPage, pageSize)}
-          onPageSizeChange={(newSize) => setPageSize(newSize)}
-        />
-      )}
-    </>
-  );
-}
-
-function EditTicketModal({ item, users, onClose, onSaved }: { item: QueueItem; users: TeamUser[]; onClose: () => void; onSaved: () => void }) {
-  const [assignedBy, setAssignedBy] = useState(item.assigned_by ?? "");
-  const [assignedTo, setAssignedTo] = useState(item.assigned_to ?? "");
-  const [assignedByUserId, setAssignedByUserId] = useState(item.assigned_by_user_id ?? "");
-  const [assignedToUserId, setAssignedToUserId] = useState(item.assigned_to_user_id ?? "");
-  const [assignmentDueAt, setAssignmentDueAt] = useState(item.assignment_due_at ?? "");
-  const [assignmentNote, setAssignmentNote] = useState(item.assignment_note ?? "");
-  const [priority, setPriority] = useState(item.priority ?? "normal");
-  const [reviewStatus, setReviewStatus] = useState(item.review_status ?? "not_required");
-  const [reviewNote, setReviewNote] = useState(item.review_note ?? "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const assignmentOwners = [...users].sort((a, b) => {
-    const aRank = a.role === "application_engineer" ? 0 : 1;
-    const bRank = b.role === "application_engineer" ? 0 : 1;
-    if (aRank !== bRank) return aRank - bRank;
-    return (a.display_name || a.email || "").localeCompare(b.display_name || b.email || "");
-  });
-
-  async function submit() {
-    setSaving(true);
-    setError("");
-    const assignedByUser = users.find((user) => user.user_id === assignedByUserId);
-    const assignedToUser = users.find((user) => user.user_id === assignedToUserId);
-    const res = await fetch(`/api/applications/${item.id}`, {
-      method: "PATCH",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        assigned_by: assignedByUser?.display_name || assignedByUser?.email || assignedBy || null,
-        assigned_to: assignedToUser?.display_name || assignedToUser?.email || assignedTo || null,
-        assigned_by_user_id: assignedByUserId || null,
-        assigned_to_user_id: assignedToUserId || null,
-        assignment_due_at: assignmentDueAt || null,
-        assignment_note: assignmentNote || null,
-        priority,
-        review_status: reviewStatus,
-        review_note: reviewNote || null,
-      }),
-    });
-    setSaving(false);
-    if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Something went wrong.");
-      return;
-    }
-    onSaved();
-  }
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Edit assignment{item.candidates ? ` — ${item.candidates.name}` : ""}</h2>
-
-        <div className="field-group">
-          <label>Assigned by</label>
-          <select value={assignedByUserId} onChange={(e) => setAssignedByUserId(e.target.value)}>
-            <option value="">Legacy / unassigned</option>
-            {assignmentOwners.map((user) => (
-              <option key={user.user_id} value={user.user_id}>
-                {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
-              </option>
-            ))}
-          </select>
-          {!assignedByUserId && (
-            <input style={{ marginTop: 8 }} value={assignedBy} onChange={(e) => setAssignedBy(e.target.value)} placeholder="Legacy manager/admin name" />
-          )}
-        </div>
-        <div className="field-group">
-          <label>Application owner</label>
-          <select value={assignedToUserId} onChange={(e) => setAssignedToUserId(e.target.value)}>
-            <option value="">Unassigned</option>
-            {assignmentOwners.map((user) => (
-              <option key={user.user_id} value={user.user_id}>
-                {user.display_name || user.email} ({user.role.replaceAll("_", " ")})
-              </option>
-            ))}
-          </select>
-          {!assignedToUserId && (
-            <input style={{ marginTop: 8 }} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)} placeholder="Legacy application owner name" />
-          )}
-        </div>
-        <div className="field-group">
-          <label>Due date</label>
-          <input type="date" value={assignmentDueAt} onChange={(e) => setAssignmentDueAt(e.target.value)} />
-        </div>
-        <div className="field-group">
-          <label>Priority</label>
-          <select value={priority} onChange={(e) => setPriority(e.target.value as QueueItem["priority"])}>
-            <option value="low">Low</option>
-            <option value="normal">Normal</option>
-            <option value="high">High</option>
-            <option value="urgent">Urgent</option>
-          </select>
-        </div>
-        <div className="field-group">
-          <label>Review status</label>
-          <select value={reviewStatus} onChange={(e) => setReviewStatus(e.target.value as QueueItem["review_status"])}>
-            <option value="not_required">No review required</option>
-            <option value="pending">Pending review</option>
-            <option value="approved">Approved</option>
-            <option value="changes_requested">Changes requested</option>
-          </select>
-        </div>
-        <div className="field-group">
-          <label>Review note</label>
-          <textarea value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} rows={2} />
-        </div>
-        <div className="field-group">
-          <label>Assignment note</label>
-          <textarea value={assignmentNote} onChange={(e) => setAssignmentNote(e.target.value)} rows={3} />
-        </div>
-
-        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
-
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving..." : "Save"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
 
-function SourceTypeBadge({ sourceType }: { sourceType: string | null }) {
-  const label = sourceType || "Legacy";
-  const colorMap: Record<string, string> = {
-    base_resume: "badge-info",
-    original_resume: "badge-success",
-    blank: "badge-warning",
-    manual: "badge-secondary",
-    Legacy: "badge-muted",
-  };
-  return <span className={`badge ${colorMap[label] || "badge-muted"}`}>{label.replaceAll("_", " ")}</span>;
+function scoreLabel(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(Number(value)) ? "—" : `${Number(value).toFixed(1)}/10`;
+}
+
+function QueueScoreCell({ item }: { item: QueueItem }) {
+  const average = item.average_score == null ? null : Number(item.average_score);
+  const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
+  if (average == null && finalScore == null) return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
+  return (
+    <div style={{ display: "grid", gap: 2, fontSize: 11 }}>
+      <span className="badge badge-info" title="Average of ATS, recruiter, role fit, truth, and Final QA scores">Avg {scoreLabel(average)}</span>
+      <span className="text-muted" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>
+    </div>
+  );
+}
+
+/** Findings are displayed inline in the queue, matching the pipeline board,
+ * so reviewers do not lose their place by opening another page. */
+function QueueFindingsPanel({ details }: { details: any }) {
+  const artifacts: any[] = details?.artifacts ?? [];
+  const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
+  const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+  return (
+    <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
+      {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+            {[
+              ["ATS", hiringPanel.atsScore],
+              ["Recruiter", hiringPanel.recruiterScore],
+              ["Role fit", hiringPanel.roleFitScore],
+              ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
+            ].map(([label, value]) => (
+              <div key={String(label)} style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>{label}</div>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{scoreLabel(value as number | null) }</div>
+              </div>
+            ))}
+          </div>
+          {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--ink-soft)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
+          {hiringPanel.disposition && (
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <span
+                className={`badge badge-${hiringPanel.disposition === "pursue" ? "success" : hiringPanel.disposition === "review" ? "info" : hiringPanel.disposition === "deprioritize" ? "warning" : "danger"}`}
+                style={{ fontSize: 9, textTransform: "capitalize" }}
+              >
+                {hiringPanel.disposition}
+              </span>
+              {Array.isArray(hiringPanel.dispositionReasons) && hiringPanel.dispositionReasons.length > 0 && (
+                <span style={{ color: "var(--ink-soft)" }}>{hiringPanel.dispositionReasons.join(" · ")}</span>
+              )}
+            </div>
+          )}
+          {hiringPanel.requiredEdits?.length > 0 && (
+            <div>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Required edits</div>
+              {hiringPanel.requiredEdits.map((e: any, i: number) => (
+                <div key={i} style={{ display: "flex", gap: 4, alignItems: "baseline", padding: "2px 0" }}>
+                  <span className={`badge badge-${e.severity === "critical" ? "danger" : e.severity === "major" ? "warning" : "info"}`} style={{ fontSize: 8 }}>{e.severity}</span>
+                  <span>{e.description}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {finalPolish && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>
+                Final Polish
+                <span className={`badge badge-${finalPolish.exportReady ? "success" : "warning"}`} style={{ marginLeft: 4, fontSize: 8 }}>
+                  {finalPolish.exportReady ? "ready" : "not ready"}
+                </span>
+              </div>
+              {Array.isArray(finalPolish.unresolvedWarnings) && finalPolish.unresolvedWarnings.length > 0 && (
+                <div style={{ display: "grid", gap: 3 }}>
+                  {finalPolish.unresolvedWarnings.map((warning: string, i: number) => {
+                    const isEvidenceGap = /candidate evidence gap/i.test(warning);
+                    return (
+                      <div
+                        key={i}
+                        style={{ color: isEvidenceGap ? "var(--ink-soft)" : "var(--warn)", fontStyle: isEvidenceGap ? "italic" : undefined }}
+                      >
+                        {isEvidenceGap ? "↳ " : "⚠ "}
+                        {warning}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {(finalPolish?.pageFit || hiringPanel?.pageFit) && (
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 6 }}>
+              <div style={{ fontWeight: 600, marginBottom: 3 }}>Page fit</div>
+              <div>{formatPageFitSummary(finalPolish?.pageFit ?? hiringPanel?.pageFit)}</div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void; expandedWorkflow: string | null }) {
+  if (!item.workflow_id || (item.workflow_stage ?? 0) < 2) return null;
+  return (
+    <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} title="Show Hiring Panel and Final Polish findings inline">
+      {expandedWorkflow === item.workflow_id ? "▲ Hide findings" : "📋 Findings"}
+    </button>
+  );
+}
+
+/** Renders the AI Pipeline cell with state-based actions. */
+function PipelineActions({
+  item, actionLoading, onStartWorkflow, onRegenerate, onFetchDetails, onReview,
+  expandedWorkflow, workflowDetails, workflowStageLabel
+}: {
+  item: QueueItem;
+  actionLoading: string | null;
+  onStartWorkflow: (item: QueueItem) => void;
+  onRegenerate: (item: QueueItem) => void;
+  onFetchDetails: (item: QueueItem) => void;
+  onReview: (wfId: string, action: string) => void;
+  expandedWorkflow: string | null;
+  workflowDetails: Record<string, any>;
+  workflowStageLabel: (stage: number | null | undefined) => string;
+}) {
+  const genStatus = item.resume_generation_status;
+  const wfStatus = item.workflow_status;
+  const formattedWorkflowScore = formatScoreOutOfTen(item.workflow_score);
+
+  // Ready — show the tailored resume link
+  if (genStatus === "ready" && item.workflow_resume_version_id) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="badge badge-success">✅ Generated</span>
+        {formattedWorkflowScore !== null && (
+          <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+        )}
+        {item.page_fit_metrics && (
+          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
+            {formatPageFitSummary(item.page_fit_metrics)}
+          </span>
+        )}
+        <button className="btn-primary btn-sm"
+          onClick={() => openFaloodStudio("application_resume_version", item.workflow_resume_version_id!)}>
+          ✏️ Open in Studio
+        </button>
+        <button className="btn-compact btn-sm"
+          onClick={() => onRegenerate(item)}
+          disabled={actionLoading === `${item.id}:regenerate`}
+          title="Restart the full AI pipeline from scratch and replace this tailored resume">
+          {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
+        </button>
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+      </div>
+    );
+  }
+
+  // Failed
+  if (genStatus === "failed" || wfStatus === "failed") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="badge badge-danger">❌ Failed</span>
+        {item.workflow_id && (
+          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+            View error
+          </button>
+        )}
+        <button className="btn-primary btn-sm"
+          onClick={() => onStartWorkflow(item)}
+          disabled={actionLoading === `${item.id}:workflow`}>
+          {actionLoading === `${item.id}:workflow` ? "Retrying..." : "🔄 Retry"}
+        </button>
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+      </div>
+    );
+  }
+
+  // Human review needed — show Approve / Reject / Restart buttons
+  if (genStatus === "human_review" || wfStatus === "waiting") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="badge badge-warning">Human Review</span>
+        {formattedWorkflowScore !== null && (
+          <span style={{ fontSize: 12 }}>QA: <strong>{formattedWorkflowScore}/10</strong></span>
+        )}
+        {item.page_fit_metrics && (
+          <span style={{ fontSize: 11 }} className={item.page_fit_metrics.overflow || !item.page_fit_metrics.readable ? "text-danger" : "text-muted"}>
+            {formatPageFitSummary(item.page_fit_metrics)}
+          </span>
+        )}
+        {item.workflow_id && (
+          <>
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              <button className="btn-primary btn-sm"
+                onClick={() => onReview(item.workflow_id!, "approve")}
+                disabled={actionLoading === `${item.id}:approve`}>
+                {actionLoading === `${item.id}:approve` ? "⟳" : "Approve"}
+              </button>
+              <button className="btn-compact btn-sm"
+                onClick={() => { if (confirm("Reject this resume?")) onReview(item.workflow_id!, "reject"); }}
+                disabled={actionLoading === `${item.id}:reject`}>
+                {actionLoading === `${item.id}:reject` ? "⟳" : "Reject"}
+              </button>
+              <button className="btn-compact btn-sm"
+                onClick={() => { if (confirm("Reject and restart from stage 1?")) onReview(item.workflow_id!, "reject_and_restart"); }}
+                disabled={actionLoading === `${item.id}:restart`}>
+                {actionLoading === `${item.id}:restart` ? "⟳" : "Restart"}
+              </button>
+            </div>
+            <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+              {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+            </button>
+            <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // Active (queued or running) — live pulse so a page left open visibly
+  // shows progress instead of looking frozen while polling updates it.
+  if (wfStatus === "queued" || wfStatus === "running") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, transition: "opacity 0.2s ease" }}>
+        <span className={`badge badge-${wfStatus === "running" ? "info" : "warning"} pipeline-live-badge`}>
+          <span className={`pipeline-live-dot ${wfStatus === "running" ? "pipeline-live-dot-running" : ""}`} />
+          {wfStatus === "running" ? "Running" : "Queued"}
+        </span>
+        {item.workflow_stage !== null && item.workflow_stage !== undefined && (
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{workflowStageLabel(item.workflow_stage)}</span>
+        )}
+        {item.workflow_id && (
+          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+            {expandedWorkflow === item.workflow_id ? "▲ Hide" : "▼ Details"}
+          </button>
+        )}
+        <FindingsButton item={item} onFetchDetails={onFetchDetails} expandedWorkflow={expandedWorkflow} />
+      </div>
+    );
+  }
+
+  // Completed (no resume — shouldn't happen but handle gracefully)
+  if (wfStatus === "completed") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <span className="badge badge-success">✅ Completed</span>
+        <span style={{ fontSize: 11 }} className="text-danger">
+          Resume link missing
+        </span>
+        <button className="btn-compact btn-sm"
+          onClick={() => onRegenerate(item)}
+          disabled={actionLoading === `${item.id}:regenerate`}
+          title="Restart the full AI pipeline from scratch to fix the missing resume">
+          {actionLoading === `${item.id}:regenerate` ? "⟳ Regenerating..." : "🔁 Regenerate"}
+        </button>
+        {item.workflow_id && (
+          <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)}>
+            {expandedWorkflow === item.workflow_id ? "▲ Hide details" : "▼ Details"}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Not started — show Generate button
+  return (
+    <button className="btn-primary btn-sm"
+      onClick={() => onStartWorkflow(item)}
+      disabled={actionLoading === `${item.id}:workflow`}>
+      {actionLoading === `${item.id}:workflow` ? "⟳ Starting..." : "🤖 Generate"}
+    </button>
+  );
 }

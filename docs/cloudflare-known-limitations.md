@@ -46,12 +46,29 @@ Our `secretCrypto.ts` uses Web Crypto API (`crypto.subtle`), which is fully supp
 
 The app uses `vercel.json` for cron jobs. Cloudflare Workers free tier does NOT support Cron Triggers (paid only).
 
+**Affected endpoints** (defined in `vercel.json`, need external scheduler):
+| Path | Schedule | Purpose |
+|------|----------|---------|
+| `GET /api/cron/digest` | `0 7 * * *` | Daily AI digest — new jobs, overdue tickets, pipeline summary |
+| `GET /api/cron/import-sources` | `0 6 * * *` | Run saved import sources |
+| `GET /api/cron/backup` | `0 5 * * *` | Daily DB backup |
+| `GET /api/cron/categorize-jobs` | `0 8 * * *` | AI job categorization |
+| `GET /api/cron/ai-usage-rollup` | `0 4 * * *` | Aggregate AI usage events into daily rollup |
+
+All endpoints require `Authorization: Bearer {CRON_SECRET}` header.
+
 **Workarounds:**
-1. **Use an external scheduler** — Cron-job.org, EasyCron, or a simple GitHub Actions workflow that calls your API endpoints
-2. **Use Cloudflare Workers paid plan** — $5/month adds Cron Triggers
+1. **Use an external scheduler** — Cron-job.org, EasyCron, or a simple GitHub Actions workflow that calls your API endpoints. Configure each endpoint with its schedule and the CRON_SECRET bearer token.
+2. **Use Cloudflare Workers paid plan** — $5/month adds Cron Triggers. Add `[triggers]` with `crons = [...]` to `wrangler.toml` and route each pattern to the matching endpoint.
 3. **Use a separate Vercel project** for cron endpoints only
 
 **Recommended:** Option 1 (external scheduler). Cron-job.org is free and reliable.
+   - Create a monitor for each endpoint URL
+   - Set the schedule per the table above
+   - Add `Authorization: Bearer {CRON_SECRET}` header
+   - Request method: GET
+
+**Manual fallback:** The `/ops` page has a "Generate now" button for the digest. For import sources and job categorization, there are also manual triggers on the ops page.
 
 ### 5. File System Access — ❌ Not Supported
 
@@ -120,40 +137,88 @@ If the Cloudflare deployment has issues:
 2. **Code rollback:** The Supabase code is still in the `else` branch of every `isNeon()` switch
 3. **No data loss:** Supabase database remains unchanged
 
+---
+
+## RBAC: Manager Role
+
+The TalentOS role-based access control system includes a `manager` role between `admin` and `application_engineer`.
+
+### Role definition
+
+| Role | Description |
+|------|-------------|
+| `admin` | Full access: all pages, team management, system config, AI key management, backup/restore |
+| `manager` | Read access to all pages; can create/edit candidates, jobs, applications, resumes, follow-ups; **cannot** access Team page or modify system config |
+| `application_engineer` | Application queue, follow-ups, candidates (read), applications (assigned only) |
+
+### Implementation
+
+- Defined in `profiles` table: `role IN ('admin', 'manager', 'application_engineer', 'recruiter')` (`sql/01_schema.sql:90`)
+- Check constraint on `profiles.role` (`sql/01_schema.sql:89-90`)
+- Enforced in app-layer auth (`src/lib/auth.ts`):
+  - `MASTER_DATA_MANAGER_ROLES = ["admin", "manager"]` — can create/edit master data
+  - `APPLICATION_WORKER_ROLES = ["admin", "manager", "application_engineer"]` — can work on applications
+  - `ASSIGNMENT_MANAGER_ROLES = ["admin", "manager", "application_engineer"]` — can manage assignments
+  - `DESTRUCTIVE_MANAGER_ROLES = ["admin", "manager"]` — can delete candidates/jobs/applications
+- Team page (`/team`) restricted to `admin` only via `canAccessPath()` (`src/lib/auth.ts:71-73`)
+- Manager cannot access `/team`, `/api/users/*`, or modify AI keys/system config
+
+### Current state
+
+- **No production account currently holds the `manager` role.** The role exists in the schema and code but has not been assigned to any user.
+- To activate: open `/team` as admin, assign `manager` role to the target account.
+- **This should be done after validating the manager dashboard works** — verify the manager can access all non-admin pages, cannot access `/team`, and has correct data scope.
+- Do not modify any user's role in the database directly; use the `/team` UI.
+
+### Manager permissions summary
+
+| Page/Feature | Admin | Manager | Application Engineer |
+|---|---|---|---|
+| `/candidates` | Full CRUD | Full CRUD | Read only |
+| `/jobs` | Full CRUD | Full CRUD | Hidden |
+| `/companies` | Full access | Full access | Hidden |
+| `/application-queue` | Full access | Full access | Assigned only |
+| `/follow-ups` | Full access | Full access | Assigned only |
+| `/review` | Full access | Full access | Read only |
+| `/interviews` | Full access | Full access | Read only |
+| `/analytics` | Full access | Full access | No access |
+| `/team` | Full access | No access | No access |
+| `/admin/ai` | Full access | No access | No access |
+| `/ops` | Full access | No access | No access |
+| `/audit` | Full access | No access | No access |
+| `/chat` | Full access | Full access | Full access |
+
 ## External Service Architecture (Recommended for Full Production)
 
-For a production setup that handles all features:
+### Markitdown PDF Parsing Service
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                   Cloudflare Workers                    │
-│  (Main app: Next.js, all routes, all DB queries)       │
-│  - Neon DB for business data                             │
-│  - Supabase Auth for authentication                      │
-│  - Supabase Storage for file uploads                     │
-│  - R2 for CDN assets (optional)                        │
-└──────────────────┬──────────────────────────────────────┘
-                   │
-                   │ PDF/DOCX generation request
-                   ▼
-┌─────────────────────────────────────────────────────────┐
-│              Vercel / Railway (Node.js)                 │
-│  (Microservice: only PDF/DOCX export)                  │
-│  - @react-pdf/renderer for PDFs                         │
-│  - docx for DOCX files                                  │
-│  - Called via HTTP API from Cloudflare Worker           │
-└─────────────────────────────────────────────────────────┘
-                   │
-                   │ Cron trigger
-                   ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Cron-job.org (Free)                      │
-│  - Calls /api/cron/digest daily                         │
-│  - Calls /api/cron/backup weekly                        │
-└─────────────────────────────────────────────────────────┘
-```
+The "Parse with markitdown & Create Base Resume" button relies on an external **Markitdown** microservice for high-accuracy PDF-to-markdown conversion. Without it, parsing falls back to basic AI text extraction (less accurate).
 
-This architecture keeps the main app on the free Cloudflare Workers tier while externalizing only the Node.js-only features to cheap/paid services.
+**What is Markitdown:**
+- Microsoft's [`markitdown`](https://github.com/microsoft/markitdown) Python library
+- Converts PDFs (and other formats) to clean Markdown text
+- Must be deployed as a separate HTTP service (e.g., FastAPI server)
+
+**Deployment steps:**
+1. Clone `https://github.com/microsoft/markitdown`
+2. Deploy as a simple FastAPI server on Vercel, Railway, or any Node-capable host:
+   ```python
+   # server.py
+   from fastapi import FastAPI, UploadFile, File
+   from markitdown import MarkItDown
+   
+   app = FastAPI()
+   md = MarkItDown()
+   
+   @app.post("/parse")
+   async def parse(file: UploadFile = File(...)):
+       result = md.convert(file.file)
+       return {"success": True, "markdown": result.text_content}
+   ```
+3. Set `MARKITDOWN_SERVICE_URL` env var in TalentOS to point to the deployed service URL
+4. Restart TalentOS — the button will activate and show "Parse with markitdown & Create Base Resume"
+
+**Without the service:** The button shows "Parse with AI & Create Base Resume" and uses the AI fallback parser — less accurate but functional.
 
 ---
 

@@ -1,37 +1,58 @@
-// src/app/api/email/send/route.ts
-// POST -> send email immediately using template + merge data
-
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { queryOne } from "@/server/db/neon";
 import { sendEmail, renderTemplate } from "@/lib/emailService";
 import { logActivity } from "@/lib/activity";
 
 export const dynamic = "force-dynamic";
 
+// ARCHIVED 2026-09-07 — the multipart/form-data branch (uploading files to
+// attach to an outgoing reply) was removed here when TalentOS moved to a
+// single shared, forward-only Gmail inbox: outgoing replies no longer exist
+// (see Planning MD Files/"TalentOS — Single Shared Gmail Inbox Redesign 6
+// August 2026 .md"). Original branch, kept for restore:
+//
+//   const MAX_FILES = 3;
+//   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+//   const contentType = req.headers.get("content-type") || "";
+//   if (contentType.includes("multipart/form-data")) {
+//     const formData = await req.formData();
+//     const candidate_id = formData.get("candidate_id")?.toString();
+//     if (!candidate_id) return NextResponse.json({ error: "candidate_id is required" }, { status: 400 });
+//     const files = formData.getAll("files") as File[];
+//     if (files.length > MAX_FILES) return NextResponse.json({ error: `Maximum ${MAX_FILES} files allowed` }, { status: 400 });
+//     const attachmentUrls: string[] = [];
+//     for (const file of files) {
+//       if (file.size > MAX_FILE_SIZE) return NextResponse.json({ error: `File ${file.name} exceeds 10MB limit` }, { status: 400 });
+//       const buffer = Buffer.from(await file.arrayBuffer());
+//       const fileName = `${Date.now()}_${file.name}`;
+//       const path = `${candidate_id}/${fileName}`;
+//       const { error: uploadError } = await supabase.storage.from("email-attachments").upload(path, buffer, { contentType: file.type || "application/octet-stream", upsert: true });
+//       if (uploadError) return NextResponse.json({ error: "Failed to upload attachment" }, { status: 500 });
+//       const { data } = supabase.storage.from("email-attachments").getPublicUrl(path);
+//       attachmentUrls.push(data.publicUrl);
+//     }
+//     return NextResponse.json({ success: true, attachment_urls: attachmentUrls });
+//   }
+//   (also restore the `import { supabase } from "@/lib/supabase";` import)
+
 export async function POST(req: NextRequest) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
+  // Handle JSON body (sending system emails via a template)
   const body = await req.json();
   if (!body.candidate_id) return NextResponse.json({ error: "candidate_id is required" }, { status: 400 });
   if (!body.template_id) return NextResponse.json({ error: "template_id is required" }, { status: 400 });
 
-  const { data: candidate } = await supabase
-    .from("candidates")
-    .select("id, name, email")
-    .eq("id", body.candidate_id)
-    .maybeSingle();
+  let candidate: any;
+  let template: any;
 
+  candidate = await queryOne<any>(`SELECT id, name, email FROM candidates WHERE id = $1`, [body.candidate_id]);
   if (!candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
   if (!candidate.email) return NextResponse.json({ error: "Candidate has no email" }, { status: 400 });
 
-  const { data: template } = await supabase
-    .from("email_templates")
-    .select("id, name, subject, body")
-    .eq("id", body.template_id)
-    .maybeSingle();
-
+  template = await queryOne<any>(`SELECT id, name, subject, body FROM email_templates WHERE id = $1`, [body.template_id]);
   if (!template) return NextResponse.json({ error: "Template not found" }, { status: 404 });
 
   const mergeData: Record<string, string> = {

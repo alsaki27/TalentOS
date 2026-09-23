@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { runAndRecord } from "@/lib/importSourceRunner";
-import { supabase } from "@/lib/supabase";
+import { queryOne } from "@/server/db/neon";
 
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
-  const { data: source, error } = await supabase
-    .from("import_sources")
-    .select("*")
-    .eq("id", params.id)
-    .single();
+  let source: any;
+  let error: any;
+
+  try {
+    source = await queryOne(`SELECT * FROM import_sources WHERE id = $1`, [params.id]);
+    error = source ? null : { message: "Not found" };
+  } catch (err: any) {
+    error = { message: err.message };
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 404 });
 

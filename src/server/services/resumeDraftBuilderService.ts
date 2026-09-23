@@ -10,22 +10,34 @@
 //   - Skips suggestions that cannot be safely matched.
 //   - Only applies suggestions with status='accepted' and truth_status !== 'fabrication_risk'.
 
-import { supabase } from "@/lib/supabase";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import {
   findResumeVersionById,
   createApplicationResumeVersion,
   updateApplicationResumeVersion,
   getCurrentDraftForApplication,
-  cloneResumeVersion,
   ApplicationResumeVersionRow,
+  ResumeVersionSourceType,
 } from "@/server/repositories/applicationResumeVersionsRepository";
 import {
   listSuggestionsByApplication,
   updateSuggestion,
   ApplicationResumeSuggestionRow,
 } from "@/server/repositories/applicationResumeSuggestionsRepository";
-import { buildResumeContext } from "@/server/services/resumeContextService";
+import { findLatestOriginalResume } from "@/server/repositories/candidateEvidenceRepository";
+import { findLatestBaseResumeFull } from "@/server/repositories/baseResumesRepository";
+import { query, queryOne } from "@/server/db/neon";
+import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
+import type { ResumeDocument } from "@/lib/falood/types";
+
+// applications.source_type has a broader domain (e.g. "copilot_adhoc",
+// "email_confirmation") than ResumeVersionSourceType — only pass through
+// values that are actually valid resume-version source types, default to
+// "base_resume" otherwise.
+const RESUME_VERSION_SOURCE_TYPES: readonly ResumeVersionSourceType[] = ["base_resume", "original_resume", "blank", "manual"];
+function toResumeVersionSourceType(value: string | null | undefined): ResumeVersionSourceType {
+  return RESUME_VERSION_SOURCE_TYPES.includes(value as ResumeVersionSourceType) ? (value as ResumeVersionSourceType) : "base_resume";
+}
 
 export interface BuildResumeDraftOptions {
   baseResumeVersionId?: string | null;
@@ -133,7 +145,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
         base_resume_id: sourceResult.baseResumeId,
         target_job_id: targetJobId,
         content: draftContent,
-        source_type: app.source_type ?? "base_resume",
+        source_type: toResumeVersionSourceType(app.source_type),
         title: sourceResult.title,
         version_label: "draft",
         created_by: createdByUserId,
@@ -146,7 +158,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
       base_resume_id: sourceResult.baseResumeId,
       target_job_id: targetJobId,
       content: draftContent,
-      source_type: app.source_type ?? "base_resume",
+      source_type: toResumeVersionSourceType(app.source_type),
       title: sourceResult.title,
       version_label: "draft",
       created_by: createdByUserId,
@@ -196,13 +208,7 @@ async function loadSourceContent(
   switch (sourceType) {
     case "base_resume": {
       // Load latest base resume for candidate
-      const { data: baseResume } = await supabase
-        .from("base_resumes")
-        .select("id, content, name")
-        .eq("candidate_id", candidateId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const baseResume = await findLatestBaseResumeFull(candidateId);
       if (baseResume) {
         return {
           content: structuredClone(baseResume.content as Record<string, unknown>),
@@ -216,17 +222,10 @@ async function loadSourceContent(
 
     case "original_resume": {
       // Load latest uploaded resume parsed content
-      const { data: resume } = await supabase
-        .from("resumes")
-        .select("parsed_json")
-        .eq("candidate_id", candidateId)
-        .eq("is_original_upload", true)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const resume = await findLatestOriginalResume(candidateId);
       if (resume?.parsed_json) {
         return {
-          content: parsedJsonToResumeDocument(resume.parsed_json as Record<string, unknown>),
+          content: parsedJsonToResumeDocument(resume.parsed_json as Record<string, unknown>) as unknown as Record<string, unknown>,
           baseResumeId: null,
           title: "Draft from Original Resume",
         };
@@ -239,42 +238,28 @@ async function loadSourceContent(
     }
 
     case "manual": {
-      // Load latest draft for this candidate's applications
-      const { data: apps } = await supabase
-        .from("applications")
-        .select("id")
-        .eq("candidate_id", candidateId);
-      const appIds = (apps ?? []).map((a: any) => a.id);
-      // Try to find an existing draft version
-      if (appIds.length > 0) {
-        const { data: versions } = await supabase
-          .from("application_resume_versions")
-          .select("id, content, title, base_resume_id")
-          .eq("candidate_id", candidateId)
-          .eq("status", "draft")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (versions) {
-          return {
-            content: structuredClone(versions.content as Record<string, unknown>),
-            baseResumeId: versions.base_resume_id,
-            title: versions.title ?? "Draft from Manual",
-          };
-        }
+      // Try to find an existing draft version for this candidate
+      const version = await queryOne<{ id: string; content: unknown; title: string | null; base_resume_id: string | null }>(
+        `SELECT id, content, title, base_resume_id
+         FROM application_resume_versions
+         WHERE candidate_id = $1 AND status = 'draft'
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        [candidateId]
+      );
+      if (version) {
+        return {
+          content: structuredClone(version.content as Record<string, unknown>),
+          baseResumeId: version.base_resume_id,
+          title: version.title ?? "Draft from Manual",
+        };
       }
       return createBlankContent();
     }
 
     default: {
       // Try base resume first, then blank
-      const { data: baseResume } = await supabase
-        .from("base_resumes")
-        .select("id, content, name")
-        .eq("candidate_id", candidateId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const baseResume = await findLatestBaseResumeFull(candidateId);
       if (baseResume) {
         return {
           content: structuredClone(baseResume.content as Record<string, unknown>),
@@ -296,7 +281,7 @@ function createBlankContent(): SourceContentResult {
       education: [],
       formatting: {
         styleId: "skarion_compact_professional",
-        pageFormat: "letter",
+      pageFormat: "a4",
         fontFamily: "Calibri",
         fontSize: 10.5,
         marginTop: 0.5,
@@ -313,16 +298,13 @@ function createBlankContent(): SourceContentResult {
   };
 }
 
-function parsedJsonToResumeDocument(parsed: Record<string, unknown>): Record<string, unknown> {
-  // Convert old parsed_json format to ResumeDocument shape
-  const content: Record<string, unknown> = {
-    header: { fullName: "" },
-    skills: [],
-    experience: [],
-    education: [],
-    formatting: {
+function parsedJsonToResumeDocument(parsed: Record<string, unknown>): ResumeDocument {
+  return buildResumeDocumentFromParsedResume(
+    parsed,
+    { name: "" },
+    {
       styleId: "skarion_compact_professional",
-      pageFormat: "letter",
+      pageFormat: "a4",
       fontFamily: "Calibri",
       fontSize: 10.5,
       marginTop: 0.5,
@@ -333,77 +315,7 @@ function parsedJsonToResumeDocument(parsed: Record<string, unknown>): Record<str
       bulletSpacing: 2,
       lineHeight: 1.15,
     },
-  };
-
-  if (parsed.header && typeof parsed.header === "object") {
-    content.header = parsed.header;
-  } else if (parsed.personalInfo && typeof parsed.personalInfo === "object") {
-    const pi = parsed.personalInfo as any;
-    content.header = {
-      fullName: pi.name ?? "",
-      location: pi.location,
-      phone: pi.phone,
-      email: pi.email,
-      linkedin: pi.linkedin,
-      github: pi.github,
-    };
-  }
-
-  if (Array.isArray(parsed.skills)) {
-    const skills: any[] = [];
-    for (const s of parsed.skills) {
-      if (typeof s === "string") {
-        skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: "Skills", skills: [s] });
-      } else if (typeof s === "object" && s) {
-        if (s.name && s.skills) {
-          skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: s.name, skills: Array.isArray(s.skills) ? s.skills : [] });
-        } else if (s.title && s.skills) {
-          skills.push({ id: `skill-${Math.random().toString(36).slice(2)}`, title: s.title, skills: Array.isArray(s.skills) ? s.skills : [] });
-        }
-      }
-    }
-    if (skills.length > 0) content.skills = skills;
-  }
-
-  if (Array.isArray(parsed.experience)) {
-    const experience: any[] = [];
-    for (const exp of parsed.experience) {
-      if (typeof exp !== "object" || !exp) continue;
-      const bullets: any[] = [];
-      if (Array.isArray(exp.bullets)) {
-        for (const b of exp.bullets) {
-          if (typeof b === "string") bullets.push({ id: `b-${Math.random().toString(36).slice(2)}`, text: b });
-          else if (typeof b === "object" && b && b.text) bullets.push({ id: `b-${Math.random().toString(36).slice(2)}`, text: b.text });
-        }
-      }
-      experience.push({
-        id: `exp-${Math.random().toString(36).slice(2)}`,
-        title: exp.title ?? "",
-        company: exp.company ?? "",
-        location: exp.location,
-        startDate: exp.startDate ?? "",
-        endDate: exp.endDate,
-        bullets,
-      });
-    }
-    if (experience.length > 0) content.experience = experience;
-  }
-
-  if (Array.isArray(parsed.education)) {
-    const education: any[] = [];
-    for (const edu of parsed.education) {
-      if (typeof edu !== "object" || !edu) continue;
-      education.push({
-        id: `edu-${Math.random().toString(36).slice(2)}`,
-        degree: edu.degree ?? "",
-        school: edu.school ?? "",
-        graduationDate: edu.graduationDate,
-      });
-    }
-    if (education.length > 0) content.education = education;
-  }
-
-  return content;
+  );
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -506,28 +418,24 @@ function applySuggestionToContent(
 // ───────────────────────────────────────────────────────────────
 
 async function resolveTargetJobId(
-  applicationId: string,
+  _applicationId: string,
   jobId: string | null,
   candidateId: string
 ): Promise<string | null> {
   if (jobId) {
     // Find the target_jobs row for this candidate + job
-    const { data } = await supabase
-      .from("target_jobs")
-      .select("id")
-      .eq("candidate_id", candidateId)
-      .eq("job_id", jobId)
-      .maybeSingle();
-    if (data?.id) return data.id;
+    const row = await queryOne<{ id: string }>(
+      `SELECT id FROM target_jobs WHERE candidate_id = $1 AND job_id = $2 LIMIT 1`,
+      [candidateId, jobId]
+    );
+    if (row?.id) return row.id;
   }
   // Try to find any target_job for this candidate
-  const { data } = await supabase
-    .from("target_jobs")
-    .select("id")
-    .eq("candidate_id", candidateId)
-    .limit(1)
-    .maybeSingle();
-  return data?.id ?? null;
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM target_jobs WHERE candidate_id = $1 LIMIT 1`,
+    [candidateId]
+  );
+  return row?.id ?? null;
 }
 
 // ───────────────────────────────────────────────────────────────

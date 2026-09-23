@@ -49,7 +49,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```bash
 AI_KEYS_ENCRYPTION_SECRET=your-32-byte-hex-secret
 CRON_SECRET=your-cron-secret
-ANTHROPIC_API_KEY=your-anthropic-key  # or NVIDIA_API_KEY
+# Add provider credentials through /admin/ai after the database is available.
 ```
 
 ## 3. Migration Order

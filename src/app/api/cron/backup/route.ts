@@ -5,6 +5,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { buildBackupSnapshot, storeBackupSnapshot } from "@/lib/backup";
+import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -14,16 +16,46 @@ function isAuthorized(req: NextRequest) {
   return req.headers.get("authorization") === `Bearer ${secret}`;
 }
 
+async function logBackupAttempt(action: "backup.created" | "backup.failed", metadata: Record<string, unknown>) {
+  await recordAuditEvent({
+    actor_user_id: "00000000-0000-0000-0000-000000000000",
+    actor_email: "system@talentos",
+    action,
+    entity_type: "backup",
+    metadata,
+  });
+}
+
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const startedMs = Date.now();
+  const startedAt = new Date().toISOString();
+  await recordJobAttempt("backup");
+
   try {
     const snapshot = await buildBackupSnapshot();
     const path = await storeBackupSnapshot(snapshot);
+    await logBackupAttempt("backup.created", {
+      storedAt: new Date().toISOString(),
+      startedAt,
+      path,
+      counts: snapshot.counts,
+    });
+    const durationMs = Date.now() - startedMs;
+    const summary = JSON.stringify({ path, counts: snapshot.counts, startedAt });
+    await recordJobSuccess("backup", durationMs, summary);
     return NextResponse.json({ path, counts: snapshot.counts });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message ?? "backup failed" }, { status: 500 });
+    const durationMs = Date.now() - startedMs;
+    const errMsg = err.message ?? "backup failed";
+    await logBackupAttempt("backup.failed", {
+      startedAt,
+      error: errMsg,
+    });
+    await recordJobFailure("backup", errMsg, durationMs);
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }

@@ -4,12 +4,25 @@
 
 const crypto = globalThis.crypto;
 
-const JWT_SECRET = process.env.JWT_SECRET ?? process.env.AI_KEYS_ENCRYPTION_SECRET ?? "";
+// Resolve secrets at request time. Reading this at module initialization lets
+// a local build bake .env.local into the middleware bundle, while the deployed
+// Worker uses its runtime secret; tokens then verify during login but fail on
+// the next API request.
+function getJwtSecret() {
+  const runtimeSecret = (globalThis as { __TALENTOS_JWT_SECRET?: unknown }).__TALENTOS_JWT_SECRET;
+  if (typeof runtimeSecret === "string" && runtimeSecret.length > 0) return runtimeSecret;
+  return process.env.JWT_SECRET ?? process.env.AI_KEYS_ENCRYPTION_SECRET ?? "";
+}
 
 export interface JWTPayload {
   user_id: string;
   email: string | null;
   role: string;
+  // Absent = staff token (pre-existing tokens keep working). "candidate" marks a
+  // portal session so candidate and staff sessions can never be confused even if
+  // a cookie name collided somehow — each auth path checks this explicitly.
+  type?: "candidate";
+  mfa_pending?: boolean;
   iat: number;
   exp: number;
 }
@@ -27,7 +40,9 @@ function encodeBase64url(buffer: BufferSource): string {
 }
 
 function decodeBase64url(str: string): Uint8Array {
-  const padded = str + "==".slice(0, (3 - (str.length % 3)) % 3);
+  // Base64url padding: length must be divisible by 4
+  const padding = (4 - (str.length % 4)) % 4;
+  const padded = str + "=".repeat(padding);
   const base64 = padded.replace(/-/g, "+").replace(/_/g, "/");
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -52,7 +67,8 @@ async function importKey(secret: string): Promise<CryptoKey> {
 }
 
 export async function createJWT(payload: Omit<JWTPayload, "iat" | "exp">): Promise<string> {
-  if (!JWT_SECRET) {
+  const jwtSecret = getJwtSecret();
+  if (!jwtSecret) {
     throw new Error("JWT_SECRET environment variable is required");
   }
 
@@ -68,7 +84,7 @@ export async function createJWT(payload: Omit<JWTPayload, "iat" | "exp">): Promi
   const payloadB64 = encodeBase64url(stringToBuffer(JSON.stringify(fullPayload)));
   const message = `${headerB64}.${payloadB64}`;
 
-  const key = await importKey(JWT_SECRET);
+  const key = await importKey(jwtSecret);
   const signature = await crypto.subtle.sign("HMAC", key, stringToBuffer(message));
   const signatureB64 = encodeBase64url(signature);
 
@@ -76,7 +92,8 @@ export async function createJWT(payload: Omit<JWTPayload, "iat" | "exp">): Promi
 }
 
 export async function verifyJWT(token: string): Promise<JWTPayload | null> {
-  if (!JWT_SECRET) {
+  const jwtSecret = getJwtSecret();
+  if (!jwtSecret) {
     console.error("JWT_SECRET not set");
     return null;
   }
@@ -87,7 +104,7 @@ export async function verifyJWT(token: string): Promise<JWTPayload | null> {
   const [headerB64, payloadB64, signatureB64] = parts;
   const message = `${headerB64}.${payloadB64}`;
 
-  const key = await importKey(JWT_SECRET);
+  const key = await importKey(jwtSecret);
   const signature = decodeBase64url(signatureB64);
   const valid = await crypto.subtle.verify(
     "HMAC",

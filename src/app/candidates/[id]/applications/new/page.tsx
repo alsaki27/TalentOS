@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 
 /* ─────────── types ─────────── */
 
@@ -870,9 +871,9 @@ export default function NewApplicationPage() {
               </button>
               <button
                 className="btn-primary"
-                onClick={() => {
+                onClick={async () => {
                   if (applicationResumeId) {
-                    router.push(`/falood/studio/application/${applicationResumeId}`);
+                    router.push(await resolveFaloodStudioUrl("application_resume_version", applicationResumeId));
                   }
                 }}
                 disabled={!applicationResumeId}

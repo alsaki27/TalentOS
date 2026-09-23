@@ -1,0 +1,9 @@
+-- 038: Preserve independent Google Vertex proxy keys.
+--
+-- This file is replayed on every deployment, so it must not delete provider
+-- pool members. Separate Vertex projects/accounts are intentional capacity
+-- boundaries and are valid fallbacks even when they share a provider.
+--
+-- The previous provider-wide deduplication deleted every Vertex key except
+-- the oldest one, which removed Vertex B and collapsed rank-2 fallbacks onto
+-- Vertex A. Existing rows are retained; key-pool routing handles rotation.

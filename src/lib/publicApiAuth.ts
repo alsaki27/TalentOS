@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { queryOne, execute } from "@/server/db/neon";
 
 export const PUBLIC_API_SCOPES = [
   "candidates:read",
@@ -86,15 +86,11 @@ export async function requirePublicApiScope(req: NextRequest, required: PublicAp
     };
   }
 
-  const { data, error } = await supabase
-    .from("public_api_keys")
-    .select("id, name, key_prefix, scopes, expires_at, revoked_at")
-    .eq("key_hash", await hashPublicApiKey(key))
-    .maybeSingle();
+  const data = await queryOne<{ id: string; name: string; key_prefix: string; scopes: string[]; expires_at: string | null; revoked_at: string | null }>(
+    "SELECT id, name, key_prefix, scopes, expires_at, revoked_at FROM public_api_keys WHERE key_hash = $1",
+    [await hashPublicApiKey(key)]
+  );
 
-  if (error) {
-    return { context: null, response: NextResponse.json({ error: error.message }, { status: 500 }) };
-  }
   if (!data || data.revoked_at || (data.expires_at && new Date(data.expires_at).getTime() < Date.now())) {
     return { context: null, response: NextResponse.json({ error: "Invalid or expired API key." }, { status: 401 }) };
   }
@@ -108,10 +104,10 @@ export async function requirePublicApiScope(req: NextRequest, required: PublicAp
     };
   }
 
-  await supabase
-    .from("public_api_keys")
-    .update({ last_used_at: new Date().toISOString() })
-    .eq("id", data.id);
+  await execute(
+    "UPDATE public_api_keys SET last_used_at = $1 WHERE id = $2",
+    [new Date().toISOString(), data.id]
+  );
 
   return {
     context: data as PublicApiContext,

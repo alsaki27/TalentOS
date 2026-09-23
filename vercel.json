@@ -15,6 +15,18 @@
     {
       "path": "/api/cron/categorize-jobs",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/ai-usage-rollup",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/job-agent-poll",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/job-ceo",
+      "schedule": "30 9 * * *"
     }
   ]
 }

@@ -3,9 +3,7 @@
 // select() calls (dataset is small enough that a Postgres RPC isn't warranted).
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -14,37 +12,14 @@ function rate(count: number, total: number): number {
 }
 
 export async function GET() {
-  let candidatesCount: number;
-  let jobs: any[];
-  let allTickets: any[];
-  let resumes: any[];
-
-  if (isNeon()) {
-    const candidatesRes = await queryOne<{ count: string }>(
-      'SELECT COUNT(*) as count FROM candidates',
-      []
-    );
-    candidatesCount = parseInt(candidatesRes?.count ?? '0', 10);
-    jobs = await query('SELECT id, source, last_seen_at FROM jobs', []);
-    allTickets = await query('SELECT id, status, job_id, resume_id FROM applications', []);
-    resumes = await query('SELECT id, label FROM resumes', []);
-  } else {
-    const [candidatesRes, jobsRes, applicationsRes, resumesRes] = await Promise.all([
-      supabase.from("candidates").select("id", { count: "exact", head: true }),
-      supabase.from("jobs").select("id, source, last_seen_at"),
-      supabase.from("applications").select("id, status, job_id, resume_id"),
-      supabase.from("resumes").select("id, label"),
-    ]);
-
-    if (jobsRes.error) return NextResponse.json({ error: jobsRes.error.message }, { status: 500 });
-    if (applicationsRes.error) return NextResponse.json({ error: applicationsRes.error.message }, { status: 500 });
-    if (resumesRes.error) return NextResponse.json({ error: resumesRes.error.message }, { status: 500 });
-
-    candidatesCount = candidatesRes.count ?? 0;
-    jobs = jobsRes.data ?? [];
-    allTickets = applicationsRes.data ?? [];
-    resumes = resumesRes.data ?? [];
-  }
+  const candidatesRes = await queryOne<{ count: string }>(
+    'SELECT COUNT(*) as count FROM candidates',
+    []
+  );
+  const candidatesCount = parseInt(candidatesRes?.count ?? '0', 10);
+  const jobs = await query('SELECT id, source, last_seen_at FROM jobs', []);
+  const allTickets = await query('SELECT id, status, job_id, resume_id FROM applications', []);
+  const resumes = await query('SELECT id, label FROM resumes', []);
 
   // Pipeline tickets are work assigned to an application engineer that hasn't been
   // submitted yet — they aren't real applications and must not skew conversion rates.

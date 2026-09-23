@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, neon-cloudflare-migration]
   pull_request:
 
 jobs:
@@ -12,9 +12,38 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
+      - name: Validate Cloudflare production wiring
+        run: npm run cf:verify
+      - name: Verify generated Cloudflare types
+        run: npm run cf:types:check
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm test
       - run: npm run build
+
+      - name: Build for Cloudflare (OpenNext)
+        run: npm run cf:build
+        env:
+          DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          NEON_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+
+      - name: Install Playwright browsers
+        if: false # SKIPPED (temporary, user-requested) - see "Run E2E tests" below
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        # TEMPORARY (skipped, user-requested): this step also has no server to
+        # test against - TEST_BASE_URL isn't set here so the suite defaults to
+        # http://localhost:3000, but nothing in this job starts a dev server
+        # (playwright.config.ts has no webServer block either). Re-enable only
+        # after that's fixed, or after wiring TEST_BASE_URL to a real preview
+        # deployment.
+        if: false
+        run: npm run test:e2e
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+          TEST_ADMIN_PASSWORD: ${{ secrets.TEST_ADMIN_PASSWORD }}

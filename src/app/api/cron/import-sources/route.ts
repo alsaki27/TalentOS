@@ -5,8 +5,9 @@
 // secret instead. src/middleware.ts has a matching bypass for this exact path.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { query } from "@/server/db/neon";
 import { runAndRecord } from "@/lib/importSourceRunner";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -21,17 +22,34 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: sources, error } = await supabase
-    .from("import_sources")
-    .select("*")
-    .eq("is_active", true);
+  const startedMs = Date.now();
+  await recordJobAttempt("import-sources");
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  let sources: any[] = [];
+  sources = await query<any>(`SELECT * FROM import_sources WHERE is_active = true`);
 
   const results = [];
-  for (const source of sources ?? []) {
+  let totalImported = 0;
+  let totalSkipped = 0;
+  let hasErrors = false;
+
+  for (const source of sources) {
     const result = await runAndRecord(source);
     results.push({ id: source.id, label: source.label, ...result });
+    if ("error" in result) {
+      hasErrors = true;
+    } else {
+      totalImported += result.imported;
+      totalSkipped += result.skipped;
+    }
+  }
+
+  const durationMs = Date.now() - startedMs;
+  const summary = JSON.stringify({ totalImported, totalSkipped, sourcesRan: results.length });
+  if (hasErrors) {
+    await recordJobFailure("import-sources", "One or more sources had errors", durationMs);
+  } else {
+    await recordJobSuccess("import-sources", durationMs, summary);
   }
 
   return NextResponse.json({ ranSources: results.length, results });

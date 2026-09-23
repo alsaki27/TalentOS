@@ -1,40 +1,89 @@
 "use client";
 
-import { FormEvent, Suspense, useMemo, useState } from "react";
+import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
   return (
     <Suspense fallback={<div className="auth-shell"><div className="auth-card">Loading...</div></div>}>
-      <LoginForm />
+      <AuthForm />
     </Suspense>
   );
 }
 
-function LoginForm() {
+type AuthMode = "signin" | "signup";
+
+function AuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = useMemo(() => searchParams?.get("next") || "/jobs", [searchParams]);
+  const requestedMode = (searchParams?.get("mode") || "").toLowerCase() === "signup" ? "signup" : "signin";
+  const [mode, setMode] = useState<AuthMode>(requestedMode);
+  const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [loadingMode, setLoadingMode] = useState<AuthMode | "">("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    setMode(requestedMode);
+  }, [requestedMode]);
+
+  useEffect(() => {
+    const authError = searchParams?.get("error");
+    if (authError) {
+      setError(authError);
+    }
+  }, [searchParams]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setLoading(true);
     setError("");
+    setLoadingMode(mode);
 
-    const res = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
-    });
+    if (mode === "signup" && password !== confirmPassword) {
+      setLoadingMode("");
+      setError("Passwords do not match.");
+      return;
+    }
 
-    setLoading(false);
+    let res: Response;
+    try {
+      res = await fetch(mode === "signin" ? "/api/signin" : "/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          display_name: displayName,
+        }),
+      });
+    } catch {
+      setLoadingMode("");
+      setError("The sign-in service could not be reached. Please disable browser blocking for this site and try again.");
+      return;
+    }
+
+    setLoadingMode("");
     if (!res.ok) {
+      // Candidate accounts use their isolated portal session. Trying this only
+      // after staff auth fails preserves staff auth and keeps the two cookies
+      // completely separate.
+      if (mode === "signin") {
+        try {
+          const candidateRes = await fetch("/api/portal/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
+          if (candidateRes.ok) {
+            router.push("/portal");
+            router.refresh();
+            return;
+          }
+        } catch {
+          // Fall through to the normal staff sign-in error below.
+        }
+      }
       const data = await res.json().catch(() => ({}));
-      setError(data.error || "Could not sign in.");
+      setError(data.error || (mode === "signin" ? "Could not sign in." : "Could not sign up."));
       return;
     }
 
@@ -42,18 +91,64 @@ function LoginForm() {
     router.refresh();
   }
 
+  const googleHref = useMemo(
+    () => `/api/auth/google/start?next=${encodeURIComponent(nextPath)}`,
+    [nextPath]
+  );
+
   return (
     <div className="auth-shell">
       <form className="auth-card" onSubmit={submit}>
         <div>
-          <h1>Skarion Tracker</h1>
-          <p className="muted">Sign in to manage candidates, jobs, and application tickets.</p>
+          <h1>TalentOS</h1>
+          <p className="muted">
+            {mode === "signin"
+              ? "Sign in to continue into the TalentOS workspace."
+              : "Create your account to start using TalentOS."}
+          </p>
         </div>
+
+        <div className="action-group" style={{ justifyContent: "stretch", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+          <button
+            type="button"
+            className={mode === "signin" ? "btn-primary" : "btn"}
+            onClick={() => {
+              setMode("signin");
+              setError("");
+            }}
+          >
+            Sign in
+          </button>
+          <button
+            type="button"
+            className={mode === "signup" ? "btn-primary" : "btn"}
+            onClick={() => {
+              setMode("signup");
+              setError("");
+            }}
+          >
+            Sign up
+          </button>
+        </div>
+
+        {mode === "signup" && (
+          <div className="field-group">
+            <label>Full Name</label>
+            <input
+              type="text"
+              autoComplete="name"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+              required={mode === "signup"}
+            />
+          </div>
+        )}
 
         <div className="field-group">
           <label>Email</label>
           <input
             type="email"
+            name="email"
             autoComplete="email"
             value={email}
             onChange={(event) => setEmail(event.target.value)}
@@ -65,6 +160,7 @@ function LoginForm() {
           <label>Password</label>
           <input
             type="password"
+            name="password"
             autoComplete="current-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -72,11 +168,34 @@ function LoginForm() {
           />
         </div>
 
+        {mode === "signup" && (
+          <div className="field-group">
+            <label>Confirm Password</label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              required={mode === "signup"}
+            />
+          </div>
+        )}
+
         {error && <p className="form-error">{error}</p>}
 
-        <button className="btn-primary auth-submit" type="submit" disabled={loading}>
-          {loading ? "Signing in..." : "Sign in"}
+        <button className="btn-primary auth-submit" type="submit" disabled={loadingMode !== ""}>
+          {loadingMode === "signin" && "Signing in..."}
+          {loadingMode === "signup" && "Creating account..."}
+          {loadingMode === "" && (mode === "signin" ? "Sign in" : "Create account")}
         </button>
+
+        <a href={googleHref} className="btn auth-submit" style={{ textAlign: "center" }}>
+          Continue with Google
+        </a>
+
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+          The first account created becomes `admin`. Any additional self-signups start as `application engineer` and can be updated by an admin from the Team page.
+        </p>
       </form>
     </div>
   );

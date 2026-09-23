@@ -7,6 +7,8 @@ import Pagination from "@/components/Pagination";
 
 interface InterviewItem {
   id: string;
+  schedule_id: string | null;
+  application_id: string;
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
@@ -14,6 +16,7 @@ interface InterviewItem {
   status: string;
   location: string | null;
   meeting_link: string | null;
+  has_transcript: boolean;
   applications: {
     candidate_id: string;
     job_id: string;
@@ -37,6 +40,7 @@ function statusBadgeClass(status: string) {
     case "cancelled": return "badge-closed";
     case "no_show": return "badge-rejected";
     case "in_progress": return "badge-in_progress";
+    case "unscheduled": return "badge";
     default: return "badge";
   }
 }
@@ -85,8 +89,10 @@ export default function InterviewsPage() {
   const [search, setSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [transcriptFilter, setTranscriptFilter] = useState<"" | "yes" | "no">("");
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [actionId, setActionId] = useState("");
+  const [notesFor, setNotesFor] = useState<InterviewItem | null>(null);
 
   function buildParams(pageNum: number, size: number) {
     const params = new URLSearchParams();
@@ -96,6 +102,7 @@ export default function InterviewsPage() {
     if (statusFilter) params.set("status", statusFilter);
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
+    if (transcriptFilter) params.set("hasTranscript", transcriptFilter);
     return params;
   }
 
@@ -122,7 +129,7 @@ export default function InterviewsPage() {
     }
   }
 
-  useEffect(() => { load(1, pageSize); }, [search, statusFilter, dateFrom, dateTo, pageSize]);
+  useEffect(() => { load(1, pageSize); }, [search, statusFilter, dateFrom, dateTo, transcriptFilter, pageSize]);
 
   async function cancelInterview(id: string) {
     if (!confirm("Cancel this interview?")) return;
@@ -174,6 +181,7 @@ export default function InterviewsPage() {
   }
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const unscheduledCount = items.filter((i) => !i.scheduled_at).length;
 
   return (
     <>
@@ -199,11 +207,17 @@ export default function InterviewsPage() {
           <input placeholder="Search candidate, round..." value={search} onChange={(e) => setSearch(e.target.value)} />
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="">All statuses</option>
+            <option value="unscheduled">Not scheduled</option>
             <option value="scheduled">Scheduled</option>
             <option value="in_progress">In Progress</option>
             <option value="completed">Completed</option>
             <option value="cancelled">Cancelled</option>
             <option value="no_show">No Show</option>
+          </select>
+          <select value={transcriptFilter} onChange={(e) => setTranscriptFilter(e.target.value as "" | "yes" | "no")}>
+            <option value="">All transcripts</option>
+            <option value="yes">Has transcript</option>
+            <option value="no">No transcript</option>
           </select>
           <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} placeholder="From" />
           <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} placeholder="To" />
@@ -220,6 +234,12 @@ export default function InterviewsPage() {
         <div className="loading-panel">Loading interviews...</div>
       ) : tab === "calendar" ? (
         <div>
+          {unscheduledCount > 0 && (
+            <div className="empty" style={{ marginBottom: 12, textAlign: "left", padding: "10px 14px" }}>
+              {unscheduledCount} interview-stage application{unscheduledCount === 1 ? "" : "s"} match{unscheduledCount === 1 ? "es" : ""} your filters but {unscheduledCount === 1 ? "hasn't" : "haven't"} been scheduled yet, so {unscheduledCount === 1 ? "it doesn't" : "they don't"} show on the calendar.{" "}
+              <button className="btn-compact" onClick={() => setTab("list")}>View in list</button>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, marginBottom: 12 }}>
             {weekDays.map((day, i) => (
               <div key={i} className="card" style={{ padding: 10, textAlign: "center", minHeight: 60 }}>
@@ -263,6 +283,7 @@ export default function InterviewsPage() {
                     <th>Date</th>
                     <th>Time</th>
                     <th>Status</th>
+                    <th>Transcript</th>
                     <th>Panel</th>
                     <th>Actions</th>
                   </tr>
@@ -288,7 +309,14 @@ export default function InterviewsPage() {
                       </td>
                       <td>{formatDate(item.scheduled_at)}</td>
                       <td>{formatTime(item.scheduled_at)}</td>
-                      <td><span className={`badge ${statusBadgeClass(item.status)}`}>{item.status}</span></td>
+                      <td><span className={`badge ${statusBadgeClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></td>
+                      <td>
+                        {item.has_transcript ? (
+                          <button className="btn-compact" onClick={() => setNotesFor(item)}>✅ View</button>
+                        ) : (
+                          <span className="muted">— None</span>
+                        )}
+                      </td>
                       <td>
                         <div style={{ display: "flex", gap: 4 }}>
                           {item.panel.slice(0, 3).map((p) => (
@@ -299,17 +327,27 @@ export default function InterviewsPage() {
                           {item.panel.length > 3 && (
                             <span className="avatar-circle" style={{ background: "var(--bg)", color: "var(--ink-soft)" }}>+{item.panel.length - 3}</span>
                           )}
+                          {item.panel.length === 0 && <span className="muted">—</span>}
                         </div>
                       </td>
                       <td>
                         <div className="action-group">
-                          <Link href={`/interviews/${item.id}`}><button className="btn-compact">View</button></Link>
-                          <button className="btn-compact" disabled={actionId === `${item.id}:cancel`} onClick={() => cancelInterview(item.id)}>
-                            {actionId === `${item.id}:cancel` ? "Cancelling..." : "Cancel"}
-                          </button>
-                          <button className="btn-compact" disabled={actionId === `${item.id}:reminder`} onClick={() => sendReminder(item.id)}>
-                            {actionId === `${item.id}:reminder` ? "Sending..." : "Reminder"}
-                          </button>
+                          {item.schedule_id ? (
+                            <>
+                              <Link href={`/interviews/${item.schedule_id}`}><button className="btn-compact">View</button></Link>
+                              <button className="btn-compact" disabled={actionId === `${item.schedule_id}:cancel`} onClick={() => cancelInterview(item.schedule_id!)}>
+                                {actionId === `${item.schedule_id}:cancel` ? "Cancelling..." : "Cancel"}
+                              </button>
+                              <button className="btn-compact" disabled={actionId === `${item.schedule_id}:reminder`} onClick={() => sendReminder(item.schedule_id!)}>
+                                {actionId === `${item.schedule_id}:reminder` ? "Sending..." : "Reminder"}
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <Link href={`/candidates/${item.applications?.candidate_id}`}><button className="btn-compact">View candidate</button></Link>
+                              <Link href={`/interviews/schedule?applicationId=${item.application_id}`}><button className="btn-compact btn-primary">Schedule</button></Link>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -329,6 +367,59 @@ export default function InterviewsPage() {
           )}
         </div>
       )}
+
+      {notesFor && <TranscriptModal item={notesFor} onClose={() => setNotesFor(null)} />}
     </>
+  );
+}
+
+interface Comment {
+  id: string;
+  body: string;
+  commenter_name: string;
+  created_at: string;
+}
+
+function TranscriptModal({ item, onClose }: { item: InterviewItem; onClose: () => void }) {
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch(`/api/applications/${item.application_id}/comments`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => setComments(Array.isArray(data) ? data : []))
+      .finally(() => setLoading(false));
+  }, [item.application_id]);
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 640 }} onClick={(e) => e.stopPropagation()}>
+        <h2>
+          Interview transcript — {item.applications?.candidates?.name ?? "—"}
+          <div className="muted" style={{ fontSize: 12, fontWeight: 400 }}>
+            {item.applications?.jobs?.title} {item.applications?.jobs?.company ? `• ${item.applications.jobs.company}` : ""}
+          </div>
+        </h2>
+        {loading ? (
+          <div className="loading-panel">Loading...</div>
+        ) : comments.length === 0 ? (
+          <p className="muted">No transcript comment found for this application (notes column may hold it instead).</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: "60vh", overflow: "auto" }}>
+            {comments.map((c) => (
+              <div key={c.id} style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+                <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                  {c.commenter_name} • {new Date(c.created_at).toLocaleString()}
+                </div>
+                <p style={{ whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.5, fontSize: 13 }}>{c.body}</p>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="modal-actions">
+          <button onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
   );
 }

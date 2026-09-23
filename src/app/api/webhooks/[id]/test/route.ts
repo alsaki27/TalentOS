@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { queryOne } from "@/server/db/neon";
 import { deliverWebhook } from "@/lib/webhookEngine";
 
 export const dynamic = "force-dynamic";
@@ -12,11 +12,14 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const { response } = await requireCurrentUser(DESTRUCTIVE_MANAGER_ROLES);
   if (response) return response;
 
-  const { data: endpoint, error } = await supabase
-    .from("webhook_endpoints")
-    .select("*")
-    .eq("id", params.id)
-    .single();
+  let endpoint: any;
+  let error: any;
+
+  endpoint = await queryOne(
+    `SELECT * FROM webhook_endpoints WHERE id = $1`,
+    [params.id]
+  );
+  error = endpoint ? null : { message: "Webhook not found" };
 
   if (error || !endpoint) {
     return NextResponse.json({ error: "Webhook not found" }, { status: 404 });

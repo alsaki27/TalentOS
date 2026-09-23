@@ -1,0 +1,69 @@
+﻿Current base resume state right before regeneration:
+
+[DB] Initializing Neon connection (host: ep-withered-leaf-at0ubn6s-pooler.c-9.us-east-1.aws.neon.tech)
+  e4efba67-2cfb-45bc-997b-13c6f9e95eb9  updated_at=Thu Aug 20 2026 17:01:16 GMT+0600 (Bangladesh Standard Time)  personalInfo={"email":"md.sarker.aminul@gmail.com","phone":"(269) 312-1996","fullName":"MD AMINUL SARKER","linkedin":"https://www.linkedin.com/in/mdaminulislam.sarker","location":"Flushing, NY"}
+  40b3750b-8ea6-4613-bffe-56021ad2e1ef  updated_at=Thu Aug 20 2026 17:38:35 GMT+0600 (Bangladesh Standard Time)  personalInfo={"email":"saddamhossainmpa@gmail.com","phone":"(610) 809-9069","fullName":"SADDAM H.","location":"Pittsburgh, PA"}
+
+HVAC & Utility Mechanical Engineer @ Boviet Solar Technologies: new workflow e6024593-784f-42e1-863f-ec9f2ca53a0f queued (base resume content re-materialized fresh just now)
+
+DFT Engineer @ JNL Technologies: new workflow 551aad82-b2f3-49a8-baa0-98afea5b48f7 queued (base resume content re-materialized fresh just now)
+
+Engineer - Entry Level, Solar (PV) @ Intertek: new workflow cf197d4c-3739-40c7-876d-a526dfe8090c queued (base resume content re-materialized fresh just now)
+
+Mechanical Design Engineer @ Insight Global: new workflow 9ad3efa2-9cec-45a4-b8e4-be6469beb742 queued (base resume content re-materialized fresh just now)
+
+4 regeneration(s) queued. Kicking off dispatch...
+  [dispatch poke] HTTP 200
+  [poll] 551aad82:running(stage 1)  9ad3efa2:running(stage 1)  e6024593:running(stage 1)  cf197d4c:running(stage 1)
+  [dispatch poke] HTTP 200
+  [poll] cf197d4c:running(stage 1)  551aad82:running(stage 2)  9ad3efa2:running(stage 2)  e6024593:queued(stage 2)
+  [dispatch poke] HTTP 200
+  [poll] cf197d4c:running(stage 3)  e6024593:running(stage 3)  551aad82:completed(stage 3)  9ad3efa2:completed(stage 3)
+  [dispatch poke] HTTP 200
+  [poll] 551aad82:completed(stage 3)  9ad3efa2:completed(stage 3)  e6024593:completed(stage 3)  cf197d4c:completed(stage 3)
+  All regenerations terminal.
+
+
+================ REGENERATION REPORT ================
+
+
+########## HVAC & Utility Mechanical Engineer @ Boviet Solar Technologies — application ae5f5901-1be9-457b-af86-c5842d931e3c ##########
+  workflow status: completed  last_error: none
+
+  [1] New resume fb01e66f-acfb-4d4a-a7a0-b3b0b8482918 vs. CURRENT base resume (e4efba67-2cfb-45bc-997b-13c6f9e95eb9) - standard identity check:
+      CLEAN - matches current base resume on every checked field.
+
+  [2] New resume vs. PREVIOUS resume from the first test run (922568e0-d92b-4e2d-a71e-dc2a8ada7b79) - what actually changed:
+      No identity-field differences vs. the first run (base resume identity fields were unchanged between runs).
+
+
+########## DFT Engineer @ JNL Technologies — application df5b7b12-4638-4a79-86f8-6cb6a080c666 ##########
+  workflow status: completed  last_error: none
+
+  [1] New resume a9f01df2-1fed-4ffb-a559-2e579f205913 vs. CURRENT base resume (e4efba67-2cfb-45bc-997b-13c6f9e95eb9) - standard identity check:
+      CLEAN - matches current base resume on every checked field.
+
+  [2] New resume vs. PREVIOUS resume from the first test run (5e07745a-4cf6-4f95-9378-ca2974aa50f5) - what actually changed:
+      No identity-field differences vs. the first run (base resume identity fields were unchanged between runs).
+
+
+########## Engineer - Entry Level, Solar (PV) @ Intertek — application 592dcf7f-5bfc-449d-9b71-99942522d46e ##########
+  workflow status: completed  last_error: none
+
+  [1] New resume 0ff27a2b-7f4f-4ec1-920d-03f5d98003da vs. CURRENT base resume (40b3750b-8ea6-4613-bffe-56021ad2e1ef) - standard identity check:
+      CLEAN - matches current base resume on every checked field.
+
+  [2] New resume vs. PREVIOUS resume from the first test run (b92ba6cb-7ed8-4b71-9a30-4da9ebdf77e1) - what actually changed:
+      No identity-field differences vs. the first run (base resume identity fields were unchanged between runs).
+
+
+########## Mechanical Design Engineer @ Insight Global — application 2e7a8491-4387-4118-ac71-57ab8971328a ##########
+  workflow status: completed  last_error: none
+
+  [1] New resume ccbbab10-1280-48b8-bb8a-33407d113dba vs. CURRENT base resume (40b3750b-8ea6-4613-bffe-56021ad2e1ef) - standard identity check:
+      CLEAN - matches current base resume on every checked field.
+
+  [2] New resume vs. PREVIOUS resume from the first test run (d9af85a4-ab00-48cc-b6eb-563f8cf53fb6) - what actually changed:
+      No identity-field differences vs. the first run (base resume identity fields were unchanged between runs).
+
+================ END REPORT ================

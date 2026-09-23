@@ -3,7 +3,12 @@
 // Loads profile, evidence bank, uploaded resume, and base resume content.
 // Never invents data — returns exactly what exists in the database.
 
-import { supabase } from "@/lib/supabase";
+import {
+  findCandidateEvidenceProfile,
+  listCandidateEvidence,
+  findLatestOriginalResume,
+  findLatestBaseResumeContent,
+} from "@/server/repositories/candidateEvidenceRepository";
 
 export interface ResumeContext {
   candidateId: string;
@@ -24,8 +29,8 @@ export interface EvidenceBankItem {
   title: string;
   description: string | null;
   related_skills: string[];
-  evidence_type: string | null;
-  url: string | null;
+  source_type: string | null;
+  proof_url: string | null;
 }
 
 export interface UploadedResumeData {
@@ -67,58 +72,37 @@ export interface BaseResumeData {
 
 export async function buildResumeContext(candidateId: string): Promise<ResumeContext> {
   const [
-    candidateRes,
-    evidenceRes,
-    resumeRes,
-    baseResumeRes,
+    candidateRow,
+    evidenceRows,
+    resumeRow,
+    baseResumeRow,
   ] = await Promise.all([
-    supabase
-      .from("candidates")
-      .select("id, name, target_roles, target_industries, work_authorization, visa_status, notes, skills")
-      .eq("id", candidateId)
-      .single(),
-    supabase
-      .from("candidate_evidence")
-      .select("id, title, description, related_skills, evidence_type, url")
-      .eq("candidate_id", candidateId)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("resumes")
-      .select("parsed_json, raw_text")
-      .eq("candidate_id", candidateId)
-      .eq("is_original_upload", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("base_resumes")
-      .select("content")
-      .eq("candidate_id", candidateId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    findCandidateEvidenceProfile(candidateId),
+    listCandidateEvidence(candidateId),
+    findLatestOriginalResume(candidateId),
+    findLatestBaseResumeContent(candidateId),
   ]);
 
-  const candidate = candidateRes.data ?? {};
+  const candidate = candidateRow ?? {};
 
   // Parse evidence bank
   const evidenceBank: EvidenceBankItem[] = [];
-  for (const ev of (evidenceRes.data ?? []) as any[]) {
+  for (const ev of evidenceRows) {
     evidenceBank.push({
       id: ev.id ?? "",
       title: ev.title ?? "",
       description: ev.description ?? null,
       related_skills: Array.isArray(ev.related_skills) ? ev.related_skills.filter((s: any) => typeof s === "string") : [],
-      evidence_type: ev.evidence_type ?? null,
-      url: ev.url ?? null,
+      source_type: ev.source_type ?? null,
+      proof_url: ev.proof_url ?? null,
     });
   }
 
-  // Parse uploaded resume
-  const uploadedResume = parseUploadedResume(resumeRes.data?.parsed_json as Record<string, unknown> | null, resumeRes.data?.raw_text ?? null);
+  // Parse uploaded resume (raw_text column does not exist in resumes table, pass null)
+  const uploadedResume = parseUploadedResume(resumeRow?.parsed_json as Record<string, unknown> | null, null);
 
   // Parse base resume
-  const baseResume = parseBaseResume(baseResumeRes.data?.content as Record<string, unknown> | null);
+  const baseResume = parseBaseResume(baseResumeRow?.content as Record<string, unknown> | null);
 
   return {
     candidateId,

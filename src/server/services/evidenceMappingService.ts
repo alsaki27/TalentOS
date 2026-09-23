@@ -4,14 +4,24 @@
 // AI-assisted only if provider is available and failure degrades cleanly.
 // NEVER invents experience. If evidence is not found, marks missing.
 
-import { supabase } from "@/lib/supabase";
-import { getActiveProvider } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
 import {
   ApplicationKeywordRow,
   UpdateApplicationKeywordInput,
   updateApplicationKeyword,
 } from "@/server/repositories/applicationKeywordsRepository";
+import {
+  findCandidateEvidenceProfile,
+  listCandidateEvidence,
+  findLatestOriginalResume,
+  findLatestBaseResumeContent,
+  findApplicationKeywords,
+  CandidateProfileRow,
+  CandidateEvidenceRow,
+  ResumeRow,
+  BaseResumeRow,
+} from "@/server/repositories/candidateEvidenceRepository";
 
 export interface EvidenceMappingResult {
   keywordId: string;
@@ -39,10 +49,7 @@ export async function mapEvidenceForApplication(
   applicationId: string,
   candidateId: string
 ): Promise<EvidenceMappingResult[]> {
-  const { data: keywords } = await supabase
-    .from("application_job_keywords")
-    .select("*")
-    .eq("application_id", applicationId);
+  const keywords = await findApplicationKeywords(applicationId);
 
   if (!keywords || keywords.length === 0) return [];
 
@@ -78,44 +85,24 @@ export async function mapEvidenceForKeyword(
 async function gatherCandidateEvidenceSources(candidateId: string): Promise<CandidateEvidenceSource> {
   // Parallel fetch of all evidence sources
   const [
-    candidateRes,
-    evidenceRes,
-    resumeRes,
-    baseResumeRes,
+    candidateRow,
+    evidenceRows,
+    resumeRow,
+    baseResumeRow,
   ] = await Promise.all([
-    supabase
-      .from("candidates")
-      .select("target_roles, target_industries, work_authorization, visa_status, notes, skills")
-      .eq("id", candidateId)
-      .single(),
-    supabase
-      .from("candidate_evidence")
-      .select("title, description, related_skills")
-      .eq("candidate_id", candidateId),
-    supabase
-      .from("resumes")
-      .select("parsed_json")
-      .eq("candidate_id", candidateId)
-      .eq("is_original_upload", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    supabase
-      .from("base_resumes")
-      .select("content")
-      .eq("candidate_id", candidateId)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
+    findCandidateEvidenceProfile(candidateId),
+    listCandidateEvidence(candidateId),
+    findLatestOriginalResume(candidateId),
+    findLatestBaseResumeContent(candidateId),
   ]);
 
-  const candidate = candidateRes.data ?? {};
+  const candidate = candidateRow ?? {};
 
   // Extract evidence skills
   const evidenceSkills: string[] = [];
   const evidenceTitles: string[] = [];
   const evidenceDescriptions: string[] = [];
-  for (const ev of (evidenceRes.data ?? []) as any[]) {
+  for (const ev of evidenceRows) {
     if (ev.related_skills) evidenceSkills.push(...ev.related_skills);
     if (ev.title) evidenceTitles.push(ev.title);
     if (ev.description) evidenceDescriptions.push(ev.description);
@@ -124,7 +111,7 @@ async function gatherCandidateEvidenceSources(candidateId: string): Promise<Cand
   // Extract resume skills from parsed_json
   const resumeSkills: string[] = [];
   const resumeExperience: string[] = [];
-  const parsed = resumeRes.data?.parsed_json as Record<string, unknown> | null;
+  const parsed = resumeRow?.parsed_json as Record<string, unknown> | null;
   if (parsed) {
     if (Array.isArray(parsed.skills)) {
       for (const s of parsed.skills) {
@@ -152,7 +139,7 @@ async function gatherCandidateEvidenceSources(candidateId: string): Promise<Cand
   // Extract base resume skills
   const baseResumeSkills: string[] = [];
   const baseResumeExperience: string[] = [];
-  const baseContent = baseResumeRes.data?.content as Record<string, unknown> | null;
+  const baseContent = baseResumeRow?.content as Record<string, unknown> | null;
   if (baseContent) {
     if (Array.isArray(baseContent.skills)) {
       for (const s of baseContent.skills) {
@@ -333,44 +320,44 @@ export async function aiMapEvidence(
   keyword: ApplicationKeywordRow,
   candidateId: string
 ): Promise<EvidenceMappingResult | null> {
-  const active = getActiveProvider();
-  if (!active) return null;
-
-  const source = await gatherCandidateEvidenceSources(candidateId);
-
-  const prompt = [
-    `Keyword from job description: "${keyword.keyword}" (category: ${keyword.category})`,
-    "Candidate profile and evidence:",
-    `Profile: ${source.profileText.slice(0, 500)}`,
-    `Evidence skills: ${source.evidenceSkills.join(", ")}`,
-    `Resume skills: ${source.resumeSkills.join(", ")}`,
-    `Base resume skills: ${source.baseResumeSkills.join(", ")}`,
-    "",
-    "Does this candidate have evidence for this keyword? Respond with ONLY a JSON object:",
-    '{"hasEvidence": boolean, "strength": "strong" | "weak" | "none", "explanation": string}',
-  ].join("\n");
-
   try {
-    const response = await active.provider.send({
-      system: "You are a conservative evidence checker. Only claim evidence exists if you can see it in the data. No invention.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("evidence_mapping", undefined, async (provider) => {
+      const source = await gatherCandidateEvidenceSources(candidateId);
+
+      const prompt = [
+        `Keyword from job description: "${keyword.keyword}" (category: ${keyword.category})`,
+        "Candidate profile and evidence:",
+        `Profile: ${source.profileText.slice(0, 500)}`,
+        `Evidence skills: ${source.evidenceSkills.join(", ")}`,
+        `Resume skills: ${source.resumeSkills.join(", ")}`,
+        `Base resume skills: ${source.baseResumeSkills.join(", ")}`,
+        "",
+        "Does this candidate have evidence for this keyword? Respond with ONLY a JSON object:",
+        '{"hasEvidence": boolean, "strength": "strong" | "weak" | "none", "explanation": string}',
+      ].join("\n");
+
+      const response = await provider.send({
+        system: "You are a conservative evidence checker. Only claim evidence exists if you can see it in the data. No invention.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
+      const raw = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      const parsed = JSON.parse(raw);
+
+      const statusMap: Record<string, "mapped" | "weak" | "missing"> = {
+        strong: "mapped",
+        weak: "weak",
+        none: "missing",
+      };
+
+      return {
+        keywordId: keyword.id,
+        evidenceStatus: statusMap[parsed.strength] ?? "missing",
+        evidenceSummary: parsed.explanation ?? "AI-evaluated evidence",
+        confidence: parsed.strength === "strong" ? 0.85 : parsed.strength === "weak" ? 0.5 : 0.0,
+      };
     });
-    const raw = textOf(response.content).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    const parsed = JSON.parse(raw);
-
-    const statusMap: Record<string, "mapped" | "weak" | "missing"> = {
-      strong: "mapped",
-      weak: "weak",
-      none: "missing",
-    };
-
-    return {
-      keywordId: keyword.id,
-      evidenceStatus: statusMap[parsed.strength] ?? "missing",
-      evidenceSummary: parsed.explanation ?? "AI-evaluated evidence",
-      confidence: parsed.strength === "strong" ? 0.85 : parsed.strength === "weak" ? 0.5 : 0.0,
-    };
+    return result;
   } catch {
     return null; // Degrade cleanly
   }

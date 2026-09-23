@@ -5,14 +5,14 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
 const PAGE_SIZE = 50;
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireCurrentUser(["admin"]);
+  const { response } = await requireCurrentUser();
   if (response) return response;
 
   const url = new URL(req.url);
@@ -20,18 +20,16 @@ export async function GET(req: NextRequest) {
   const action = url.searchParams.get("action") || "";
   const entityType = url.searchParams.get("entityType") || "";
 
-  let query = supabase
-    .from("audit_logs")
-    .select("id, actor_user_id, actor_email, action, entity_type, entity_id, metadata, created_at", { count: "exact" })
-    .order("created_at", { ascending: false });
-
-  if (action) query = query.eq("action", action);
-  if (entityType) query = query.eq("entity_type", entityType);
-
   const from = (page - 1) * PAGE_SIZE;
-  const { data, error, count } = await query.range(from, from + PAGE_SIZE - 1);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const whereClauses: string[] = [];
+  const params: string[] = [];
+  if (action) { whereClauses.push(`action = $${params.length + 1}`); params.push(action); }
+  if (entityType) { whereClauses.push(`entity_type = $${params.length + 1}`); params.push(entityType); }
+  const where = whereClauses.length ? `WHERE ${whereClauses.join(" AND ")}` : "";
 
-  return NextResponse.json({ logs: data ?? [], total: count ?? 0, page, pageSize: PAGE_SIZE });
+  const countRes = await queryOne<{total: number}>(`SELECT COUNT(*)::int as total FROM audit_logs ${where}`, params);
+  const logs = await query<any>(`SELECT id, actor_user_id, actor_email, action, entity_type, entity_id, metadata, created_at FROM audit_logs ${where} ORDER BY created_at DESC OFFSET $${params.length + 1} LIMIT $${params.length + 2}`, [...params, from, PAGE_SIZE]);
+
+  return NextResponse.json({ logs: logs ?? [], total: countRes?.total ?? 0, page, pageSize: PAGE_SIZE });
 }

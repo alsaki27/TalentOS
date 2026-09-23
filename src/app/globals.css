@@ -8,162 +8,1061 @@
 /* Internal ops tool — optimized for scanability, not marketing polish. */
 
 :root {
-  --ink: #1a1d23;
-  --ink-soft: #5a5f6b;
-  --bg: #f7f7f8;
-  --surface: #ffffff;
-  --border: #e2e4e8;
-  --accent: #2a6f4f;       /* deep green — calm, not corporate-blue */
-  --accent-soft: #e7f2ec;
-  --warn: #b3541e;
-  --danger: #b3261e;
-  --radius: 8px;
+  /* Core Brand Colors (Dark Mode) - Midnight Neon Theme */
+  --ink: #f8fafc; /* slate-50 */
+  --ink-soft: #94a3b8; /* slate-400 */
+  --bg: #020617; /* slate-950 - deep midnight blue */
+  --surface: rgba(15, 23, 42, 0.7); /* slate-900 with opacity for glassmorphism */
+  --surface-raised: rgba(30, 41, 59, 0.85); /* slate-800 */
+  --border: #334155; /* slate-700 - thin subtle borders */
+  --accent: #8b5cf6; /* violet-500 - neon purple */
+  --accent-soft: rgba(139, 92, 246, 0.15);
+  --accent-hover: #a78bfa; /* violet-400 */
+  --warn: #fb923c; /* orange-400 */
+  --danger: #f43f5e; /* rose-500 */
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-sm: 8px;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* RGB triplets so badges/glows can build translucent tints that adapt
+     automatically to whichever theme (light :root vs .dark) is active,
+     instead of hardcoded hex pastels that only look right on white. */
+  --accent-rgb: 139, 92, 246; /* violet-500 */
+  --danger-rgb: 244, 63, 94; /* rose-500 */
+  --warn-rgb: 251, 146, 60;
+  --neutral-rgb: 148, 163, 184; /* slate-400 */
+  --shadow-color: 0, 0, 0;
+
+  /* Compatibility aliases: many pages across the app (admin/ai, application-
+     queue, resume-parsing-status, job-agent/review, jobs/[id], candidate-
+     dashboard, falood/*) reference these semantic names in inline styles,
+     but they were never actually defined anywhere in this file. Most of
+     those usages have no fallback at all, so the declaration was simply
+     invalid and silently dropped — no background/color applied whatsoever,
+     not even a wrong one. Defining them here fixes every one of those
+     pages at once with no JSX changes needed. */
+  --surface-1: var(--surface);
+  --surface-2: var(--surface-raised);
+  --surface-3: rgba(51, 65, 85, 0.85); /* slate-700 */
+  --success: var(--accent);
+  --warning: var(--warn);
+  --info: #3b82f6; /* blue-500 */
+  --danger-soft: rgba(var(--danger-rgb), 0.12);
+  --border-color: var(--border);
+  --border-light: rgba(var(--neutral-rgb), 0.16);
+  --bg-secondary: var(--surface);
+
+  /* shadcn/ui CSS variables (Dark Mode - Midnight Neon) */
+  --background: 226 58% 5%; /* slate-950 approx */
+  --foreground: 210 40% 98%;
+  --card: 222 47% 11%; /* slate-900 approx */
+  --card-foreground: 210 40% 98%;
+  --popover: 222 47% 11%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 258 90% 66%; /* violet-500 approx */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 217.2 32.6% 17.5%; /* slate-800 approx */
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%; /* slate-400 approx */
+  --destructive: 349 89% 60%; /* rose-500 approx */
+  --destructive-foreground: 210 40% 98%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 258 90% 66%;
 }
 
-* { box-sizing: border-box; }
+/* Overrides --muted-foreground (declared above as an unused shadcn HSL
+   triplet) with a real color, since every actual usage in the app is
+   var(--muted-foreground) used bare — not wrapped in hsl(...) — which is
+   invalid against an HSL-triplet value. A later same-specificity :root
+   rule wins the cascade, so this intentionally comes after the block above. */
+:root {
+  --muted-foreground: var(--ink-soft);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  overflow-x: hidden;
+}
 
 body {
   margin: 0;
+  padding-top: var(--nav-height);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--ink);
   font-size: 14px;
+  position: relative;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
+/* Faint dot-grid texture instead of a flat background — deliberately subtle
+   since this is a dense data tool used for hours, not a landing page; it
+   should read as "considered" at a glance, never distract from content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(circle, rgba(var(--neutral-rgb), 0.06) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(ellipse 70% 50% at 50% 0%, #000 30%, transparent 100%);
+  pointer-events: none;
+}
+
+
+/* ─── Nav Design System Tokens ─────────────────────────────────────────────
+   All nav colours, sizes and effects are declared here as CSS variables so
+   that every element in NavBar.tsx can reference them by semantic name.
+   Changing a theme (light/dark) only requires overriding these variables.
+   ───────────────────────────────────────────────────────────────────────── */
+:root {
+  --nav-height: 56px;
+  --nav-bg: var(--surface);
+  --nav-border: rgba(var(--neutral-rgb), 0.12);
+  --nav-shadow: 0 1px 3px rgba(var(--shadow-color), 0.12),
+                0 4px 16px rgba(var(--shadow-color), 0.08);
+
+  /* Link states */
+  --nav-link-color: var(--ink-soft);
+  --nav-link-hover: var(--ink);
+  --nav-link-active-color: var(--ink);
+  --nav-link-active-bg: rgba(var(--accent-rgb), 0.1);
+  --nav-link-active-indicator: var(--accent);
+
+  /* "More" mega-dropdown */
+  --nav-dropdown-bg: var(--surface-raised);
+  --nav-dropdown-border: rgba(var(--neutral-rgb), 0.14);
+  --nav-dropdown-shadow: 0 8px 32px rgba(var(--shadow-color), 0.32),
+                         0 2px 8px rgba(var(--shadow-color), 0.16);
+  --nav-dropdown-item-hover: rgba(var(--neutral-rgb), 0.08);
+
+  /* Mobile drawer */
+  --nav-drawer-bg: var(--surface);
+  --nav-drawer-border: rgba(var(--neutral-rgb), 0.12);
+
+  /* User section */
+  --nav-user-separator: rgba(var(--neutral-rgb), 0.16);
+
+  /* New Application CTA */
+  --nav-cta-bg: var(--accent);
+  --nav-cta-bg-hover: var(--accent-hover);
+  --nav-cta-text: #fff;
+}
+
+/* Dark theme overrides — these variables shadow the :root ones above
+   when the .dark class is on <html>. Nothing else needs touching. */
+.dark {
+  --nav-bg: var(--surface);
+  --nav-border: rgba(var(--neutral-rgb), 0.10);
+  --nav-shadow: 0 1px 2px rgba(0,0,0,0.4), 0 4px 20px rgba(0,0,0,0.3);
+  --nav-dropdown-bg: var(--surface-raised);
+  --nav-dropdown-border: rgba(var(--neutral-rgb), 0.12);
+  --nav-dropdown-shadow: 0 12px 40px rgba(0,0,0,0.6),
+                         0 2px 8px rgba(0,0,0,0.4);
+  --nav-dropdown-item-hover: rgba(255,255,255,0.05);
+  --nav-drawer-bg: var(--surface);
+  --nav-user-separator: rgba(255,255,255,0.10);
+}
+
+/* ─── Top Navigation Bar ────────────────────────────────────────────────── */
 .topnav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  height: var(--nav-height);
+  padding: 0 16px;
+  background: var(--nav-bg);
+  border-bottom: 1px solid var(--nav-border);
+  box-shadow: var(--nav-shadow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  width: 100%;
+  max-width: 100vw;
+  flex-wrap: nowrap;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
 }
 
-.brand { font-weight: 600; font-size: 15px; }
-
-.navlinks { display: flex; gap: 20px; align-items: center; }
-.navlinks a {
-  color: var(--ink-soft);
+/* ─── Logo / Brand ──────────────────────────────────────────────────────── */
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   text-decoration: none;
-  font-weight: 500;
+  flex-shrink: 0;
 }
-.navlinks a:hover { color: var(--ink); }
-.navlinks a:focus-visible { outline: 2px solid var(--accent); border-radius: 4px; }
 
-.nav-more { position: relative; }
-.nav-more-trigger {
-  border: none;
-  background: none;
-  padding: 0;
+.nav-brand-wordmark {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1;
+  background: linear-gradient(135deg, var(--ink) 0%, var(--ink-soft) 120%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Primary nav links (desktop center) ───────────────────────────────── */
+.nav-desktop-links {
+  display: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.nav-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  color: var(--nav-link-color);
   font-size: 14px;
   font-weight: 500;
-  color: var(--ink-soft);
-  cursor: pointer;
-}
-.nav-more-trigger:hover { color: var(--ink); }
-.nav-more-menu {
-  position: absolute;
-  top: 28px;
-  left: 0;
-  min-width: 160px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 8px 20px rgba(0,0,0,0.12);
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  z-index: 60;
-}
-.nav-more-menu a {
-  padding: 8px 10px;
-  border-radius: 6px;
-  color: var(--ink);
   text-decoration: none;
-  font-size: 13px;
-  font-weight: 500;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.nav-more-menu a:hover { background: var(--bg); }
 
+.nav-link:hover {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+}
+
+.nav-link.active {
+  color: var(--nav-link-active-color);
+  background: var(--nav-link-active-bg);
+}
+
+/* Accent underline on active link */
+.nav-link.active::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 10px;
+  right: 10px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--nav-link-active-indicator);
+}
+
+/* focus ring */
+.nav-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ─── Badge (notification count) ───────────────────────────────────────── */
 .nav-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  margin-left: 5px;
+  min-width: 17px;
+  height: 17px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--danger);
-  color: white;
   font-size: 10px;
+  font-weight: 700;
   line-height: 1;
 }
 
-.nav-user {
+/* Badge colour variants */
+.badge-danger { background: rgba(244,63,94,0.18); color: #fb7185; }
+.badge-warn   { background: rgba(251,146,60,0.18); color: #fb923c; }
+.badge-accent { background: rgba(var(--accent-rgb),0.15); color: var(--accent); }
+
+/* ─── "More" button ─────────────────────────────────────────────────────── */
+.nav-more-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--nav-link-color);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nav-more-btn:hover,
+.nav-more-btn[aria-expanded="true"] {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+}
+
+.nav-more-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.nav-more-chevron {
+  font-size: 9px;
+  opacity: 0.6;
+  transition: transform 0.2s ease;
+}
+
+.nav-more-btn[aria-expanded="true"] .nav-more-chevron {
+  transform: rotate(180deg);
+}
+
+/* ─── Mega dropdown ─────────────────────────────────────────────────────── */
+.nav-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 480px;
+  background: var(--nav-dropdown-bg);
+  border: 1px solid var(--nav-dropdown-border);
+  border-radius: var(--radius);
+  box-shadow: var(--nav-dropdown-shadow);
+  padding: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  z-index: 200;
+  max-height: 70vh;
+  overflow-y: auto;
+  animation: nav-dropdown-in 0.15s var(--ease);
+}
+
+@keyframes nav-dropdown-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.nav-dropdown-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  color: var(--ink-soft);
-  font-size: 12px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  color: var(--nav-link-color);
+  font-size: 13.5px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.12s ease, background 0.12s ease;
 }
 
-.nav-user button {
-  padding: 5px 9px;
-  font-size: 12px;
+.nav-dropdown-item:hover,
+.nav-dropdown-item.active {
+  color: var(--nav-link-hover);
+  background: var(--nav-dropdown-item-hover);
 }
 
+/* ─── Right user section (desktop) ─────────────────────────────────────── */
+.nav-desktop-user {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Mobile right cluster (bell + burger) */
+.nav-mobile-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.nav-user-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--nav-user-separator);
+  margin: 0 4px;
+}
+
+.nav-user-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+/* First-name account link button */
+.nav-user-account-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--nav-link-color);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.nav-user-account-btn:hover {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+}
+
+/* ─── New Application CTA button ───────────────────────────────────────── */
+.nav-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--nav-cta-bg);
+  color: var(--nav-cta-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.nav-cta:hover {
+  background: var(--nav-cta-bg-hover);
+  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.4);
+  transform: translateY(-1px);
+}
+
+.nav-cta:active {
+  transform: translateY(0);
+}
+
+/* ─── Role pill ─────────────────────────────────────────────────────────── */
 .role-pill {
-  display: inline-block;
-  margin-left: 6px;
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: capitalize;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+}
+
+/* ─── Sign out button ───────────────────────────────────────────────────── */
+.nav-signout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--nav-border);
+  background: transparent;
+  color: var(--nav-link-color);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.nav-signout:hover {
+  color: var(--ink);
+  border-color: rgba(var(--neutral-rgb), 0.4);
+  background: var(--nav-link-active-bg);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════/* ============================================================
+   RESPONSIVE BREAKPOINTS - media queries control desktop/mobile
+   ============================================================ */
+
+/* Desktop >= 1024px: show desktop nav, hide mobile elements */
+@media (min-width: 1024px) {
+  .nav-desktop-links { display: flex; }
+  .nav-desktop-user  { display: flex; }
+  .nav-mobile-right  { display: none; }
+  .mob-panel         { display: none !important; }
+}
+
+/* ============================================================
+   MOBILE PANEL (< 1024px)
+   Fixed full-width dropdown below the sticky topnav.
+   ============================================================ */
+
+/* Hamburger button */
+.nav-burger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--nav-border);
+  background: transparent;
+  color: var(--nav-link-color);
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.nav-burger:hover,
+.nav-burger.is-open {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+  border-color: rgba(var(--accent-rgb), 0.4);
+}
+
+/* Mobile full-width panel */
+.mob-panel {
+  position: fixed;
+  top: var(--nav-height);
+  left: 0;
+  right: 0;
+  width: 100%;
+  background: var(--nav-drawer-bg);
+  border-bottom: 2px solid var(--nav-drawer-border);
+  box-shadow: 0 12px 40px rgba(var(--shadow-color), 0.28);
+  z-index: 49;
+  max-height: calc(100vh - var(--nav-height));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: mob-slide-down 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes mob-slide-down {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* User strip */
+.mob-user-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  text-decoration: none;
+  background: rgba(var(--accent-rgb), 0.04);
+  transition: background 0.15s ease;
+}
+
+.mob-user-strip:hover { background: var(--nav-link-active-bg); }
+
+.mob-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 700;
+  flex-shrink: 0;
+  border: 1.5px solid rgba(var(--accent-rgb), 0.3);
+}
+
+.mob-user-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mob-user-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mob-user-role {
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-transform: capitalize;
+  font-weight: 500;
+}
+
+/* Divider */
+.mob-hr {
+  border: none;
+  border-top: 1px solid var(--nav-drawer-border);
+  margin: 4px 0;
+}
+
+/* Section label */
+.mob-label {
+  padding: 10px 16px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  opacity: 0.5;
+  margin: 0;
+}
+
+/* Nav links */
+.mob-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  color: var(--nav-link-color);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  min-height: 52px;
+  transition: color 0.12s ease, background 0.12s ease;
+  border-left: 3px solid transparent;
+}
+
+.mob-link:hover {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+}
+
+.mob-link.active {
+  color: var(--accent);
+  font-weight: 600;
+  background: rgba(var(--accent-rgb), 0.08);
+  border-left-color: var(--accent);
+}
+
+/* More toggle */
+.mob-more-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px 16px;
+  border: none;
+  background: transparent;
+  color: var(--nav-link-color);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 52px;
+  text-align: left;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.mob-more-btn:hover,
+.mob-more-btn.open {
+  color: var(--nav-link-hover);
+  background: var(--nav-link-active-bg);
+}
+
+.mob-more-btn.route-active { color: var(--accent); }
+
+.mob-more-count {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  text-transform: capitalize;
+  margin-left: auto;
 }
 
-.page { max-width: 1100px; margin: 0 auto; padding: 28px 24px 60px; }
+/* More expanded list */
+.mob-more-list {
+  background: rgba(var(--neutral-rgb), 0.03);
+  border-top: 1px solid var(--nav-drawer-border);
+  animation: mob-slide-down 0.15s ease;
+}
+
+.mob-more-item {
+  padding-left: 28px;
+  min-height: 48px;
+  font-size: 14px;
+  border-left: 3px solid rgba(var(--accent-rgb), 0.2);
+}
+
+/* Footer */
+.mob-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px 16px;
+}
+
+.mob-signout {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--nav-border);
+  background: transparent;
+  color: var(--nav-link-color);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 48px;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.mob-signout:hover {
+  color: var(--ink);
+  border-color: rgba(var(--neutral-rgb), 0.4);
+  background: var(--nav-link-active-bg);
+}
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+
+/* Application Queue's table needs ~2000px+ to lay out its 13 columns
+   (candidate/job/status/AI pipeline/stage/owner/due + 4 ID columns +
+   actions) without an internal horizontal scrollbar on top of the page's
+   own centering - 1600px still left it scrolling on a 1920-2000px display.
+   Goes almost full-bleed instead of a fixed cap. */
+.page:has(.app-queue-page),
+.page:has(.resume-parsing-status-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* The AI Control Center contains operational tables wider than the default
+   1100px content shell. Give this page the same deliberate full-width canvas
+   as the application queue so its action column is visible without forcing
+   operators to discover a hidden horizontal scroll first. */
+.page:has(.ai-control-center) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Candidate Inbox needs room for the thread list, category chips, and the
+   full-width action modal - same full-bleed treatment as Application Queue
+   and the AI Control Center rather than the default 1100px content shell. */
+.page:has(.inbox-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Job Agent's Run Dashboard table has 11 columns of run/tier data - same
+   full-bleed treatment as Application Queue, the AI Control Center, and the
+   Inbox rather than the default 1100px content shell. */
+.page:has(.job-agent-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+/* Job CEO's Run History table has 11 columns of run/pipeline data - same
+   full-bleed treatment as Application Queue, the AI Control Center, the
+   Inbox, and Job Agent rather than the default 1100px content shell. */
+.page:has(.job-ceo-page),
+.page:has(.candidates-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.job-agent-page .job-agent-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.job-agent-page .job-agent-eyebrow {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.job-agent-page .stats-strip {
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+}
+
+.job-agent-page .source-actor-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  transition: all 140ms var(--ease);
+  user-select: none;
+}
+
+.job-agent-page .source-actor-chip.active {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.job-agent-page .source-actor-chip input {
+  width: auto;
+  accent-color: var(--accent);
+}
+
+.job-agent-page .keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.job-agent-page .keyword-chip-icon-btn {
+  padding: 3px 6px;
+  font-size: 11px;
+  border-radius: 999px;
+  line-height: 1;
+}
+
+.job-agent-page .run-dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 900px) {
+  .job-agent-page .stats-strip {
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .job-agent-page .job-agent-header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .job-agent-page .job-agent-header-row > a,
+  .job-agent-page .job-agent-header-row > button {
+    width: 100%;
+    text-align: center;
+  }
+  .job-agent-page .stats-strip {
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+  }
+  .job-agent-page .run-now-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .inbox-page .inbox-thread-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 8px;
+  }
+  .inbox-page .inbox-thread-time {
+    align-self: flex-end;
+  }
+}
 
 .page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+  animation: page-rise 0.4s var(--ease) both;
 }
-.page-header h1 { font-size: 20px; margin: 0; }
+
+.page-header h1 {
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+
 .page-kicker {
   margin-top: 4px;
   color: var(--ink-soft);
   font-size: 13px;
 }
 
-button, .btn {
+@keyframes page-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stats-strip {
+  animation: page-rise 0.4s var(--ease) 0.05s both;
+}
+
+.table-shell,
+.card {
+  animation: page-rise 0.35s var(--ease) 0.08s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-header,
+  .stats-strip,
+  .table-shell,
+  .card {
+    animation: none;
+  }
+}
+
+button,
+.btn {
   font-family: inherit;
   font-size: 13px;
   font-weight: 500;
-  padding: 8px 14px;
+  padding: 8px 16px;
   border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(30, 41, 59, 0.6); /* Glassmorphic background */
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   color: var(--ink);
   cursor: pointer;
+  text-decoration: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
-button:hover { background: var(--bg); }
-button:focus-visible { outline: 2px solid var(--accent); }
+
+/* A <button> element is browser-default display:inline-block, so width:100%
+   already worked on it — but an <a> styled as a button defaults to
+   display:inline, where width has no effect at all. Scoped to just <a>
+   here (not the base button/.btn rule) so it can't affect any existing
+   button whose content relies on normal block-stacking behavior — .btn-
+   classed buttons keep their default display untouched. */
+a.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button:hover, .btn:hover {
+  background: rgba(51, 65, 85, 0.8);
+  border-color: rgba(139, 92, 246, 0.5); /* Neon purple subtle border */
+  box-shadow: 0 0 10px rgba(139, 92, 246, 0.2);
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #8b5cf6, #3b82f6); /* Violet to Blue gradient */
+  color: #ffffff;
+  border: none;
+  font-weight: 600;
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.4);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.6);
+  transform: translateY(-1px) scale(1.02);
+}
+
+.dropdown-wrapper {
+  display: inline-block;
+}
+
+/* Appearance only — no position rules here. Callers inside a scrolling
+   container (e.g. .table-shell's overflow-x: auto, which per spec forces
+   overflow-y: auto too) must render this via a portal with inline
+   position: fixed coordinates, or it will be silently clipped since it's
+   still a DOM descendant of the clipped ancestor. See RowActionsMenu in
+   src/app/candidates/[id]/page.tsx. */
+.dropdown-menu {
+  z-index: 20;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 4px;
+}
+
+.dropdown-header {
+  padding: 8px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-radius: 4px;
+}
+
+.dropdown-item:hover {
+  background-color: var(--bg);
+}
+
+.dropdown-item:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-.btn-primary {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
+.dropdown-item-danger {
+  color: var(--danger);
 }
-.btn-primary:hover { background: #235c41; }
 
-input, select, textarea {
+.dropdown-item-danger:hover {
+  background-color: rgba(248, 113, 113, 0.12);
+}
+
+input,
+select,
+textarea {
   font-family: inherit;
   font-size: 13px;
   padding: 8px 10px;
@@ -172,18 +1071,61 @@ input, select, textarea {
   background: var(--surface);
   color: var(--ink);
   width: 100%;
-}
-input:focus-visible, select:focus-visible, textarea:focus-visible {
-  outline: 2px solid var(--accent);
+  transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
 }
 
-label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: block; margin-bottom: 4px; }
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: rgba(var(--neutral-rgb), 0.45);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+select {
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--ink);
+  padding-right: 30px;
+}
+
+select option {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  display: block;
+  margin-bottom: 4px;
+}
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: rgba(15, 23, 42, 0.55); /* Glassmorphic background */
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-lg);
   padding: 16px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease);
+}
+
+.card:hover {
+  border-color: rgba(139, 92, 246, 0.2);
+  box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4), 0 0 20px rgba(139, 92, 246, 0.1);
 }
 
 .table {
@@ -194,100 +1136,807 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   border-radius: var(--radius);
   overflow: hidden;
 }
+
 .table-shell {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16), 0 12px 28px -18px rgba(var(--shadow-color), 0.5);
 }
+
 .table-shell .table {
   border: none;
   border-radius: 0;
-  min-width: 920px;
+  width: 100%;
 }
+
 .table th {
   text-align: left;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--ink-soft);
-  padding: 10px 14px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--surface-raised);
   white-space: nowrap;
 }
+
 .table td {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
+  transition: background-color 120ms var(--ease);
 }
-.table tr:last-child td { border-bottom: none; }
-.table tr:hover { background: var(--bg); }
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tr {
+  transition: background-color 120ms var(--ease);
+}
+
+.table tr:hover td {
+  background: var(--surface-raised);
+}
+
+/* Application Queue's 11-column table needs every horizontal pixel it can
+   get - tighter cell padding than the rest of the app's tables, scoped so
+   this doesn't cramp candidates/companies/interviews tables elsewhere. */
+.app-queue-page .table th,
+.app-queue-page .table td {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+/* Readability pass, scoped to this page only:
+   - filter bar gets real breathing room instead of the default cramped
+     inline-flow spacing (.filter-group has no base styling anywhere else,
+     so its children were only separated by incidental JSX whitespace)
+   - header/badge/button text nudged up from the tiny 11px this page had
+     leaned on to fit its wide table, to a standard readable size */
+.app-queue-page .filter-bar {
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.app-queue-page .filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  flex: 1 1 auto;
+}
+
+.app-queue-page .filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-queue-page .filter-field .filter-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.app-queue-page .filter-bar input,
+.app-queue-page .filter-bar select {
+  min-width: 160px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+.app-queue-page .table th {
+  font-size: 12px;
+}
+.app-queue-page .badge {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.app-queue-page .btn-compact {
+  font-size: 12.5px;
+  padding: 7px 11px;
+}
+.app-queue-page .action-group {
+  gap: 8px;
+}
+.app-queue-page .queue-stage-meta {
+  font-size: 12px;
+}
+
+/* `text-muted` is a Tailwind color utility, so it compiles to
+   `color: hsl(var(--muted))` — and --muted is the shadcn HSL triplet
+   `217.2 32.6% 17.5%`, i.e. a near-black slate. Against this app's dark
+   shell that renders secondary text (emails, company/location, "by
+   <assigner>", em-dashes) as barely-visible dark-on-dark. Point it at the
+   real muted-text token instead. Scoped to this page so the many other
+   pages using `text-muted` keep their current appearance untouched. */
+.app-queue-page .text-muted {
+  color: var(--ink-soft);
+}
+
+/* `table-layout: fixed` gives every column a hard width, but nothing in the
+   base table styles stops a cell's content from spilling past that width.
+   Long unbroken tokens — candidate emails, hyphenated job titles, category
+   labels — overflowed their cell and visually collided with the column
+   next door. Wrap them instead, so nothing is lost and nothing overlaps.
+   (`th` already did this inline via overflow/textOverflow; `td` never did.) */
+.app-queue-page .table td {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.app-queue-page .table td a,
+.app-queue-page .table td .row-link {
+  overflow-wrap: anywhere;
+}
+/* Multi-word category badges are the one badge long enough to overrun a
+   cell; let those wrap rather than clip. Short #-chips stay on one line. */
+.app-queue-page .cell-category-badge {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.35;
+}
+
+/* C#/A#/J# reference numbers. Previously these sat inline beside the
+   candidate/job name, where a narrow fixed-width column left them
+   squeezed against the link or pushed out of the cell entirely. They get
+   their own row now, so each number renders in full at a legible size. */
+.app-queue-page .ref-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+.app-queue-page .ref-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink-soft);
+}
+.app-queue-page .ref-chip-candidate {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: #c4b5fd;
+}
+.app-queue-page .ref-chip-job {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: #7dd3fc;
+}
+
+/* Ticket/Job and Resume ID cells: two labeled, individually-copyable rows
+   per cell (replacing four separate near-illegible truncated-ID columns
+   with an explicit copy affordance instead of click-anywhere-to-copy). */
+.app-queue-page .id-pair-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.app-queue-page .id-pair-row + .id-pair-row {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.app-queue-page .id-pair-label {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.app-queue-page .id-pair-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-queue-page .id-pair-copy {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  color: var(--ink-soft);
+}
+.app-queue-page .id-pair-copy:hover {
+  background: var(--accent-soft);
+  border-color: rgba(var(--accent-rgb), 0.5);
+  color: var(--accent);
+  transform: none;
+  box-shadow: none;
+}
+.app-queue-page .id-pair-copy.copied {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.12);
+}
+
 .table-compact td {
   padding-top: 10px;
   padding-bottom: 10px;
 }
 
-.row-link { color: var(--ink); text-decoration: none; font-weight: 600; }
-.row-link:hover { text-decoration: underline; }
+/* AI Control Center readability and wide-table ergonomics. The generated
+   `.text-muted` utility uses the shadcn muted surface token, which is nearly
+   black in the dark theme. On this page it is secondary text, so it must use
+   the actual readable ink token instead. Keep the fix scoped to avoid changing
+   unrelated pages that intentionally use muted surfaces. */
+.ai-control-center {
+  min-width: 0;
+  color: var(--ink);
+}
+
+.ai-control-center .text-muted {
+  color: var(--ink-soft) !important;
+}
+
+.ai-control-center .panel,
+.ai-control-center .table-shell {
+  min-width: 0;
+}
+
+.ai-control-center .table-shell {
+  position: relative;
+  overflow-x: auto;
+  scrollbar-color: var(--border) var(--surface);
+}
+
+.ai-control-center .table th,
+.ai-control-center .table td {
+  line-height: 1.35;
+}
+
+.ai-control-center .ai-key-table,
+.ai-control-center .ai-agent-table,
+.ai-control-center .ai-usage-table {
+  min-width: 1080px;
+}
+
+.ai-control-center .ai-key-table th:first-child,
+.ai-control-center .ai-key-table td:first-child,
+.ai-control-center .ai-agent-table th:first-child,
+.ai-control-center .ai-agent-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 190px;
+  background: var(--surface);
+  box-shadow: 8px 0 12px -12px rgba(var(--shadow-color), 0.8);
+}
+
+.ai-control-center .ai-key-table th:first-child,
+.ai-control-center .ai-agent-table th:first-child {
+  background: var(--surface-raised);
+  z-index: 3;
+}
+
+.ai-control-center .ai-key-table th:last-child,
+.ai-control-center .ai-key-table td:last-child,
+.ai-control-center .ai-agent-table th:last-child,
+.ai-control-center .ai-agent-table td:last-child,
+.ai-control-center .ai-routing-states-table th:last-child,
+.ai-control-center .ai-routing-states-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 2;
+  min-width: 168px;
+  background: var(--surface);
+  box-shadow: -8px 0 12px -12px rgba(var(--shadow-color), 0.8);
+}
+
+.ai-control-center .ai-key-table th:last-child,
+.ai-control-center .ai-agent-table th:last-child,
+.ai-control-center .ai-routing-states-table th:last-child {
+  background: var(--surface-raised);
+  z-index: 3;
+}
+
+.ai-control-center .ai-key-table td:first-child,
+.ai-control-center .ai-agent-table td:first-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.ai-control-center .ai-key-table td:last-child > div,
+.ai-control-center .ai-agent-table td:last-child,
+.ai-control-center .ai-routing-states-table td:last-child {
+  white-space: normal;
+}
+
+.ai-control-center .ai-key-table td:last-child > div:first-child {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ai-control-center .ai-routing-states-table {
+  min-width: 720px;
+}
+
+@media (max-width: 900px) {
+  .ai-control-center {
+    padding: 16px !important;
+  }
+
+  .ai-control-center .page-header h1 {
+    font-size: 24px !important;
+  }
+
+  .ai-control-center > .stats-strip {
+    gap: 8px;
+  }
+
+  .ai-control-center .filter-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ai-control-center .filter-group .input {
+    flex: 1 1 170px;
+    width: auto !important;
+  }
+}
+
+.row-link {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.row-link:hover {
+  text-decoration: underline;
+}
 
 .badge {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  padding: 3px 9px;
   border-radius: 100px;
   background: var(--accent-soft);
   color: var(--accent);
   white-space: nowrap;
 }
-.badge-assigned { background: #eef1f5; color: #4a5568; }
-.badge-stacked { background: #f1eefc; color: #5b3eb8; }
-.badge-in_progress { background: #fff3e0; color: var(--warn); }
-.badge-applied { background: #eef1f5; color: #4a5568; }
-.badge-replied { background: #fff3e0; color: var(--warn); }
-.badge-scheduled { background: var(--accent-soft); color: var(--accent); }
-.badge-no_show { background: #fbeaea; color: var(--danger); }
-.badge-interview { background: var(--accent-soft); color: var(--accent); }
-.badge-rejected { background: #fbeaea; color: var(--danger); }
-.badge-offer { background: #e7f2ec; color: var(--accent); font-weight: 700; }
-.badge-submitted { background: #eef1f5; color: #4a5568; }
-.badge-waiting { background: #fff3e0; color: var(--warn); }
-.badge-closed { background: #fbeaea; color: var(--danger); }
-.badge-urgent, .badge-priority-urgent { background: #fbeaea; color: var(--danger); }
-.badge-priority-high { background: #fff3e0; color: var(--warn); }
-.badge-priority-normal { background: #eef1f5; color: #4a5568; }
-.badge-priority-low { background: #e7f2ec; color: var(--accent); }
-.badge-review-pending { background: #fff3e0; color: var(--warn); }
-.badge-review-approved { background: #e7f2ec; color: var(--accent); }
-.badge-review-changes_requested { background: #fbeaea; color: var(--danger); }
-.badge-review-not_required { background: #eef1f5; color: #4a5568; }
 
-.muted { color: var(--ink-soft); }
-.overdue { color: var(--danger); font-weight: 600; }
+/* Every badge-* variant below uses a translucent overlay of a semantic
+   color rather than a hardcoded pastel hex — the old hardcoded light-mode
+   pastels (#eef1f5 etc.) read as harsh, out-of-place white rectangles
+   against the dark shell. This adapts correctly in both themes. */
+.badge-assigned {
+  background: rgba(var(--neutral-rgb), 0.16);
+  color: var(--ink-soft);
+}
+
+.badge-stacked {
+  background: rgba(139, 92, 246, 0.16);
+  color: #a78bfa;
+}
+
+.badge-in_progress {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+.badge-applied {
+  background: rgba(var(--neutral-rgb), 0.16);
+  color: var(--ink-soft);
+}
+
+.badge-replied {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+.badge-scheduled {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* Live AI-pipeline indicator (Application Queue) — a small pulsing dot so a
+   page left open reads as "actively working" rather than frozen while the
+   6s poll silently patches stage/status in the background. */
+.pipeline-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.pipeline-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.pipeline-live-dot-running {
+  animation: pipeline-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pipeline-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.badge-no_show {
+  background: rgba(244, 63, 94, 0.15); /* rose-500/15 */
+  color: var(--danger);
+}
+
+.badge-interview {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.badge-rejected {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--danger);
+}
+
+.badge-offer {
+  background: rgba(139, 92, 246, 0.15); /* violet/15 */
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.badge-submitted {
+  background: rgba(148, 163, 184, 0.15); /* slate-400/15 */
+  color: #cbd5e1; /* slate-300 */
+}
+
+.badge-waiting {
+  background: rgba(251, 146, 60, 0.15); /* orange-400/15 */
+  color: var(--warn);
+}
+
+.badge-closed {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--danger);
+}
+
+.badge-urgent,
+.badge-priority-urgent {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--danger);
+}
+
+.badge-priority-high {
+  background: rgba(251, 146, 60, 0.15);
+  color: var(--warn);
+}
+
+.badge-priority-normal {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+}
+
+.badge-priority-low {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent);
+}
+
+.badge-review-pending {
+  background: rgba(251, 146, 60, 0.15);
+  color: var(--warn);
+}
+
+.badge-review-approved {
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent);
+}
+
+.badge-review-changes_requested {
+  background: rgba(244, 63, 94, 0.15);
+  color: var(--danger);
+}
+
+.badge-review-not_required {
+  background: rgba(148, 163, 184, 0.15);
+  color: #cbd5e1;
+}
+
+.badge-tier-a {
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--accent);
+}
+
+.badge-tier-b {
+  background: rgba(var(--warn-rgb), 0.16);
+  color: var(--warn);
+}
+
+/* Referenced by 8 pages (job-agent, jobs, candidates, application-queue,
+   admin/ai, resume-parsing-status, ...) that all assumed these existed
+   alongside the badge-tier and badge-priority variants above — none of them
+   were ever actually defined, so every "danger"/"warning" status badge on
+   those pages silently rendered as the plain default (violet) badge instead
+   of red/orange. Purely additive: fixes all 8 at once, overrides nothing. */
+.badge-danger {
+  background: rgba(var(--danger-rgb), 0.15);
+  color: var(--danger);
+}
+
+.badge-warning {
+  background: rgba(var(--warn-rgb), 0.15);
+  color: var(--warn);
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+.overdue {
+  color: var(--danger);
+  font-weight: 600;
+}
+
 .empty {
   text-align: center;
   padding: 48px 20px;
   color: var(--ink-soft);
 }
 
-.modal-overlay {
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.35);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 50;
-}
-.modal {
-  background: var(--surface);
+/* .notice and .alert* were used across 15 sites (application-queue,
+   admin/ai, candidates, candidates/[id]/job-search-profiles, ops,
+   ops/components/ai-agent-manager, and now /inbox) but never defined
+   anywhere - every one rendered as a bare unstyled div. Purely additive:
+   no existing rule is overridden. */
+.notice, .alert {
+  padding: 10px 14px;
   border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.alert-error, .alert.error {
+  border-color: rgba(var(--danger-rgb), 0.4);
+  background: rgba(var(--danger-rgb), 0.10);
+  color: var(--danger);
+}
+.alert-success, .alert.success {
+  border-color: rgba(var(--accent-rgb), 0.4);
+  background: rgba(var(--accent-rgb), 0.10);
+}
+.alert-close {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  animation: modal-fade 0.15s var(--ease) both;
+}
+
+.modal {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 24px 60px -16px rgba(var(--shadow-color), 0.6);
   padding: 24px;
   width: 420px;
   max-width: 90vw;
   max-height: 85vh;
   overflow-y: auto;
+  animation: modal-rise 0.2s var(--ease) both;
 }
-.modal h2 { margin-top: 0; font-size: 16px; }
-.field-group { margin-bottom: 14px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+.modal h2 {
+  margin-top: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes modal-rise {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal {
+    animation: none;
+  }
+}
+
+.field-group {
+  margin-bottom: 14px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* ---- Project-wide scrollbar (Midnight Neon) -----------------------------
+   One consistent, professional scrollbar everywhere: thin violet accent
+   thumb on a slate track. Element-specific scrollbar-color rules elsewhere
+   (e.g. .jobs-table-shell) still win over the universal selector. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.45) rgba(15, 23, 42, 0.5);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.45);
+  background-clip: padding-box;
+  border: 2px solid rgba(15, 23, 42, 0.6);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(167, 139, 250, 0.7);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---- Edit Profile modal (wider, sectioned, project-styled) -------------- */
+.edit-profile-modal {
+  width: 680px;
+  max-width: 94vw;
+  max-height: 88vh;
+  padding: 0;
+}
+
+.edit-profile-head {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-raised);
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+
+.edit-profile-head h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.edit-profile-close {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-soft);
+  font-size: 16px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.edit-profile-close:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.edit-profile-body {
+  padding: 18px 24px 24px;
+}
+
+.edit-profile-section {
+  margin-bottom: 20px;
+}
+
+.edit-profile-section + .edit-profile-section {
+  border-top: 1px solid var(--border-light);
+  padding-top: 18px;
+}
+
+.edit-profile-section h3 {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-hover);
+}
+
+.edit-profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
+.edit-profile-grid .field-group {
+  margin-bottom: 12px;
+}
+
+.edit-profile-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 24px;
+  margin: 20px -24px -24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
 
 .filter-bar {
   display: flex;
@@ -296,7 +1945,180 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   align-items: center;
   margin-bottom: 16px;
 }
-.filter-bar input, .filter-bar select { width: auto; min-width: 140px; }
+
+.filter-bar input,
+.filter-bar select {
+  width: auto;
+  min-width: 140px;
+}
+
+/* Application Queue stage metadata must remain readable against the dark
+   table surface; the generic muted token is too low-contrast here. */
+.queue-stage-meta {
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+.queue-stage-meta-changed { color: #bfdbfe; }
+.queue-stage-meta-reviewed { color: #fde68a; }
+.queue-stage-meta-applied { color: #86efac; margin-top: 2px; }
+/* Jobs masterlist: keep the control surface readable and make the wide data
+   table intentionally scrollable instead of silently clipping actions. */
+.jobs-page { min-width: 0; }
+
+/* The masterlist table is intrinsically wide (9 columns incl. a pinned action
+   column). The default 1100px .page cap is narrower than the table's own
+   min-width, which guaranteed a horizontal scrollbar and left the pinned
+   column permanently overlapping content. Give this page the room it needs. */
+.page:has(.jobs-page) {
+  max-width: min(1720px, calc(100vw - 48px));
+  padding-left: 24px;
+  padding-right: 24px;
+}
+
+/* ---- Search row ------------------------------------------------------- */
+.jobs-search-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+.jobs-search-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.jobs-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 13px;
+}
+.jobs-result-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.jobs-result-count strong { color: var(--ink); font-weight: 700; }
+.jobs-result-count-label { color: var(--ink-soft); }
+
+/* ---- Filter grid ------------------------------------------------------ */
+.jobs-filters {
+  display: grid;
+  /* auto-fit rather than a hard 4-up: filters keep a comfortable minimum
+     width and reflow to fill the now-wider page instead of being crushed. */
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  align-items: end;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  gap: 18px 20px;
+}
+.jobs-filters > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.jobs-filters > div > span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jobs-filters > div > select,
+.jobs-filters > div > input { width: 100%; min-width: 0; }
+.jobs-filters > .dual-range-slider { min-width: 0; }
+.jobs-filters-clear { justify-content: flex-end; }
+.jobs-filters-clear button { width: 100%; white-space: nowrap; }
+
+.jobs-savebar { align-items: center; padding: 10px 2px 4px; gap: 10px; }
+.jobs-savebar input { min-width: 220px; }
+
+/* ---- Data table ------------------------------------------------------- */
+.jobs-table-shell {
+  overflow-x: auto;
+  scrollbar-color: var(--accent) var(--surface-sunken);
+}
+/* Columns sum to ~1054px (see the width attributes in the header row). This
+   caps the table at that natural content width instead of stretching it to
+   fill 100% of a wider container - the exact thing that previously forced
+   the table past typical viewport width and required scrolling to reach the
+   Actions column. overflow-x on the shell stays as a fallback for genuinely
+   narrow viewports/zoom levels only. */
+.jobs-table { width: 100%; }
+.jobs-table th,
+.jobs-table td { vertical-align: top; }
+.jobs-table th { padding-left: 10px; padding-right: 10px; }
+.jobs-table td { padding: 10px; }
+
+/* Pinned action column. Both header and cell need the same width, offset and
+   background or the sticky edge tears as the table scrolls under it. */
+.jobs-table th.jobs-actions-head,
+.jobs-table td.jobs-actions {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  width: 110px;
+  min-width: 110px;
+  background: var(--surface);
+  box-shadow: -12px 0 18px -14px rgba(0, 0, 0, 0.85);
+}
+.jobs-table th.jobs-actions-head { z-index: 4; background: var(--surface-raised); }
+.jobs-table tr:hover td.jobs-actions { background: var(--surface-raised); }
+.jobs-actions-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: stretch;
+}
+/* white-space stays normal (not nowrap) so "Log application" wraps onto a
+   second line inside the narrower column instead of overflowing it. */
+.jobs-actions-inner button {
+  white-space: normal;
+  width: 100%;
+  padding: 5px 6px;
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+}
+
+/* Applicant avatars wrap inside their own column instead of pushing the row
+   wider and colliding with the pinned actions. */
+.jobs-applicant-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+@media (max-width: 1100px) {
+  .page:has(.jobs-page) { padding-left: 16px; padding-right: 16px; }
+}
+
+@media (max-width: 560px) {
+  .jobs-search-row { align-items: stretch; flex-direction: column; }
+  .jobs-result-count { align-self: flex-start; }
+  .jobs-filters { grid-template-columns: 1fr; padding: 14px; gap: 14px; }
+  .jobs-savebar { align-items: stretch; flex-direction: column; }
+  .jobs-savebar input, .jobs-savebar button { width: 100%; }
+}
 
 .queue-stats {
   display: flex;
@@ -308,39 +2130,81 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
 
 .stats-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  grid-template-columns: repeat(5, minmax(130px, 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
 
+/* Soft pastel-tinted cards (cycled per position) instead of flat neutral
+   boxes — reads as friendlier/more modern while staying legible on the dark
+   shell. Tint is a translucent overlay of the semantic color, so it still
+   adapts correctly across the light (:root) and dark (.dark) themes. */
 .stat-button,
 .stat-card {
   text-align: left;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 10px 12px;
-  min-height: 64px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: rgba(var(--neutral-rgb), 0.1);
+  padding: 12px 14px;
+  min-height: 68px;
+  transition: transform 140ms var(--ease), box-shadow 140ms var(--ease), background-color 140ms var(--ease);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
 }
 
-.stat-button { cursor: pointer; }
-.stat-button:hover { background: var(--bg); }
-.stat-button.active {
-  border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
+.stats-strip .stat-button:nth-child(4n+1),
+.stats-strip .stat-card:nth-child(4n+1) {
+  background: rgba(var(--accent-rgb), 0.14);
 }
+
+.stats-strip .stat-button:nth-child(4n+2),
+.stats-strip .stat-card:nth-child(4n+2) {
+  background: rgba(56, 189, 248, 0.14);
+}
+
+.stats-strip .stat-button:nth-child(4n+3),
+.stats-strip .stat-card:nth-child(4n+3) {
+  background: rgba(var(--warn-rgb), 0.14);
+}
+
+.stats-strip .stat-button:nth-child(4n+4),
+.stats-strip .stat-card:nth-child(4n+4) {
+  background: rgba(var(--danger-rgb), 0.12);
+}
+
+.stat-button {
+  cursor: pointer;
+}
+
+.stat-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px -10px rgba(var(--shadow-color), 0.5);
+}
+
+.stat-button.active {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.35);
+}
+
 .stat-label {
   display: block;
   color: var(--ink-soft);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
+
 .stat-value {
   display: block;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  margin-top: 4px;
+  letter-spacing: -0.01em;
+  margin-top: 5px;
 }
 
 .workflow-panel {
@@ -350,7 +2214,10 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   padding: 12px;
   margin-bottom: 14px;
 }
-.workflow-panel .filter-bar:last-child { margin-bottom: 0; }
+
+.workflow-panel .filter-bar:last-child {
+  margin-bottom: 0;
+}
 
 .action-group {
   display: flex;
@@ -377,6 +2244,7 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   font-size: 13px;
   font-weight: 600;
 }
+
 .toast-error {
   border-color: var(--danger);
   background: #fbeaea;
@@ -397,9 +2265,15 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
    because the page's final shape is visible immediately, with no layout jump when
    real data arrives. */
 @keyframes skeleton-shimmer {
-  0% { background-position: -200px 0; }
-  100% { background-position: calc(200px + 100%) 0; }
+  0% {
+    background-position: -200px 0;
+  }
+
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
 }
+
 .skeleton-bar {
   height: 12px;
   border-radius: 4px;
@@ -416,6 +2290,7 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   font-weight: 600;
   white-space: nowrap;
 }
+
 .date-pill::before {
   content: "";
   width: 7px;
@@ -423,10 +2298,19 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   border-radius: 50%;
   background: var(--border);
 }
-.date-pill.overdue::before { background: var(--danger); }
-.date-pill.today::before { background: var(--warn); }
 
-.cell-main { max-width: 280px; }
+.date-pill.overdue::before {
+  background: var(--danger);
+}
+
+.date-pill.today::before {
+  background: var(--warn);
+}
+
+.cell-main {
+  max-width: 280px;
+}
+
 .cell-note {
   max-width: 320px;
   color: var(--ink-soft);
@@ -452,7 +2336,8 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   margin-bottom: 12px;
   font-size: 13px;
 }
-.bulk-bar > div {
+
+.bulk-bar>div {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -464,7 +2349,10 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   color: var(--danger);
   border-color: var(--danger);
 }
-.btn-danger:hover { background: #fbeaea; }
+
+.btn-danger:hover {
+  background: #fbeaea;
+}
 
 .applicant-chip {
   display: inline-flex;
@@ -517,16 +2405,39 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   width: min(420px, 100%);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 24px;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1px 2px rgba(var(--shadow-color), 0.16), 0 24px 60px -20px rgba(var(--shadow-color), 0.5);
+  padding: 28px 26px;
+  /* Consistent vertical rhythm via gap instead of scattered per-child
+     margins — the previous no-gap layout let the Sign in/Sign up toggle
+     touch the Email field directly with zero space between them. */
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* .field-group's own margin-bottom (used standalone elsewhere, e.g. modals)
+   would stack on top of .auth-card's gap here and over-space things. */
+.auth-card .field-group {
+  margin-bottom: 0;
 }
 
 .auth-card h1 {
   margin: 0 0 6px;
   font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
+/* .auth-submit is applied to both <button> (inline-block by default, so
+   width:100% already worked) and an <a> styled as a button for "Continue
+   with Google" — <a> defaults to display:inline, where width has no
+   effect at all, which is why that link rendered squished/shrink-to-content
+   instead of full width. */
 .auth-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
 }
 
@@ -569,6 +2480,7 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   .team-create-grid {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
+
   .stats-strip {
     grid-template-columns: repeat(2, minmax(130px, 1fr));
   }
@@ -578,31 +2490,29 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   .team-create-grid {
     grid-template-columns: 1fr;
   }
-  .topnav {
-    align-items: flex-start;
-    gap: 12px;
-    flex-direction: column;
-  }
-  .navlinks {
-    gap: 10px;
-    flex-wrap: wrap;
-  }
+
+
+
   .page {
     padding: 20px 14px 48px;
   }
+
   .page-header {
     align-items: flex-start;
     gap: 10px;
     flex-direction: column;
   }
+
   .filter-bar input,
   .filter-bar select,
   .filter-bar button {
     width: 100%;
   }
+
   .stats-strip {
     grid-template-columns: 1fr;
   }
+
   .bulk-bar {
     align-items: flex-start;
     gap: 10px;
@@ -615,9 +2525,232 @@ label { font-size: 12px; font-weight: 600; color: var(--ink-soft); display: bloc
   --ink-soft: #9a9fa8;
   --bg: #0f1115;
   --surface: #1a1d23;
+  --surface-raised: #20232b;
   --border: #2a2d35;
-  --accent: #3d8f6a;
-  --accent-soft: #1a2e25;
+  --accent: #4fae82;
+  --accent-soft: rgba(79, 174, 130, 0.14);
+  --accent-hover: #45a075;
   --warn: #d4723a;
-  --danger: #d44a3a;
+  --danger: #e2584a;
+
+  --accent-rgb: 79, 174, 130;
+  --danger-rgb: 226, 88, 74;
+  --warn-rgb: 212, 114, 58;
+  --neutral-rgb: 154, 159, 168;
+  --shadow-color: 0, 0, 0;
+
+  /* Same compatibility aliases as :root above — see that block's comment
+     for why these exist. */
+  --surface-1: var(--surface);
+  --surface-2: var(--surface-raised);
+  --surface-3: #262a33;
+  --success: var(--accent);
+  --warning: var(--warn);
+  --info: #38bdf8;
+  --danger-soft: rgba(var(--danger-rgb), 0.14);
+  --border-color: var(--border);
+  --border-light: rgba(var(--neutral-rgb), 0.18);
+  --bg-secondary: var(--surface);
+
+  /* shadcn/ui dark mode */
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 152 45% 40%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 152 45% 40%;
+}
+
+/* See the matching :root override above for why this exists. */
+.dark {
+  --muted-foreground: var(--ink-soft);
+}
+
+/* ─── Print styles for resume PDF export ─── */
+@media print {
+  /* Hide everything except the resume */
+  .topnav,
+  .print\:hidden,
+  button,
+  .modal-overlay {
+    display: none !important;
+  }
+
+  html, body, #__next, main, [style*="minHeight: 100vh"], [style*="min-height: 100vh"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    overflow: visible !important;
+    width: auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  /* Hide all elements, then selectively show resume */
+  body * {
+    visibility: hidden;
+  }
+
+  #resume-print-area,
+  #resume-print-area * {
+    visibility: visible;
+  }
+
+  #resume-print-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: white !important;
+  }
+
+  #resume-print-area[data-page-format="a4"] {
+    width: 210mm !important;
+    height: auto !important;
+    min-height: 0 !important;
+    page: resume-a4;
+  }
+
+  #resume-print-area[data-page-format="letter"] {
+    width: 8.5in !important;
+    height: auto !important;
+    min-height: 0 !important;
+    page: resume-letter;
+  }
+
+  /* The preview wrapper uses small inline pixel dimensions — override to full page */
+  .resume-paper {
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #resume-print-area[data-page-format="a4"] .resume-paper,
+  #resume-print-area[data-page-format="a4"] #resume-content,
+  #resume-print-area[data-page-format="a4"] .resume-preview-container {
+    width: 210mm !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  #resume-print-area[data-page-format="letter"] .resume-paper,
+  #resume-print-area[data-page-format="letter"] #resume-content,
+  #resume-print-area[data-page-format="letter"] .resume-preview-container {
+    width: 8.5in !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+
+  /* Keep the resume at its normal layout size; the outer print area applies the scale. */
+  #resume-content {
+    transform: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+  }
+
+  /* The preview container */
+  .resume-preview-container {
+    display: block !important;
+    padding: 0 !important;
+    height: auto !important;
+  }
+
+  @page resume-a4 {
+    size: A4 portrait;
+    margin: 0;
+  }
+
+  @page resume-letter {
+    size: letter portrait;
+    margin: 0;
+  }
+}
+
+/* Override Tailwind text sizing for resume templates to use ems for proportional scaling */
+.resume-paper .text-xs { font-size: 0.75em !important; line-height: 1.33 !important; }
+.resume-paper .text-sm { font-size: 0.875em !important; line-height: 1.42 !important; }
+.resume-paper .text-base { font-size: 1em !important; line-height: 1.5 !important; }
+.resume-paper .text-lg { font-size: 1.125em !important; line-height: 1.55 !important; }
+.resume-paper .text-xl { font-size: 1.25em !important; line-height: 1.4 !important; }
+.resume-paper .text-2xl { font-size: 1.5em !important; line-height: 1.33 !important; }
+.resume-paper .text-3xl { font-size: 1.875em !important; line-height: 1.2 !important; }
+
+/* ── Global utility animations ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+
+
+/* ============================================================
+   NOTIFICATION PANEL
+   Desktop: absolute dropdown from bell icon, right-aligned.
+   Mobile:  fixed panel centered on screen.
+   ============================================================ */
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 360px;
+  max-width: 90vw;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 40px rgba(var(--shadow-color), 0.32);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: nav-dropdown-in 0.15s ease;
+}
+
+@media (max-width: 1023px) {
+  .notif-panel {
+    position: fixed;
+    top: calc(var(--nav-height) + 8px);
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    width: min(360px, calc(100vw - 24px));
+    max-height: calc(100vh - var(--nav-height) - 24px);
+    overflow-y: auto;
+  }
+}
+
+/* ============================================================
+   GLOBAL MOBILE OVERFLOW FIX
+   Prevents any element from causing horizontal scroll.
+   ============================================================ */
+@media (max-width: 1023px) {
+  .page,
+  main,
+  [class*="container"],
+  [class*="wrapper"] {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
 }

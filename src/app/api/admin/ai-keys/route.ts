@@ -47,6 +47,7 @@ export async function POST(req: NextRequest) {
   const provider = body.provider as AiProvider;
   const label = typeof body.label === "string" ? body.label.trim() : "";
   const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
   const priority = typeof body.priority === "number" ? body.priority : 100;
   const isEnabled = body.isEnabled !== false;
 
@@ -60,8 +61,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
   }
 
+  // "glm" and "google_vertex_proxy" were missing here - real providers this app
+  // supports (buildProviderFromDbKey has cases for both), but a key for either
+  // would have been rejected by this list before it ever reached that logic.
   const validProviders = [
-    "anthropic", "nvidia", "openai", "google", "groq", "openrouter", "deepseek", "local",
+    "anthropic", "nvidia", "openai", "glm", "google", "google_vertex_proxy",
+    "groq", "openrouter", "deepseek", "local",
   ];
   if (!validProviders.includes(provider)) {
     return NextResponse.json({ error: `Invalid provider: ${provider}` }, { status: 400 });
@@ -72,6 +77,7 @@ export async function POST(req: NextRequest) {
       provider,
       label,
       apiKey,
+      model,
       priority,
       isEnabled,
       createdBy: context?.profile.user_id,

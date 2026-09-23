@@ -1,10 +1,14 @@
 // src/app/api/keyword-approvals/route.ts
 // GET  -> list by candidateId query param, join with job_keywords(*)
-// POST -> upsert keyword approval (delete existing for same keyword_id+candidate_id, then insert new)
+// POST -> upsert keyword approval (delete existing for same keyword_id+candidate_id, then insert new).
+//         Accepts either a single keywordId or a keywordIds array - batch mode exists
+//         because approving JD keywords one at a time was a real, measured bottleneck
+//         to the "volume applications, minimum human interaction" goal: a 30-50
+//         keyword JD meant 30-50 individual clicks before tailoring could even start.
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne, execute } from "@/server/db/neon";
 import { logActivity } from "@/lib/activity";
 
 export async function GET(req: NextRequest) {
@@ -14,14 +18,41 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("keyword_approvals")
-    .select("*, job_keywords(*)")
-    .eq("candidate_id", candidateId)
-    .order("decided_at", { ascending: false });
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await query<any>(`
+    SELECT ka.*, row_to_json(jk.*) as job_keywords
+    FROM keyword_approvals ka
+    LEFT JOIN job_keywords jk ON jk.id = ka.keyword_id
+    WHERE ka.candidate_id = $1
+    ORDER BY ka.decided_at DESC
+  `, [candidateId]);
   return NextResponse.json(data ?? []);
+}
+
+async function upsertOne(opts: {
+  keywordId: string;
+  candidateId: string;
+  decision: string;
+  baseResumeId?: string;
+  evidenceStatus?: string;
+  evidenceIds?: string[];
+  notes?: string;
+  decidedBy: string;
+}) {
+  const { keywordId, candidateId, decision, baseResumeId, evidenceStatus, evidenceIds, notes, decidedBy } = opts;
+
+  await execute(`DELETE FROM keyword_approvals WHERE keyword_id = $1 AND candidate_id = $2`, [keywordId, candidateId]);
+  const data = await queryOne<any>(`INSERT INTO keyword_approvals (keyword_id, candidate_id, base_resume_id, decision, evidence_status, evidence_ids, notes, decided_by, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`, [
+    keywordId,
+    candidateId,
+    baseResumeId ?? null,
+    decision,
+    evidenceStatus ?? null,
+    evidenceIds ?? null,
+    notes ?? null,
+    decidedBy,
+    new Date().toISOString(),
+  ]);
+  return data;
 }
 
 export async function POST(req: NextRequest) {
@@ -30,6 +61,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const keywordId = body.keywordId as string | undefined;
+  const keywordIds = Array.isArray(body.keywordIds) ? (body.keywordIds as string[]).filter((id) => typeof id === "string" && id) : null;
   const candidateId = body.candidateId as string | undefined;
   const decision = body.decision as string | undefined;
   const baseResumeId = body.baseResumeId as string | undefined;
@@ -37,8 +69,8 @@ export async function POST(req: NextRequest) {
   const evidenceIds = body.evidenceIds as string[] | undefined;
   const notes = body.notes as string | undefined;
 
-  if (!keywordId || !candidateId || !decision) {
-    return NextResponse.json({ error: "keywordId, candidateId, and decision are required" }, { status: 400 });
+  if ((!keywordId && !keywordIds?.length) || !candidateId || !decision) {
+    return NextResponse.json({ error: "keywordId (or keywordIds array), candidateId, and decision are required" }, { status: 400 });
   }
 
   const validDecisions = ["approved", "rejected", "needs_review", "cover_letter_only", "already_present"];
@@ -46,40 +78,40 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `decision must be one of: ${validDecisions.join(", ")}` }, { status: 400 });
   }
 
-  // Delete existing approval for same keyword + candidate
-  await supabase
-    .from("keyword_approvals")
-    .delete()
-    .eq("keyword_id", keywordId)
-    .eq("candidate_id", candidateId);
+  const targetIds = keywordIds ?? [keywordId as string];
 
-  const { data, error } = await supabase
-    .from("keyword_approvals")
-    .insert({
-      keyword_id: keywordId,
-      candidate_id: candidateId,
-      base_resume_id: baseResumeId ?? null,
-      decision,
-      evidence_status: evidenceStatus ?? null,
-      evidence_ids: evidenceIds ?? null,
-      notes: notes ?? null,
-      decided_by: context!.profile.user_id,
-      decided_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
+  try {
+    const results = await Promise.all(
+      targetIds.map((id) =>
+        upsertOne({
+          keywordId: id,
+          candidateId,
+          decision,
+          baseResumeId,
+          evidenceStatus,
+          evidenceIds,
+          notes,
+          decidedBy: context!.profile.user_id,
+        })
+      )
+    );
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await logActivity({
+      userId: context!.profile.user_id,
+      actorName: context!.profile.display_name || context!.profile.email || undefined,
+      type: "create",
+      description: targetIds.length > 1
+        ? `Recorded ${decision} for ${targetIds.length} keywords for candidate ${candidateId}`
+        : `Recorded keyword approval (${decision}) for candidate ${candidateId}`,
+      entityType: "keyword_approval",
+      entityId: results[0]?.id ?? candidateId,
+      metadata: { keyword_ids: targetIds, candidate_id: candidateId, decision },
+    });
 
-  await logActivity({
-    userId: context!.profile.user_id,
-    actorName: context!.profile.display_name || context!.profile.email || undefined,
-    type: "create",
-    description: `Recorded keyword approval (${decision}) for candidate ${candidateId}`,
-    entityType: "keyword_approval",
-    entityId: data.id,
-    metadata: { keyword_id: keywordId, candidate_id: candidateId, decision },
-  });
-
-  return NextResponse.json(data, { status: 201 });
+    // Batch callers (keywordIds) get the array back; single-keyword callers keep
+    // the original single-object response shape so existing call sites don't break.
+    return NextResponse.json(keywordIds ? results : results[0], { status: 201 });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message ?? "Failed to record keyword approval" }, { status: 500 });
+  }
 }

@@ -15,27 +15,44 @@ export async function GET(req: NextRequest) {
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
-  const status = url.searchParams.get("status") || "";
+  const stage = url.searchParams.get("stage") || "";
   const owner = url.searchParams.get("owner") || "";
   const priority = url.searchParams.get("priority") || "";
   const review = url.searchParams.get("review") || "";
   const view = url.searchParams.get("view") || "all";
+  const candidateId = url.searchParams.get("candidate_id") || "";
+  const workMode = url.searchParams.get("work_mode") || "";
+  const timeWindow = url.searchParams.get("time_window") || "";
+  const timeWindowHours = ({ "12h": 12, "24h": 24, "3d": 72, "7d": 168 } as Record<string, number>)[timeWindow] ?? null;
+  const requestedSort = url.searchParams.get("sort");
+  const sort = requestedSort === "final_score" || requestedSort === "average_score" ? requestedSort : "due";
+  const sortDirection = url.searchParams.get("direction") === "asc" ? "asc" : "desc";
 
   try {
     const result = await listApplicationQueue({
       page,
       pageSize,
       search,
-      status,
+      candidateId,
+      stage,
       owner,
       priority,
       review,
-      view: view as "all" | "mine" | "overdue" | "review",
+      view: view as "all" | "mine" | "ae_review" | "ae_application",
+      workMode,
       userId: context!.profile.user_id,
       userEmail: context!.profile.email ?? null,
       userDisplayName: context!.profile.display_name ?? null,
       userRole: context!.profile.role,
-      pipelineStatuses: ["assigned", "stacked", "in_progress"],
+      // Hide terminal/archived statuses by default (see
+      // DEFAULT_EXCLUDED_STATUSES) - but never on top of an explicit Status
+      // or Stage selection, so that choice is always honored in full
+      // instead of being silently narrowed further. This is also what makes
+      // Stage -> "AE Applied" show every one of those tickets now.
+      excludeStatuses: stage ? [] : undefined,
+      timeWindowHours,
+      sort,
+      sortDirection,
     });
 
     return NextResponse.json({ items: result.items, total: result.total, page, pageSize, stats: result.stats });

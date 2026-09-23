@@ -12,12 +12,11 @@
 // separation is the literal enforcement of "AI suggests, human approves" for base
 // resumes (see ROADMAP/PLAN — Architecture decision #9).
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne } from "@/server/db/neon";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
-import { getActiveProvider } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { emptyResumeDocument, FaloodCommandResult, ResumeDocument, ResumeFormatting } from "@/lib/falood/types";
 
 const PROMPTING_RULES = [
@@ -31,6 +30,10 @@ const PROMPTING_RULES = [
   "Respect any prior rejected keywords or forbidden claims noted in context.",
   "Do not optimize for one-page fit during base resume creation — that only matters during final application prep (a later phase).",
   "If you are not confident a claim is true, flag it as a risk in your message instead of inventing supporting detail.",
+  "Completeness is the point of a base resume: capture EVERY evidenced skill, tool, certification, and role from the evidence bank and uploaded resume, using each tool's exact product name and casing (e.g. \"Vetro FiberMap\", \"AutoCAD\") — downstream tailoring can only select from what exists here, so an evidenced skill missing from the base resume is invisible to every future application.",
+  "Bullet craft: open every bullet with a strong, specific action verb (past tense for past roles, present for the current one), state what was done at what scope with what outcome, and include real numbers (counts, %, $, route miles, timelines, team size) wherever the evidence contains them — never invent a number. No first-person pronouns, no filler (\"passionate\", \"results-driven\", \"dynamic\"), no two consecutive bullets in a role opening with the same verb.",
+  "When the same fact appears in both the uploaded resume and the evidence bank with different detail, keep the more specific, more quantified version.",
+  "NEVER list \"Microsoft Office\", \"MS Office\", or \"Office 365\" as a skill, in any category, under any circumstance — universal office-suite literacy is assumed for every candidate and wastes space that should go to real technical differentiators. Same for bare \"Word\" or \"PowerPoint\" — never list those. Excel is the one exception: it's a genuine, specific technical skill many roles explicitly require, so list \"Excel\" on its own (not folded into \"Microsoft Office\") whenever the evidence bank or uploaded resume supports it.",
 ].map((r, i) => `${i + 1}. ${r}`).join("\n");
 
 const SKARION_STYLE_GUIDE = `Skarion resume format:
@@ -46,48 +49,26 @@ interface BaseResumeContext {
   candidate: { id: string; name: string | null; email: string | null; phone: string | null; work_authorization: string | null; linkedin_url: string | null; github_url: string | null; portfolio_url: string | null };
   evidence: Array<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>;
   originalParsedResume: Record<string, unknown> | null;
+  originalResumeFile: { filename: string; file_url: string } | null;
 }
 
 async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | null> {
-  const baseResume = isNeon()
-    ? await queryOne<{ id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string; candidate_id: string }>(
-        "SELECT * FROM base_resumes WHERE id = $1",
-        [baseResumeId]
-      )
-    : await supabase
-        .from("base_resumes")
-        .select("id, name, target_industry, target_roles, content, status, candidate_id")
-        .eq("id", baseResumeId)
-        .single()
-        .then((r: any) => r.data ?? null);
+  const baseResume = await queryOne<{ id: string; name: string; target_industry: string | null; target_roles: string[] | null; content: ResumeDocument; status: string; candidate_id: string }>(
+    "SELECT * FROM base_resumes WHERE id = $1",
+    [baseResumeId]
+  );
   if (!baseResume) return null;
 
   const [candidate, evidence, originalResume] = await Promise.all([
     findCandidateById(baseResume.candidate_id),
-    isNeon()
-      ? query<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>(
-          "SELECT title, description, related_skills, source_type, confidence_score FROM candidate_evidence WHERE candidate_id = $1",
-          [baseResume.candidate_id]
-        )
-      : supabase
-          .from("candidate_evidence")
-          .select("title, description, related_skills, source_type, confidence_score")
-          .eq("candidate_id", baseResume.candidate_id)
-          .then((r: { data: any[] | null }) => r.data ?? []),
-    isNeon()
-      ? queryOne<{ parsed_json: Record<string, unknown> }>(
-          "SELECT parsed_json FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
-          [baseResume.candidate_id]
-        )
-      : supabase
-          .from("resumes")
-          .select("parsed_json")
-          .eq("candidate_id", baseResume.candidate_id)
-          .eq("is_original_upload", true)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then((r: { data: { parsed_json: Record<string, unknown> } | null }) => r.data ?? null),
+    query<{ title: string; description: string | null; related_skills: string[] | null; source_type: string; confidence_score: number | null }>(
+      "SELECT title, description, related_skills, source_type, confidence_score FROM candidate_evidence WHERE candidate_id = $1",
+      [baseResume.candidate_id]
+    ),
+    queryOne<{ parsed_json: Record<string, unknown>; filename: string; file_url: string }>(
+      "SELECT parsed_json, filename, file_url FROM resumes WHERE candidate_id = $1 AND is_original_upload = true ORDER BY created_at DESC LIMIT 1",
+      [baseResume.candidate_id]
+    ),
   ]);
 
   if (!candidate) return null;
@@ -97,6 +78,7 @@ async function gatherContext(baseResumeId: string): Promise<BaseResumeContext | 
     candidate,
     evidence: evidence ?? [],
     originalParsedResume: (originalResume?.parsed_json as Record<string, unknown>) ?? null,
+    originalResumeFile: originalResume ? { filename: originalResume.filename, file_url: originalResume.file_url } : null,
   };
 }
 
@@ -105,8 +87,16 @@ function buildPrompt(ctx: BaseResumeContext, command: string | undefined, userMe
     ? `Command: ${command}`
     : `User instruction: ${userMessage}`;
 
+  const resumeSection = ctx.originalParsedResume
+    ? `Original uploaded resume (parsed): ${JSON.stringify(ctx.originalParsedResume)}`
+    : ctx.originalResumeFile
+      ? `An original resume was uploaded (${ctx.originalResumeFile.filename}) but has not been parsed yet. If the user is asking to build from their resume, you can only work with the information provided in the prompt — you cannot access the file directly. Ask the user to paste their resume text if they want you to parse it.`
+      : "No original resume has been uploaded for this candidate yet.";
+
   return [
-    "You are Falood, a controlled resume-preparation assistant for Skarion's candidate placement workflow.",
+    MISSION_CONTEXT,
+    "",
+    "You are Falood, a controlled resume-preparation assistant for Skarion's candidate placement workflow. This base resume is the foundation every future tailored application for this candidate will build from - get the baseline right (real, evidence-backed, well-organized) and every downstream tailoring step benefits; get it wrong and every application built on it inherits the same problem.",
     "You suggest. A human always approves before anything is saved. Follow these rules strictly:",
     PROMPTING_RULES,
     "",
@@ -114,7 +104,7 @@ function buildPrompt(ctx: BaseResumeContext, command: string | undefined, userMe
     "",
     `Candidate: ${ctx.candidate.name}, target industry: ${ctx.baseResume.target_industry ?? "unspecified"}, target roles: ${(ctx.baseResume.target_roles ?? []).join(", ") || "unspecified"}.`,
     `Candidate contact: email=${ctx.candidate.email ?? "?"} phone=${ctx.candidate.phone ?? "?"} linkedin=${ctx.candidate.linkedin_url ?? "?"} github=${ctx.candidate.github_url ?? "?"} portfolio=${ctx.candidate.portfolio_url ?? "?"} work_authorization=${ctx.candidate.work_authorization ?? "?"}.`,
-    ctx.originalParsedResume ? `Original uploaded resume (parsed): ${JSON.stringify(ctx.originalParsedResume)}` : "No original resume has been uploaded/parsed for this candidate yet.",
+    resumeSection,
     `Evidence bank (${ctx.evidence.length} entries): ${JSON.stringify(ctx.evidence)}`,
     `Current base resume draft (ResumeDocument JSON): ${JSON.stringify(ctx.baseResume.content)}`,
     "",
@@ -145,19 +135,18 @@ export async function runBaseResumeCommand(opts: {
   command?: string;
   message?: string;
 }): Promise<FaloodCommandResult | { error: string }> {
-  const active = getActiveProvider();
-  if (!active) return { error: "No AI provider configured (set ANTHROPIC_API_KEY or NVIDIA_API_KEY)." };
-
   const ctx = await gatherContext(opts.baseResumeId);
   if (!ctx) return { error: "Base resume not found." };
 
   const prompt = buildPrompt(ctx, opts.command, opts.message);
 
   try {
-    const response = await active.provider.send({
-      system: "You are Falood, a controlled resume assistant. Respond with raw JSON only, exactly matching the requested schema.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("base_resume_studio", undefined, async (provider) => {
+      return provider.send({
+        system: "You are Falood, a controlled resume assistant. Respond with raw JSON only, exactly matching the requested schema.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     return parseResult(textOf(response.content));
   } catch (err: any) {

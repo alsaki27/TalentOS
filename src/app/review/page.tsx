@@ -1,5 +1,5 @@
 // src/app/review/page.tsx
-// QC Review Queue for reviewers and managers — base resumes and application packets.
+// QC review queue for TalentOS operators — base resumes and application packets.
 // Packets have no status column of their own; review state is the linked
 // applications.review_status (pending/approved/changes_requested/not_required),
 // the same review gate the rest of the app already uses for applications.
@@ -9,8 +9,9 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../Skeleton";
+import { openFaloodStudio } from "@/lib/falood/openStudio";
 
-const REVIEWER_ROLES = ["admin", "manager", "reviewer"];
+const REVIEWER_ROLES = ["admin", "manager", "application_engineer"];
 
 type ReviewTab = "All" | "Base Resumes" | "Application Packets" | "Approved" | "Rejected";
 
@@ -155,7 +156,7 @@ export default function ReviewPage() {
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   useEffect(() => {
-    fetch("/api/auth/me")
+    fetch("/api/bootstrap")
       .then((r) => (r.ok ? r.json() : null))
       .then(setMe)
       .catch(() => setMe(null));
@@ -175,54 +176,52 @@ export default function ReviewPage() {
       const candidates: CandidateCompact[] = (candData.items ?? []).map((c: any) => ({
         id: c.id,
         name: c.name,
-      }));
+      }));      const candidateIds = candidates.map(c => c.id).join(",");
 
-      const [baseResumeResults, packetResults] = await Promise.all([
-        Promise.all(
-          candidates.map(async (c) => {
-            try {
-              const res = await fetch(`/api/base-resumes?candidateId=${c.id}`, { cache: "no-store" });
-              const data = res.ok ? await res.json() : [];
-              return (data as BaseResumeSummary[]).map((b) => ({
-                id: b.id,
-                type: "base_resume" as const,
-                candidateId: c.id,
-                candidateName: c.name,
-                name: b.name,
-                status: b.status,
-                createdAt: b.created_at,
-                updatedAt: b.updated_at,
-                createdBy: b.created_by,
-              }));
-            } catch {
-              return [];
-            }
-          })
-        ),
-        Promise.all(
-          candidates.map(async (c) => {
-            try {
-              const res = await fetch(`/api/application-packets?candidateId=${c.id}`, { cache: "no-store" });
-              const data = res.ok ? await res.json() : [];
-              return (data as ApplicationPacketSummary[])
-                .filter((p) => p.applications && p.applications.review_status && p.applications.review_status !== "not_required")
-                .map((p) => ({
-                  id: p.application_id,
-                  type: "application_packet" as const,
-                  candidateId: c.id,
-                  candidateName: c.name,
-                  name: p.applications?.jobs ? `${p.applications.jobs.title} @ ${p.applications.jobs.company ?? "—"}` : "Application packet",
-                  status: packetReviewToGenericStatus(p.applications?.review_status ?? null),
-                  createdAt: p.created_at,
-                  updatedAt: p.created_at,
-                  createdBy: p.created_by,
-                }));
-            } catch {
-              return [];
-            }
-          })
-        ),
-      ]);
+      let baseResumes: any[] = [];
+      let packets: any[] = [];
+      if (candidateIds.length > 0) {
+        const [baseRes, packetsRes] = await Promise.all([
+          fetch(`/api/base-resumes?candidateIds=${candidateIds}`, { cache: "no-store" }),
+          fetch(`/api/application-packets?candidateIds=${candidateIds}`, { cache: "no-store" })
+        ]);
+        baseResumes = baseRes.ok ? await baseRes.json() : [];
+        packets = packetsRes.ok ? await packetsRes.json() : [];
+      }
+
+      const baseResumeResults = baseResumes.map(b => {
+        const cand = candidates.find(c => c.id === b.candidate_id);
+        return {
+          id: b.id,
+          type: "base_resume" as const,
+          candidateId: b.candidate_id,
+          candidateName: cand?.name || "Unknown",
+          name: b.name,
+          status: b.status,
+          createdAt: b.created_at,
+          updatedAt: b.updated_at,
+          createdBy: b.created_by,
+        };
+      });
+
+      const packetResults = packets
+        .filter((p) => p.applications && p.applications.review_status && p.applications.review_status !== "not_required")
+        .map((p) => {
+          const cand = candidates.find(c => c.id === p.candidate_id);
+          return {
+            id: p.application_id,
+            type: "application_packet" as const,
+            candidateId: p.candidate_id || "",
+            candidateName: cand?.name || "Unknown",
+            name: p.applications?.jobs ? `${p.applications.jobs.title} @ ${p.applications.jobs.company ?? "—"}` : "Application packet",
+            status: packetReviewToGenericStatus(p.applications?.review_status ?? null),
+            createdAt: p.created_at,
+            updatedAt: p.created_at,
+            createdBy: p.created_by,
+          };
+        });
+
+      // We need candidateId for packets. Let's fix that below if missing, but we'll try to map it.   ]);
       setItems([...baseResumeResults.flat(), ...packetResults.flat()]);
     } catch {
       showToast("Failed to load review queue.", "error");
@@ -358,7 +357,7 @@ export default function ReviewPage() {
   }, [items, activeTab, search]);
 
   const stats = useMemo(() => {
-    const pending = items.filter((i) => i.status === "in_review").length;
+    const pending = items.filter((i) => i.status === "in_review" || i.status === "draft").length;
     const approvedToday = items.filter((i) => i.status === "approved" && isToday(i.updatedAt)).length;
     const rejectedToday = items.filter((i) => i.status === "rejected" && isToday(i.updatedAt)).length;
     const approvedItems = items.filter((i) => i.status === "approved");
@@ -436,7 +435,7 @@ export default function ReviewPage() {
 
       <div className="stats-strip">
         <div className="stat-card">
-          <span className="stat-label">Pending reviews</span>
+          <span className="stat-label">Pending (incl. drafts)</span>
           <span className="stat-value">{stats.pending}</span>
         </div>
         <div className="stat-card">
@@ -806,9 +805,13 @@ function ReviewModal({
                 packet?.final_resume_version_id ? (
                   <p className="muted" style={{ fontSize: 12 }}>
                     Command history is available in the{" "}
-                    <Link href={`/falood/studio/application/${packet.final_resume_version_id}`} onClick={onClose}>
+                    <button
+                      className="row-link"
+                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}
+                      onClick={() => { openFaloodStudio("application_resume_version", packet.final_resume_version_id!); onClose(); }}
+                    >
                       Falood Studio
-                    </Link>
+                    </button>
                     .
                   </p>
                 ) : (
@@ -817,9 +820,13 @@ function ReviewModal({
               ) : (
                 <p className="muted" style={{ fontSize: 12 }}>
                   Command history is available in the{" "}
-                  <Link href={`/falood/studio/base/${item.id}`} onClick={onClose}>
+                  <button
+                    className="row-link"
+                    style={{ background: "none", border: "none", padding: 0, cursor: "pointer", textDecoration: "underline" }}
+                    onClick={() => { openFaloodStudio("base_resume", item.id); onClose(); }}
+                  >
                     Falood Studio
-                  </Link>
+                  </button>
                   .
                 </p>
               )}

@@ -1,18 +1,19 @@
 // src/lib/ai/tools.ts
 // Read-only tools the chat assistant can call. Deliberately no write/delete tools —
 // "access to every database" means broad query visibility through controlled,
-// parameterized Supabase queries, not raw SQL execution or the ability to mutate
+// parameterized queries, not raw SQL execution or the ability to mutate
 // data via natural language. Each tool caps its own row limit to keep token usage
 // (and API cost) bounded.
 
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query } from "@/server/db/neon";
+import { query, execute } from "@/server/db/neon";
 import { listCandidates, countCandidates } from "@/server/repositories/candidatesRepository";
 import { listJobs, countJobs } from "@/server/repositories/jobsRepository";
 import { listApplicationsForTool, listAllApplicationsWithStatus } from "@/server/repositories/applicationsRepository";
 import { AiTool } from "@/lib/ai/provider";
 import type { UserRole } from "@/lib/auth";
+import { createApplications, updateApplication, deleteApplication, findApplicationById } from "@/server/repositories/applicationsRepository";
+import { APPLICATION_STAGES } from "@/lib/applicationStages";
+import { findAuditStudentByCandidateId, listMockSessions, getMockSession, getLowScoreStudents } from "@/server/db/auditBridge";
 
 const MAX_ROWS = 50;
 
@@ -109,10 +110,66 @@ export const TOOLS: AiTool[] = [
       },
     },
   },
+  {
+    name: "create_application",
+    description: "Create an application ticket for an existing candidate and job. Requires candidate_id, job_id, and confirm=true. The action is audited and starts in the appropriate application_stage.",
+    inputSchema: { type: "object", properties: {
+      candidate_id: { type: "string" }, job_id: { type: "string" }, base_resume_id: { type: "string" },
+      priority: { type: "string", description: "low, normal, high, urgent" }, confirm: { type: "boolean" },
+    }, required: ["candidate_id", "job_id", "confirm"] },
+  },
+  {
+    name: "update_application",
+    description: "Update one application through the canonical workflow. Supports application_stage, owner, priority, notes, and review fields. Requires application_id and confirm=true; stage transitions are audited.",
+    inputSchema: { type: "object", properties: {
+      application_id: { type: "string" }, application_stage: { type: "string", enum: APPLICATION_STAGES as unknown as string[] },
+      assigned_to_user_id: { type: "string" }, priority: { type: "string" }, notes: { type: "string" }, event_note: { type: "string" }, confirm: { type: "boolean" },
+    }, required: ["application_id", "confirm"] },
+  },
+  {
+    name: "delete_application",
+    description: "Permanently remove one application and its workflow record. Manager/admin only. Requires application_id and confirm=true.",
+    inputSchema: { type: "object", properties: { application_id: { type: "string" }, confirm: { type: "boolean" } }, required: ["application_id", "confirm"] },
+  },
+  {
+    name: "get_candidate_mock_sessions",
+    description: "List a candidate's mock interview sessions from the mentorship/audit system (skarion-student-audit) — session dates, target role, and overall score. Requires candidate_id.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        candidate_id: { type: "string" },
+        limit: { type: "number", description: "max rows, default 10, capped at 50" },
+      },
+      required: ["candidate_id"],
+    },
+  },
+  {
+    name: "get_candidate_latest_audit_report",
+    description: "Get a candidate's most recent parsed mock-interview audit report — metrics, strengths, weaknesses, and mentor action items. Requires candidate_id.",
+    inputSchema: {
+      type: "object",
+      properties: { candidate_id: { type: "string" } },
+      required: ["candidate_id"],
+    },
+  },
+  {
+    name: "list_candidates_with_low_audit_scores",
+    description: "Find candidates whose most recent mock-interview audit score is below a threshold — useful for prioritizing who needs more coaching.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        threshold: { type: "number", description: "score out of 10, default 6" },
+        limit: { type: "number", description: "max rows, default 25, capped at 50" },
+      },
+    },
+  },
 ];
 
 export interface ToolContext {
   role: UserRole;
+  userId?: string;
+  email?: string | null;
+  displayName?: string | null;
 }
 
 export async function executeTool(name: string, input: Record<string, unknown>, ctx: ToolContext): Promise<string> {
@@ -157,54 +214,36 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       }
 
       case "query_companies": {
-        if (isNeon()) {
-          const search = input.search as string | undefined;
-          const limit = cappedLimit(input.limit);
-          let sql = "SELECT id, name, website, linkedin_url, employees_count, last_seen_at FROM companies";
-          const values: (string | number)[] = [];
-          if (search) {
-            sql += " WHERE name ILIKE $1";
-            values.push(`%${search}%`);
-          }
-          sql += ` ORDER BY last_seen_at DESC LIMIT $${values.length + 1}`;
-          values.push(limit);
-          const data = await query<any>(sql, values);
-          return JSON.stringify(data);
+        const search = input.search as string | undefined;
+        const limit = cappedLimit(input.limit);
+        let sql = "SELECT id, name, website, linkedin_url, employees_count, last_seen_at FROM companies";
+        const values: (string | number)[] = [];
+        if (search) {
+          sql += " WHERE name ILIKE $1";
+          values.push(`%${search}%`);
         }
-        let q = supabase.from("companies").select("id, name, website, linkedin_url, employees_count, last_seen_at");
-        if (input.search) q = q.ilike("name", `%${input.search}%`);
-        const { data, error } = await q.order("last_seen_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        sql += ` ORDER BY last_seen_at DESC LIMIT $${values.length + 1}`;
+        values.push(limit);
+        const data = await query<any>(sql, values);
         return JSON.stringify(data);
       }
 
       case "query_application_activity_log": {
-        if (isNeon()) {
-          const applicationId = input.application_id as string | undefined;
-          const limit = cappedLimit(input.limit);
-          let sql = "SELECT id, application_id, commenter_name, body, visible_to_candidate, parent_comment_id, created_at FROM application_comments";
-          const values: (string | number)[] = [];
-          if (applicationId) {
-            sql += " WHERE application_id = $1";
-            values.push(applicationId);
-          }
-          sql += ` ORDER BY created_at DESC LIMIT $${values.length + 1}`;
-          values.push(limit);
-          const data = await query<any>(sql, values);
-          return JSON.stringify(data);
+        const applicationId = input.application_id as string | undefined;
+        const limit = cappedLimit(input.limit);
+        let sql = "SELECT id, application_id, commenter_name, body, visible_to_candidate, parent_comment_id, created_at FROM application_comments";
+        const values: (string | number)[] = [];
+        if (applicationId) {
+          sql += " WHERE application_id = $1";
+          values.push(applicationId);
         }
-        let q = supabase.from("application_comments").select("id, application_id, commenter_name, body, visible_to_candidate, parent_comment_id, created_at");
-        if (input.application_id) q = q.eq("application_id", input.application_id as string);
-        const { data, error } = await q.order("created_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        sql += ` ORDER BY created_at DESC LIMIT $${values.length + 1}`;
+        values.push(limit);
+        const data = await query<any>(sql, values);
         return JSON.stringify(data);
       }
 
       case "get_analytics_summary": {
-        // Deliberately NOT a same-origin fetch to /api/analytics: that route requires a
-        // session cookie (added after this tool was first written), so a server-side fetch
-        // with no cookie always 401s. Compute it directly instead — same definitions as
-        // that route (pipeline tickets excluded from conversion-rate math).
         const PIPELINE_STATUSES = new Set(["assigned", "stacked", "in_progress"]);
         const [candidatesCount, allTickets, jobsCount] = await Promise.all([
           countCandidates(),
@@ -233,12 +272,7 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
       }
 
       case "query_import_sources": {
-        if (isNeon()) {
-          const data = await query<any>("SELECT id, label, provider, is_active, last_run_at, last_result FROM import_sources");
-          return JSON.stringify(data);
-        }
-        const { data, error } = await supabase.from("import_sources").select("id, label, provider, is_active, last_run_at, last_result");
-        if (error) throw error;
+        const data = await query<any>("SELECT id, label, provider, is_active, last_run_at, last_result FROM import_sources");
         return JSON.stringify(data);
       }
 
@@ -246,35 +280,126 @@ export async function executeTool(name: string, input: Record<string, unknown>, 
         if (ctx.role !== "admin") {
           return JSON.stringify({ error: "Permission denied: audit logs are admin-only." });
         }
-        if (isNeon()) {
-          const limit = cappedLimit(input.limit);
-          const action = input.action as string | undefined;
-          const entity_type = input.entity_type as string | undefined;
-          let sql = "SELECT id, actor_email, action, entity_type, entity_id, metadata, created_at FROM audit_logs";
-          const conditions: string[] = [];
-          const values: (string | number)[] = [];
-          let idx = 1;
-          if (action) {
-            conditions.push(`action = $${idx++}`);
-            values.push(action);
-          }
-          if (entity_type) {
-            conditions.push(`entity_type = $${idx++}`);
-            values.push(entity_type);
-          }
-          if (conditions.length > 0) {
-            sql += " WHERE " + conditions.join(" AND ");
-          }
-          sql += ` ORDER BY created_at DESC LIMIT $${idx}`;
-          values.push(limit);
-          const data = await query<any>(sql, values);
-          return JSON.stringify(data);
+        const limit = cappedLimit(input.limit);
+        const action = input.action as string | undefined;
+        const entity_type = input.entity_type as string | undefined;
+        let sql = "SELECT id, actor_email, action, entity_type, entity_id, metadata, created_at FROM audit_logs";
+        const conditions: string[] = [];
+        const values: (string | number)[] = [];
+        let idx = 1;
+        if (action) {
+          conditions.push(`action = $${idx++}`);
+          values.push(action);
         }
-        let q = supabase.from("audit_logs").select("id, actor_email, action, entity_type, entity_id, metadata, created_at");
-        if (input.action) q = q.eq("action", input.action as string);
-        if (input.entity_type) q = q.eq("entity_type", input.entity_type as string);
-        const { data, error } = await q.order("created_at", { ascending: false }).limit(cappedLimit(input.limit));
-        if (error) throw error;
+        if (entity_type) {
+          conditions.push(`entity_type = $${idx++}`);
+          values.push(entity_type);
+        }
+        if (conditions.length > 0) {
+          sql += " WHERE " + conditions.join(" AND ");
+        }
+        sql += ` ORDER BY created_at DESC LIMIT $${idx}`;
+        values.push(limit);
+        const data = await query<any>(sql, values);
+        return JSON.stringify(data);
+      }
+
+      case "create_application": {
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the candidate and job." });
+        const candidateId = String(input.candidate_id ?? "");
+        const jobId = String(input.job_id ?? "");
+        if (!candidateId || !jobId) return JSON.stringify({ error: "candidate_id and job_id are required" });
+        const rows = await createApplications([{
+          candidate_id: candidateId,
+          job_id: jobId,
+          base_resume_id: input.base_resume_id ? String(input.base_resume_id) : null,
+          priority: input.priority ? String(input.priority) : "normal",
+          status: "in_progress",
+          created_by: ctx.userId ?? null,
+        }]);
+        const created = rows[0];
+        if (!created) return JSON.stringify({ error: "Application was not created" });
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.created','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, created.id, JSON.stringify({ source: "codex_mcp", candidate_id: candidateId, job_id: jobId })]);
+        return JSON.stringify({ ok: true, application: { id: created.id, application_stage: (created as any).application_stage, candidate_id: candidateId, job_id: jobId } });
+      }
+
+      case "update_application": {
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the proposed change." });
+        const id = String(input.application_id ?? "");
+        const current = await findApplicationById(id);
+        if (!current) return JSON.stringify({ error: "Application not found" });
+        const nextStage = input.application_stage ? String(input.application_stage) : undefined;
+        if (nextStage && !(APPLICATION_STAGES as readonly string[]).includes(nextStage)) return JSON.stringify({ error: "Invalid application_stage" });
+        const updates: any = {};
+        if (nextStage) {
+          if (nextStage === "applied" && !["approved", "not_required"].includes(String((current as any).review_status ?? "not_required"))) {
+            return JSON.stringify({ error: "Manager review must be approved before marking this application applied." });
+          }
+          const now = new Date().toISOString();
+          updates.application_stage = nextStage;
+          updates.ae_stage = nextStage;
+          updates.ae_stage_updated_at = now;
+          updates.ae_stage_updated_by_user_id = ctx.userId ?? null;
+          updates.ae_stage_updated_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          updates.application_stage_changed_at = now;
+          updates.application_stage_changed_by_user_id = ctx.userId ?? null;
+          updates.application_stage_changed_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          if (nextStage === "applied") {
+            updates.status = "applied";
+            updates.applied_at = (current as any).applied_at ?? now;
+            updates.completed_at = (current as any).completed_at ?? now;
+            updates.ae_applied_at = now;
+            updates.ae_applied_by_user_id = ctx.userId ?? null;
+            updates.ae_applied_by_name = ctx.displayName ?? ctx.email ?? "Codex";
+          } else if ((current as any).application_stage === "applied") {
+            updates.status = "in_progress";
+            updates.applied_at = null;
+            updates.completed_at = null;
+          }
+        }
+        if (input.assigned_to_user_id !== undefined) updates.assigned_to_user_id = input.assigned_to_user_id ? String(input.assigned_to_user_id) : null;
+        if (input.priority !== undefined) updates.priority = String(input.priority);
+        if (input.notes !== undefined) updates.notes = String(input.notes);
+        const updated = await updateApplication(id, updates);
+        if (nextStage && nextStage !== (current as any).application_stage) {
+          await execute(`INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1,$2,$3,$4,$5,$6,'codex_mcp')`, [id, (current as any).application_stage, nextStage, ctx.userId ?? null, ctx.displayName ?? ctx.email ?? "Codex", input.event_note ? String(input.event_note) : null]);
+        }
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.updated','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, id, JSON.stringify({ source: "codex_mcp", fields: Object.keys(updates) })]);
+        return JSON.stringify({ ok: true, application: updated });
+      }
+
+      case "delete_application": {
+        if (ctx.role !== "admin" && ctx.role !== "manager") return JSON.stringify({ error: "Permission denied: manager/admin only" });
+        if (input.confirm !== true) return JSON.stringify({ error: "Confirmation required. Re-run with confirm=true after reviewing the application ID." });
+        const id = String(input.application_id ?? "");
+        const current = await findApplicationById(id);
+        if (!current) return JSON.stringify({ error: "Application not found" });
+        await deleteApplication(id);
+        await execute(`INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1,$2,'application.deleted','application',$3,$4)`, [ctx.userId ?? null, ctx.email ?? null, id, JSON.stringify({ source: "codex_mcp", candidate_id: (current as any).candidate_id, job_id: (current as any).job_id })]);
+        return JSON.stringify({ ok: true, deleted_application_id: id });
+      }
+
+      case "get_candidate_mock_sessions": {
+        const candidateId = String(input.candidate_id ?? "");
+        const student = await findAuditStudentByCandidateId(candidateId);
+        if (!student) return JSON.stringify({ error: "No audit record linked to this candidate" });
+        const sessions = await listMockSessions(student.id);
+        return JSON.stringify(sessions.slice(0, cappedLimit(input.limit ?? 10)));
+      }
+
+      case "get_candidate_latest_audit_report": {
+        const candidateId = String(input.candidate_id ?? "");
+        const student = await findAuditStudentByCandidateId(candidateId);
+        if (!student) return JSON.stringify({ error: "No audit record linked to this candidate" });
+        const sessions = await listMockSessions(student.id);
+        if (sessions.length === 0) return JSON.stringify({ error: "No mock sessions recorded yet" });
+        const detail = await getMockSession(sessions[0].id);
+        return JSON.stringify({ session_date: detail.session_date, overall_score: detail.overall_score, report: detail.report });
+      }
+
+      case "list_candidates_with_low_audit_scores": {
+        const threshold = typeof input.threshold === "number" ? input.threshold : 6;
+        const data = await getLowScoreStudents(threshold, cappedLimit(input.limit ?? 25));
         return JSON.stringify(data);
       }
 

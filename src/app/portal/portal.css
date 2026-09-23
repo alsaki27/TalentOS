@@ -1,0 +1,2055 @@
+/* src/app/portal/portal.css
+   Scoped design system for the candidate-facing portal only — everything is
+   prefixed .portal-* so nothing here can leak into or collide with the
+   internal staff app's globals.css (which is dark-themed; this deliberately
+   is not, see below).
+
+   Palette pulled directly from skarion.com (navy #122461, coral #ff686b) and
+   its logo.svg — candidates land here after seeing the marketing site, so
+   this matches its light theme rather than the internal dark admin tool.
+*/
+
+.page:has(.portal-root) {
+  max-width: none;
+  padding: 0;
+  margin: 0;
+}
+
+.portal-root {
+  /* --p-navy is the ACCENT role (icons, links, borders, focus rings on
+     tinted surfaces) - it shifts to a lighter, still-navy-hued blue in dark
+     mode so it stays readable on a dark surface. --p-navy-fill is the
+     BRAND-CONSTANT role (solid fills: avatar, primary button, sidebar,
+     hero) - it never changes, in either theme, by design. */
+  --p-navy: #122461;
+  --p-navy-fill: #122461;
+  --p-navy-soft: #eef0f8;
+  --p-navy-soft-hover: #e0e5f7;
+  --p-coral: #ff686b;
+  --p-coral-soft: #ffeced;
+  --p-ink: #14151a;
+  --p-ink-soft: #6b7280;
+  --p-border: #e6e8ee;
+  --p-bg: #fbfbfd;
+  --p-surface: #ffffff;
+  --p-shadow-rgb: 18, 36, 97;
+  --p-radius-lg: 18px;
+  --p-radius-md: 13px;
+  --p-radius-sm: 9px;
+  --p-ease: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Fixed brand anchors, constant across themes - the sidebar is always a
+     dark-navy surface, like the demo template this redesign is inspired by. */
+  --p-sidebar-bg: #0d1530;
+  --p-sidebar-bg-active: #16204a;
+  --p-sidebar-border: #1c2547;
+  --p-sidebar-ink: #c7cee3;
+  --p-sidebar-ink-soft: #7c86a8;
+  --p-sidebar-ink-active: #ffffff;
+
+  min-height: 100vh;
+  background: var(--p-bg);
+  color: var(--p-ink);
+  position: relative;
+  overflow-x: hidden;
+  /* overflow-x alone forces overflow-y to compute as auto per the CSS
+     overflow spec, turning this into its own scroll container and
+     breaking position:sticky/fixed's relationship to the real viewport
+     for anything positioned relative to it - keep overflow-y explicit. */
+  overflow-y: visible;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Dark theme - mirrors the app-wide ThemeProvider's .dark class on <html>.
+   Only the tokens that represent an actual surface/ink pairing move; the
+   brand-fill and sidebar tokens above stay constant on purpose. */
+:root.dark .portal-root {
+  --p-navy: #8fa3f2;
+  --p-navy-soft: rgba(143, 163, 242, 0.14);
+  --p-navy-soft-hover: rgba(143, 163, 242, 0.24);
+  --p-coral-soft: rgba(255, 104, 107, 0.16);
+  --p-ink: #eef1f8;
+  --p-ink-soft: #93a0b8;
+  --p-border: #242c49;
+  --p-bg: #0a0e1c;
+  --p-surface: #121933;
+  --p-shadow-rgb: 3, 6, 16;
+}
+
+:root.dark .portal-root .portal-btn-secondary {
+  border-color: var(--p-border);
+}
+
+/* globals.css (the staff app's stylesheet, loaded on these pages too by the
+   root layout) styles EVERY `button:hover` with a slate background, purple
+   border, purple glow and a lift. That chrome is wrong for the portal's bare
+   buttons - collapsible section headers, the back link, interview tabs - which
+   are meant to read as text, not as raised controls. Neutralize it at
+   element-level specificity via :where() so each portal button class further
+   down can still declare the hover it actually wants and win on source order. */
+.portal-root :where(button):hover {
+  background: none;
+  border-color: var(--p-border);
+  box-shadow: none;
+  transform: none;
+}
+
+:root.dark .portal-root .portal-skeleton {
+  background: linear-gradient(90deg, #161d38 25%, #1c2444 37%, #161d38 63%);
+  background-size: 400% 100%;
+}
+
+:root.dark .portal-root .portal-timeline-item:not(:last-child) .portal-timeline-dot::after {
+  background: rgba(255, 104, 107, 0.35);
+}
+
+.portal-root::before,
+.portal-root::after {
+  content: "";
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(100px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.portal-root::before {
+  width: 460px;
+  height: 460px;
+  background: radial-gradient(circle, var(--p-navy-fill), transparent 70%);
+  top: -200px;
+  left: -140px;
+  opacity: 0.06;
+}
+
+.portal-root::after {
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, var(--p-coral), transparent 70%);
+  bottom: -180px;
+  right: -120px;
+  opacity: 0.08;
+}
+
+/* ---------- Logo ---------- */
+
+.portal-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.portal-logo-mark {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.portal-logo-text {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--p-navy);
+}
+
+/* ---------- Auth shell (login / invite) ---------- */
+
+.portal-auth-shell {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.portal-auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04), 0 16px 40px -16px rgba(var(--p-shadow-rgb), 0.16);
+  padding: 36px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  animation: portal-rise 0.5s var(--p-ease) both;
+}
+
+.portal-h1 {
+  margin: 0;
+  font-size: clamp(1.3rem, 1.15rem + 0.6vw, 1.55rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--p-ink);
+}
+
+.portal-sub {
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--p-ink-soft);
+}
+
+.portal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.portal-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--p-ink-soft);
+  letter-spacing: 0.01em;
+}
+
+.portal-field input {
+  padding: 11px 14px;
+  border-radius: var(--p-radius-sm);
+  border: 1px solid var(--p-border);
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 180ms var(--p-ease), box-shadow 180ms var(--p-ease);
+}
+
+.portal-field input::placeholder {
+  color: #a3a7b3;
+}
+
+.portal-field input:focus {
+  border-color: var(--p-navy);
+  background: var(--p-surface);
+  box-shadow: 0 0 0 3px rgba(var(--p-shadow-rgb), 0.1);
+}
+
+.portal-btn {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--p-radius-sm);
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 150ms var(--p-ease), box-shadow 150ms var(--p-ease), opacity 150ms var(--p-ease), background 150ms var(--p-ease);
+  min-height: 44px;
+  text-decoration: none;
+}
+
+.portal-btn:active {
+  transform: scale(0.98);
+}
+
+.portal-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.portal-btn-primary {
+  background: var(--p-navy-fill);
+  color: #fff;
+  box-shadow: 0 6px 16px -4px rgba(var(--p-shadow-rgb), 0.35);
+}
+
+.portal-btn-primary:hover:not(:disabled) {
+  background: #0d1a49;
+  box-shadow: 0 8px 20px -4px rgba(var(--p-shadow-rgb), 0.42);
+  transform: translateY(-1px);
+}
+
+.portal-btn-google {
+  background: #fff;
+  color: #1f1f1f;
+  border: 1px solid var(--p-border);
+}
+
+.portal-btn-google:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -6px rgba(var(--p-shadow-rgb), 0.2);
+}
+
+.portal-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 2px 0;
+}
+
+.portal-divider::before,
+.portal-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--p-border);
+}
+
+.portal-divider span {
+  font-size: 11px;
+  color: var(--p-ink-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.portal-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: #b91c1c;
+  background: var(--p-coral-soft);
+  border: 1px solid rgba(255, 104, 107, 0.35);
+  border-radius: var(--p-radius-sm);
+  padding: 9px 12px;
+}
+
+.portal-footnote {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--p-ink-soft);
+  text-align: center;
+}
+
+.portal-footnote a {
+  color: var(--p-navy);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.portal-footnote a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Dashboard ---------- */
+
+.portal-shell {
+  position: relative;
+  z-index: 1;
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.portal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  animation: portal-rise 0.45s var(--p-ease) both;
+}
+
+.portal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.portal-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--p-navy-fill);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 6px 16px -4px rgba(var(--p-shadow-rgb), 0.35);
+}
+
+.portal-greeting {
+  margin: 0;
+  font-size: clamp(1.15rem, 1.05rem + 0.4vw, 1.35rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--p-ink);
+}
+
+.portal-greeting-sub {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--p-ink-soft);
+}
+
+.portal-signout {
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  color: var(--p-ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: var(--p-radius-sm);
+  cursor: pointer;
+  transition: all 160ms var(--p-ease);
+}
+
+.portal-signout:hover {
+  color: var(--p-ink);
+  border-color: var(--p-navy);
+  background: var(--p-navy-soft);
+}
+
+.portal-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.portal-stat {
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04);
+  animation: portal-rise 0.45s var(--p-ease) both;
+}
+
+.portal-stat::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--p-navy-fill), var(--p-coral));
+}
+
+.portal-stat-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--p-navy-soft);
+  color: var(--p-navy);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.portal-stat-value {
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--p-ink);
+}
+
+.portal-stat-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--p-ink-soft);
+}
+
+.portal-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--p-ink-soft);
+  margin: 4px 0 -6px;
+}
+
+.portal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-app-card {
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04);
+  transition: border-color 200ms var(--p-ease), transform 200ms var(--p-ease), box-shadow 200ms var(--p-ease);
+  animation: portal-rise 0.45s var(--p-ease) both;
+}
+
+.portal-app-card:hover {
+  border-color: var(--p-navy);
+  box-shadow: 0 10px 24px -12px rgba(var(--p-shadow-rgb), 0.25);
+  transform: translateY(-2px);
+}
+
+.portal-app-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.portal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.portal-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.portal-eyebrow {
+  color: var(--p-coral);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.portal-section-heading-title {
+  margin: 3px 0 0;
+  color: var(--p-ink);
+  font-size: 22px;
+  letter-spacing: -0.03em;
+}
+
+.portal-count-badge {
+  color: var(--p-navy);
+  background: var(--p-navy-soft);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 11px;
+  white-space: nowrap;
+}
+
+.portal-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.7fr) repeat(4, minmax(115px, 1fr));
+  gap: 10px;
+  padding: 12px;
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+}
+
+.portal-search-field,
+.portal-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.portal-search-field {
+  flex-direction: row;
+  align-items: center;
+  padding: 0 11px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+}
+
+.portal-search-field:focus-within,
+.portal-filter-field select:focus {
+  border-color: var(--p-navy);
+  box-shadow: 0 0 0 3px rgba(var(--p-shadow-rgb), 0.1);
+  outline: none;
+}
+
+.portal-search-field input,
+.portal-filter-field select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  color: var(--p-ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.portal-search-field input {
+  padding: 11px 0;
+}
+
+.portal-search-field input::placeholder {
+  color: #9aa0ad;
+}
+
+.portal-filter-field span {
+  color: var(--p-ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.portal-filter-field select,
+.portal-filter-field input[type="date"] {
+  height: 40px;
+  padding: 0 9px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.portal-app-main {
+  min-width: 0;
+}
+
+.portal-app-meta,
+.portal-app-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.portal-app-meta {
+  margin-top: 8px;
+  color: var(--p-ink-soft);
+  font-size: 11.5px;
+}
+
+.portal-app-meta span + span::before {
+  content: "•";
+  margin-right: 8px;
+  color: #c1c5cf;
+}
+
+.portal-app-footer {
+  padding-top: 2px;
+}
+
+.portal-resume-pill,
+.portal-next-action {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 9px;
+}
+
+.portal-attention-pill {
+  border-radius: 999px;
+  color: #9a3412;
+  background: #ffedd5;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 5px 9px;
+}
+
+.portal-next-action {
+  color: var(--p-ink-soft);
+  background: var(--p-bg);
+  border: 1px solid var(--p-border);
+}
+
+.portal-btn-secondary {
+  color: var(--p-navy);
+  background: var(--p-navy-soft);
+  border: 1px solid #dbe0f0;
+}
+
+.portal-btn-secondary:hover:not(:disabled) {
+  /* Was a hardcoded light-mode color: in dark mode the text (var(--p-navy),
+     which shifts to a light blue there) rendered on this near-white
+     background with very low contrast, effectively unreadable on hover. */
+  background: var(--p-navy-soft-hover);
+  transform: translateY(-1px);
+}
+
+.portal-btn-small {
+  min-height: 34px;
+  margin-left: auto;
+  padding: 7px 11px;
+  font-size: 11px;
+}
+
+.portal-list-loading {
+  opacity: 0.58;
+  pointer-events: none;
+}
+
+.portal-application-skeleton {
+  height: 142px;
+}
+
+.portal-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--p-ink-soft);
+  font-size: 12px;
+}
+
+.portal-pagination-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.portal-page-btn,
+.portal-page-current {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 9px;
+  border-radius: var(--p-radius-sm);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.portal-page-btn {
+  border: 1px solid var(--p-border);
+  background: var(--p-surface);
+  color: var(--p-navy);
+  cursor: pointer;
+}
+
+.portal-page-btn:hover:not(:disabled) {
+  border-color: var(--p-navy);
+  background: var(--p-navy-soft);
+}
+
+.portal-page-btn:disabled {
+  color: #b2b5bd;
+  cursor: not-allowed;
+}
+
+.portal-page-current {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--p-navy-fill);
+}
+
+.portal-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.portal-back-link {
+  align-self: flex-start;
+  border: 0;
+  padding: 0;
+  color: var(--p-navy);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.portal-detail-shell {
+  /* No max-width - fills .portal-main the same way every other portal page
+     does. It used to cap at 980px with no auto-centering margin, which on a
+     wide viewport left a large unused gap on the right instead of the page
+     using the available width. */
+  width: 100%;
+}
+
+.portal-detail-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.portal-detail-hero h1 {
+  margin: 4px 0 6px;
+  color: var(--p-ink);
+  font-size: clamp(1.5rem, 1.2rem + 1vw, 2rem);
+  letter-spacing: -0.04em;
+}
+
+.portal-detail-hero p {
+  margin: 0;
+  color: var(--p-ink-soft);
+  font-size: 14px;
+}
+
+.portal-detail-status {
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: #166534;
+  background: #dcfce7;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 8px 12px;
+}
+
+/* Main content + side panel (Updates, resume) - replaces the old 2-card
+   .portal-detail-grid row, which only filled the top of the page and left
+   everything below it (Progress, Interviews, notes, resume) stacked full
+   width, wasting the wide-viewport space this now spreads across. */
+.portal-detail-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 20px;
+  align-items: start;
+}
+
+.portal-detail-main,
+.portal-detail-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.portal-detail-side {
+  position: sticky;
+  top: 84px;
+}
+
+
+.portal-card {
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04);
+}
+
+.portal-detail-card {
+  padding: 20px;
+}
+
+.portal-detail-card h2 {
+  margin: 0 0 14px;
+  color: var(--p-ink);
+  font-size: 16px;
+  letter-spacing: -0.02em;
+}
+
+.portal-detail-facts {
+  display: grid;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.portal-detail-facts div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--p-border);
+  padding-bottom: 8px;
+}
+
+.portal-detail-facts dt,
+.portal-detail-facts dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.portal-detail-facts dt { color: var(--p-ink-soft); }
+.portal-detail-facts dd { color: var(--p-ink); font-weight: 700; text-align: right; }
+
+.portal-detail-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-detail-updates article {
+  border-left: 3px solid var(--p-coral);
+  border-radius: 0 var(--p-radius-sm) var(--p-radius-sm) 0;
+  background: var(--p-bg);
+  padding: 10px 12px;
+}
+
+.portal-detail-updates p { margin: 0 0 5px; color: var(--p-ink); font-size: 13px; line-height: 1.5; }
+.portal-detail-updates span { color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-interview-list,
+.portal-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-interview-card,
+.portal-notes-list article {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  padding: 12px;
+}
+
+.portal-interview-card strong,
+.portal-interview-card span,
+.portal-notes-list span {
+  display: block;
+}
+
+.portal-interview-card strong { color: var(--p-ink); font-size: 13px; }
+.portal-interview-card span { margin-top: 4px; color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-tab-list { display: flex; gap: 6px; margin: 14px 0 12px; border-bottom: 1px solid var(--p-border); }
+.portal-tab { border: 0; border-bottom: 2px solid transparent; color: var(--p-ink-soft); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 10px; }
+.portal-tab:hover, .portal-tab-active { border-bottom-color: var(--p-coral); color: var(--p-ink); }
+.portal-interview-center-list { display: flex; flex-direction: column; gap: 10px; }
+.portal-interview-center-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--p-border); border-radius: var(--p-radius-md); background: var(--p-surface); padding: 14px; }
+.portal-interview-center-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.portal-interview-center-title strong { color: var(--p-ink); font-size: 13px; }
+.portal-interview-center-main h3 { margin: 5px 0 2px; color: var(--p-navy); font-size: 15px; }
+.portal-interview-center-main p { margin: 3px 0 0; color: var(--p-ink-soft); font-size: 11px; }
+.portal-interview-center-main .portal-interview-time { color: var(--p-ink); font-size: 12px; font-weight: 700; }
+.portal-interview-updates { margin-top: 10px; border-left: 3px solid var(--p-coral); background: var(--p-bg); padding: 8px 10px; }
+.portal-interview-updates strong, .portal-interview-updates span { display: block; color: var(--p-ink-soft); font-size: 10px; }
+.portal-interview-updates p { margin: 4px 0; color: var(--p-ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
+.portal-interview-status { border-radius: 999px; font-size: 10px; font-weight: 700; padding: 4px 7px; }
+.portal-interview-status-upcoming { color: #075985; background: #e0f2fe; }
+.portal-interview-status-completed { color: #166534; background: #dcfce7; }
+.portal-interview-status-cancelled { color: #991b1b; background: #fee2e2; }
+.portal-interview-status-not_scheduled { color: #92400e; background: #fef3c7; }
+
+.portal-notes-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.portal-note-composer {
+  margin: 14px 0;
+}
+
+.portal-note-composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  padding: 10px 12px;
+}
+
+.portal-note-composer textarea:focus {
+  border-color: var(--p-navy);
+  box-shadow: 0 0 0 3px rgba(var(--p-shadow-rgb), 0.1);
+}
+
+.portal-note-composer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 7px;
+}
+
+.portal-note-composer > div > span,
+.portal-notes-list span { color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-notes-list article {
+  display: block;
+}
+
+.portal-notes-list p { margin: 0 0 8px; color: var(--p-ink); font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+.portal-notes-list article > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.portal-note-delete { border: 0; color: #b91c1c; background: transparent; cursor: pointer; font-size: 11px; font-weight: 700; }
+
+.portal-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.portal-timeline-item {
+  display: flex;
+  gap: 12px;
+  min-height: 54px;
+}
+
+.portal-timeline-dot {
+  position: relative;
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border: 3px solid var(--p-surface);
+  border-radius: 50%;
+  background: var(--p-coral);
+  box-shadow: 0 0 0 1px var(--p-coral);
+}
+
+.portal-timeline-item:not(:last-child) .portal-timeline-dot::after {
+  content: "";
+  position: absolute;
+  top: 7px;
+  left: 2px;
+  width: 1px;
+  height: 47px;
+  background: #f4b5b7;
+}
+
+.portal-timeline-item strong,
+.portal-timeline-item span {
+  display: block;
+}
+
+.portal-timeline-item strong { color: var(--p-ink); font-size: 13px; }
+.portal-timeline-item span { margin-top: 3px; color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-resume-preview {
+  overflow: hidden;
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: 0 8px 24px -16px rgba(var(--p-shadow-rgb), 0.3);
+  padding: 24px;
+}
+
+.portal-resume-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--p-border);
+  padding-bottom: 16px;
+}
+
+.portal-resume-heading h2 { margin: 3px 0; color: var(--p-ink); font-size: 20px; }
+.portal-resume-heading p { margin: 0; color: var(--p-ink-soft); font-size: 12px; }
+.portal-resume-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.portal-resume-ready { color: #166534; background: #dcfce7; }
+/* The rules that styled a hand-built resume layout here (name, contact line,
+   section headings, skill chips, entry lists, plain-text fallback) are gone
+   with that renderer - the document is now drawn by the studio templates
+   inside the protected viewer, which bring their own typography. */
+.portal-detail-empty { display: flex; flex-direction: column; gap: 6px; }
+
+.portal-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.portal-chart-card {
+  min-width: 0;
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  padding: 20px;
+  box-shadow: 0 1px 2px rgba(var(--p-shadow-rgb), 0.04);
+}
+
+.portal-chart-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.portal-chart-heading h3 { margin: 0; color: var(--p-ink); font-size: 14.5px; font-weight: 700; }
+.portal-chart-heading span { color: var(--p-ink-soft); font-size: 11.5px; white-space: nowrap; }
+
+.portal-chart {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 180px;
+  margin-top: 20px;
+  border-bottom: 1px solid var(--p-border);
+  padding: 0 2px;
+}
+
+.portal-chart-column {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  cursor: default;
+}
+
+.portal-chart-bar {
+  width: 100%;
+  max-width: 22px;
+  min-height: 3px;
+  border-radius: 5px 5px 0 0;
+  background: linear-gradient(180deg, var(--p-coral), #ffb0a7);
+  transition: filter 120ms var(--p-ease), transform 120ms var(--p-ease);
+  transform-origin: bottom center;
+}
+
+.portal-chart-bar-active {
+  filter: brightness(1.12);
+  transform: scaleY(1.02);
+}
+
+.portal-chart-axis-label {
+  /* With 24 hourly columns in one card, each column is only a few px wide -
+     narrower than any label text. Only every 4th column carries a label
+     (see labelEvery in CandidatePortalInsights), so its neighbors are empty;
+     letting the label overflow its own column horizontally instead of
+     clipping it lets it render in full, spilling into that empty space
+     rather than being cut down to 1-2 characters. */
+  overflow: visible;
+  width: 100%;
+  min-height: 14px;
+  color: var(--p-ink-soft);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.portal-chart-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 11px;
+  border-radius: var(--p-radius-sm);
+  background: var(--p-ink);
+  color: var(--p-bg);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 8px 20px -8px rgba(var(--p-shadow-rgb), 0.4);
+  animation: portal-tooltip-in 120ms var(--p-ease) both;
+}
+
+.portal-chart-tooltip strong {
+  color: var(--p-coral);
+  font-size: 13px;
+}
+
+.portal-chart-tooltip span {
+  color: var(--p-bg);
+  opacity: 0.75;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.portal-chart-tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--p-ink);
+}
+
+@keyframes portal-tooltip-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.portal-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.portal-action-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  color: inherit;
+  background: var(--p-surface);
+  padding: 13px 15px;
+  text-decoration: none;
+  transition: border-color 160ms var(--p-ease), transform 160ms var(--p-ease), box-shadow 160ms var(--p-ease);
+}
+
+.portal-action-card:hover {
+  border-color: var(--p-navy);
+  box-shadow: 0 8px 20px -14px rgba(var(--p-shadow-rgb), 0.3);
+  transform: translateY(-1px);
+}
+
+.portal-action-icon {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.portal-action-interview { color: #92400e; background: #fef3c7; }
+.portal-action-follow_up { color: var(--p-navy); background: var(--p-navy-soft); }
+.portal-action-copy { display: block; min-width: 0; flex: 1; }
+.portal-action-copy strong, .portal-action-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.portal-action-copy strong { color: var(--p-ink); font-size: 13px; }
+.portal-action-copy span { margin-top: 3px; color: var(--p-ink-soft); font-size: 11px; }
+.portal-action-due { color: var(--p-navy); font-size: 11px; font-weight: 800; text-align: right; white-space: nowrap; }
+.portal-action-due small { color: var(--p-ink-soft); font-size: 10px; font-weight: 600; }
+.portal-action-empty { display: flex; flex-direction: column; gap: 6px; }
+
+.portal-app-title {
+  font-weight: 700;
+  font-size: 14.5px;
+  letter-spacing: -0.01em;
+  color: var(--p-ink);
+}
+
+.portal-app-company {
+  font-size: 13px;
+  color: var(--p-ink-soft);
+  margin-top: 2px;
+}
+
+.portal-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 11px;
+  border-radius: 999px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.01em;
+}
+
+.portal-app-date {
+  font-size: 12px;
+  color: var(--p-ink-soft);
+}
+
+.portal-update {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--p-ink);
+  background: var(--p-bg);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  padding: 10px 12px;
+}
+
+.portal-empty {
+  text-align: center;
+  padding: 56px 24px;
+  color: var(--p-ink-soft);
+  background: var(--p-surface);
+  border: 1px dashed var(--p-border);
+  border-radius: var(--p-radius-md);
+  font-size: 13.5px;
+}
+
+.portal-empty-icon {
+  font-size: 28px;
+  margin-bottom: 10px;
+  opacity: 0.7;
+}
+
+/* ---------- Skeletons ---------- */
+
+.portal-skeleton {
+  background: linear-gradient(90deg, #eef0f4 25%, #f7f8fa 37%, #eef0f4 63%);
+  background-size: 400% 100%;
+  animation: portal-shimmer 1.4s ease infinite;
+  border-radius: var(--p-radius-sm);
+}
+
+@keyframes portal-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+@keyframes portal-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.portal-stagger-1 { animation-delay: 0.04s; }
+.portal-stagger-2 { animation-delay: 0.08s; }
+.portal-stagger-3 { animation-delay: 0.12s; }
+.portal-stagger-4 { animation-delay: 0.16s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .portal-auth-card,
+  .portal-header,
+  .portal-stat,
+  .portal-app-card,
+  .portal-hero,
+  .portal-chart-tooltip,
+  .portal-skeleton {
+    animation: none !important;
+  }
+  .portal-btn,
+  .portal-app-card,
+  .portal-chart-bar,
+  .portal-field input {
+    transition: none !important;
+  }
+}
+
+
+
+/* ---------- App shell: sidebar + topbar ---------- */
+
+.portal-layout {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+}
+
+/* The sidebar is position:fixed (not sticky-in-a-grid) - a fixed app-shell
+   sidebar has no dependency on scroll-container/containing-block chains
+   the way sticky does, so it can't be silently broken by an ancestor's
+   overflow value. .portal-content offsets by the same width instead. */
+.portal-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 248px;
+  display: flex;
+  flex-direction: column;
+  background: var(--p-sidebar-bg);
+  border-right: 1px solid var(--p-sidebar-border);
+  padding: 20px 14px;
+  gap: 4px;
+  transition: transform 220ms var(--p-ease);
+  z-index: 20;
+}
+
+.portal-content {
+  margin-left: 248px;
+  min-width: 0;
+}
+
+.portal-sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 20px;
+}
+
+.portal-sidebar-logo span {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+
+.portal-sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.portal-sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: var(--p-radius-sm);
+  color: var(--p-sidebar-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 160ms var(--p-ease), color 160ms var(--p-ease);
+}
+
+.portal-sidebar-link svg {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.portal-sidebar-link:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--p-sidebar-ink-active);
+}
+
+.portal-sidebar-link-active {
+  background: var(--p-sidebar-bg-active);
+  color: var(--p-sidebar-ink-active);
+}
+
+.portal-sidebar-link-active svg {
+  opacity: 1;
+  color: var(--p-coral);
+}
+
+.portal-sidebar-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 10px 4px;
+  margin-top: 10px;
+  border-top: 1px solid var(--p-sidebar-border);
+}
+
+.portal-sidebar-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.portal-sidebar-profile-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--p-sidebar-ink-active);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portal-sidebar-signout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--p-radius-sm);
+  border: 1px solid var(--p-sidebar-border);
+  background: transparent;
+  color: var(--p-sidebar-ink-soft);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 160ms var(--p-ease), color 160ms var(--p-ease), border-color 160ms var(--p-ease);
+}
+
+.portal-sidebar-signout svg {
+  flex-shrink: 0;
+}
+
+.portal-sidebar-signout:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--p-sidebar-ink-active);
+  border-color: var(--p-sidebar-ink-soft);
+}
+
+.portal-sidebar-backdrop {
+  display: none;
+}
+
+.portal-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 28px;
+  background: color-mix(in srgb, var(--p-bg) 85%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--p-border);
+}
+
+.portal-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.portal-topbar-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--p-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.portal-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.portal-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--p-radius-sm);
+  border: 1px solid var(--p-border);
+  background: var(--p-surface);
+  color: var(--p-ink-soft);
+  cursor: pointer;
+  transition: color 160ms var(--p-ease), border-color 160ms var(--p-ease), background 160ms var(--p-ease);
+}
+
+.portal-icon-btn svg {
+  /* Without this, the icon is a flex child with the default flex-shrink:1
+     and gets compressed to ~2px wide by the flex layout algorithm instead
+     of rendering at its intended 17px - effectively invisible. Every other
+     icon-in-flex-container in this file already carries this same rule
+     (.portal-sidebar-link svg, .portal-collapsible-header svg); this button
+     was the one place it was missing. */
+  flex-shrink: 0;
+}
+
+.portal-icon-btn:hover {
+  color: var(--p-navy);
+  border-color: var(--p-navy);
+  background: var(--p-navy-soft);
+}
+
+/* Shown again in the ≤900px block, together with the off-canvas sidebar. */
+.portal-hamburger {
+  display: none;
+}
+
+.portal-main {
+  min-width: 0;
+  padding: 24px 28px 60px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* ---------- Icon badges (stat cards, action items, sidebar-adjacent chips) ---------- */
+
+.portal-icon-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.portal-icon-badge-navy { background: var(--p-navy-soft); color: var(--p-navy); }
+.portal-icon-badge-coral { background: var(--p-coral-soft); color: var(--p-coral); }
+.portal-icon-badge-green { background: #dcfce7; color: #166534; }
+.portal-icon-badge-amber { background: #fef3c7; color: #92400e; }
+.portal-icon-badge-gray { background: var(--p-bg); color: var(--p-ink-soft); }
+
+/* ---------- Collapsible section (application detail) ---------- */
+
+.portal-collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 14px;
+  text-align: left;
+  font: inherit;
+}
+
+.portal-collapsible-header h2 {
+  margin: 0;
+  transition: color 160ms var(--p-ease);
+}
+
+.portal-collapsible-header svg {
+  color: var(--p-ink-soft);
+  flex-shrink: 0;
+  transition: transform 200ms var(--p-ease), color 160ms var(--p-ease);
+}
+
+/* Quiet, text-level affordance instead of a raised button box - the chevron
+   picks up the accent and the title lifts to full ink. */
+.portal-collapsible-header:hover svg {
+  color: var(--p-coral);
+}
+
+.portal-collapsible-header:hover h2 {
+  color: var(--p-navy);
+}
+
+.portal-back-link {
+  transition: color 160ms var(--p-ease), gap 160ms var(--p-ease);
+}
+
+.portal-back-link:hover {
+  color: var(--p-coral);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------- Mini calendar (interview center) ---------- */
+
+.portal-mini-calendar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.portal-mini-calendar-dow {
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--p-ink-soft);
+  text-transform: uppercase;
+  padding-bottom: 4px;
+}
+
+.portal-mini-calendar-day {
+  position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  font-size: 11.5px;
+  color: var(--p-ink-soft);
+  background: var(--p-bg);
+}
+
+.portal-mini-calendar-day-today {
+  background: var(--p-navy-fill);
+  color: #fff;
+  font-weight: 700;
+}
+
+.portal-mini-calendar-day-event::after {
+  content: "";
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--p-coral);
+}
+
+.portal-mini-calendar-day-today.portal-mini-calendar-day-event::after {
+  background: #fff;
+}
+
+/* ---------- Tailored resume document (studio templates) ---------- */
+
+/* The templates render on a white page at fixed print dimensions and are
+   scaled to fit; they carry their own typography, so the portal's theme
+   tokens deliberately stop at this boundary - the document must look the
+   same here as it does in the studio and on the PDF, in either theme. */
+.portal-resume-doc {
+  margin-top: 16px;
+  width: 100%;
+  min-width: 0;
+  /* Below the renderer's minimum scale the page is wider than this box; keep
+     that pan contained here so the page body never scrolls sideways. */
+  overflow-x: auto;
+}
+
+.portal-resume-doc-page {
+  position: relative;
+  overflow: hidden;
+  max-width: 100%;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  box-shadow: 0 10px 30px -18px rgba(var(--p-shadow-rgb), 0.45);
+}
+
+.portal-resume-doc-inner {
+  background: #fff;
+}
+
+/* ---------- Modal + protected PDF viewer ---------- */
+
+.portal-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 8, 20, 0.72);
+  backdrop-filter: blur(4px);
+  animation: portal-fade-in 180ms var(--p-ease) both;
+}
+
+.portal-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1080px, 100%);
+  height: min(90vh, 100%);
+  background: var(--p-surface);
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+  animation: portal-rise 240ms var(--p-ease) both;
+}
+
+.portal-modal:focus {
+  outline: none;
+}
+
+/* Selection/drag are capture-adjacent affordances; off inside the viewer. */
+.portal-modal-protected {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.portal-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--p-border);
+}
+
+.portal-modal-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--p-ink);
+}
+
+.portal-modal-heading p {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--p-coral);
+}
+
+.portal-modal-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--p-bg);
+  /* The watermark layer is deliberately scaled past its box so the rotated
+     tiles reach every corner; clip it here or it paints over the backdrop
+     and the page behind the modal. */
+  overflow: hidden;
+}
+
+/* Holds the scrolling document. The watermark and blackout are siblings that
+   sit above it and stay put while this scrolls, so neither can be escaped by
+   simply scrolling the resume. */
+.portal-doc-scroll {
+  height: 100%;
+  overflow: auto;
+  padding: 20px;
+  overscroll-behavior: contain;
+}
+
+.portal-doc-scroll .portal-resume-doc {
+  margin-top: 0;
+  overflow-x: visible;
+}
+
+.portal-pdf-watermark {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  align-content: space-around;
+  gap: 24px;
+  padding: 24px;
+  pointer-events: none;
+  overflow: hidden;
+  transform: rotate(-24deg) scale(1.4);
+  opacity: 0.16;
+}
+
+.portal-pdf-watermark span {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: #7b8499;
+  text-align: center;
+}
+
+.portal-pdf-blackout {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  background: #05070f;
+  color: #e7ebf5;
+}
+
+.portal-pdf-blackout strong {
+  font-size: 14px;
+}
+
+.portal-pdf-blackout span {
+  font-size: 12px;
+  color: #9aa4bd;
+  max-width: 320px;
+}
+
+.portal-modal-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--p-border);
+  font-size: 11.5px;
+  color: var(--p-ink-soft);
+}
+
+/* Ctrl+P / "save as PDF" is a capture path - never let the protected
+   document reach the print surface. */
+@media print {
+  .portal-modal-backdrop,
+  .portal-resume-doc {
+    display: none !important;
+  }
+}
+
+@keyframes portal-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------- Hero card ---------- */
+
+.portal-hero {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 24px 28px;
+  border-radius: var(--p-radius-lg);
+  background: linear-gradient(135deg, var(--p-navy-fill), #1c3496 60%, var(--p-coral));
+  color: #fff;
+  box-shadow: 0 16px 40px -20px rgba(var(--p-shadow-rgb), 0.55);
+  animation: portal-rise 0.45s var(--p-ease) both;
+}
+
+.portal-hero-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.portal-hero-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.portal-hero h1 {
+  margin: 0;
+  font-size: clamp(1.15rem, 1.05rem + 0.4vw, 1.35rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.portal-hero p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.portal-hero-chips {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.portal-hero-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 16px;
+  border-radius: var(--p-radius-sm);
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  min-width: 84px;
+}
+
+.portal-hero-chip strong {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.portal-hero-chip span {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.75);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.portal-hero .portal-signout {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #fff;
+}
+
+.portal-hero .portal-signout:hover {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #fff;
+}
+
+@media (max-width: 520px) {
+  .portal-hero { padding: 20px; }
+}
+
+/* ---------- Responsive ----------
+   One shared breakpoint (900px) drives the whole app shell: the hamburger
+   appearing, the sidebar going off-canvas, the backdrop and the content
+   losing its sidebar offset all switch together. These used to be split
+   across 760px and 520px, so every viewport in between rendered a hamburger
+   that toggled an already-visible sidebar while the content stayed pushed
+   248px to the right - the tablet/large-phone layout was broken outright. */
+@media (max-width: 900px) {
+  .portal-sidebar { transform: translateX(-100%); }
+  .portal-sidebar-open .portal-sidebar { transform: translateX(0); }
+  .portal-content { margin-left: 0; }
+  .portal-hamburger { display: inline-flex; }
+  .portal-sidebar-open .portal-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(5, 8, 20, 0.5);
+    z-index: 15;
+  }
+  .portal-main { padding: 20px 20px 64px; gap: 22px; }
+  .portal-topbar { padding: 12px 20px; }
+  .portal-detail-layout { grid-template-columns: 1fr; }
+  .portal-detail-side { position: static; }
+  .portal-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .portal-search-field { grid-column: 1 / -1; }
+  .portal-chart-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+  .portal-main { padding: 16px 14px 56px; gap: 18px; }
+  .portal-topbar { padding: 10px 14px; }
+  .portal-shell { padding: 26px 14px 60px; gap: 22px; }
+
+  /* Hero: stack the greeting above the stat chips and let the chips share
+     the row evenly instead of overflowing it. */
+  .portal-hero { flex-direction: column; align-items: stretch; gap: 16px; padding: 20px 18px; }
+  .portal-hero-chips { width: 100%; }
+  .portal-hero-chip { flex: 1; min-width: 0; align-items: center; text-align: center; }
+
+  .portal-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .portal-filter-panel { grid-template-columns: 1fr; }
+  .portal-search-field { grid-column: auto; }
+
+  .portal-app-top { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .portal-app-footer { align-items: stretch; flex-direction: column; gap: 8px; }
+  .portal-btn-small { margin-left: 0; width: 100%; }
+
+  .portal-pagination { align-items: stretch; flex-direction: column; gap: 10px; }
+  .portal-pagination-actions { width: 100%; justify-content: space-between; }
+
+  .portal-detail-hero { flex-direction: column; align-items: flex-start; gap: 12px; }
+  /* The detail hero reuses .portal-hero, which stretches its children here so
+     the overview's stat chips fill the row - the status pill must opt out or
+     it spans the whole card. */
+  .portal-detail-status { align-self: flex-start; }
+  .portal-resume-preview { padding: 16px; }
+  .portal-resume-heading { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .portal-resume-actions { width: 100%; flex-wrap: wrap; }
+
+  .portal-interview-card { flex-direction: column; }
+  .portal-interview-card .portal-btn-small { width: auto; }
+  .portal-interview-center-card { flex-direction: column; align-items: stretch; gap: 12px; }
+
+  .portal-action-card { align-items: flex-start; gap: 10px; }
+  .portal-action-due { text-align: right; white-space: nowrap; }
+
+  /* Full-bleed sheet on small screens - a centred, inset dialog wastes the
+     little space a phone has for a page-shaped document. */
+  .portal-modal-backdrop { padding: 0; }
+  .portal-modal { width: 100%; height: 100%; border-radius: 0; border: 0; }
+  /* Give the document as much of the narrow viewport as possible - it is
+     held at a readable minimum scale, so every pixel here is one less the
+     reader has to pan across. */
+  .portal-doc-scroll { padding: 10px; }
+}
+
+@media (max-width: 420px) {
+  .portal-auth-card { padding: 28px 22px; }
+  .portal-header { flex-wrap: wrap; }
+  .portal-stats { grid-template-columns: 1fr; }
+  .portal-hero-chips { flex-wrap: wrap; }
+  .portal-hero-chip { flex-basis: calc(50% - 5px); }
+  .portal-main { padding: 14px 12px 52px; }
+}

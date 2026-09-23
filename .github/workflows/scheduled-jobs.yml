@@ -1,17 +1,46 @@
 name: Scheduled Jobs
 
+# Root cause of the recurring Job Agent Google/LinkedIn failures ("Dataset
+# processing lease expired after 30 minutes", "Run timed out ... after
+# 120/180 minutes") traced to THIS file, not the application code that
+# reports those messages: every job below ran a plain `curl` with no
+# --max-time, and no job in this file (job-ceo-dispatch excepted) declared
+# timeout-minutes — so a single stalled response from TalentOS left the
+# GitHub Actions job hanging for up to GitHub's 360-minute default, tying up
+# a runner the whole time. Confirmed directly from job_agent_runs: real
+# elapsed time between a run being created and finally being cleaned up
+# ranged from 136 to 651 minutes across the same few days, in occasional
+# clusters (several runs completing within the same minute, sometimes hours
+# apart) rather than the steady 5-minute drumbeat the cron schedule
+# specifies - the signature of a scheduler catching up after a stuck
+# previous run finally released its runner slot, not of the endpoint being
+# individually slow each time. The failure messages' stated thresholds (30
+# minutes, 120 minutes) were themselves fine; the runs simply weren't being
+# checked anywhere near that often.
+#
+# Every job below now has both layers: --max-time (+ --connect-timeout) on
+# every curl call, so a single request can never hang past a few minutes,
+# and timeout-minutes on the job itself as a second, independent ceiling.
+# Neither changes behavior on a normal, responsive call - both only bound
+# the failure case, and do so in minutes instead of hours, so a real
+# problem shows up as a failed, notifying GitHub Actions run almost
+# immediately instead of silently occupying a slot for hours.
 env:
-  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://skarion-talent-os.skarion-talentos.workers.dev' }}
+  TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
 
 on:
   schedule:
-    - cron: '*/5 * * * *'  # dispatch-workflows + email-queue – every 5 minutes
+    - cron: '*/5 * * * *'  # workflow dispatch + Gmail sync + email queue + Job Agent polling
     - cron: '0 * * * *'    # ai-key-health – hourly (only tests rate_limited/quota_exhausted/failing keys)
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
     - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
+    - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
+    - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
+    - cron: '0 2 * * *'     # Candidate-job matching – 08:00 Asia/Dhaka
+    - cron: '0 1 * * *'     # Gmail watch renewal
   workflow_dispatch:
     inputs:
       job:
@@ -29,8 +58,45 @@ on:
           - ai-usage-rollup
           - email-queue
           - run-all
+          - job-ceo-dispatch
+          - job-description-enrichment
+          - retry-failed-since
+          - job-agent-poll
+          - gmail-sync
+          - gmail-watch
+          - active-candidate-job-match
+          - retriage-email-backlog
+      apply:
+        description: 'For retriage-email-backlog only: actually write (default is a dry-run preview)'
+        required: false
+        type: boolean
+        default: false
+
 
 jobs:
+  active-candidate-job-match:
+    if: >
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *') ||
+      github.event.inputs.job == 'active-candidate-job-match' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Active candidate job matching
+    timeout-minutes: 10
+    steps:
+      - name: Match approved candidate profiles to recent jobs
+        run: |
+          INVOCATION="${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}"
+          HTTP_CODE=$(curl -s -o response.json -w '%{http_code}' --max-time 300 --connect-timeout 30 -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "X-Candidate-Match-Invocation: $INVOCATION" \
+            -H "Content-Type: application/json" \
+            "${{ env.TALENTOS_BASE_URL }}/api/cron/active-candidate-job-match")
+          cat response.json
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Candidate matcher failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
   dispatch-workflows:
     if: >
       (github.event_name == 'schedule' &&
@@ -39,6 +105,9 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Workflow dispatcher
+    # Second layer over the loop's own ~270s wall clock below, same
+    # belt-and-suspenders pattern as job-ceo-dispatch's timeout-minutes: 60.
+    timeout-minutes: 15
     steps:
       - name: Call Workflow dispatcher (looped)
         run: |
@@ -59,7 +128,12 @@ jobs:
           FAILURES=0
           while [ $SECONDS -lt $END ]; do
             CALLS=$((CALLS + 1))
-            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
+            # A dispatch call owns one complete AI stage. The outer stage
+            # guard is timeout_ms*2+5s; current production defaults permit
+            # up to 445s for Final Polish, and database-configured agents may
+            # use 300s (605s with the fallback budget). A 60s client timeout
+            # let the request disappear while the Worker still held the lease.
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 660 --connect-timeout 15 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
               echo "::warning::Dispatch call failed with HTTP $HTTP_CODE"
@@ -82,14 +156,34 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI digest
+    timeout-minutes: 10
     steps:
       - name: Call AI digest
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/digest")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/digest")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
           fi
+
+  job-agent-poll:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'job-agent-poll' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Job Agent Poller
+    timeout-minutes: 10
+    steps:
+      - name: Call Job Agent poll API
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/job-agent-poll")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
 
   import-sources:
     if: >
@@ -99,10 +193,11 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Import sources
+    timeout-minutes: 10
     steps:
       - name: Call Import sources
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/import-sources")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/import-sources")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
@@ -116,10 +211,15 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Backup
+    # Longer allowance than the other single-shot crons: /api/cron/backup
+    # (src/app/api/cron/backup/route.ts) builds and stores the snapshot
+    # synchronously in-request rather than backgrounding it, so the call is
+    # expected to legitimately take longer than a status check or dispatch.
+    timeout-minutes: 15
     steps:
       - name: Call Backup
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/backup")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 600 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/backup")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
@@ -133,10 +233,11 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Job categorization
+    timeout-minutes: 10
     steps:
       - name: Call Job categorization
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/categorize-jobs")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
@@ -150,10 +251,11 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI usage rollup
+    timeout-minutes: 10
     steps:
       - name: Call AI usage rollup
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-usage-rollup")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-usage-rollup")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
@@ -167,10 +269,11 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: AI key health
+    timeout-minutes: 10
     steps:
       - name: Call AI key health
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-key-health")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/ai-key-health")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
@@ -184,11 +287,216 @@ jobs:
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest
     name: Email queue
+    timeout-minutes: 10
     steps:
       - name: Call Email queue
         run: |
-          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/email-queue")
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/email-queue")
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1
           fi
+
+  job-ceo-dispatch:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/10 * * * *') ||
+      github.event.inputs.job == 'job-ceo-dispatch' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: JOB CEO dispatch
+    # Hard wall: GitHub Actions job timeout prevents a runaway loop from
+    # consuming runner minutes indefinitely. The inner loop already has its own
+    # 55-minute safety limit, but this provides a second layer of protection.
+    timeout-minutes: 60
+    steps:
+      - name: Call JOB CEO dispatch (smart loop)
+        run: |
+          # Strategy: call /api/job-ceo/dispatch in a tight loop.
+          # - Read the JSON body on every call.
+          # - If needsDispatch=false the run is fully complete — break immediately.
+          # - Sleep 5 seconds between calls (enough time for Cloudflare to process
+          #   a batch before the next request lands).
+          # - Hard wall: 55 minutes total (leaves 5 minutes of safety margin before
+          #   the 60-minute job timeout).
+          # This turns what was a 10-hour "one call per tick" problem into a
+          # self-draining loop: a 300-job run finishes in 30-45 minutes instead.
+          WALL_END=$((SECONDS + 3300))   # 55 * 60
+          CALLS=0
+          FAILURES=0
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+
+          echo "JOB CEO dispatch smart loop started. Will run until needsDispatch=false or wall time."
+
+          while [ $SECONDS -lt $WALL_END ]; do
+            CALLS=$((CALLS + 1))
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 60 --connect-timeout 15 \
+              -X POST \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              -H "Content-Type: application/json" \
+              "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/dispatch" 2>&1)
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              FAILURES=$((FAILURES + 1))
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Call $CALLS: JOB CEO dispatch HTTP $HTTP_CODE — body: $(echo $BODY | head -c 200)"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
+                exit 1
+              fi
+              sleep 5
+              continue
+            fi
+
+            CONSECUTIVE_FAILURES=0
+
+            # Check if the run is complete
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' || echo "true")
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' || echo "unknown")
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' || echo "0")
+
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH"
+
+            if [ "$NEEDS_DISPATCH" = "false" ]; then
+              echo "✓ JOB CEO dispatch complete — run is fully done. Exiting loop after $CALLS calls."
+              break
+            fi
+
+            sleep 5
+          done
+
+          if [ "$CALLS" -eq 0 ]; then
+            echo "::error::No dispatch calls were made."
+            exit 1
+          fi
+
+          # Fail only if a majority of all calls failed (transient blips are acceptable)
+          if [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS JOB CEO dispatch calls failed this run"
+            exit 1
+          fi
+
+          echo "JOB CEO dispatch loop done: $CALLS calls, $FAILURES failures."
+
+
+
+  job-description-enrichment:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/15 * * * *') ||
+      github.event.inputs.job == 'job-description-enrichment' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Job description enrichment
+    timeout-minutes: 10
+    steps:
+      - name: Call description enrichment
+        run: |
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/enrich")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  gmail-sync:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/5 * * * *') ||
+      github.event.inputs.job == 'gmail-sync' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Gmail sync + AI triage
+    timeout-minutes: 10
+    steps:
+      - name: Call Gmail sync
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/gmail-sync")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Gmail sync failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  gmail-watch:
+    if: >
+      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+      github.event.inputs.job == 'gmail-watch' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: Register Gmail push watches
+    timeout-minutes: 10
+    steps:
+      - name: Register Gmail watches
+        run: |
+          HTTP_CODE=$(curl -s -o response.json -w '%{http_code}' --max-time 300 --connect-timeout 30 -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/cron/gmail-watch")
+          cat response.json
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then exit 1; fi
+
+  # Manual cleanup only, deliberately not part of any cron schedule or
+  # run-all - this bulk-retries everything that failed during the Aug 4
+  # 2026 Vertex gateway outage (stale ai_key_id routing -> gateway auth
+  # header mismatch -> stale Cloudflare secret). Not something that should
+  # ever fire automatically; trigger by hand once, after confirming the
+  # underlying gateway fixes are actually live.
+  retry-failed-since:
+    if: github.event.inputs.job == 'retry-failed-since'
+    runs-on: ubuntu-latest
+    name: Retry everything failed during the Vertex outage
+    timeout-minutes: 10
+    steps:
+      - name: Call retry-failed-since
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 300 --connect-timeout 30 -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/admin/retry-failed-since")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::retry-failed-since failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  # Manual cleanup only, deliberately not part of any cron schedule or
+  # run-all - re-applies Chunk A's deterministic Gmail filter rules to
+  # already-stored candidate email and dismisses the action_items those
+  # rules would never have created. The API itself defaults to a dry run;
+  # this workflow's `apply` input controls whether that's overridden. A dry
+  # run only ever makes one call (nothing is marked scanned without
+  # apply=true, so looping would just re-preview the same page forever) -
+  # an actual apply run loops until the report says nothing is left.
+  retriage-email-backlog:
+    if: github.event.inputs.job == 'retriage-email-backlog'
+    runs-on: ubuntu-latest
+    name: Re-triage stored Gmail against Chunk A's filter rules
+    # 50 iterations * 60s max-time worst case = 50 minutes; 60 gives a
+    # small margin without being so loose it defeats the point of bounding it.
+    timeout-minutes: 60
+    steps:
+      - name: Call retriage-email-backlog
+        run: |
+          BATCH_ID="retriage-$(date -u +%Y%m%dT%H%M%SZ)"
+          APPLY="${{ github.event.inputs.apply }}"
+          CALLS=0
+          REMAINING=1
+          while [ "$REMAINING" -gt 0 ] && [ "$CALLS" -lt 50 ]; do
+            CALLS=$((CALLS + 1))
+            RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 60 --connect-timeout 15 -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/admin/retriage-email-backlog?apply=${APPLY}&batchId=${BATCH_ID}")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | head -n-1)
+            echo "Call $CALLS: $BODY"
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              echo "::error::retriage-email-backlog failed with HTTP $HTTP_CODE"
+              exit 1
+            fi
+            REMAINING=$(echo "$BODY" | grep -o '"remaining":[0-9]*' | grep -o '[0-9]*' || echo "0")
+            if [ "$APPLY" != "true" ]; then
+              echo "Dry run (apply=false) - stopping after one preview call. Re-run with apply=true to actually write."
+              break
+            fi
+          done
+          echo "retriage-email-backlog done: $CALLS call(s), batch $BATCH_ID, apply=$APPLY."

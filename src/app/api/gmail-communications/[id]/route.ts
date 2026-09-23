@@ -1,0 +1,71 @@
+import { NextResponse } from "next/server";
+import { ALL_USER_ROLES, requireCurrentUser } from "@/lib/auth";
+import { query, queryOne } from "@/server/db/neon";
+
+export const dynamic = "force-dynamic";
+
+export async function GET(_req: Request, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser(ALL_USER_ROLES);
+  if (response) return response;
+
+  const message = await queryOne<any>(
+    `SELECT ec.id, ec.candidate_id, c.name AS candidate_name, c.email AS candidate_email,
+            ec.integration_account_id, ec.gmail_message_id, ec.gmail_thread_id,
+            ec.direction, ec.from_email, ec.to_emails, ec.subject, ec.snippet,
+            ec.body_text, ec.body_html, ec.candidate_match_method, ec.sent_at, ec.ingested_at, ec.ai_relevant, ec.ai_category,
+            ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
+            ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
+            ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence,
+            a.status AS application_status, a.application_stage,
+            j.id AS job_id, j.title AS job_title, j.company AS company_name,
+            c.portal_token,
+            (SELECT arv.id FROM application_resume_versions arv
+              WHERE arv.application_id = ec.ai_matched_application_id
+              ORDER BY arv.created_at DESC LIMIT 1) AS resume_version_id
+       FROM email_communications ec
+       LEFT JOIN candidates c ON c.id = ec.candidate_id
+       LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
+       LEFT JOIN jobs j ON j.id = a.job_id
+      WHERE ec.id = $1`,
+    [params.id],
+  );
+  if (!message) return NextResponse.json({ error: "Email not found." }, { status: 404 });
+
+  // Full-thread view (shared-inbox redesign): scoped by gmail_thread_id
+  // alone, not also candidate_id - a message can be null/unassigned while
+  // other messages in the same conversation are already matched.
+  const thread = await query<any>(
+    `SELECT ec.id, ec.direction, ec.from_email, ec.to_emails, ec.subject,
+            ec.body_text, ec.body_html, ec.gmail_message_id, ec.snippet, ec.sent_at, ec.ai_relevant, ec.ai_category,
+            ec.ai_confidence, ec.ai_summary, ec.needs_reply, ec.replied_at,
+            ec.triaged_at, ec.gmail_label_ids, ec.gmail_is_unread,
+            ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence
+       FROM email_communications ec
+      WHERE ec.gmail_thread_id = $1
+      ORDER BY ec.sent_at ASC, ec.id ASC`,
+    [message.gmail_thread_id],
+  );
+
+  const actionItems = await query<any>(
+    `SELECT ai.id, ai.type, ai.title, ai.description, ai.suggested_action, ai.priority, ai.status,
+            ai.resolution_rule, ai.resolution_kind, ai.resolution_note, ai.due_at,
+            ai.resolved_at, ai.created_at, ai.assigned_to_user_id,
+            ai.proposed_status, ai.proposed_from_status, ai.ai_confidence, ai.decision, ai.decided_at
+       FROM action_items ai
+       LEFT JOIN applications approval_app ON approval_app.id = ai.application_id
+      WHERE ai.email_communication_id IN (SELECT id FROM email_communications WHERE gmail_thread_id = $1)
+        AND (ai.type <> 'status_change_approval'
+             OR ai.decision IS NOT NULL
+             OR (ai.application_id IS NOT NULL AND ai.proposed_status IS NOT NULL
+                 AND approval_app.status IS DISTINCT FROM ai.proposed_status))
+      ORDER BY ai.created_at DESC`,
+    [message.gmail_thread_id],
+  );
+
+  return NextResponse.json({
+    message,
+    thread,
+    actionItems,
+    gmailUrl: `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(message.gmail_thread_id)}`,
+  });
+}

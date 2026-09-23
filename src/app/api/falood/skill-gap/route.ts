@@ -1,0 +1,103 @@
+// POST /api/falood/skill-gap
+// Deterministic skill-gap suggestions for the Falood Copilot: skills present
+// in the job description, the candidate's base resumes, or their
+// Source-of-Truth confirmed skills, but missing from the tailored resume
+// currently open in the studio. See docs/FALOOD_COPILOT_SKILL_GAP_SUGGESTIONS_PLAN_2026-08-24.md.
+//
+// Stateless, same shape as /api/falood/suggestions - the client sends its
+// current resume/JD rather than this route re-fetching a session row, so it
+// always reflects exactly what's on screen right now.
+
+import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUserContext } from "@/lib/auth";
+import { query } from "@/server/db/neon";
+import { sanitizeApiError } from "@/lib/utils";
+import { extractSkillsFromJobDescription, categorizeSkillsIntoCategories } from "@/server/services/faloodAiService";
+import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
+import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
+import {
+  detectSkillGaps,
+  filterSkillGapsForScoreIncrease,
+  flattenResumeSkills,
+} from "@/lib/falood/skillGapDetector";
+
+export const dynamic = "force-dynamic";
+
+async function getBaseResumeSkills(candidateId: string): Promise<string[]> {
+  const rows = await query<{ content: any }>(
+    "SELECT content FROM base_resumes WHERE candidate_id = $1",
+    [candidateId]
+  );
+  const skills: string[] = [];
+  for (const row of rows) {
+    try {
+      const parsed = typeof row.content === "string" ? JSON.parse(row.content) : row.content;
+      skills.push(...flattenResumeSkills(studioDocumentToResumeData(parsed).skills));
+    } catch {
+      // A malformed base resume shouldn't block gap detection for the rest.
+    }
+  }
+  return skills;
+}
+
+export async function POST(req: NextRequest) {
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const jobDescription: string = typeof body.jobDescription === "string" ? body.jobDescription : "";
+  const resumeSkills: string[] = Array.isArray(body.resumeSkills) ? body.resumeSkills.filter((s: unknown) => typeof s === "string") : [];
+  const candidateId: string | undefined = typeof body.candidateId === "string" ? body.candidateId : undefined;
+  // The resume's actual skill categories (id + name) - lets each suggested
+  // skill be routed to the category it belongs to instead of always landing
+  // in whichever category happens to be listed first.
+  const skillCategories: { id: string; name: string }[] = Array.isArray(body.skillCategories)
+    ? body.skillCategories.filter((c: unknown): c is { id: string; name: string } =>
+        !!c && typeof c === "object" && typeof (c as any).id === "string" && typeof (c as any).name === "string"
+      )
+    : [];
+
+  if (jobDescription.trim().length < 80) {
+    // Same floor the existing auto-suggest effect already uses before it
+    // trusts a job description enough to act on it.
+    return NextResponse.json({ gaps: [] });
+  }
+
+  try {
+    const [{ skills: jdSkills, requiredSkills: requiredJdSkills }, baseResumeSkills, sot] = await Promise.all([
+      extractSkillsFromJobDescription(jobDescription, currentUser.profile.user_id),
+      candidateId ? getBaseResumeSkills(candidateId) : Promise.resolve<string[]>([]),
+      candidateId ? getSourceOfTruth(candidateId) : Promise.resolve(null),
+    ]);
+
+    const gaps = detectSkillGaps({
+      resumeSkills,
+      jdSkills,
+      baseResumeSkills,
+      sourceOfTruthSkills: sot?.confirmedSkills ?? [],
+      requiredJdSkills,
+    });
+    const filtered = filterSkillGapsForScoreIncrease(gaps, resumeSkills, jdSkills);
+
+    const categoryAssignments = skillCategories.length > 0 && filtered.length > 0
+      ? await categorizeSkillsIntoCategories(
+          filtered.map((g) => g.skill),
+          skillCategories.map((c) => c.name),
+          currentUser.profile.user_id
+        )
+      : {};
+    const categoryIdByName = new Map(skillCategories.map((c) => [c.name.trim().toLowerCase(), c.id]));
+
+    return NextResponse.json({
+      gaps: filtered.map((g) => {
+        const categoryName = categoryAssignments[g.skill];
+        const categoryId = typeof categoryName === "string" ? categoryIdByName.get(categoryName.trim().toLowerCase()) : undefined;
+        return { skill: g.skill, isRequiredByJob: g.isRequiredByJob, categoryId };
+      }),
+    });
+  } catch (e: any) {
+    return NextResponse.json({ error: sanitizeApiError(e) }, { status: 500 });
+  }
+}

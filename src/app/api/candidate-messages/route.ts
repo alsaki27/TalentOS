@@ -4,7 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne } from "@/server/db/neon";
 import { sendEmail } from "@/lib/emailService";
 import { logActivity } from "@/lib/activity";
 
@@ -18,13 +18,15 @@ export async function GET(req: NextRequest) {
   const candidateId = url.searchParams.get("candidateId") || "";
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("candidate_messages")
-    .select("*, candidates(id,name,avatar_url)")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: true });
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await query<Record<string, any>>(
+    `SELECT cm.*,
+      jsonb_build_object('id', c.id, 'name', c.name, 'avatar_url', c.avatar_url) as candidates
+     FROM candidate_messages cm
+     LEFT JOIN candidates c ON cm.candidate_id = c.id
+     WHERE cm.candidate_id = $1
+     ORDER BY cm.created_at ASC`,
+    [candidateId]
+  );
   return NextResponse.json({ messages: data ?? [] });
 }
 
@@ -37,11 +39,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "candidate_id and body are required" }, { status: 400 });
   }
 
-  const { data: candidate } = await supabase
-    .from("candidates")
-    .select("id, name, email")
-    .eq("id", body.candidate_id)
-    .maybeSingle();
+  let candidate;
+  candidate = await queryOne<{ id: string; name: string; email: string | null }>(
+    'SELECT id, name, email FROM candidates WHERE id = $1',
+    [body.candidate_id]
+  );
 
   if (!candidate) return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
 
@@ -65,21 +67,20 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const { data, error } = await supabase
-    .from("candidate_messages")
-    .insert({
-      candidate_id: body.candidate_id,
-      direction: "outbound",
+  let data;
+  data = await queryOne<Record<string, any>>(
+    `INSERT INTO candidate_messages (candidate_id, direction, channel, subject, body, sender_id, sender_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [
+      body.candidate_id,
+      "outbound",
       channel,
-      subject: body.subject ?? null,
-      body: body.body,
-      sender_id: context.profile.user_id,
-      sender_name: context.profile.display_name || context.profile.email,
-    })
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      body.subject ?? null,
+      body.body,
+      context.profile.user_id,
+      context.profile.display_name || context.profile.email,
+    ]
+  );
 
   await logActivity({
     userId: context.profile.user_id,

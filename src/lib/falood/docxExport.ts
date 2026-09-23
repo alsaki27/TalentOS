@@ -3,8 +3,12 @@
 // much, but architecture should leave room for DOCX." Implemented directly since the
 // same ResumeDocument structure renders cleanly to either format; mirrors the section
 // order/styling of skarionPdfDocument.tsx so the two exports stay visually consistent.
+//
+// Builds the Document only - rendering to bytes (Packer.toBuffer for Node,
+// Packer.toBlob for the browser) is the caller's job, since that choice depends on
+// where this runs. See clientExport.ts for the browser-side caller.
 
-import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from "docx";
+import { Document, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from "docx";
 import { ResumeDocument } from "@/lib/falood/types";
 
 function contactLine(content: ResumeDocument): string {
@@ -31,7 +35,7 @@ function bulletParagraph(text: string) {
   return new Paragraph({ text, bullet: { level: 0 } });
 }
 
-export async function renderResumeDocx(content: ResumeDocument): Promise<Buffer> {
+export function buildResumeDocxDocument(content: ResumeDocument): Document {
   const children: Paragraph[] = [
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -107,7 +111,7 @@ export async function renderResumeDocx(content: ResumeDocument): Promise<Buffer>
     for (const b of section.bullets) children.push(bulletParagraph(b.text));
   }
 
-  const doc = new Document({
+  return new Document({
     sections: [{
       properties: {
         page: {
@@ -122,6 +126,4 @@ export async function renderResumeDocx(content: ResumeDocument): Promise<Buffer>
       children,
     }],
   });
-
-  return Packer.toBuffer(doc);
 }

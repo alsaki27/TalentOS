@@ -2,11 +2,22 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { verifyJWT } from "@/server/auth/jwt";
 import { queryOne } from "@/server/db/neon";
+import { normalizeUserRole } from "@/lib/auth-edge";
+import type { UserRole } from "@/lib/auth-edge";
+
+export {
+  ALL_USER_ROLES,
+  canAccessPath,
+  getDefaultRouteForRole,
+  getRoleLabel,
+  normalizeUserRole,
+} from "@/lib/auth-edge";
+export type { LegacyUserRole, UserRole } from "@/lib/auth-edge";
 
 export const ACCESS_TOKEN_COOKIE = "skarion_access_token";
 export const REFRESH_TOKEN_COOKIE = "skarion_refresh_token";
-
-export type UserRole = "admin" | "manager" | "application_engineer" | "recruiter" | "reviewer";
+export const GOOGLE_OAUTH_STATE_COOKIE = "skarion_google_oauth_state";
+export const POST_AUTH_REDIRECT_COOKIE = "skarion_post_auth_redirect";
 
 export interface UserProfile {
   user_id: string;
@@ -21,14 +32,26 @@ export interface CurrentUserContext {
   profile: UserProfile;
 }
 
-export const ASSIGNMENT_MANAGER_ROLES: UserRole[] = ["admin", "manager", "recruiter"];
-export const APPLICATION_WORKER_ROLES: UserRole[] = ["admin", "manager", "application_engineer", "recruiter"];
-export const MASTER_DATA_MANAGER_ROLES: UserRole[] = ["admin", "manager", "recruiter"];
+export const ASSIGNMENT_MANAGER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
+export const APPLICATION_WORKER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
+export const MASTER_DATA_MANAGER_ROLES: UserRole[] = ["admin", "manager"];
 export const DESTRUCTIVE_MANAGER_ROLES: UserRole[] = ["admin", "manager"];
-export const FALOOD_REVIEWER_ROLES: UserRole[] = ["admin", "manager", "reviewer"];
+export const FALOOD_REVIEWER_ROLES: UserRole[] = ["admin", "manager", "application_engineer"];
+
+export function sanitizeInternalPath(path: string | null | undefined) {
+  if (!path || !path.startsWith("/") || path.startsWith("//")) return null;
+  return path;
+}
 
 export function hasRole(profile: UserProfile, roles: UserRole[]) {
-  return roles.includes(profile.role);
+  return roles.includes(normalizeUserRole(profile.role));
+}
+
+function normalizeUserProfile<T extends Pick<UserProfile, "role">>(profile: T): T {
+  return {
+    ...profile,
+    role: normalizeUserRole(profile.role),
+  };
 }
 
 export async function getCurrentUserContext(): Promise<CurrentUserContext | null> {
@@ -44,10 +67,11 @@ export async function getCurrentUserContext(): Promise<CurrentUserContext | null
   );
 
   if (!profile || !profile.is_active) return null;
+  const normalizedProfile = normalizeUserProfile(profile);
 
   return {
     user: { id: jwtPayload.user_id, email: jwtPayload.email },
-    profile,
+    profile: normalizedProfile,
   };
 }
 
@@ -65,10 +89,12 @@ export async function requireCurrentUser(allowedRoles?: UserRole[]) {
 }
 
 export function publicUserProfile(profile: UserProfile) {
+  const normalizedProfile = normalizeUserProfile(profile);
   return {
-    user_id: profile.user_id,
-    email: profile.email,
-    display_name: profile.display_name,
-    role: profile.role,
+    user_id: normalizedProfile.user_id,
+    email: normalizedProfile.email,
+    display_name: normalizedProfile.display_name,
+    role: normalizedProfile.role,
+    is_active: normalizedProfile.is_active,
   };
 }

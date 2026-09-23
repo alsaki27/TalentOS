@@ -30,8 +30,11 @@ export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const fetchingRef = useRef(false);
 
   async function loadNotifications() {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       const res = await fetch("/api/notifications?page=1&pageSize=10&unread=1", { cache: "no-store" });
       if (!res.ok) return;
@@ -41,12 +44,14 @@ export default function NotificationBell() {
       setUnreadCount(data.total ?? 0);
     } catch {
       // ignore polling errors
+    } finally {
+      fetchingRef.current = false;
     }
   }
 
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000);
+    const interval = setInterval(loadNotifications, 60000);
     return () => clearInterval(interval);
   }, []);
 
@@ -106,12 +111,12 @@ export default function NotificationBell() {
   return (
     <div className="relative" ref={panelRef}>
       <button
-        className="relative p-1.5 rounded-md hover:bg-bg transition-colors"
+        className="relative flex items-center justify-center w-11 h-11 rounded-md border border-transparent hover:border-border hover:bg-bg transition-colors"
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
         aria-expanded={open}
       >
-        <Bell className="w-4 h-4 text-ink-soft" />
+        <Bell className="w-[22px] h-[22px] text-ink-soft" />
         {unreadCount > 0 && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[10px] font-bold flex items-center justify-center">
             {unreadCount > 99 ? "99+" : unreadCount}
@@ -120,7 +125,7 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute top-9 right-0 w-[360px] max-w-[90vw] bg-surface border border-border rounded-lg shadow-xl z-50 flex flex-col overflow-hidden">
+        <div className="notif-panel">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <span className="text-sm font-semibold text-ink">Notifications</span>
             <div className="flex items-center gap-2">

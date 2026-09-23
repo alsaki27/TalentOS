@@ -12,8 +12,9 @@
 //   6. Run deterministic truth-check on each candidate
 //   7. Persist suggestions to repository
 
-import { getActiveProviderAsync } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import {
   findResumeVersionById,
   updateApplicationResumeVersion,
@@ -87,15 +88,6 @@ export async function generateResumeSuggestions(
   const context = await buildResumeContext(app.candidate_id);
 
   // 4. Call AI
-  const active = await getActiveProviderAsync();
-  if (!active) {
-    return {
-      suggestions: [],
-      aiAnalysisUsed: false,
-      error: "No AI provider configured. Set ANTHROPIC_API_KEY or NVIDIA_API_KEY.",
-    };
-  }
-
   const prompt = buildSuggestionPrompt(
     context,
     approvedKeywords,
@@ -104,10 +96,12 @@ export async function generateResumeSuggestions(
   );
 
   try {
-    const response = await active.provider.send({
-      system: buildSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result: response } = await callWithUsageTracking("resume_suggestions", { userId: createdByUserId ?? undefined }, async (provider) => {
+      return provider.send({
+        system: buildSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
     const raw = textOf(response.content)
       .trim()
@@ -161,7 +155,9 @@ export async function generateResumeSuggestions(
 
 function buildSystemPrompt(): string {
   return [
-    "You are a precise resume editor. You suggest improvements to help a candidate's resume better match a job description.",
+    MISSION_CONTEXT,
+    "",
+    "You are a precise resume editor. You suggest improvements to help a candidate's resume better match a job description. Note: truth_status on your output is recalculated server-side against the evidence bank after you respond, not taken as your own self-report - so there's no benefit to being optimistic about a suggestion's safety, the system checks it independently either way. Focus your effort on suggestion quality, not on guessing what status it'll be assigned.",
     "",
     "RULES (never violate):",
     "1. NEVER invent experience, skills, or qualifications the candidate does not have.",
@@ -171,6 +167,22 @@ function buildSystemPrompt(): string {
     "5. For content changes, prefer rephrasing existing bullets to highlight relevant experience.",
     "6. For format improvements, suggest structural changes that improve readability or ATS scoring.",
     "7. Always provide clear reasoning for each suggestion.",
+    "",
+    "QUALITY BAR (what makes a suggestion worth accepting):",
+    "8. Work highest-importance keywords first: a critical/high-importance keyword with evidence but no",
+    "   verbatim presence in the resume is always your first suggestion, not your last.",
+    "9. keyword_injection and content_change proposals must use the keyword's EXACT phrasing and casing",
+    "   ('Vetro FiberMap', not 'Vetro'; 'OSP' and 'Outside Plant' are separate matches) — ATS matching",
+    "   is literal, and a paraphrased keyword is a missed keyword.",
+    "10. Proposed bullet text must open with a strong action verb (never 'Responsible for'/'Helped with'),",
+    "    state scope and outcome, and carry a real number (count, %, $, timeline, team size) whenever one",
+    "    exists in the evidence — never invent a number. No first person, no filler ('passionate',",
+    "    'results-driven', 'dynamic').",
+    "11. Prefer suggestions that strengthen the top of the resume — the summary and the most recent role's",
+    "    first bullets are what a recruiter reads in the first 6 seconds; a great edit buried in the oldest",
+    "    role is worth less than a good edit up top.",
+    "12. Each proposed_text must be drop-in ready: complete, correctly tensed (past for past roles, present",
+    "    for current), one to two lines — not advice about what to write.",
     "",
     "Suggestion types:",
     "- content_change: Rephrase, expand, or restructure existing content (e.g., make a bullet more achievement-oriented).",

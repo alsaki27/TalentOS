@@ -4,10 +4,9 @@
 // generic /api/cron bypass already covers this path.
 
 import { NextRequest, NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query } from "@/server/db/neon";
 import { generateDailyDigest } from "@/lib/ai/digest";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -22,18 +21,27 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await generateDailyDigest();
-  if ("error" in result) return NextResponse.json(result, { status: 502 });
+  const startedAt = Date.now();
+  await recordJobAttempt("digest");
 
-  if (isNeon()) {
+  const result = await generateDailyDigest();
+  const durationMs = Date.now() - startedAt;
+
+  if ("error" in result) {
+    const errMsg = result.error;
     await query(
-      "INSERT INTO ai_digests (content, provider) VALUES ($1, $2)",
-      [result.content, result.provider]
+      "INSERT INTO ai_digests (content, provider, last_error) VALUES ($1, $2, $3)",
+      ["(generation failed)", "unknown", errMsg]
     );
-  } else {
-    const { error } = await supabase.from("ai_digests").insert({ content: result.content, provider: result.provider });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await recordJobFailure("digest", errMsg, durationMs);
+    return NextResponse.json(result, { status: 502 });
   }
 
+  await query(
+    "INSERT INTO ai_digests (content, provider, last_success_at, data_summary) VALUES ($1, $2, NOW(), $3)",
+    [result.content, result.provider, JSON.stringify(result.dataSummary)]
+  );
+
+  await recordJobSuccess("digest", durationMs, JSON.stringify(result.dataSummary));
   return NextResponse.json({ ok: true, provider: result.provider });
 }

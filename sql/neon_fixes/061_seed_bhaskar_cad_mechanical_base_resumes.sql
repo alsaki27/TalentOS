@@ -1,0 +1,29 @@
+-- 061_seed_bhaskar_cad_mechanical_base_resumes.sql
+--
+-- NEUTRALIZED 2026-08-12 — do not restore the original INSERT below.
+--
+-- This was a one-time candidate data seed: two base resumes for active
+-- candidate Bhaskar Roy, "Resume_Bhaskar(CAD)" and
+-- "Resume_Bhaskar(Mechanical Engineering)". The seed's only guard against
+-- duplicating itself was "does a base_resumes row with this exact
+-- candidate_id + name already exist" (a WHERE NOT EXISTS clause).
+--
+-- Every file in sql/neon_fixes/ is re-executed on every single deploy with
+-- no applied-migrations ledger (see .github/workflows/deploy.yml, the
+-- "Run Neon schema fixes" step: `for f in sql/neon_fixes/*.sql; do psql ...
+-- -f "$f"; done`, unconditionally, every time). That's fine for the schema
+-- DDL files in this directory (CREATE TABLE IF NOT EXISTS, ADD COLUMN IF
+-- NOT EXISTS, etc. - truly idempotent), but this file inserts *data*, and
+-- its NOT EXISTS guard only holds while the seeded rows are left alone.
+-- These two resumes were deleted on purpose (superseded by
+-- "Resume_Bhaskar_Roy (CAD Drafting)" and "Resume_Bhaskar_Roy (Mech
+-- Engineering)"), but the very next deploy after each deletion silently
+-- re-ran this file, found no matching row, and recreated them - three
+-- times in a row before this was traced back here.
+--
+-- Left as an empty, harmless file (not deleted outright) to preserve the
+-- migration numbering sequence and this history for whoever looks at 061
+-- next. If similar named-candidate data seeds are needed again, run them
+-- by hand against the target database once - do not add another file like
+-- this to sql/neon_fixes/, since anything placed here runs forever, not
+-- once.

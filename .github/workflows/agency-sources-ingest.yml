@@ -1,0 +1,217 @@
+name: Agency Job Sources Ingest (Actalent + Broadstaff)
+
+# Daily ingest for the two agency career sites approved in
+# docs/AGENCY_JOB_SOURCES_ACTALENT_BROADSTAFF_PLAN_2026-09-13.md, feeding the
+# same Job CEO staging pipeline OpenJobData uses (POST /api/job-ceo/ingest) —
+# same dedup, QA, deep-fetch, and matchmaking stages, same downstream jobs
+# table. Runs at 21:00 UTC, one hour after the 20:00 UTC OpenJobData nightly
+# run, so the two never compete for the Job CEO dispatch loop at once.
+#
+# Actalent runs in its default 'sitemap' mode: it walks the site's own
+# published sitemap (the complete, authoritative US job list) and filters
+# locally by title before fetching any detail page — see
+# scripts/actalent_ingest.py's module docstring for why Actalent's own
+# keyword search is not trusted for this (confirmed fuzzy/unreliable
+# live). Broadstaff enumerates its entire (~39-job) sitemap every run — it
+# is small enough that "enumerate everything, filter locally" has no
+# meaningful cost.
+#
+# Both scripts reuse (import, not duplicate) openjobdata_ingest.py's
+# ROLE_GROUPS/matches_role — the same keyword groups already used for
+# OpenJobData — plus any custom keyword group added via the Job Agent / Job
+# CEO pages, fetched from GET /api/job-ceo/effective-keywords.
+
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Which source(s) to run."
+        required: false
+        default: "both"
+        type: choice
+        options: ["both", "actalent", "broadstaff"]
+      role_group:
+        description: "Role group id (A-R), or 'all' for every group. Single id only — not comma-separated."
+        required: false
+        default: "all"
+      actalent_mode:
+        description: "Actalent enumeration mode. 'sitemap' is the complete/authoritative daily default; 'search' is a fast, narrow, keyword-scoped lookup for manual use."
+        required: false
+        default: "sitemap"
+        type: choice
+        options: ["sitemap", "search"]
+      dry_run:
+        description: "If true, fetch and filter but don't POST to TalentOS."
+        required: false
+        default: "false"
+
+concurrency:
+  group: agency-sources-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    # Sitemap-prefilter mode fetches roughly a few hundred Actalent detail
+    # pages after filtering (422 observed live for the full "all" group set
+    # out of 3,822 sitemap-listed jobs) at 1-4s each, plus Broadstaff's ~39
+    # pages at up to ~17s each observed live, plus the dispatch drive-loop —
+    # 75 minutes mirrors openjobdata-nightly-ingest.yml's same budget
+    # reasoning for a comparable total workload.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: neon-cloudflare-migration
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-agency-sources.txt
+
+      # The two sources are independent: one being down, blocked, or having
+      # changed its markup says nothing about the other, so a failure in one
+      # must never stop the other from running or prevent the jobs that DID
+      # ingest from being processed. continue-on-error lets the run proceed;
+      # the outcome is captured per-step and re-raised by the final gate step
+      # below, so a genuine failure is still surfaced as a red run rather
+      # than silently swallowed.
+      - name: Run Broadstaff ingest
+        id: broadstaff
+        continue-on-error: true
+        if: github.event.inputs.source != 'actalent'
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
+        run: |
+          ARGS=(--role-group "${{ github.event.inputs.role_group || 'all' }}")
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/broadstaff_ingest.py "${ARGS[@]}"
+
+      - name: Run Actalent ingest
+        id: actalent
+        continue-on-error: true
+        # always() so this still runs when the Broadstaff step above failed —
+        # without it, GitHub's default "skip everything after a failure"
+        # behavior means one bad source silently costs a whole day of the
+        # other source's postings.
+        if: always() && github.event.inputs.source != 'broadstaff'
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
+        run: |
+          ARGS=(--mode "${{ github.event.inputs.actalent_mode || 'sitemap' }}" --role-group "${{ github.event.inputs.role_group || 'all' }}")
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/actalent_ingest.py "${ARGS[@]}"
+
+      - name: Drive Job CEO pipeline to completion
+        # Same pattern as openjobdata-nightly-ingest.yml's identically-named
+        # step: poll /api/job-ceo/dispatch in a tight loop until
+        # needsDispatch=false (both this run's staged jobs are fully
+        # processed) or the wall-clock budget below is spent, so newly
+        # staged jobs don't sit waiting for the separate */10 dispatch cron.
+        #
+        # always() so a partial success still gets processed: if one source
+        # failed but the other staged jobs, those jobs must still be driven
+        # through QA/matchmaking rather than left sitting in staging until
+        # the next cron tick.
+        if: always() && github.event.inputs.dry_run != 'true'
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          echo "Starting Job CEO dispatch loop — driving pipeline to completion..."
+          WALL_END=$((SECONDS + 3000))   # 50 minutes (leaves 10-minute buffer before the 60-minute step timeout budget)
+          CALLS=0
+          FAILURES=0
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+
+          while [ $SECONDS -lt $WALL_END ]; do
+            CALLS=$((CALLS + 1))
+
+            CLEAN_BASE_URL=$(echo "${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}" | tr -d '[:space:]')
+
+            RESPONSE=$(curl -sS -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              -H "Content-Type: application/json" \
+              --max-time 300 \
+              "$CLEAN_BASE_URL/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1 | tr -d '[:space:]')
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+            HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '[:space:]')
+            if ! echo "$HTTP_CODE" | grep -qE '^[0-9]+$'; then
+              HTTP_CODE="000"
+            fi
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              FAILURES=$((FAILURES + 1))
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo "$BODY" | head -c 300)"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
+                exit 1
+              fi
+              sleep 10
+              continue
+            fi
+
+            CONSECUTIVE_FAILURES=0
+
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' | head -1)
+            NEEDS_DISPATCH="${NEEDS_DISPATCH:-true}"
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' | head -1)
+            STAGE="${STAGE:-unknown}"
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' | head -1)
+            COUNT="${COUNT:-0}"
+
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH (HTTP $HTTP_CODE)"
+
+            if [ "$NEEDS_DISPATCH" = "false" ]; then
+              echo "✓ Job CEO pipeline complete after $CALLS dispatch calls."
+              break
+            fi
+
+            sleep 5
+          done
+
+          echo "Dispatch loop finished: $CALLS calls, $FAILURES failures."
+          if [ "$CALLS" -gt 0 ] && [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS dispatch calls failed"
+            exit 1
+          fi
+
+      # Re-raises any source failure that continue-on-error let the run past,
+      # so a real problem still shows up as a red run — the point of
+      # continue-on-error above is to stop one source blocking the other,
+      # not to hide failures. Reports every source's outcome either way, so
+      # the summary says which one actually broke instead of just "the run
+      # failed".
+      - name: Report source outcomes
+        if: always()
+        run: |
+          BROADSTAFF="${{ steps.broadstaff.outcome }}"
+          ACTALENT="${{ steps.actalent.outcome }}"
+          echo "Broadstaff: ${BROADSTAFF:-not run}"
+          echo "Actalent:   ${ACTALENT:-not run}"
+
+          FAILED=""
+          [ "$BROADSTAFF" = "failure" ] && FAILED="$FAILED broadstaff"
+          [ "$ACTALENT" = "failure" ] && FAILED="$FAILED actalent"
+
+          if [ -n "$FAILED" ]; then
+            echo "::error::Source ingest failed for:$FAILED (see that step's log above). Any other source in this run completed and its jobs were still ingested and dispatched."
+            exit 1
+          fi
+          echo "All requested sources completed successfully."

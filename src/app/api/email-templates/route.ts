@@ -6,8 +6,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
@@ -43,43 +41,30 @@ export async function GET(req: NextRequest) {
   const category = url.searchParams.get("category") || "";
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
 
-  if (isNeon()) {
-    const offset = (page - 1) * pageSize;
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let idx = 1;
+  const offset = (page - 1) * pageSize;
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let idx = 1;
 
-    if (category) {
-      conditions.push(`category = $${idx++}`);
-      params.push(category);
-    }
-    if (search) {
-      conditions.push(`(name ILIKE $${idx} OR subject ILIKE $${idx + 1})`);
-      params.push(`%${search}%`, `%${search}%`);
-      idx += 2;
-    }
-
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const countSql = `SELECT COUNT(*) as count FROM email_templates ${whereClause}`;
-    const countRow = await queryOne<{ count: string }>(countSql, params);
-    const total = parseInt(countRow?.count ?? "0", 10);
-
-    const dataSql = `SELECT * FROM email_templates ${whereClause} ORDER BY created_at DESC OFFSET $${idx++} LIMIT $${idx++}`;
-    const data = await query(dataSql, [...params, offset, pageSize]);
-
-    return NextResponse.json({ items: data ?? [], total, page, pageSize });
+  if (category) {
+    conditions.push(`category = $${idx++}`);
+    params.push(category);
+  }
+  if (search) {
+    conditions.push(`(name ILIKE $${idx} OR subject ILIKE $${idx + 1})`);
+    params.push(`%${search}%`, `%${search}%`);
+    idx += 2;
   }
 
-  let dbQuery = supabase.from("email_templates").select("*", { count: "exact" }).order("created_at", { ascending: false });
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const countSql = `SELECT COUNT(*) as count FROM email_templates ${whereClause}`;
+  const countRow = await queryOne<{ count: string }>(countSql, params);
+  const total = parseInt(countRow?.count ?? "0", 10);
 
-  if (category) dbQuery = dbQuery.eq("category", category);
-  if (search) dbQuery = dbQuery.or(`name.ilike.%${search}%,subject.ilike.%${search}%`);
+  const dataSql = `SELECT * FROM email_templates ${whereClause} ORDER BY created_at DESC OFFSET $${idx++} LIMIT $${idx++}`;
+  const data = await query(dataSql, [...params, offset, pageSize]);
 
-  const from = (page - 1) * pageSize;
-  const { data, error, count } = await dbQuery.range(from, from + pageSize - 1);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ items: data ?? [], total: count ?? 0, page, pageSize });
+  return NextResponse.json({ items: data ?? [], total, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -97,29 +82,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Invalid merge tags: ${invalidTags.join(", ")}` }, { status: 400 });
   }
 
-  if (isNeon()) {
-    const data = await queryOne(
-      `INSERT INTO email_templates (name, subject, body, category, is_default, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [body.name, body.subject, body.body, body.category ?? "general", body.is_default ?? false, context.profile.user_id]
-    );
-    if (!data) return NextResponse.json({ error: "Insert failed" }, { status: 500 });
-    return NextResponse.json(data, { status: 201 });
-  }
-
-  const { data, error } = await supabase
-    .from("email_templates")
-    .insert({
-      name: body.name,
-      subject: body.subject,
-      body: body.body,
-      category: body.category ?? "general",
-      is_default: body.is_default ?? false,
-      created_by: context.profile.user_id,
-    })
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await queryOne(
+    `INSERT INTO email_templates (name, subject, body, category, is_default, created_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [body.name, body.subject, body.body, body.category ?? "general", body.is_default ?? false, context.profile.user_id]
+  );
+  if (!data) return NextResponse.json({ error: "Insert failed" }, { status: 500 });
   return NextResponse.json(data, { status: 201 });
 }
 
@@ -142,34 +109,16 @@ export async function PATCH(req: NextRequest) {
   if (body.category != null) updates.category = body.category;
   if (body.is_default != null) updates.is_default = body.is_default;
 
-  if (isNeon()) {
-    const keys = Object.keys(updates);
-    if (keys.length === 0) return NextResponse.json({ error: "No fields to update" }, { status: 400 });
-    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
-    values.push(body.id);
-    const data = await queryOne(
-      `UPDATE email_templates SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
-      values
-    );
-    if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
-    return NextResponse.json(data);
-  }
-
-  const { data, error } = await supabase
-    .from("email_templates")
-    .update({
-      name: body.name ?? undefined,
-      subject: body.subject ?? undefined,
-      body: body.body ?? undefined,
-      category: body.category ?? undefined,
-      is_default: body.is_default ?? undefined,
-    })
-    .eq("id", body.id)
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const keys = Object.keys(updates);
+  if (keys.length === 0) return NextResponse.json({ error: "No fields to update" }, { status: 400 });
+  const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+  const values = keys.map((k) => updates[k]) as (string | number | boolean | null | Date | object)[];
+  values.push(body.id);
+  const data = await queryOne(
+    `UPDATE email_templates SET ${setClause} WHERE id = $${keys.length + 1} RETURNING *`,
+    values
+  );
+  if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
   return NextResponse.json(data);
 }
 
@@ -181,12 +130,6 @@ export async function DELETE(req: NextRequest) {
   const id = url.searchParams.get("id") || "";
   if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
 
-  if (isNeon()) {
-    await execute("DELETE FROM email_templates WHERE id = $1", [id]);
-    return NextResponse.json({ success: true });
-  }
-
-  const { error } = await supabase.from("email_templates").delete().eq("id", id);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await execute("DELETE FROM email_templates WHERE id = $1", [id]);
   return NextResponse.json({ success: true });
 }

@@ -1,10 +1,17 @@
 // src/app/candidates/[id]/page.tsx
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, Suspense, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ApplicationResumeAttach, TailorResumeModal } from "@/components/TailorResumeModal";
+import { buildResumeDocumentFromParsedResume } from "@/lib/falood/seedFromParsedResume";
+import { openFaloodStudio, resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
+import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
+import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
+import { AuditPanel } from "@/components/candidates/AuditPanel";
+import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
 interface BaseResumeSummary {
   id: string;
@@ -75,10 +82,18 @@ interface CandidateDetail {
   portfolio_url: string | null;
   visa_status: string | null;
   target_industries: string[] | null;
+  verified_skills: string[] | null;
   location_preference: string | null;
   work_mode_preference: string | null;
   available_start_date: string | null;
+  eeo_gender?: string | null;
+  eeo_race?: string | null;
+  eeo_veteran?: string | null;
+  eeo_disability?: string | null;
   portal_token: string;
+  account_created_at: string | null;
+  account_email: string | null;
+  last_login_at: string | null;
   applications: Application[];
   resumes: Resume[];
 }
@@ -98,11 +113,230 @@ interface ApplicationEvent {
   created_at: string;
 }
 
+interface TailoredResumeEntry {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  name?: string | null;
+  jobDescription: string | null;
+  companyName: string | null;
+  skills: string[];
+  resumeData: any;
+  chatHistory: any;
+  // AI-generated resume versions from application_resume_versions
+  isAiGenerated?: boolean;
+  sourceType?: string | null;
+  atsScore?: number | null;
+  applicationId?: string | null;
+  applicationStatus?: string | null;
+  applicationStage?: string | null;
+  proofUrl?: string | null;
+  proofFilename?: string | null;
+  appliedAt?: string | null;
+  pdfAvailable?: boolean;
+  pdfStorageUrl?: string | null;
+  pdfStorageItemId?: string | null;
+}
+
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+function formatAppliedDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+  if (!m) return "—";
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var monthIdx = parseInt(m[2], 10) - 1;
+  var day = parseInt(m[3], 10);
+  if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31) return "—";
+  return months[monthIdx] + " " + day + ", " + m[1];
+}
+
+function tailoredResumeDisplayName(t: TailoredResumeEntry): string {
+  if (t.name && t.name.trim()) return t.name.trim();
+  const jd = (t.jobDescription || "").trim();
+  const firstLine = jd.split("\n")[0] || "";
+  if (firstLine.toLowerCase().startsWith("title:")) return firstLine.replace(/^title:\s*/i, "").trim();
+  return t.isAiGenerated ? "AI-Tailored Resume" : "Tailored resume";
+}
+
+interface RowAction {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+}
+
+// Rendered via a portal into document.body with viewport-fixed coordinates
+// rather than position: absolute inside the row. This table sits in a
+// .table-shell (overflow-x: auto, which per spec forces overflow-y: auto too)
+// — a plain absolutely-positioned dropdown is a DOM descendant of that
+// scroll container and gets silently clipped no matter what position value
+// it uses, unless it's moved out of that subtree entirely.
+function RowActionsMenu({ actions }: { actions: RowAction[] }) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onOutsideEvent(e: MouseEvent | Event) {
+      const target = e.target as Node;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onOutsideEvent);
+    window.addEventListener("scroll", onOutsideEvent, true);
+    window.addEventListener("resize", onOutsideEvent);
+    return () => {
+      document.removeEventListener("mousedown", onOutsideEvent);
+      window.removeEventListener("scroll", onOutsideEvent, true);
+      window.removeEventListener("resize", onOutsideEvent);
+    };
+  }, [open]);
+
+  function toggle() {
+    if (!open && buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setCoords({ top: rect.bottom + 4, left: rect.right });
+    }
+    setOpen((v) => !v);
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        className="btn-compact btn-sm"
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label="More actions"
+        onClick={toggle}
+      >
+        ⋯
+      </button>
+      {open && coords && typeof document !== "undefined" && createPortal(
+        <div
+          ref={menuRef}
+          className="dropdown-menu"
+          style={{ position: "fixed", top: coords.top, left: coords.left, transform: "translateX(-100%)" }}
+        >
+          {actions.map((a) => (
+            <button
+              key={a.label}
+              className={`dropdown-item${a.danger ? " dropdown-item-danger" : ""}`}
+              disabled={a.disabled}
+              onClick={() => {
+                setOpen(false);
+                a.onClick();
+              }}
+            >
+              {a.loading ? "⟳ Working…" : a.label}
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </>
+  );
+}
+
+function NamePromptModal({
+  title,
+  description,
+  label,
+  initialValue,
+  confirmLabel,
+  saving,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  description?: string;
+  label: string;
+  initialValue: string;
+  confirmLabel: string;
+  saving: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>{title}</h2>
+        {description && (
+          <p className="muted" style={{ marginTop: -6, marginBottom: 12 }}>{description}</p>
+        )}
+        <div className="field-group">
+          <label>{label}</label>
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && value.trim()) onConfirm(value.trim());
+            }}
+          />
+        </div>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onCancel}>Cancel</button>
+          <button
+            className="btn-primary"
+            onClick={() => onConfirm(value.trim())}
+            disabled={saving || !value.trim()}
+          >
+            {saving ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmDeleteModal({
+  title,
+  message,
+  confirmLabel = "Delete",
+  saving,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  saving: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 380 }}>
+        <h2>{title}</h2>
+        <p className="muted" style={{ marginTop: -6 }}>{message}</p>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onCancel}>Cancel</button>
+          <button className="btn-danger" onClick={onConfirm} disabled={saving}>
+            {saving ? "Deleting…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CandidateProfilePage() {
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params?.id;
   const [candidate, setCandidate] = useState<CandidateDetail | null>(null);
@@ -115,9 +349,12 @@ export default function CandidateProfilePage() {
   const [events, setEvents] = useState<ApplicationEvent[]>([]);
   const [comments, setComments] = useState<ApplicationComment[]>([]);
   const [selectedApps, setSelectedApps] = useState<Set<string>>(new Set());
-  const [appStatusFilter, setAppStatusFilter] = useState("");
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteMessage, setInviteMessage] = useState("");
   const [linkCopied, setLinkCopied] = useState(false);
-  const [activeTab, setActiveTab] = useState<"Overview" | "Evidence Bank" | "Base Resumes" | "Applications">("Overview");
+  const [passwordResetting, setPasswordResetting] = useState(false);
+  const [passwordResetMessage, setPasswordResetMessage] = useState("");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -127,7 +364,37 @@ export default function CandidateProfilePage() {
   const [baseResumes, setBaseResumes] = useState<BaseResumeSummary[]>([]);
   const [baseResumesLoading, setBaseResumesLoading] = useState(false);
   const [showCreateBaseResume, setShowCreateBaseResume] = useState(false);
+  const [tailoredResumes, setTailoredResumes] = useState<TailoredResumeEntry[]>([]);
+  const [tailoredResumesLoading, setTailoredResumesLoading] = useState(false);
+  const [resumeActionLoading, setResumeActionLoading] = useState<string | null>(null);
+  const [resumeNameModal, setResumeNameModal] = useState<
+    | { kind: "base"; mode: "rename" | "duplicate"; item: BaseResumeSummary; error?: string }
+    | { kind: "tailored"; mode: "rename" | "duplicate"; item: TailoredResumeEntry; error?: string }
+    | null
+  >(null);
+  const [resumeDeleteModal, setResumeDeleteModal] = useState<
+    | { kind: "base"; item: BaseResumeSummary; error?: string }
+    | { kind: "tailored"; item: TailoredResumeEntry; error?: string }
+    | null
+  >(null);
   const [tailorContext, setTailorContext] = useState<{ jobId?: string; applicationId?: string } | null>(null);
+  const [showParseModal, setShowParseModal] = useState(false);
+  const [parseModalText, setParseModalText] = useState("");
+  const [parseModalResumeId, setParseModalResumeId] = useState("");
+  const [parsingMarkitdown, setParsingMarkitdown] = useState(false);
+  const [markitdownResult, setMarkitdownResult] = useState<{ parsed: any; parseStatus?: any; markdown?: string } | null>(null);
+  const [markitdownAvailable, setMarkitdownAvailable] = useState<boolean | null>(null);
+  const [me, setMe] = useState<{ profile?: { role?: string } } | null>(null);
+  const isManager = ["admin", "manager"].includes(me?.profile?.role ?? "");
+
+  async function resetCandidatePassword() {
+    if (!confirm("Reset this candidate's portal password and issue a temporary password?")) return;
+    setPasswordResetting(true); setPasswordResetMessage("");
+    const res = await fetch(`/api/candidates/${id}/password-reset`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    setPasswordResetting(false);
+    setPasswordResetMessage(res.ok ? (data.emailSent ? "Temporary password emailed." : `Temporary password: ${data.temporaryPassword}`) : (data.error || "Reset failed."));
+  }
 
   async function load() {
     if (!id) return;
@@ -140,13 +407,27 @@ export default function CandidateProfilePage() {
   useEffect(() => { load(); }, [id]);
 
   useEffect(() => {
+    fetch("/api/bootstrap").then(r => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/markitdown/parse")
+      .then(r => r.json())
+      .then(d => setMarkitdownAvailable(d.available ?? false))
+      .catch(() => setMarkitdownAvailable(false));
+  }, []);
+
+  useEffect(() => {
     if (activeTab === "Evidence Bank" && id) {
       loadEvidence();
     }
     if (activeTab === "Base Resumes" && id) {
       loadBaseResumes();
     }
-  }, [activeTab, id]);
+    if (activeTab === "Tailored Resumes" && id) {
+      loadTailoredResumes();
+    }
+  }, [activeTab, id, candidate?.name]);
 
   async function loadEvidence() {
     if (!id) return;
@@ -164,14 +445,418 @@ export default function CandidateProfilePage() {
     setBaseResumesLoading(false);
   }
 
+  async function setBaseResumeStatus(baseResumeId: string, status: string) {
+    const res = await fetch(`/api/base-resumes/${baseResumeId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    if (res.ok) loadBaseResumes();
+  }
+
+  async function submitBaseResumeRename(b: BaseResumeSummary, name: string) {
+    setResumeActionLoading(`${b.id}:rename`);
+    try {
+      const res = await fetch(`/api/base-resumes/${b.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to rename base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitBaseResumeDuplicate(b: BaseResumeSummary, name: string) {
+    if (!candidate) return;
+    setResumeActionLoading(`${b.id}:duplicate`);
+    try {
+      const res = await fetch("/api/base-resumes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          candidateId: candidate.id,
+          name,
+          startingSource: "duplicate",
+          sourceBaseResumeId: b.id,
+        }),
+      });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitBaseResumeDelete(b: BaseResumeSummary) {
+    setResumeActionLoading(`${b.id}:delete`);
+    try {
+      const res = await fetch(`/api/base-resumes/${b.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await loadBaseResumes();
+        setResumeDeleteModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeDeleteModal((m) => (m ? { ...m, error: data?.error || "Failed to delete base resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function loadTailoredResumes() {
+    if (!id) return;
+    setTailoredResumesLoading(true);
+    try {
+      // Source 1: Falood Tailor system (falood_saved_applications)
+      const res = await fetch("/api/falood/applications", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      const rows: TailoredResumeEntry[] = json?.success ? (json.data ?? []) : [];
+
+      const normalize = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+      const candidateName = candidate?.name ? normalize(candidate.name) : "";
+
+      const isForCandidate = (app: TailoredResumeEntry) => {
+        const history = Array.isArray(app.chatHistory)
+          ? app.chatHistory
+          : typeof app.chatHistory === "string"
+            ? (() => {
+                try { return JSON.parse(app.chatHistory); } catch { return []; }
+              })()
+            : [];
+        if (history.some((m: any) => m?.candidateId === id)) return true;
+
+        const fullName = app?.resumeData?.personalInfo?.fullName;
+        if (candidateName && typeof fullName === "string" && normalize(fullName) === candidateName) return true;
+
+        return false;
+      };
+
+      const faloodTailored = rows
+        .filter((a) => (a.jobDescription || "").trim().length > 0)
+        .filter(isForCandidate);
+
+      // Source 2: AI pipeline (application_resume_versions, source_type = 'ai_agent')
+      // The 4-agent workflow finalizes into this table. The Falood Tailor
+      // system above writes to a separate table and never intersects — so
+      // without this merge, AI-completed resumes are invisible in this tab.
+      const aiRes = await fetch(`/api/application-resume-versions?candidateId=${id}`, { cache: "no-store" });
+      const aiVersions: any[] = aiRes.ok ? (await aiRes.json()) : [];
+
+      const aiTailored: TailoredResumeEntry[] = aiVersions
+        .filter((v: any) => v.source_type === "ai_agent" || v.source_type === "base_resume")
+        .map((v: any) => ({
+          id: v.id,
+          createdAt: v.created_at,
+          updatedAt: v.updated_at,
+          name: v.title ?? null,
+          jobDescription: v.target_jobs?.jobs?.title ?? null,
+          companyName: v.target_jobs?.jobs?.company ?? null,
+          skills: [],
+          resumeData: null,
+          chatHistory: [],
+          isAiGenerated: v.source_type === "ai_agent",
+          sourceType: v.source_type,
+          atsScore: v.ats_score,
+          applicationId: v.application_id ?? null,
+          applicationStatus: v.applications?.status ?? null,
+          applicationStage: v.applications?.stage ?? null,
+          proofUrl: v.applications?.proof_url ?? null,
+          proofFilename: v.applications?.proof_filename ?? null,
+          appliedAt: v.applications?.applied_at ?? null,
+          pdfAvailable: Boolean(v.pdf_available),
+          pdfStorageUrl: v.pdf_storage_url ?? null,
+          pdfStorageItemId: v.pdf_storage_item_id ?? null,
+        }));
+
+      const merged = [...faloodTailored, ...aiTailored]
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+      setTailoredResumes(merged);
+    } catch {
+      setTailoredResumes([]);
+    } finally {
+      setTailoredResumesLoading(false);
+    }
+  }
+
+  async function markResumeApplied(t: TailoredResumeEntry) {
+    if (!t.applicationId) return;
+    setResumeActionLoading(`${t.id}:applied`);
+    try {
+      const res = await fetch(`/api/applications/${t.applicationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "applied", applied_at: new Date().toISOString() }),
+      });
+      if (res.ok) await loadTailoredResumes();
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  function uploadProofForResume(t: TailoredResumeEntry) {
+    if (!t.applicationId) return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*,.pdf";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setResumeActionLoading(`${t.id}:proof`);
+      const fd = new FormData();
+      fd.append("file", file);
+      try {
+        const res = await fetch(`/api/applications/${t.applicationId}/proof`, { method: "POST", body: fd });
+        if (res.ok) await loadTailoredResumes();
+      } finally {
+        setResumeActionLoading(null);
+      }
+    };
+    input.click();
+  }
+
+  async function submitTailoredResumeRename(t: TailoredResumeEntry, name: string) {
+    setResumeActionLoading(`${t.id}:rename`);
+    try {
+      const res = t.isAiGenerated
+        ? await fetch(`/api/application-resume-versions/${t.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: name }),
+          })
+        : await fetch(`/api/falood/applications?id=${t.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+      if (res.ok) {
+        await loadTailoredResumes();
+        setResumeNameModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to rename tailored resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitTailoredResumeDuplicate(t: TailoredResumeEntry, name: string) {
+    setResumeActionLoading(`${t.id}:duplicate`);
+    try {
+      if (t.isAiGenerated) {
+        const res = await fetch(`/api/application-resume-versions/${t.id}/duplicate`, { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate tailored resume" } : m));
+          return;
+        }
+      } else {
+        const getRes = await fetch(`/api/falood/applications?id=${t.id}`, { cache: "no-store" });
+        const getJson = await getRes.json().catch(() => ({}));
+        if (!getRes.ok || !getJson?.success) {
+          setResumeNameModal((m) => (m ? { ...m, error: getJson?.error || "Failed to load tailored resume to duplicate" } : m));
+          return;
+        }
+        const source = getJson.data;
+        const res = await fetch("/api/falood/applications", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            jobDescription: source.jobDescription,
+            companyName: source.companyName,
+            skills: source.skills,
+            resumeData: source.resumeData,
+            chatHistory: source.chatHistory,
+            candidateId: source.candidateId ?? id,
+          }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          setResumeNameModal((m) => (m ? { ...m, error: data?.error || "Failed to duplicate tailored resume" } : m));
+          return;
+        }
+      }
+      await loadTailoredResumes();
+      setResumeNameModal(null);
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  async function submitTailoredResumeDelete(t: TailoredResumeEntry) {
+    setResumeActionLoading(`${t.id}:delete`);
+    try {
+      const res = t.isAiGenerated
+        ? await fetch(`/api/application-resume-versions/${t.id}`, { method: "DELETE" })
+        : await fetch(`/api/falood/applications?id=${t.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await loadTailoredResumes();
+        setResumeDeleteModal(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setResumeDeleteModal((m) => (m ? { ...m, error: data?.error || "Failed to delete tailored resume" } : m));
+      }
+    } finally {
+      setResumeActionLoading(null);
+    }
+  }
+
+  function handleResumeNameModalConfirm(name: string) {
+    if (!resumeNameModal) return;
+    if (resumeNameModal.kind === "base") {
+      if (resumeNameModal.mode === "rename") submitBaseResumeRename(resumeNameModal.item, name);
+      else submitBaseResumeDuplicate(resumeNameModal.item, name);
+    } else {
+      if (resumeNameModal.mode === "rename") submitTailoredResumeRename(resumeNameModal.item, name);
+      else submitTailoredResumeDuplicate(resumeNameModal.item, name);
+    }
+  }
+
+  function handleResumeDeleteModalConfirm() {
+    if (!resumeDeleteModal) return;
+    if (resumeDeleteModal.kind === "base") submitBaseResumeDelete(resumeDeleteModal.item);
+    else submitTailoredResumeDelete(resumeDeleteModal.item);
+  }
+
+  async function parseWithMarkitdown(resumeId: string) {
+    if (!candidate) return;
+    setParsingMarkitdown(true);
+    try {
+      const res = await fetch(`/api/candidates/${candidate.id}/parse-markitdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_id: resumeId }),
+      });
+      const data = await res.json();
+
+      // If the API needs manual text input (PDF extraction failed)
+      if (data.needsManualText) {
+        setParseModalResumeId(resumeId);
+        setParseModalText("");
+        setShowParseModal(true);
+        return;
+      }
+
+      if (!res.ok) {
+        alert(data.error || "Failed to parse resume");
+        return;
+      }
+
+      setMarkitdownResult(data);
+      // After successful parse, create a base resume
+      await createBaseResumeFromParsed(data.parsed);
+    } catch (err: any) {
+      alert(err.message || "Failed to parse resume");
+    } finally {
+      setParsingMarkitdown(false);
+    }
+  }
+
+  async function submitManualParse() {
+    if (!candidate || !parseModalText.trim() || !parseModalResumeId) return;
+    setParsingMarkitdown(true);
+    try {
+      const res = await fetch(`/api/candidates/${candidate.id}/parse-markitdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resume_id: parseModalResumeId, resume_text: parseModalText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || "Failed to parse resume text");
+        return;
+      }
+      setMarkitdownResult(data);
+      setShowParseModal(false);
+      await createBaseResumeFromParsed(data.parsed);
+    } catch (err: any) {
+      alert(err.message || "Failed to parse resume text");
+    } finally {
+      setParsingMarkitdown(false);
+    }
+  }
+
+  async function createBaseResumeFromParsed(parsed: any) {
+    if (!candidate) return;
+    const createRes = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: candidate.id,
+        name: `${candidate.name} — Base Resume`,
+        startingSource: "uploaded_resume",
+      }),
+    });
+    if (createRes.ok) {
+      const baseResume = await createRes.json();
+      // Apply the parsed content to the new base resume
+      await fetch(`/api/base-resumes/${baseResume.id}/apply-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newContent: buildResumeDocumentFromParsed(parsed) }),
+      });
+      router.push(await resolveFaloodStudioUrl("base_resume", baseResume.id));
+    }
+  }
+
+  function buildResumeDocumentFromParsed(parsed: any) {
+    return buildResumeDocumentFromParsedResume(
+      parsed,
+      {
+        name: candidate?.name ?? "",
+        email: candidate?.email,
+        phone: candidate?.phone,
+        linkedin_url: candidate?.linkedin_url,
+        github_url: candidate?.github_url,
+        portfolio_url: candidate?.portfolio_url,
+      },
+      {
+        styleId: "skarion_compact_professional",
+        pageFormat: "a4",
+        fontFamily: "Calibri",
+        fontSize: 10.5,
+        marginTop: 0.5,
+        marginRight: 0.5,
+        marginBottom: 0.5,
+        marginLeft: 0.5,
+        sectionSpacing: 8,
+        bulletSpacing: 2,
+        lineHeight: 1.15,
+      },
+    );
+  }
+
+  const [uploadError, setUploadError] = useState<string | null>(null);
   async function handleResumeUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setUploadError(null);
     const formData = new FormData();
     formData.append("file", file);
     const res = await fetch(`/api/candidates/${id}/resume`, { method: "POST", body: formData });
-    const data: Resume = res.ok ? await res.json() : null;
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({ error: "Upload failed" }));
+      setUploadError(errorData.error || `Upload failed (${res.status})`);
+      setUploading(false);
+      return;
+    }
+    const data: Resume = await res.json();
     setUploading(false);
     load();
     if (data?.parsed_json) {
@@ -260,10 +945,38 @@ export default function CandidateProfilePage() {
   }
 
   function copyPortalLink() {
-    const url = `${window.location.origin}/portal/${candidate?.portal_token}`;
+    // Invite link: candidate sets a password and/or connects Google to create a
+    // real login. The old anonymous read-only link (/portal/<token>) still works
+    // on its own if ever needed, but this button now drives account creation.
+    const url = `${window.location.origin}/portal/invite/${candidate?.portal_token}`;
     navigator.clipboard.writeText(url);
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
+  }
+
+  async function sendPortalInvite() {
+    setInviteSending(true);
+    setInviteMessage("");
+    try {
+      const res = await fetch(`/api/candidates/${candidate?.id}/invite`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setInviteMessage(data.error || "Could not send invite.");
+        return;
+      }
+      if (data.emailSent) {
+        setInviteMessage("Invite email sent.");
+      } else {
+        navigator.clipboard.writeText(data.link);
+        setInviteMessage(
+          data.emailError && data.emailError !== "No recipient address provided" && data.emailError !== "No email on file for this candidate."
+            ? "Email delivery isn't configured yet — link copied to clipboard instead."
+            : "No email on file — invite link copied to clipboard instead."
+        );
+      }
+    } finally {
+      setInviteSending(false);
+    }
   }
 
   function toggleAppSelected(id: string) {
@@ -296,14 +1009,36 @@ export default function CandidateProfilePage() {
     <>
       <div className="page-header">
         <h1>{candidate.name}</h1>
-        <div style={{ display: "flex", gap: 10 }}>
-          <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy candidate portal link"}</button>
-          <button onClick={() => setShowEdit(true)}>Edit profile</button>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {candidate.account_created_at ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Portal active since {new Date(candidate.account_created_at).toLocaleDateString()}
+                {candidate.last_login_at ? ` · last login ${new Date(candidate.last_login_at).toLocaleDateString()}` : " · never logged in"}
+              </span>
+            ) : (
+              <>
+                <button onClick={sendPortalInvite} disabled={inviteSending}>
+                  {inviteSending ? "Inviting..." : "Invite to portal"}
+                </button>
+                <button onClick={copyPortalLink}>{linkCopied ? "Copied!" : "Copy invite link"}</button>
+              </>
+            )}
+            {candidate.status === "active" && (
+              <Link href={"/candidates/" + candidate.id + "/job-search-profiles"}>
+                <button>Job search profiles</button>
+              </Link>
+            )}
+            <button onClick={() => setShowEdit(true)}>Edit profile</button>
+            {isManager && candidate.account_created_at && <button onClick={resetCandidatePassword} disabled={passwordResetting}>{passwordResetting ? "Resetting..." : "Reset portal password"}</button>}
+          </div>
+          {inviteMessage && <span className="muted" style={{ fontSize: 12 }}>{inviteMessage}</span>}
+          {passwordResetMessage && <span className="muted" style={{ fontSize: 12 }}>{passwordResetMessage}</span>}
         </div>
       </div>
 
       <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
-        {(["Overview", "Evidence Bank", "Base Resumes", "Applications"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -321,7 +1056,7 @@ export default function CandidateProfilePage() {
         ))}
       </div>
 
-      {activeTab === "Overview" && (
+      {activeTab === "Profile Overview" && (
         <>
           <div className="card" style={{ marginBottom: 20 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 16 }}>
@@ -390,6 +1125,10 @@ export default function CandidateProfilePage() {
                 <p>{candidate.target_industries?.length ? candidate.target_industries.join(", ") : "—"}</p>
               </div>
               <div>
+                <label>Verified skills</label>
+                <p>{candidate.verified_skills?.length ? candidate.verified_skills.join(", ") : "—"}</p>
+              </div>
+              <div>
                 <label>Location preference</label>
                 <p>{candidate.location_preference || "—"}</p>
               </div>
@@ -414,6 +1153,55 @@ export default function CandidateProfilePage() {
               )}
               <input type="file" accept=".pdf,.doc,.docx" onChange={handleResumeUpload} disabled={uploading} />
               {uploading && <p className="muted">Uploading…</p>}
+              {uploadError && (
+                <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 6 }}>
+                  ⚠ {uploadError}
+                </p>
+              )}
+
+              {primaryResume && (
+                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button
+                    onClick={() => parseWithMarkitdown(primaryResume.id)}
+                    disabled={parsingMarkitdown || markitdownAvailable === false}
+                    className="btn-primary"
+                    title={
+                      markitdownAvailable === null
+                        ? "Checking markitdown service status..."
+                        : markitdownAvailable
+                          ? "Parse resume via markitdown service (higher accuracy)"
+                          : "Markitdown service not deployed — parsing will use AI fallback. See docs/cloudflare-known-limitations.md for deployment instructions."
+                    }
+                  >
+                    {parsingMarkitdown ? "Parsing…" : markitdownAvailable === false ? "Parse with AI & Create Base Resume" : "Parse with markitdown & Create Base Resume"}
+                  </button>
+                  <button onClick={() => setShowCreateBaseResume(true)}>
+                    + Create blank base resume
+                  </button>
+                </div>
+              )}
+
+              {markitdownResult && (
+                <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
+                  <h3 style={{ fontSize: 14, margin: "0 0 10px" }}>Parsed Resume</h3>
+                  {markitdownResult.parseStatus && (
+                    <div style={{ fontSize: 12, marginBottom: 10, display: "flex", flexWrap: "wrap", gap: "6px 12px" }}>
+                      <span className={markitdownResult.parseStatus.hasName ? "badge" : "badge-closed"}>Name</span>
+                      <span className={markitdownResult.parseStatus.hasEmail ? "badge" : "badge-closed"}>Email</span>
+                      <span className={markitdownResult.parseStatus.hasPhone ? "badge" : "badge-closed"}>Phone</span>
+                      <span className={markitdownResult.parseStatus.hasSummary ? "badge" : "badge-closed"}>Summary</span>
+                      <span className={markitdownResult.parseStatus.skillsCount > 0 ? "badge" : "badge-closed"}>Skills ({markitdownResult.parseStatus.skillsCount})</span>
+                      <span className={markitdownResult.parseStatus.experienceCount > 0 ? "badge" : "badge-closed"}>Jobs ({markitdownResult.parseStatus.experienceCount})</span>
+                      <span className={markitdownResult.parseStatus.educationCount > 0 ? "badge" : "badge-closed"}>Education ({markitdownResult.parseStatus.educationCount})</span>
+                      <span className={markitdownResult.parseStatus.certificationsCount > 0 ? "badge" : "badge-closed"}>Certs ({markitdownResult.parseStatus.certificationsCount})</span>
+                      <span className={markitdownResult.parseStatus.totalBulletPoints > 0 ? "badge" : "badge-closed"}>Bullets ({markitdownResult.parseStatus.totalBulletPoints})</span>
+                    </div>
+                  )}
+                  <p className="muted" style={{ fontSize: 12 }}>Skills: {markitdownResult.parsed.skills?.join(", ") || "—"}</p>
+                  <p className="muted" style={{ fontSize: 12 }}>Experience: {markitdownResult.parsed.experience?.length || 0} entries</p>
+                  <p className="muted" style={{ fontSize: 12 }}>Education: {markitdownResult.parsed.education?.length || 0} entries</p>
+                </div>
+              )}
 
               {primaryResume?.parsed_json && (
                 <div className="card" style={{ marginTop: 12, background: "var(--bg)" }}>
@@ -425,6 +1213,13 @@ export default function CandidateProfilePage() {
                     </button>
                     <button onClick={() => generateEvidenceFromResume(primaryResume.id)} disabled={generatingEvidence}>
                       {generatingEvidence ? "Generating…" : "Generate evidence from resume"}
+                    </button>
+                    <button
+                      onClick={() => parseWithMarkitdown(primaryResume.id)}
+                      disabled={parsingMarkitdown}
+                      style={{ marginLeft: "auto" }}
+                    >
+                      {parsingMarkitdown ? "Parsing…" : "Re-parse"}
                     </button>
                   </div>
                 </div>
@@ -442,28 +1237,42 @@ export default function CandidateProfilePage() {
               No tailored resumes or cover letters yet.
             </div>
           ) : (
-            <table className="table" style={{ marginBottom: 20 }}>
-              <thead>
-                <tr>
-                  <th>Label</th>
-                  <th>Kind</th>
-                  <th>File</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {candidate.resumes.map((r) => (
-                  <tr key={r.id}>
-                    <td><strong>{r.label}</strong></td>
-                    <td><span className="badge">{r.kind}</span></td>
-                    <td><a href={r.file_url} target="_blank" rel="noreferrer">{r.filename}</a></td>
-                    <td><button onClick={() => deleteVariant(r.id)}>Delete</button></td>
+            <div className="table-shell" style={{ marginBottom: 20 }}>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Kind</th>
+                    <th>File</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {candidate.resumes.map((r) => (
+                    <tr key={r.id}>
+                      <td><strong>{r.label}</strong></td>
+                      <td><span className="badge">{r.kind}</span></td>
+                      <td><a href={r.file_url} target="_blank" rel="noreferrer">{r.filename}</a></td>
+                      <td><button onClick={() => deleteVariant(r.id)}>Delete</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </>
+      )}
+
+      {activeTab === "Source of Truth" && (
+        <SourceOfTruthPanel candidateId={candidate.id} verifiedSkills={candidate.verified_skills || []} />
+      )}
+
+      {activeTab === "Notes & Caveats" && (
+        <CandidateNotesPanel candidateId={candidate.id} />
+      )}
+
+      {activeTab === "Audit" && (
+        <AuditPanel candidateId={candidate.id} />
       )}
 
       {activeTab === "Evidence Bank" && (
@@ -525,162 +1334,234 @@ export default function CandidateProfilePage() {
           {baseResumesLoading ? (
             <p className="muted">Loading…</p>
           ) : baseResumes.length === 0 ? (
-            <div className="empty">No base resumes yet.</div>
+            <div className="card" style={{ borderStyle: "dashed", borderColor: "var(--warn)" }}>
+              <p style={{ fontSize: 14, margin: "0 0 8px" }}><strong>No base resumes yet</strong></p>
+              <p className="muted" style={{ fontSize: 13, margin: "0 0 12px" }}>
+                You need a base resume to build tailored applications with Falood AI. Choose how to start:
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn-primary" onClick={() => setShowCreateBaseResume(true)}>
+                  + Create blank base resume
+                </button>
+                <Link href={`/candidates/${candidate.id}`} onClick={() => setActiveTab("Profile Overview")}>
+                  <button>Upload resume first</button>
+                </Link>
+              </div>
+            </div>
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Target industry</th>
-                  <th>Status</th>
-                  <th>Updated</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {baseResumes.map((b) => (
-                  <tr key={b.id}>
-                    <td><strong>{b.name}</strong></td>
-                    <td className="muted">{b.target_industry ?? "—"}</td>
-                    <td><span className="badge">{b.status}</span></td>
-                    <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
-                    <td><Link className="row-link" href={`/falood/studio/base/${b.id}`}>Open in studio</Link></td>
+            <div className="table-shell">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Target industry</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {baseResumes.map((b) => (
+                    <tr key={b.id}>
+                      <td><strong>{b.name}</strong></td>
+                      <td className="muted">{b.target_industry ?? "—"}</td>
+                      <td>
+                        {isManager ? (
+                          <select
+                            className="input"
+                            style={{ padding: "2px 6px", fontSize: 12, width: "auto" }}
+                            value={b.status}
+                            onChange={(e) => setBaseResumeStatus(b.id, e.target.value)}
+                          >
+                            <option value="draft">draft</option>
+                            <option value="approved">approved</option>
+                          </select>
+                        ) : (
+                          <span className="badge">{b.status}</span>
+                        )}
+                      </td>
+                      <td className="muted" style={{ fontSize: 12 }}>{new Date(b.updated_at).toLocaleDateString()}</td>
+                      <td style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <button
+                          className="row-link"
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+                          onClick={() => openFaloodStudio("base_resume", b.id)}
+                        >
+                          Open in studio
+                        </button>
+                        <RowActionsMenu
+                          actions={[
+                            {
+                              label: "Rename",
+                              loading: resumeActionLoading === `${b.id}:rename`,
+                              onClick: () => setResumeNameModal({ kind: "base", mode: "rename", item: b }),
+                            },
+                            {
+                              label: "Duplicate",
+                              loading: resumeActionLoading === `${b.id}:duplicate`,
+                              onClick: () => setResumeNameModal({ kind: "base", mode: "duplicate", item: b }),
+                            },
+                            ...(isManager
+                              ? [{
+                                  label: "Delete",
+                                  danger: true,
+                                  loading: resumeActionLoading === `${b.id}:delete`,
+                                  onClick: () => setResumeDeleteModal({ kind: "base", item: b }),
+                                }]
+                              : []),
+                          ]}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "Tailored Resumes" && (
+        <div>
+          <div className="page-header">
+            <h2 style={{ fontSize: 16, margin: 0 }}>Tailored resumes ({tailoredResumes.length})</h2>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setTailorContext({})}>+ New tailored resume</button>
+            </div>
+          </div>
+          <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
+            Job-specific resumes created from this candidate&apos;s base resume, editable in the Falood studio.
+          </p>
+
+          {tailoredResumesLoading ? (
+            <p className="muted">Loading…</p>
+          ) : tailoredResumes.length === 0 ? (
+            <div className="empty">
+              No tailored resumes found for this candidate yet. Create one from the Base Resumes tab.
+            </div>
+          ) : (
+            <div className="table-shell">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Target job</th>
+                    <th>Company</th>
+                    <th>Status</th>
+                    <th>Updated</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tailoredResumes.map((t) => {
+                    const title = tailoredResumeDisplayName(t);
+                    const company = t.companyName || "—";
+                    return (
+                      <tr key={t.id}>
+                        <td>
+                          <strong>{title || "Tailored resume"}</strong>
+                          {t.isAiGenerated && (
+                            <span className="badge" style={{ marginLeft: 6, fontSize: 10, background: "var(--accent)", color: "var(--surface)" }}>AI</span>
+                          )}
+                          {t.atsScore != null && (
+                            // ats_score is a 0-100 composite (see computeDeterministicScore in
+                            // src/lib/atsScoring.ts, and the unlabeled 0-100 display convention
+                            // already used on the ATS Score Analysis page) - "/10" here was wrong
+                            // from the day this line was added (be7bb7d), not a regression.
+                            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>ATS {t.atsScore}%</span>
+                          )}
+                        </td>
+                        <td className="muted">{company}</td>
+                        <td>
+                          {t.applicationId ? (
+                            <>
+                              <span className={`badge badge-${t.applicationStage ?? t.applicationStatus}`}>{t.applicationStage ?? t.applicationStatus ?? "assigned"}</span>
+                              {t.appliedAt && <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>Applied {formatAppliedDate(t.appliedAt)}</span>}
+                              {t.proofUrl && (
+                                <a href={t.proofUrl} target="_blank" rel="noreferrer" className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                                  📎 {t.proofFilename || "proof"}
+                                </a>
+                              )}
+                            </>
+                          ) : (
+                            <span className="muted" style={{ fontSize: 11 }}>Not linked to an application</span>
+                          )}
+                        </td>
+                        <td className="muted" style={{ fontSize: 12 }}>{new Date(t.updatedAt).toLocaleDateString()}</td>
+                        <td style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                          <button
+                            className="row-link"
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer" }}
+                            onClick={() => t.isAiGenerated ? openFaloodStudio("application_resume_version", t.id) : window.open(`/falood/studio/tailor/${t.id}`, "_blank")}
+                          >
+                            Open in studio
+                          </button>
+                          {t.applicationId && (
+                            <>
+                              {t.pdfAvailable && <a className="btn-compact btn-sm" href={`/api/applications/${t.applicationId}/resume-pdf`} target="_blank" rel="noreferrer">View PDF</a>}
+                              {t.pdfStorageUrl && <a className="btn-compact btn-sm" href={t.pdfStorageUrl} target="_blank" rel="noreferrer">Open SharePoint</a>}
+                              <button
+                                className="btn-compact btn-sm"
+                                onClick={() => uploadProofForResume(t)}
+                                disabled={resumeActionLoading === `${t.id}:proof`}
+                              >
+                                {resumeActionLoading === `${t.id}:proof` ? "⟳" : "📎 Proof"}
+                              </button>
+                              <button
+                                className="btn-primary btn-sm"
+                                onClick={() => markResumeApplied(t)}
+                                disabled={resumeActionLoading === `${t.id}:applied` || t.applicationStatus === "applied"}
+                              >
+                                {resumeActionLoading === `${t.id}:applied` ? "⟳" : t.applicationStatus === "applied" ? "✅ Applied" : "Mark Applied"}
+                              </button>
+                            </>
+                          )}
+                          <RowActionsMenu
+                            actions={[
+                              {
+                                label: "Rename",
+                                loading: resumeActionLoading === `${t.id}:rename`,
+                                onClick: () => setResumeNameModal({ kind: "tailored", mode: "rename", item: t }),
+                              },
+                              {
+                                label: "Duplicate",
+                                loading: resumeActionLoading === `${t.id}:duplicate`,
+                                onClick: () => setResumeNameModal({ kind: "tailored", mode: "duplicate", item: t }),
+                              },
+                              ...(isManager
+                                ? [{
+                                    label: "Delete",
+                                    danger: true,
+                                    loading: resumeActionLoading === `${t.id}:delete`,
+                                    onClick: () => setResumeDeleteModal({ kind: "tailored", item: t }),
+                                  }]
+                                : []),
+                            ]}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
 
       {activeTab === "Applications" && (
-        <div>
-          <h2 style={{ fontSize: 16, marginBottom: 12 }}>Applications ({candidate.applications.length})</h2>
-
-          {candidate.applications.length > 0 && (
-            <div className="filter-bar">
-              <select value={appStatusFilter} onChange={(e) => setAppStatusFilter(e.target.value)}>
-                <option value="">All statuses</option>
-                <option value="assigned">Assigned</option>
-                <option value="stacked">Stacked</option>
-                <option value="in_progress">In progress</option>
-                <option value="applied">Applied</option>
-                <option value="replied">Replied</option>
-                <option value="interview">Interview</option>
-                <option value="rejected">Rejected</option>
-                <option value="offer">Offer</option>
-              </select>
-            </div>
-          )}
-
-          {selectedApps.size > 0 && (
-            <div className="bulk-bar">
-              <span>{selectedApps.size} selected</span>
-              <button className="btn-danger" onClick={deleteSelectedApplications}>Delete selected</button>
-            </div>
-          )}
-
-          {candidate.applications.length === 0 ? (
-            <div className="empty">No applications logged yet for this candidate.</div>
-          ) : (() => {
-            const filteredApps = candidate.applications.filter((a) => !appStatusFilter || a.status === appStatusFilter);
-            return filteredApps.length === 0 ? (
-              <div className="empty">No applications match this filter.</div>
-            ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th style={{ width: 28 }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: "auto" }}
-                      checked={selectedApps.size === filteredApps.length}
-                      onChange={() =>
-                        setSelectedApps((prev) =>
-                          prev.size === filteredApps.length ? new Set() : new Set(filteredApps.map((a) => a.id))
-                        )
-                      }
-                    />
-                  </th>
-                  <th>Job</th>
-                  <th>Company</th>
-                  <th>Status</th>
-                  <th>Source</th>
-                  <th>Applied</th>
-                  <th>Resume used</th>
-                  <th>Tailored variant</th>
-                  <th>Follow-up</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredApps.map((a) => (
-                  <Fragment key={a.id}>
-                    <tr>
-                      <td><input type="checkbox" style={{ width: "auto" }} checked={selectedApps.has(a.id)} onChange={() => toggleAppSelected(a.id)} /></td>
-                      <td>{a.jobs?.title || <span className="muted">Ad-hoc job</span>}</td>
-                      <td className="muted">{a.jobs?.company || <span className="muted">—</span>}</td>
-                      <td><StatusBadge status={a.status} /></td>
-                      <td><SourceTypeBadge sourceType={a.source_type} /></td>
-                      <td className="muted">{new Date(a.applied_at).toLocaleDateString()}</td>
-                      <td className="muted">{a.resume_filename || "—"}</td>
-                      <td>
-                        <ApplicationResumeAttach
-                          candidateId={candidate.id}
-                          applicationId={a.id}
-                          jobId={a.jobs?.id ?? ""}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="date"
-                          defaultValue={a.follow_up_at ?? ""}
-                          onBlur={(e) => updateFollowUp(a.id, e.target.value)}
-                        />
-                      </td>
-                      <td style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => setTailorContext({ jobId: a.jobs?.id ?? "", applicationId: a.id })}>Tailor</button>
-                        <button onClick={() => toggleHistory(a.id)}>History</button>
-                        <button onClick={() => deleteApplication(a.id)}>Delete</button>
-                      </td>
-                    </tr>
-                    {expandedAppId === a.id && (
-                      <tr>
-                        <td colSpan={10} style={{ background: "var(--bg)" }}>
-                          <label style={{ display: "block", marginBottom: 6 }}>Status history</label>
-                          {events.length === 0 ? (
-                            <span className="muted">No status changes recorded yet.</span>
-                          ) : (
-                            <ul style={{ margin: "0 0 16px", paddingLeft: 18 }}>
-                              {events.map((ev) => (
-                                <li key={ev.id} className="muted" style={{ fontSize: 12 }}>
-                                  {new Date(ev.created_at).toLocaleString()} — {ev.from_status ?? "(created)"} → <strong>{ev.to_status}</strong>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                          <ApplicationComments
-                            applicationId={a.id}
-                            comments={comments}
-                            onCommented={() => loadComments(a.id)}
-                          />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-            );
-          })()}
-        </div>
+        <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
+          <CandidateApplicationsDashboard candidateId={candidate.id} />
+        </Suspense>
       )}
 
       {showEdit && (
         <EditProfileModal
           candidate={candidate}
           onClose={() => setShowEdit(false)}
-          onSaved={() => { setShowEdit(false); load(); }}
+          onSaved={(updates) => {
+            setShowEdit(false);
+            setCandidate((cur) => (cur ? { ...cur, ...updates } : cur));
+          }}
         />
       )}
       {showAddVariant && (
@@ -695,6 +1576,60 @@ export default function CandidateProfilePage() {
           candidateId={candidate.id}
           onClose={() => setShowAddEvidence(false)}
           onAdded={() => { setShowAddEvidence(false); loadEvidence(); }}
+        />
+      )}
+      {showCreateBaseResume && (
+        <CreateBaseResumeModal
+          candidateId={candidate.id}
+          candidateName={candidate.name}
+          hasUploadedResume={candidate.resumes.some((resume) => resume.kind === "resume")}
+          onClose={() => setShowCreateBaseResume(false)}
+          onCreated={async (id) => {
+            setShowCreateBaseResume(false);
+            if (id) {
+              router.push(await resolveFaloodStudioUrl("base_resume", id));
+            } else {
+              loadBaseResumes();
+            }
+          }}
+        />
+      )}
+      {showParseModal && (
+        <ParseResumeModal
+          onClose={() => setShowParseModal(false)}
+          onSubmit={submitManualParse}
+          text={parseModalText}
+          setText={setParseModalText}
+          loading={parsingMarkitdown}
+        />
+      )}
+      {resumeNameModal && (
+        <NamePromptModal
+          title={resumeNameModal.mode === "rename" ? "Rename resume" : "Duplicate resume"}
+          description={resumeNameModal.mode === "duplicate" ? "Creates a new, independent copy with this name." : undefined}
+          label="Name"
+          initialValue={
+            resumeNameModal.mode === "rename"
+              ? resumeNameModal.kind === "base"
+                ? resumeNameModal.item.name
+                : tailoredResumeDisplayName(resumeNameModal.item)
+              : `${resumeNameModal.kind === "base" ? resumeNameModal.item.name : tailoredResumeDisplayName(resumeNameModal.item)} (Copy)`
+          }
+          confirmLabel={resumeNameModal.mode === "rename" ? "Save" : "Duplicate"}
+          saving={resumeActionLoading === `${resumeNameModal.item.id}:${resumeNameModal.mode}`}
+          error={resumeNameModal.error}
+          onCancel={() => setResumeNameModal(null)}
+          onConfirm={handleResumeNameModalConfirm}
+        />
+      )}
+      {resumeDeleteModal && (
+        <ConfirmDeleteModal
+          title={resumeDeleteModal.kind === "base" ? "Delete base resume" : "Delete tailored resume"}
+          message={`Delete "${resumeDeleteModal.kind === "base" ? resumeDeleteModal.item.name : tailoredResumeDisplayName(resumeDeleteModal.item)}"? This cannot be undone.`}
+          saving={resumeActionLoading === `${resumeDeleteModal.item.id}:delete`}
+          error={resumeDeleteModal.error}
+          onCancel={() => setResumeDeleteModal(null)}
+          onConfirm={handleResumeDeleteModalConfirm}
         />
       )}
       {tailorContext && (
@@ -732,6 +1667,21 @@ function ParsedResults({ parsed }: { parsed: any }) {
   const experience = parsed?.experience ?? [];
   const education = parsed?.education ?? [];
   const certifications = parsed?.certifications ?? [];
+
+  if (parsed?.parse_error || (!skills.length && !experience.length && !education.length && !certifications.length && !parsed?.name && !parsed?.email)) {
+    return (
+      <div>
+        {parsed?.parse_error ? (
+          <div style={{ padding: "8px 12px", borderRadius: 6, background: "rgba(211, 38, 30, 0.12)", fontSize: 13 }}>
+            <strong>Parsing failed:</strong> {parsed.parse_error}
+          </div>
+        ) : (
+          <p className="muted" style={{ fontSize: 14 }}>No structured data was extracted from this resume.</p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
       <div><label>Name</label><p className="muted">{parsed?.name || "—"}</p></div>
@@ -882,7 +1832,10 @@ function ApplicationComments({ applicationId, comments, onCommented }: { applica
   );
 }
 
-function EditProfileModal({ candidate, onClose, onSaved }: { candidate: CandidateDetail; onClose: () => void; onSaved: () => void }) {
+function EditProfileModal({ candidate, onClose, onSaved }: { candidate: CandidateDetail; onClose: () => void; onSaved: (updates: Partial<CandidateDetail>) => void }) {
+  const [name, setName] = useState(candidate.name ?? "");
+  const [email, setEmail] = useState(candidate.email ?? "");
+  const [phone, setPhone] = useState(candidate.phone ?? "");
   const [targetRoles, setTargetRoles] = useState(candidate.target_roles ?? "");
   const [preferredLocations, setPreferredLocations] = useState(candidate.preferred_locations ?? "");
   const [salaryExpectation, setSalaryExpectation] = useState(candidate.salary_expectation ?? "");
@@ -892,102 +1845,194 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
   const [portfolioUrl, setPortfolioUrl] = useState(candidate.portfolio_url ?? "");
   const [visaStatus, setVisaStatus] = useState(candidate.visa_status ?? "");
   const [targetIndustries, setTargetIndustries] = useState(candidate.target_industries?.join(", ") ?? "");
+  const [verifiedSkills, setVerifiedSkills] = useState(candidate.verified_skills?.join(", ") ?? "");
   const [locationPreference, setLocationPreference] = useState(candidate.location_preference ?? "");
   const [workModePreference, setWorkModePreference] = useState(candidate.work_mode_preference ?? "");
   const [availableStartDate, setAvailableStartDate] = useState(candidate.available_start_date ?? "");
+  const [eeoGender, setEeoGender] = useState(candidate.eeo_gender ?? "");
+  const [eeoRace, setEeoRace] = useState(candidate.eeo_race ?? "");
+  const [eeoVeteran, setEeoVeteran] = useState(candidate.eeo_veteran ?? "");
+  const [eeoDisability, setEeoDisability] = useState(candidate.eeo_disability ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   async function submit() {
+    if (!name.trim()) {
+      setError("Name is required.");
+      return;
+    }
     setSaving(true);
     setError("");
+    const payload = {
+      name: name.trim(),
+      email: email.trim() || null,
+      phone: phone.trim() || null,
+      target_roles: targetRoles.trim() || null,
+      preferred_locations: preferredLocations.trim() || null,
+      salary_expectation: salaryExpectation.trim() || null,
+      work_authorization: workAuthorization.trim() || null,
+      linkedin_url: linkedinUrl.trim() || null,
+      github_url: githubUrl.trim() || null,
+      portfolio_url: portfolioUrl.trim() || null,
+      visa_status: visaStatus.trim() || null,
+      target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
+      verified_skills: verifiedSkills ? verifiedSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
+      location_preference: locationPreference.trim() || null,
+      work_mode_preference: workModePreference.trim() || null,
+      available_start_date: availableStartDate || null,
+      eeo_gender: eeoGender.trim() || null,
+      eeo_race: eeoRace.trim() || null,
+      eeo_veteran: eeoVeteran.trim() || null,
+      eeo_disability: eeoDisability.trim() || null,
+    };
     const res = await fetch(`/api/candidates/${candidate.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        target_roles: targetRoles || null,
-        preferred_locations: preferredLocations || null,
-        salary_expectation: salaryExpectation || null,
-        work_authorization: workAuthorization || null,
-        linkedin_url: linkedinUrl || null,
-        github_url: githubUrl || null,
-        portfolio_url: portfolioUrl || null,
-        visa_status: visaStatus || null,
-        target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
-        location_preference: locationPreference || null,
-        work_mode_preference: workModePreference || null,
-        available_start_date: availableStartDate || null,
-      }),
+      body: JSON.stringify(payload),
     });
     setSaving(false);
     if (!res.ok) {
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       setError(data.error || "Something went wrong.");
       return;
     }
-    onSaved();
+    onSaved(payload);
   }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>Edit profile</h2>
-        <div className="field-group">
-          <label>Target roles</label>
-          <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Telecom PM" />
-        </div>
-        <div className="field-group">
-          <label>Preferred locations</label>
-          <input value={preferredLocations} onChange={(e) => setPreferredLocations(e.target.value)} placeholder="e.g. Remote, Atlanta GA" />
-        </div>
-        <div className="field-group">
-          <label>Salary expectation</label>
-          <input value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. $90k-$110k" />
-        </div>
-        <div className="field-group">
-          <label>Work authorization</label>
-          <input value={workAuthorization} onChange={(e) => setWorkAuthorization(e.target.value)} placeholder="e.g. US Citizen, H1B" />
-        </div>
-        <div className="field-group">
-          <label>LinkedIn URL</label>
-          <input value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/..." />
-        </div>
-        <div className="field-group">
-          <label>GitHub URL</label>
-          <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder="https://github.com/..." />
-        </div>
-        <div className="field-group">
-          <label>Portfolio URL</label>
-          <input value={portfolioUrl} onChange={(e) => setPortfolioUrl(e.target.value)} placeholder="https://..." />
-        </div>
-        <div className="field-group">
-          <label>Visa status</label>
-          <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H1B, Green Card" />
-        </div>
-        <div className="field-group">
-          <label>Target industries (comma-separated)</label>
-          <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. Telecom, SaaS, Finance" />
-        </div>
-        <div className="field-group">
-          <label>Location preference</label>
-          <input value={locationPreference} onChange={(e) => setLocationPreference(e.target.value)} placeholder="e.g. Remote, NYC" />
-        </div>
-        <div className="field-group">
-          <label>Work mode preference</label>
-          <input value={workModePreference} onChange={(e) => setWorkModePreference(e.target.value)} placeholder="e.g. Remote, Hybrid, Onsite" />
-        </div>
-        <div className="field-group">
-          <label>Available start date</label>
-          <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
-        </div>
-
-        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
-
-        <div className="modal-actions">
-          <button onClick={onClose}>Cancel</button>
-          <button className="btn-primary" onClick={submit} disabled={saving}>
-            {saving ? "Saving…" : "Save"}
+      <div className="modal edit-profile-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="edit-profile-head">
+          <div>
+            <h2>Edit Profile</h2>
+            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+              Contact details and career preferences update instantly across the candidate profile.
+            </p>
+          </div>
+          <button type="button" className="edit-profile-close" onClick={onClose} aria-label="Close">
+            ✕
           </button>
+        </div>
+
+        <div className="edit-profile-body">
+          <div className="edit-profile-section">
+            <h3>Basic Information</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Full name</label>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Jane Doe" />
+              </div>
+              <div className="field-group">
+                <label>Email</label>
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. jane@example.com" />
+              </div>
+              <div className="field-group">
+                <label>Phone number</label>
+                <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +1 (555) 010-2030" />
+              </div>
+              <div className="field-group">
+                <label>Location preference</label>
+                <input value={locationPreference} onChange={(e) => setLocationPreference(e.target.value)} placeholder="e.g. Remote, NYC" />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Career Preferences</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Target roles</label>
+                <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Telecom PM" />
+              </div>
+              <div className="field-group">
+                <label>Preferred locations</label>
+                <input value={preferredLocations} onChange={(e) => setPreferredLocations(e.target.value)} placeholder="e.g. Remote, Atlanta GA" />
+              </div>
+              <div className="field-group">
+                <label>Salary expectation</label>
+                <input value={salaryExpectation} onChange={(e) => setSalaryExpectation(e.target.value)} placeholder="e.g. $90k-$110k" />
+              </div>
+              <div className="field-group">
+                <label>Work authorization</label>
+                <input value={workAuthorization} onChange={(e) => setWorkAuthorization(e.target.value)} placeholder="e.g. US Citizen, H1B" />
+              </div>
+              <div className="field-group">
+                <label>Visa status</label>
+                <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H1B, Green Card" />
+              </div>
+              <div className="field-group">
+                <label>Work mode preference</label>
+                <input value={workModePreference} onChange={(e) => setWorkModePreference(e.target.value)} placeholder="e.g. Remote, Hybrid, Onsite" />
+              </div>
+              <div className="field-group">
+                <label>Available start date</label>
+                <input type="date" value={availableStartDate} onChange={(e) => setAvailableStartDate(e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Links & Profiles</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>LinkedIn URL</label>
+                <input value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} placeholder="https://linkedin.com/in/..." />
+              </div>
+              <div className="field-group">
+                <label>GitHub URL</label>
+                <input value={githubUrl} onChange={(e) => setGithubUrl(e.target.value)} placeholder="https://github.com/..." />
+              </div>
+              <div className="field-group">
+                <label>Portfolio URL</label>
+                <input value={portfolioUrl} onChange={(e) => setPortfolioUrl(e.target.value)} placeholder="https://..." />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Skills & Industries</h3>
+            <div className="field-group">
+              <label>Verified skills (comma-separated)</label>
+              <input value={verifiedSkills} onChange={(e) => setVerifiedSkills(e.target.value)} placeholder="e.g. Vetro FiberMap, Katapult, PE License" />
+              <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 4 }}>
+                Recruiter-confirmed skills the AI resume pipeline can use even if the base resume text doesn't mention them.
+              </p>
+            </div>
+            <div className="field-group">
+              <label>Target industries (comma-separated)</label>
+              <input value={targetIndustries} onChange={(e) => setTargetIndustries(e.target.value)} placeholder="e.g. Telecom, SaaS, Finance" />
+            </div>
+          </div>
+
+          <div className="edit-profile-section">
+            <h3>Equal Employment Opportunity (EEO)</h3>
+            <div className="edit-profile-grid">
+              <div className="field-group">
+                <label>Gender</label>
+                <input value={eeoGender} onChange={(e) => setEeoGender(e.target.value)} placeholder="e.g. Male, Female, Decline to self-identify" />
+              </div>
+              <div className="field-group">
+                <label>Race / Ethnicity</label>
+                <input value={eeoRace} onChange={(e) => setEeoRace(e.target.value)} placeholder="e.g. Asian, White, Hispanic" />
+              </div>
+              <div className="field-group">
+                <label>Veteran Status</label>
+                <input value={eeoVeteran} onChange={(e) => setEeoVeteran(e.target.value)} placeholder="e.g. Protected Veteran, Not a Veteran" />
+              </div>
+              <div className="field-group">
+                <label>Disability Status</label>
+                <input value={eeoDisability} onChange={(e) => setEeoDisability(e.target.value)} placeholder="e.g. Yes, No, Decline to answer" />
+              </div>
+            </div>
+          </div>
+
+          <div className="edit-profile-actions">
+            {error && <p style={{ color: "var(--danger)", fontSize: 13, margin: 0, marginRight: "auto" }}>{error}</p>}
+            <button onClick={onClose}>Cancel</button>
+            <button className="btn-primary" onClick={submit} disabled={saving}>
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1138,6 +2183,134 @@ function AddEvidenceModal({ candidateId, onClose, onAdded }: { candidateId: stri
           <button onClick={onClose}>Cancel</button>
           <button className="btn-primary" onClick={submit} disabled={saving}>
             {saving ? "Adding…" : "Add evidence"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateBaseResumeModal({
+  candidateId,
+  candidateName,
+  hasUploadedResume,
+  onClose,
+  onCreated,
+}: {
+  candidateId: string;
+  candidateName: string;
+  hasUploadedResume: boolean;
+  onClose: () => void;
+  onCreated: (id?: string) => void;
+}) {
+  const [name, setName] = useState(`${candidateName} — Base Resume`);
+  const [targetIndustry, setTargetIndustry] = useState("");
+  const [targetRoles, setTargetRoles] = useState("");
+  const [startingSource, setStartingSource] = useState<"blank" | "uploaded_resume">("blank");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit() {
+    if (!name.trim()) { setError("Name is required."); return; }
+    if (startingSource === "uploaded_resume" && !hasUploadedResume) {
+      setError("Please upload a resume first, then choose 'Seed from uploaded resume'.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    const res = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId,
+        name: name.trim(),
+        targetIndustry: targetIndustry.trim() || undefined,
+        targetRoles: targetRoles ? targetRoles.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        startingSource,
+      }),
+    });
+    setSaving(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error || "Failed to create base resume.");
+      return;
+    }
+    const data = await res.json();
+    onCreated(data.id);
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Create base resume</h2>
+        <p className="muted" style={{ marginTop: -6, marginBottom: 12 }}>
+          A reusable starting point for tailoring applications with Falood AI.
+        </p>
+        <div className="field-group">
+          <label>Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. John Doe — Base Resume" />
+        </div>
+        <div className="field-group">
+          <label>Target industry</label>
+          <input value={targetIndustry} onChange={(e) => setTargetIndustry(e.target.value)} placeholder="e.g. Telecom, SaaS" />
+        </div>
+        <div className="field-group">
+          <label>Target roles (comma-separated)</label>
+          <input value={targetRoles} onChange={(e) => setTargetRoles(e.target.value)} placeholder="e.g. OSP Designer, Network Engineer" />
+        </div>
+        <div className="field-group">
+          <label>Starting source</label>
+          <select value={startingSource} onChange={(e) => setStartingSource(e.target.value as "blank" | "uploaded_resume")}>
+            <option value="blank">Blank canvas (build with Falood AI)</option>
+            <option value="uploaded_resume">Seed from uploaded resume (if available)</option>
+          </select>
+          {startingSource === "uploaded_resume" && !hasUploadedResume && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+              No uploaded resume found yet. Upload a resume first, then come back and seed from it.
+            </p>
+          )}
+        </div>
+        {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={submit} disabled={saving}>
+            {saving ? "Creating…" : "Create base resume"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function ParseResumeModal({ onClose, onSubmit, text, setText, loading }: {
+  onClose: () => void;
+  onSubmit: () => void;
+  text: string;
+  setText: (t: string) => void;
+  loading: boolean;
+}) {
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
+        <h2>Build base resume with AI</h2>
+        <p className="muted" style={{ fontSize: 13, marginTop: -6, marginBottom: 12 }}>
+          We couldn't automatically read your PDF. Please paste your resume text below and the AI will structure it into a professional base resume.
+        </p>
+        <div className="field-group">
+          <label>Resume text</label>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Paste your full resume text here..."
+            rows={12}
+            style={{ resize: "vertical", fontFamily: "inherit" }}
+          />
+        </div>
+        <div className="modal-actions">
+          <button onClick={onClose}>Cancel</button>
+          <button className="btn-primary" onClick={onSubmit} disabled={loading || !text.trim()}>
+            {loading ? "Building…" : "Build with AI"}
           </button>
         </div>
       </div>

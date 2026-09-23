@@ -119,7 +119,7 @@ export default function InterviewDetailPage() {
     try {
       const [interviewRes, meRes, usersRes, consensusRes] = await Promise.all([
         fetch(`/api/interviews/${id}`, { cache: "no-store" }),
-        fetch("/api/auth/me", { cache: "no-store" }),
+        fetch("/api/bootstrap", { cache: "no-store" }),
         fetch("/api/users", { cache: "no-store" }),
         fetch(`/api/interviews/${id}/scorecard`, { cache: "no-store" }),
       ]);
@@ -143,7 +143,7 @@ export default function InterviewDetailPage() {
 
   const myPanelMember = interview?.panel.find((p) => p.interviewer_id === me?.profile.user_id);
   const myScorecard = interview?.scorecards.find((s) => s.panel_member_id === myPanelMember?.id);
-  const canManage = ["admin", "manager", "recruiter"].includes(me?.profile.role ?? "");
+  const canManage = ["admin", "manager", "application_engineer"].includes(me?.profile.role ?? "");
 
   async function updateStatus(status: string) {
     setActionLoading(status);
@@ -161,6 +161,31 @@ export default function InterviewDetailPage() {
       return;
     }
     setFeedback({ kind: "success", text: `Interview ${status.replaceAll("_", " ")}.` });
+    load();
+  }
+
+  async function advanceToNextRound() {
+    if (!interview) return;
+    setActionLoading("advance");
+    setFeedback(null);
+    const nextRound = (interview.round_number ?? 1) + 1;
+    const res = await fetch(`/api/interviews/${id}`, {
+      method: "PATCH",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "scheduled",
+        round_number: nextRound,
+        round_name: `Round ${nextRound}`,
+      }),
+    });
+    setActionLoading("");
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setFeedback({ kind: "error", text: data.error || "Could not advance to next round." });
+      return;
+    }
+    setFeedback({ kind: "success", text: `Advanced to Round ${nextRound}.` });
     load();
   }
 
@@ -452,14 +477,17 @@ export default function InterviewDetailPage() {
                   <button
                     className="btn-primary"
                     disabled={actionLoading === "advance"}
-                    onClick={() => updateStatus("scheduled")}
+                    onClick={advanceToNextRound}
                   >
-                    Advance to Next Stage
+                    Advance to Next Round
                   </button>
                   <button
                     className="btn-primary"
-                    disabled={actionLoading === "offer"}
-                    onClick={() => router.push(`/jobs/${job?.id}/offer?candidate=${candidate?.id}`)}
+                    disabled={actionLoading === "offer" || !job?.id || !candidate?.id}
+                    onClick={() => {
+                      if (!job?.id || !candidate?.id) return;
+                      router.push(`/jobs/${job.id}/offer?candidate=${candidate.id}`);
+                    }}
                   >
                     Send Offer
                   </button>

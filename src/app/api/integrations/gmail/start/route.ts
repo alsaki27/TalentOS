@@ -1,42 +1,65 @@
 import { NextRequest, NextResponse } from "next/server";
 import { DESTRUCTIVE_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { gmailAuthUrl, newOAuthState } from "@/lib/integrations/googleGmail";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { execute } from "@/server/db/neon";
+import { gmailConfigurationReadiness } from "@/server/runtimeConfig";
+import { isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export async function GET(req: NextRequest) {
   const context = await getCurrentUserContext();
   if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
   const url = new URL(req.url);
-  const owner = url.searchParams.get("owner") || "profile";
+  // Shared mailbox is the default so a bare /start URL cannot accidentally
+  // create a personal/profile Gmail integration.
+  const owner = url.searchParams.get("owner") || "shared";
   const redirectAfter = url.searchParams.get("redirect") || "/account";
 
-  if (owner === "shared" && !hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
+  // ARCHIVED 2026-09-07 — per-candidate Gmail connections retired in favor
+  // of the single shared mailbox (owner=shared, below). Original branch
+  // (kept for restore - see Planning MD Files/"TalentOS — Single Shared
+  // Gmail Inbox Redesign 6 August 2026.md"):
+  //
+  //   const candidateId = url.searchParams.get("candidateId");
+  //   if (owner === "candidate") {
+  //     if (!hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
+  //       return NextResponse.json({ error: "Only admins and managers can connect a client's Gmail." }, { status: 403 });
+  //     }
+  //     if (!candidateId) return NextResponse.json({ error: "candidateId is required." }, { status: 400 });
+  //     const candidate = await queryOne<{ id: string }>("SELECT id FROM candidates WHERE id = $1", [candidateId]);
+  //     if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
+  //   }
+  //   ... and further below, after inserting the oauth state row:
+  //   if (ownerType === "candidate") {
+  //     await execute("UPDATE integration_oauth_states SET candidate_id = $1 WHERE state = $2", [candidateId, state]);
+  //   }
+  if (owner !== "shared") {
+    return NextResponse.json(
+      { error: "Only the shared application Gmail can be connected. Per-candidate and personal Gmail connections have been retired." },
+      { status: 410 }
+    );
+  }
+
+  if (!hasRole(context.profile, DESTRUCTIVE_MANAGER_ROLES)) {
     return NextResponse.json({ error: "Only admins and managers can connect the shared application Gmail." }, { status: 403 });
+  }
+
+  const readiness = gmailConfigurationReadiness();
+  if (!readiness.ready || !isEncryptionAvailable()) {
+    return NextResponse.json(
+      { error: "SHARED_GMAIL_NOT_READY", readiness: { ...readiness, tokenEncryptionReady: isEncryptionAvailable() } },
+      { status: 503 },
+    );
   }
 
   const ownerType = owner === "shared" ? "shared_application_mailbox" : "profile";
   const state = newOAuthState();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-  if (isNeon()) {
-    await execute(
-      "INSERT INTO integration_oauth_states (state, provider, owner_type, owner_user_id, redirect_after, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
-      [state, "gmail", ownerType, ownerType === "profile" ? context.profile.user_id : null, redirectAfter, expiresAt]
-    );
-  } else {
-    const { error } = await supabase.from("integration_oauth_states").insert({
-      state,
-      provider: "gmail",
-      owner_type: ownerType,
-      owner_user_id: ownerType === "profile" ? context.profile.user_id : null,
-      redirect_after: redirectAfter,
-      expires_at: expiresAt,
-    });
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  }
+  await execute(
+    "INSERT INTO integration_oauth_states (state, provider, owner_type, owner_user_id, redirect_after, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
+    [state, "gmail", ownerType, context.profile.user_id, redirectAfter, expiresAt]
+  );
 
-  return NextResponse.redirect(gmailAuthUrl({ state, origin: url.origin }));
+  return NextResponse.redirect(gmailAuthUrl({ state }));
 }

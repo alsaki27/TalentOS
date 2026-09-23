@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { normalizeCompanyName } from "@/lib/companyDirectory";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne } from "@/server/db/neon";
 
 const COMPANY_FIELDS = [
   "name", "website", "linkedin_url", "logo_url", "employees_count",
@@ -29,16 +29,26 @@ export async function GET(req: NextRequest) {
   const { url, page, pageSize, from, to } = pageParams(req, { page: 1, pageSize: 50, maxPageSize: 100 });
   const search = (url.searchParams.get("search") || "").trim();
 
-  let query = supabase
-    .from("companies")
-    .select("id, name, website, linkedin_url, logo_url, employees_count, slogan, source, last_seen_at, created_at", { count: "planned" })
-    .order("last_seen_at", { ascending: false });
+  const offset = from;
+  const conditions: string[] = [];
+  const values: any[] = [];
+  let idx = 1;
 
-  if (search) query = query.ilike("name", `%${search}%`);
+  if (search) {
+    conditions.push(`name ILIKE $${idx++}`);
+    values.push(`%${search}%`);
+  }
 
-  const { data, error, count } = await query.range(from, to);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ data: data ?? [], total: count ?? 0, page, pageSize });
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const countSql = `SELECT COUNT(*)::int as total FROM companies ${where}`;
+  const countRow = await queryOne<{ total: number }>(countSql, [...values]);
+  const total = countRow?.total ?? 0;
+
+  const dataSql = `SELECT id, name, website, linkedin_url, logo_url, employees_count, slogan, source, last_seen_at, created_at FROM companies ${where} ORDER BY last_seen_at DESC OFFSET $${idx++} LIMIT $${idx++}`;
+  values.push(offset, pageSize);
+
+  const data = await query(dataSql, values);
+  return NextResponse.json({ data: data ?? [], total, page, pageSize });
 }
 
 export async function POST(req: NextRequest) {
@@ -48,11 +58,23 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("companies")
-    .upsert(companyPayload(body), { onConflict: "normalized_name" })
-    .select()
-    .single();
+  const payload = companyPayload(body);
+  const keys = Object.keys(payload);
+  const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
+  const values = keys.map((k) => (payload as any)[k]);
+
+  let data: any;
+  let error: any;
+
+  const updateClause = keys
+    .filter((k) => k !== "normalized_name")
+    .map((k) => `${k} = EXCLUDED.${k}`)
+    .join(", ");
+  data = await queryOne(
+    `INSERT INTO companies (${keys.join(", ")}) VALUES (${placeholders}) ON CONFLICT (normalized_name) DO UPDATE SET ${updateClause} RETURNING *`,
+    values
+  );
+  error = data ? null : { message: "Upsert failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data, { status: 201 });

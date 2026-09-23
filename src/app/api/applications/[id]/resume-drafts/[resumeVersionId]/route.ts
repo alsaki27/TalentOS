@@ -23,7 +23,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   const allowedFields: Record<string, unknown> = {};
-  const permittedKeys = ["content", "formatting", "status", "ats_score", "truth_score", "one_page_fit_score", "title", "version_label", "generated_text"];
+  const permittedKeys = ["content", "formatting", "status", "ats_score", "truth_score", "one_page_fit_score", "page_fit_metrics", "title", "version_label", "generated_text"];
   for (const key of permittedKeys) {
     if (key in body) allowedFields[key] = body[key];
   }

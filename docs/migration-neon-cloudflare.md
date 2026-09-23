@@ -35,7 +35,7 @@ Chunk 3.5 added portability guardrails to prevent future feature chunks from dee
 
 1. **Avoid Node-only APIs in runtime routes.** `src/server/security/secretCrypto.ts` uses Node `crypto.createCipheriv`. For Cloudflare, replace with `crypto.subtle.encrypt` / `crypto.subtle.decrypt` using the same AES-256-GCM algorithm. The exported interface (`encryptSecret`, `decryptSecret`, `fingerprintKey`, `isEncryptionAvailable`) should remain unchanged.
 2. **Avoid long-lived DB connections.** Neon supports serverless/edge via `neon` driver with `ws` pooling. Keep DB operations request-scoped.
-3. **Secrets must move to Cloudflare Worker environment variables/secrets.** `AI_KEYS_ENCRYPTION_SECRET`, `ANTHROPIC_API_KEY`, `NVIDIA_API_KEY`, etc. should be bound as secrets, not stored in `.env`.
+3. **Separate the encryption root from provider credentials.** Keep only `AI_KEYS_ENCRYPTION_SECRET` as a Cloudflare runtime secret; store provider keys, endpoints, and models encrypted in Neon through `/admin/ai`.
 4. **OpenNext compatibility.** If using OpenNext for Next.js on Cloudflare, ensure dynamic routes and API routes are compatible with the edge runtime. Test `src/app/api/admin/ai-keys/[id]/test/route.ts` specifically — it does `fetch()` to external APIs, which is well-supported on Cloudflare Workers.
 
 ## Neon notes

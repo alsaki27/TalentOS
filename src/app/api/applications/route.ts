@@ -7,14 +7,17 @@ import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { execute } from "@/server/db/neon";
 import {
   listApplications,
   findExistingCandidateIdsForJob,
   createApplications,
 } from "@/server/repositories/applicationsRepository";
+import { recordAuditEvent } from "@/server/repositories/auditLogRepository";
+import { triggerAiWorkflowForApplication } from "@/server/services/applicationAiWorkflowService";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { getSourceOfTruth, parseSourceOfTruth } from "@/server/services/sourceOfTruthService";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 
 export async function GET(req: NextRequest) {
   const currentUser = await getCurrentUserContext();
@@ -81,14 +84,25 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Per-candidate resume overrides (candidate_id -> { base_resume_id, resume_id,
+  // resume_url, resume_filename }). When logging multiple candidates for the
+  // same job in one request, each candidate's OWN base resume/uploaded file
+  // must be used - a single shared resume_url/base_resume_id previously got
+  // applied identically to every candidate in the batch (i.e. effectively to
+  // nobody but whichever one candidate it actually belonged to). Falls back
+  // to the flat singular fields below for existing single-candidate callers.
+  const candidateResumes: Record<string, { base_resume_id?: string | null; resume_id?: string | null; resume_url?: string | null; resume_filename?: string | null }> =
+    body.candidate_resumes && typeof body.candidate_resumes === "object" ? body.candidate_resumes : {};
+
   try {
     const data = await createApplications(newCandidateIds.map((candidateId) => ({
       candidate_id: candidateId,
       job_id: body.job_id ?? null,
       status,
-      resume_url: body.resume_url ?? null,
-      resume_filename: body.resume_filename ?? null,
-      resume_id: body.resume_id ?? null,
+      resume_url: candidateResumes[candidateId]?.resume_url ?? body.resume_url ?? null,
+      resume_filename: candidateResumes[candidateId]?.resume_filename ?? body.resume_filename ?? null,
+      resume_id: candidateResumes[candidateId]?.resume_id ?? body.resume_id ?? null,
+      base_resume_id: candidateResumes[candidateId]?.base_resume_id ?? body.base_resume_id ?? null,
       follow_up_at: followUpAt,
       next_action: nextAction,
       follow_up_source: followUpSource,
@@ -107,50 +121,23 @@ export async function POST(req: NextRequest) {
       source_type: body.source_type ?? "base_resume",
     })));
 
-    if (isNeon()) {
-      for (const application of data) {
-        await execute(
-          'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
-          [application.id, null, status, body.event_note ?? body.assignment_note ?? null]
-        );
-      }
-    } else {
-      await supabase.from("application_events").insert((data ?? []).map((application: any) => ({
-        application_id: application.id,
-        from_status: null,
-        to_status: status,
-        note: body.event_note ?? body.assignment_note ?? null,
-      })));
+    for (const application of data) {
+      await execute(
+        'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
+        [application.id, null, status, body.event_note ?? body.assignment_note ?? null]
+      );
     }
 
     if (currentUser && data?.length) {
-      if (isNeon()) {
-        for (const application of data) {
-          await execute(
-            'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-            [
-              currentUser.profile.user_id,
-              currentUser.profile.email,
-              'application.created',
-              'application',
-              application.id,
-              JSON.stringify({ job_id: body.job_id, candidate_id: application.candidate_id, status }),
-            ]
-          );
-        }
-      } else {
-        await supabase.from("audit_logs").insert(data.map((application: any) => ({
+      for (const application of data) {
+        await recordAuditEvent({
           actor_user_id: currentUser.profile.user_id,
           actor_email: currentUser.profile.email,
           action: "application.created",
           entity_type: "application",
           entity_id: application.id,
-          metadata: {
-            job_id: body.job_id,
-            candidate_id: application.candidate_id,
-            status,
-          },
-        })));
+          metadata: { job_id: body.job_id, candidate_id: application.candidate_id, status },
+        });
       }
 
       for (const application of data) {
@@ -174,6 +161,61 @@ export async function POST(req: NextRequest) {
           status,
           created_by: currentUser.profile.user_id,
         });
+      }
+    }
+
+    if (body.job_id) {
+      for (const application of data ?? []) {
+        const preferredBaseResumeId = candidateResumes[application.candidate_id]?.base_resume_id ?? body.base_resume_id ?? undefined;
+        
+        // 1. Auto-trigger AI resume tailoring workflow
+        await backgroundDispatch(
+          triggerAiWorkflowForApplication(application.id, currentUser?.profile.user_id, preferredBaseResumeId ?? undefined).catch(async (err) => {
+            console.error(`[Application ${application.id}] Auto-trigger AI workflow failed:`, err);
+            // Previously silent: a failure here (transient DB/provider error,
+            // bad data, anything) left the ticket at resume_generation_status
+            // 'not_started' forever - indistinguishable from "never attempted"
+            // - with no error visible anywhere and no way to retry short of
+            // recognizing the missing resume and clicking Generate manually.
+            // Persisting the real error puts it in the same 'failed' state a
+            // manual Generate failure already produces, which the Application
+            // Queue already renders with a visible error and a Retry button -
+            // no new UI, no new status value, nothing hardcoded to this one
+            // error. Guarded to only touch a still-'not_started' row so a
+            // concurrent manual click that already succeeded (or is still
+            // running) is never clobbered.
+            await execute(
+              `UPDATE applications SET resume_generation_status = 'failed', resume_generation_error = $2
+               WHERE id = $1 AND resume_generation_status = 'not_started'`,
+              [application.id, err?.message ?? String(err)]
+            ).catch((updateErr) => {
+              console.error(`[Application ${application.id}] Failed to persist auto-trigger error:`, updateErr);
+            });
+          })
+        );
+        
+        // 2. Auto-parse Source of Truth if not parsed yet (per plan: auto-trigger on ticket creation)
+        await backgroundDispatch(
+          (async () => {
+            try {
+              const existingSoT = await getSourceOfTruth(application.candidate_id);
+              if (!existingSoT || !existingSoT.lastParsedAt) {
+                // SoT has never been parsed — auto-parse now
+                console.log(`[SoT Auto-Parse] Starting for candidate ${application.candidate_id}`);
+                await callWithUsageTracking(
+                  "candidate_source_of_truth",
+                  { userId: currentUser?.profile.user_id, applicationId: application.id },
+                  provider => parseSourceOfTruth(application.candidate_id, undefined, provider)
+                );
+                console.log(`[SoT Auto-Parse] Completed for candidate ${application.candidate_id}`);
+              } else {
+                console.log(`[SoT Auto-Parse] Skipped for candidate ${application.candidate_id} — already parsed at ${existingSoT.lastParsedAt}`);
+              }
+            } catch (err) {
+              console.error(`[SoT Auto-Parse] Failed for candidate ${application.candidate_id}:`, err);
+            }
+          })()
+        );
       }
     }
 

@@ -1,0 +1,66 @@
+name: OSP Jobs Daily Export (openjobdata.com)
+
+# Pulls yesterday's daily delta from the openjobdata.com public dataset
+# (hf://buckets/Invicto69/Jobs-Dataset-bucket, MIT licensed, no auth required),
+# filters to OSP/fiber-optic/telecom-construction relevant postings, and
+# uploads the result as an .xlsx workflow artifact.
+#
+# Why a GitHub Actions job and not a Vercel/Cloudflare cron route: the dataset
+# is a Hugging Face Storage Bucket, which is only reachable through the Python
+# huggingface_hub client (hf:// scheme) — there is no plain-HTTPS or Node/edge
+# path to it (confirmed: /resolve/ URLs 404, the web file-tree doesn't expose
+# nested paths). See scripts/openjobdata_export.py for the full explanation.
+#
+# This does NOT write into the TalentOS database. It is a standalone reporting
+# export. Wiring matched jobs into the `jobs` table would go through the
+# existing crawler-ingestion endpoint (POST /api/integrations/crawler/jobs,
+# see src/lib/integrations/jobCrawler.ts) as a separate follow-up, not this job.
+
+on:
+  # Daily schedule disabled 2026-08-12 — exports weren't being used.
+  # Trigger manually via workflow_dispatch if a one-off export is ever needed.
+  # schedule:
+  #   # 09:00 UTC daily — after openjobdata.com's own daily refresh has landed.
+  #   - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Last day of the export window (YYYY-MM-DD, UTC). Leave blank for yesterday."
+        required: false
+        default: ""
+      days:
+        description: "Number of trailing days to combine into one export (default: 1)."
+        required: false
+        default: "1"
+
+jobs:
+  export-osp-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-openjobdata.txt
+
+      - name: Run export
+        run: |
+          ARGS=()
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            ARGS+=(--date "${{ github.event.inputs.date }}")
+          fi
+          if [ -n "${{ github.event.inputs.days }}" ] && [ "${{ github.event.inputs.days }}" != "1" ]; then
+            ARGS+=(--days "${{ github.event.inputs.days }}")
+          fi
+          python scripts/openjobdata_export.py "${ARGS[@]}"
+
+      - name: Upload export as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: osp-jobs-export
+          path: exports/osp_jobs_*.xlsx
+          retention-days: 90
+          if-no-files-found: warn

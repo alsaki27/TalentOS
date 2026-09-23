@@ -4,14 +4,20 @@
 // (the main /api/jobs list is paginated and can't derive these from a single page).
 
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { data, error } = await supabase
-    .from("jobs")
-    .select("source, employment_type, job_category, category_tags");
+  let data: any;
+  let error: any;
+
+  try {
+    data = await query(`SELECT source, employment_type, job_category, category_tags FROM jobs`);
+    error = null;
+  } catch (err: any) {
+    error = { message: err.message };
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

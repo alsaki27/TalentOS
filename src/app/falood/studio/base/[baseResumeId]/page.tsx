@@ -1,279 +1,586 @@
-// src/app/falood/studio/base/[baseResumeId]/page.tsx
-// Base Resume CLI Studio (brief section 7). Three panes: candidate context, the
-// structured draft (not a final PDF — see ROADMAP/PLAN), and the Falood CLI. Every
-// command call returns a proposed action that must be explicitly applied — nothing
-// the AI returns touches the saved draft until the user clicks "Apply".
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import Link from "next/link";
+import React, { useState, useRef, Suspense, useEffect, useCallback } from 'react';
+import { ResumeProvider, useResume } from '@/components/falood/resumify/contexts/ResumeContext';
+import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeForm';
+import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
+import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDown, Sparkles, Save, ArrowLeft, Briefcase, X } from 'lucide-react';
+import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
+import { cn } from '@/lib/utils';
+import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
+import { getPageSizePx, PAGE_OVERFLOW_TOLERANCE_PX } from '@/components/falood/resumify/types/resume';
+import { readResumePresentation } from '@/lib/falood/resumePresentation';
+import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 
-interface ResumeDocument {
-  header: { fullName: string; location?: string; phone?: string; email?: string; linkedin?: string; github?: string; portfolio?: string };
-  summary?: { id: string; text: string };
-  skills: { id: string; title: string; skills: string[] }[];
-  experience: { id: string; title: string; company: string; location?: string; startDate: string; endDate?: string; bullets: { id: string; text: string }[] }[];
-  education: { id: string; degree: string; school: string; graduationDate?: string }[];
-}
+/* ── Tailor Modal ── */
+function TailorModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: { jobTitle: string; company: string; jobDescription: string }) => void }) {
+    const [jobTitle, setJobTitle] = useState('');
+    const [company, setCompany] = useState('');
+    const [jobDescription, setJobDescription] = useState('');
 
-interface BaseResume {
-  id: string;
-  candidate_id: string;
-  name: string;
-  target_industry: string | null;
-  target_roles: string[] | null;
-  status: string;
-  content: ResumeDocument;
-  updated_at: string;
-}
-
-interface Candidate {
-  id: string;
-  name: string;
-  work_authorization: string | null;
-}
-
-interface EvidenceRow {
-  id: string;
-  title: string;
-  description: string | null;
-  source_type: string;
-}
-
-interface FaloodAction {
-  type: "update_resume_document" | "create_warning";
-  newContent?: ResumeDocument;
-  reason?: string;
-  warningType?: string;
-  message?: string;
-}
-
-interface LogEntry {
-  role: "user" | "assistant" | "warning";
-  text: string;
-}
-
-const QUICK_COMMANDS = [
-  "/create-base", "/make-skarion-style", "/organize-skills", "/improve-bullets",
-  "/rewrite-summary", "/add-projects", "/remove-ai-slop", "/truth-check",
-];
-
-export default function BaseResumeStudioPage() {
-  const params = useParams<{ baseResumeId: string }>();
-  const baseResumeId = params?.baseResumeId;
-  const [baseResume, setBaseResume] = useState<BaseResume | null>(null);
-  const [candidate, setCandidate] = useState<Candidate | null>(null);
-  const [evidence, setEvidence] = useState<EvidenceRow[]>([]);
-  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
-  const [log, setLog] = useState<LogEntry[]>([]);
-  const [pendingAction, setPendingAction] = useState<FaloodAction | null>(null);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
-
-  async function load() {
-    if (!baseResumeId) return;
-    const res = await fetch(`/api/base-resumes/${baseResumeId}`);
-    const data = await res.json();
-    setBaseResume(data);
-    if (data?.candidate_id) {
-      const [candRes, evRes] = await Promise.all([
-        fetch(`/api/candidates/${data.candidate_id}`),
-        fetch(`/api/candidates/${data.candidate_id}/evidence`),
-      ]);
-      if (candRes.ok) setCandidate(await candRes.json());
-      if (evRes.ok) setEvidence(await evRes.json());
-    }
-  }
-
-  useEffect(() => { load(); }, [baseResumeId]);
-
-  async function sendCommand(commandOrMessage: string, isCommand: boolean) {
-    if (!baseResumeId || sending) return;
-    setSending(true);
-    setError("");
-    setLog((prev) => [...prev, { role: "user", text: commandOrMessage }]);
-
-    const res = await fetch("/api/falood/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: "base_resume_creation",
-        baseResumeId,
-        candidateId: baseResume?.candidate_id,
-        conversationId,
-        ...(isCommand ? { command: commandOrMessage } : { message: commandOrMessage }),
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setSending(false);
-
-    if (!res.ok) {
-      setError(data.error || "Falood command failed.");
-      setLog((prev) => [...prev, { role: "assistant", text: `(error) ${data.error ?? "request failed"}` }]);
-      return;
-    }
-
-    setConversationId(data.conversationId);
-    setLog((prev) => [...prev, { role: "assistant", text: data.message }]);
-    (data.warnings ?? []).forEach((w: string) => setLog((prev) => [...prev, { role: "warning", text: w }]));
-    if (data.action?.type === "update_resume_document") {
-      setPendingAction(data.action);
-    } else if (data.action?.type === "create_warning") {
-      setLog((prev) => [...prev, { role: "warning", text: data.action.message }]);
-    }
-  }
-
-  async function applyPendingAction() {
-    if (!pendingAction?.newContent || !baseResumeId) return;
-    const res = await fetch(`/api/base-resumes/${baseResumeId}/apply-draft`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ newContent: pendingAction.newContent }),
-    });
-    if (res.ok) {
-      setBaseResume(await res.json());
-      setPendingAction(null);
-      setLog((prev) => [...prev, { role: "assistant", text: "Applied to the draft." }]);
-    }
-  }
-
-  async function saveAsApproved() {
-    if (!baseResumeId) return;
-    const res = await fetch(`/api/base-resumes/${baseResumeId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "approved" }),
-    });
-    if (res.ok) setBaseResume(await res.json());
-  }
-
-  if (!baseResume) return <div className="empty">Loading…</div>;
-
-  const content = pendingAction?.newContent ?? baseResume.content;
-
-  return (
-    <>
-      <div className="page-header">
-        <h1>{baseResume.name}</h1>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Link className="btn" href={`/candidates/${baseResume.candidate_id}`}>Back to candidate</Link>
-          <span className="badge">{baseResume.status}</span>
-          <button className="btn-primary" onClick={saveAsApproved} disabled={baseResume.status === "approved"}>
-            Save as approved
-          </button>
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr 320px", gap: 16, alignItems: "start" }}>
-        {/* Candidate context */}
-        <div className="card">
-          <h3 style={{ fontSize: 14, marginTop: 0 }}>Candidate context</h3>
-          <p className="muted" style={{ fontSize: 13 }}>{candidate?.name}</p>
-          <p className="muted" style={{ fontSize: 12 }}>Work auth: {candidate?.work_authorization ?? "—"}</p>
-          <p className="muted" style={{ fontSize: 12 }}>Target: {baseResume.target_industry ?? "—"}</p>
-          <h4 style={{ fontSize: 13, marginBottom: 6 }}>Evidence bank ({evidence.length})</h4>
-          {evidence.length === 0 ? (
-            <p className="muted" style={{ fontSize: 12 }}>No evidence yet.</p>
-          ) : (
-            <ul style={{ paddingLeft: 16, fontSize: 12 }}>
-              {evidence.slice(0, 8).map((e) => <li key={e.id}>{e.title}</li>)}
-            </ul>
-          )}
-        </div>
-
-        {/* Draft */}
-        <div className="card">
-          <h3 style={{ fontSize: 14, marginTop: 0 }}>
-            Base resume draft {pendingAction && <span className="badge" style={{ marginLeft: 8 }}>Proposed — not saved yet</span>}
-          </h3>
-          <h2 style={{ margin: "8px 0 0" }}>{content.header.fullName}</h2>
-          <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-            {[content.header.location, content.header.phone, content.header.email, content.header.linkedin, content.header.portfolio].filter(Boolean).join(" | ")}
-          </p>
-          {content.summary?.text && <p style={{ fontSize: 13 }}>{content.summary.text}</p>}
-
-          {content.skills.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, marginBottom: 4 }}>Technical Skills</h4>
-              {content.skills.map((s) => (
-                <p key={s.id} style={{ fontSize: 12, margin: "2px 0" }}><strong>{s.title}:</strong> {s.skills.join(", ")}</p>
-              ))}
-            </>
-          )}
-
-          {content.experience.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Professional Experience</h4>
-              {content.experience.map((exp) => (
-                <div key={exp.id} style={{ marginBottom: 8 }}>
-                  <p style={{ fontSize: 13, margin: 0 }}><strong>{exp.title}</strong> — {exp.company} {exp.location ? `(${exp.location})` : ""}</p>
-                  <p className="muted" style={{ fontSize: 11, margin: 0 }}>{exp.startDate} – {exp.endDate ?? "Present"}</p>
-                  <ul style={{ fontSize: 12, margin: "2px 0", paddingLeft: 16 }}>
-                    {exp.bullets.map((b) => <li key={b.id}>{b.text}</li>)}
-                  </ul>
+    return (
+        <div className="modal-overlay" onClick={onClose}>
+            <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 520 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <h2 style={{ margin: 0, fontSize: 16 }}>Tailor Resume for Job</h2>
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}><X size={18} /></button>
                 </div>
-              ))}
-            </>
-          )}
-
-          {content.education.length > 0 && (
-            <>
-              <h4 style={{ fontSize: 13, margin: "10px 0 4px" }}>Education</h4>
-              {content.education.map((edu) => (
-                <p key={edu.id} style={{ fontSize: 12, margin: "2px 0" }}>{edu.degree} — {edu.school} {edu.graduationDate ? `(${edu.graduationDate})` : ""}</p>
-              ))}
-            </>
-          )}
-
-          {pendingAction && (
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-              <button className="btn-primary" onClick={applyPendingAction}>Apply this draft</button>
-              <button onClick={() => setPendingAction(null)}>Discard</button>
+                <div className="field-group">
+                    <label>Job Title <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <input value={jobTitle} onChange={(e) => setJobTitle(e.target.value)} placeholder="e.g. Senior Software Engineer" />
+                </div>
+                <div className="field-group">
+                    <label>Company Name</label>
+                    <input value={company} onChange={(e) => setCompany(e.target.value)} placeholder="e.g. Google" />
+                </div>
+                <div className="field-group">
+                    <label>Job Description <span style={{ color: 'var(--danger)' }}>*</span></label>
+                    <textarea
+                        value={jobDescription}
+                        onChange={(e) => setJobDescription(e.target.value)}
+                        placeholder="Paste the full job description here..."
+                        style={{ minHeight: 180, resize: 'vertical' }}
+                    />
+                </div>
+                <div className="modal-actions">
+                    <button onClick={onClose}>Cancel</button>
+                    <button
+                        className="btn-primary"
+                        disabled={!jobTitle.trim() || !jobDescription.trim()}
+                        onClick={() => onSubmit({ jobTitle, company, jobDescription })}
+                    >
+                        Tailor with AI →
+                    </button>
+                </div>
             </div>
-          )}
         </div>
+    );
+}
 
-        {/* Falood CLI */}
-        <div className="card" style={{ display: "flex", flexDirection: "column", height: 600 }}>
-          <h3 style={{ fontSize: 14, marginTop: 0 }}>Falood CLI</h3>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
-            {QUICK_COMMANDS.map((c) => (
-              <button key={c} style={{ fontSize: 11 }} onClick={() => sendCommand(c, true)} disabled={sending}>{c}</button>
-            ))}
-          </div>
-          <div style={{ flex: 1, overflowY: "auto", marginBottom: 8, fontSize: 12 }}>
-            {log.length === 0 && <p className="muted">Run /create-base to generate the first draft.</p>}
-            {log.map((entry, i) => (
-              <p key={i} style={{
-                margin: "4px 0",
-                color: entry.role === "warning" ? "var(--danger)" : undefined,
-                fontWeight: entry.role === "user" ? 600 : 400,
-              }}>
-                {entry.role === "user" ? "> " : entry.role === "warning" ? "⚠ " : ""}{entry.text}
-              </p>
-            ))}
-            {sending && <p className="muted">Falood is thinking…</p>}
-          </div>
-          {error && <p className="form-error">{error}</p>}
-          <div style={{ display: "flex", gap: 6 }}>
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Type a command or instruction…"
-              onKeyDown={(e) => { if (e.key === "Enter" && input.trim()) { sendCommand(input.trim(), input.trim().startsWith("/")); setInput(""); } }}
-            />
-            <button
-              className="btn-primary"
-              disabled={sending || !input.trim()}
-              onClick={() => { sendCommand(input.trim(), input.trim().startsWith("/")); setInput(""); }}
-            >
-              Send
-            </button>
-          </div>
+function buildCustomSectionsForBuilder(old: any) {
+    const importedSections = Array.isArray(old.customSections)
+        ? old.customSections
+            .map((section: any, index: number) => {
+                const content = Array.isArray(section?.bullets)
+                    ? section.bullets
+                        .map((bullet: any) => bullet?.text || bullet)
+                        .filter(Boolean)
+                        .join('\n')
+                    : typeof section?.content === 'string'
+                        ? section.content.trim()
+                        : '';
+                if (!content) return null;
+                const lines = content.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+                return {
+                    id: section?.id || `custom-${index}`,
+                    title: section?.title || `Custom Section ${index + 1}`,
+                    content,
+                    type: lines.length > 1 ? 'bullets' : 'paragraph',
+                    visible: section?.visible ?? true,
+                    order: index,
+                    placement: section?.placement || 'right',
+                };
+            })
+            .filter(Boolean)
+        : [];
+
+    const certificationLines = Array.isArray(old.certifications)
+        ? old.certifications
+            .map((cert: any) => [cert?.name, cert?.issuer, cert?.date].filter(Boolean).join(' | '))
+            .filter(Boolean)
+        : [];
+
+    if (certificationLines.length > 0) {
+        importedSections.push({
+            id: 'certifications',
+            title: 'Certifications',
+            content: certificationLines.join('\n'),
+            type: 'bullets',
+            visible: true,
+            order: importedSections.length,
+            placement: 'right',
+        });
+    }
+
+    return importedSections;
+}
+
+function projectBulletsToText(value: unknown): string {
+    if (!Array.isArray(value)) return '';
+    return value
+        .map((bullet: any) => bullet?.text || bullet)
+        .filter(Boolean)
+        .join('\n');
+}
+
+function convertOldFormatToNew(old: any): any {
+    if (!old || typeof old !== 'object') return old;
+    // Already the editor-native shape - content passes through untouched, but
+    // presentation is still normalized so a row missing (or carrying an empty)
+    // sections/colors/typography block opens with usable defaults instead of
+    // rendering a blank page. Matches what studioDocumentToResumeData already
+    // does for the same shape, so both editors agree on any given resume.
+    if (old.personalInfo) return { ...old, ...readResumePresentation(old) };
+    
+    // It's the old ResumeDocument format (has header, experience, education, etc)
+    return {
+        personalInfo: {
+            fullName: old.header?.fullName || '',
+            jobTitle: '',
+            email: old.header?.email || '',
+            phone: old.header?.phone || '',
+            location: old.header?.location || '',
+            linkedin: old.header?.linkedin || '',
+            github: old.header?.github || '',
+            website: old.header?.portfolio || old.header?.website || ''
+        },
+        summary: old.summary?.text || '',
+        experience: Array.isArray(old.experience) ? old.experience.map((e: any) => ({
+            id: e.id || Math.random().toString(),
+            jobTitle: e.title || '',
+            company: e.company || '',
+            location: e.location || '',
+            startDate: e.startDate || '',
+            endDate: e.endDate || '',
+            current: !e.endDate,
+            description: '',
+            bulletPoints: Array.isArray(e.bullets) ? e.bullets.map((b: any) => b.text || b) : []
+        })) : [],
+        education: Array.isArray(old.education) ? old.education.map((e: any) => ({
+            id: e.id || Math.random().toString(),
+            degree: e.degree || '',
+            institution: e.school || '',
+            location: '',
+            graduationYear: e.graduationDate || '',
+        })) : [],
+        skills: {
+            mode: 'categorized',
+            simple: [],
+            categorized: Array.isArray(old.skills) ? old.skills.map((s: any) => ({
+                id: s.id || Math.random().toString(),
+                name: s.title || '',
+                skills: Array.isArray(s.skills) ? s.skills : []
+            })) : []
+        },
+        projects: Array.isArray(old.projects) ? old.projects.map((p: any) => ({
+            id: p.id || Math.random().toString(),
+            title: p.title || p.name || '',
+            description: p.description || projectBulletsToText(p.bullets) || '',
+            technologies: Array.isArray(p.technologies) ? p.technologies.filter(Boolean) : [],
+            liveUrl: p.liveUrl || p.url || '',
+            githubUrl: p.githubUrl || '',
+            startDate: p.startDate || '',
+            endDate: p.endDate || ''
+        })).filter((project: any) => project.title || project.description || project.technologies.length || project.liveUrl || project.githubUrl) : [],
+        customSections: buildCustomSectionsForBuilder(old),
+        // Presentation settings come from the stored document (falling back
+        // to the same defaults this used to hardcode when it carries none),
+        // so a saved template/color/typography/section-order choice is not
+        // silently reset on reopen. See src/lib/falood/resumePresentation.ts.
+        ...readResumePresentation(old),
+    };
+}
+
+/* ── Resume Content (inner component) ── */
+const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => {
+    const [showPreview, setShowPreview] = useState(true);
+    const [showAiPanel, setShowAiPanel] = useState(false);
+    const [activePanel, setActivePanel] = useState<'form' | 'customize' | 'settings'>('form');
+    const [pageOverflow, setPageOverflow] = useState(false);
+    const [showTailorModal, setShowTailorModal] = useState(false);
+    const { state, exportResumeData, importResumeData } = useResume();
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const router = useRouter();
+    const [isSaving, setIsSaving] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
+    const [toastMsg, setToastMsg] = useState<string | null>(null);
+    const [candidateId, setCandidateId] = useState<string | null>(null);
+    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const isNew = baseResumeId === 'new';
+    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(isNew);
+    const lastSavedSnapshotRef = useRef<string | null>(null);
+    // Synchronous mutual-exclusion for saves (a ref, not state, since it must
+    // be readable/settable instantly - see persistBaseResume). Root cause of
+    // deleted custom sections reappearing: the PATCH route used to await a
+    // multi-second AI keyword-generation call before responding, and with a
+    // 1s autosave debounce plus the explicit Save button, two saves could
+    // easily be in flight at once. Since each PATCH fully overwrites
+    // `content`, their responses could arrive out of order and let an
+    // older, in-flight save silently clobber a newer one (e.g. one made
+    // right after deleting a section). This guard ensures only one save is
+    // ever in flight; the debounce effect below retries with the freshest
+    // state once it clears.
+    const isSavingRef = useRef(false);
+
+    const showToast = (msg: string) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(null), 3000);
+    };
+
+    // Load existing Base Resume
+    useEffect(() => {
+        if (!isNew) {
+            const fetchBaseResume = async () => {
+                setIsLoading(true);
+                try {
+                    const response = await fetch(`/api/base-resumes/${baseResumeId}`);
+                    const json = await response.json();
+                    if (json && json.content) {
+                        const convertedData = convertOldFormatToNew(json.content);
+                        importResumeData(convertedData);
+                        lastSavedSnapshotRef.current = JSON.stringify(convertedData);
+                        setCandidateId(json.candidate_id || null);
+                        setHasLoadedInitialData(true);
+                        showToast('Base Resume loaded.');
+                    }
+                } catch (error) {
+                    console.error('Error loading base resume:', error);
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            fetchBaseResume();
+        }
+    }, [baseResumeId, isNew]);
+
+    // Page overflow detection. Measured against the same derived page
+    // geometry the preview paginates with, so this banner and the page
+    // separators drawn in the preview can never disagree.
+    React.useEffect(() => {
+        const checkOverflow = () => {
+            const element = document.getElementById('resume-content');
+            if (element) {
+                const { height: pageHeight } = getPageSizePx(state.resumeData.pageFormat);
+                setPageOverflow(element.offsetHeight - PAGE_OVERFLOW_TOLERANCE_PX > pageHeight);
+            }
+        };
+        const timeoutId = setTimeout(checkOverflow, 500);
+        return () => clearTimeout(timeoutId);
+    }, [state.resumeData, state.resumeData.pageFormat]);
+
+    const handleDownloadPDF = () => {
+        window.print();
+    };
+
+    const handleExportJSON = () => {
+        const success = exportResumeAsJSON(exportResumeData());
+        if (success) showToast('Resume exported as JSON.');
+        else showToast('Export failed.');
+    };
+
+    const persistBaseResume = useCallback(async (showSuccessToast = false) => {
+        if (isNew) return false;
+
+        // Never let two PATCHes race - see isSavingRef's declaration for why.
+        // The debounce effect below re-checks and retries once this clears,
+        // so a save that's skipped here is never silently lost.
+        if (isSavingRef.current) return false;
+
+        const snapshot = JSON.stringify(state.resumeData);
+        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
+            return true;
+        }
+
+        isSavingRef.current = true;
+        setIsSaving(true);
+        setSaveStatus('saving');
+        try {
+            const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    content: state.resumeData,
+                }),
+            });
+            if (saveResponse.ok) {
+                lastSavedSnapshotRef.current = snapshot;
+                setSaveStatus('saved');
+                if (showSuccessToast) {
+                    showToast('Base Resume saved!');
+                }
+                return true;
+            } else {
+                throw new Error("Failed to save");
+            }
+        } catch (error) {
+            console.error('Error saving:', error);
+            setSaveStatus('error');
+            if (showSuccessToast) {
+                showToast('Save failed.');
+            }
+            return false;
+        } finally {
+            isSavingRef.current = false;
+            setIsSaving(false);
+        }
+    }, [baseResumeId, isNew, state.resumeData]);
+
+    const handleSave = async () => {
+        if (isNew) {
+            setIsSaving(true);
+            setSaveStatus('saving');
+            try {
+                const saveResponse = await fetch('/api/falood/applications', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jobDescription: state.jobDescription || '',
+                        companyName: null,
+                        skills: [],
+                        resumeData: state.resumeData,
+                        chatHistory: state.chatHistory,
+                    }),
+                });
+                if (saveResponse.ok) {
+                    setSaveStatus('saved');
+                    showToast('Saved as standalone application!');
+                } else {
+                    throw new Error('Failed to save');
+                }
+            } catch (error) {
+                console.error('Error saving:', error);
+                setSaveStatus('error');
+                showToast('Save failed.');
+            } finally {
+                setIsSaving(false);
+            }
+            return;
+        }
+
+        await persistBaseResume(true);
+    };
+
+    useEffect(() => {
+        // isSaving re-runs this effect the instant a save finishes, so a
+        // change that arrived while one was in flight (skipped by
+        // persistBaseResume's isSavingRef guard) always gets a follow-up
+        // attempt with the freshest state - it's never silently dropped.
+        if (isNew || isLoading || !hasLoadedInitialData || isSaving) return;
+
+        const snapshot = JSON.stringify(state.resumeData);
+        if (snapshot === lastSavedSnapshotRef.current) return;
+
+        const timeoutId = window.setTimeout(() => {
+            void persistBaseResume(false);
+        }, 1000);
+
+        return () => window.clearTimeout(timeoutId);
+    }, [hasLoadedInitialData, isLoading, isNew, isSaving, persistBaseResume, state.resumeData]);
+
+    const handleTailorSubmit = async (data: { jobTitle: string; company: string; jobDescription: string }) => {
+        setShowTailorModal(false);
+        // Save current base resume first - routed through the same guarded
+        // persistBaseResume as everything else, so this can't race an
+        // in-flight autosave with its own separate, un-tracked PATCH.
+        if (!isNew) {
+            await persistBaseResume(false);
+        }
+
+        // Then create a NEW application for tailoring
+        try {
+            const createResponse = await fetch('/api/falood/applications', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jobDescription: data.jobDescription,
+                    companyName: data.company,
+                    skills: [],
+                    resumeData: state.resumeData, // Seeded with the current base resume content
+                    chatHistory: candidateId ? [{ id: "meta-candidate", role: "assistant", content: "", candidateId }] : [],
+                }),
+            });
+            if (createResponse.ok) {
+                const json = await createResponse.json();
+                const savedId = json.data?.id;
+                if (savedId) {
+                    router.push(`/falood/studio/tailor/${savedId}?jobTitle=${encodeURIComponent(data.jobTitle)}&company=${encodeURIComponent(data.company)}`);
+                }
+            }
+        } catch (error) {
+            console.error('Error creating tailored application:', error);
+            showToast('Failed to start tailoring.');
+        }
+    };
+
+    const handleImportJSON = () => fileInputRef.current?.click();
+
+    const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        try {
+            const resumeData = await importResumeFromJSON(file);
+            importResumeData(resumeData);
+            showToast('Resume imported.');
+        } catch {
+            showToast('Import failed: invalid file.');
+        }
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    if (isLoading) {
+        return <div className="flex items-center justify-center h-[600px]"><p className="muted">Loading base resume…</p></div>;
+    }
+
+    return (
+        <div style={{ minHeight: '100vh' }}>
+            {/* Toast */}
+            {toastMsg && (
+                <div style={{
+                    position: 'fixed', top: 20, right: 20, zIndex: 9999,
+                    padding: '12px 20px', borderRadius: 8,
+                    background: 'var(--accent, #2a6f4f)', color: '#fff',
+                    fontSize: 13, fontWeight: 500, boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                }}>
+                    {toastMsg}
+                </div>
+            )}
+
+            {showTailorModal && (
+                <TailorModal
+                    onClose={() => setShowTailorModal(false)}
+                    onSubmit={handleTailorSubmit}
+                />
+            )}
+
+            <div style={{ maxWidth: 1800, margin: '0 auto', padding: '16px 16px' }}>
+                {/* Header */}
+                <div className="print:hidden" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Link href={candidateId ? `/candidates/${candidateId}` : "/falood"} style={{ color: 'inherit' }}>
+                            <ArrowLeft size={20} />
+                        </Link>
+                        <div>
+                            <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Falood Base Resume Builder</h1>
+                            <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                                {isNew ? 'New resume' : `Editing Base Resume: ${baseResumeId.slice(0, 8)}…`}
+                            </p>
+                        </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button className="btn" onClick={() => setShowTailorModal(true)} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Briefcase size={14} /> Tailor for Job
+                        </button>
+                        <Button
+                            variant={showAiPanel ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => setShowAiPanel(!showAiPanel)}
+                            className="hidden xl:flex items-center gap-2"
+                        >
+                            <Sparkles className="w-4 h-4" />
+                            {showAiPanel ? 'Hide AI' : 'Show AI'}
+                        </Button>
+                    </div>
+                </div>
+
+                {/* Overflow warning */}
+                {pageOverflow && (
+                    <Alert className="mb-4 print:hidden" style={{ borderColor: '#f59e0b', background: 'rgba(245,158,11,0.1)' }}>
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertDescription>
+                            Your resume content exceeds one page. Consider removing some content or using a more compact template.
+                        </AlertDescription>
+                    </Alert>
+                )}
+
+                {/* Mobile toggle */}
+                <div className="lg:hidden mb-4 flex gap-2 print:hidden">
+                    <Button variant={showPreview ? "default" : "outline"} size="sm" onClick={() => setShowPreview(!showPreview)} className="flex items-center gap-2">
+                        {showPreview ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        {showPreview ? 'Hide Preview' : 'Show Preview'}
+                    </Button>
+                </div>
+
+                <div className="flex flex-col xl:flex-row gap-4 xl:overflow-x-auto print:overflow-visible" style={{ maxWidth: 1800, margin: '0 auto' }}>
+                    {/* Form Panel */}
+                    <div className={cn(
+                        "w-full lg:w-[600px] xl:w-[500px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
+                        "lg:block",
+                        showPreview ? "hidden lg:flex" : "flex"
+                    )} style={{ height: 750, flexShrink: 0 }}>
+                        <div style={{ borderBottom: '1px solid var(--border, #e5e7eb)', flexShrink: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center' }}>
+                                <Button variant={activePanel === 'form' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('form')} style={{ borderRadius: 0, padding: '12px 24px' }}>Content</Button>
+                                <Button variant={activePanel === 'customize' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('customize')} style={{ borderRadius: 0, padding: '12px 24px' }}><Palette className="w-4 h-4 mr-2" />Customize</Button>
+                                <Button variant={activePanel === 'settings' ? 'default' : 'ghost'} size="sm" onClick={() => setActivePanel('settings')} style={{ borderRadius: 0, padding: '12px 24px' }}><Settings className="w-4 h-4 mr-2" />Settings</Button>
+                            </div>
+                        </div>
+                        <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <ResumeForm activePanel={activePanel} />
+                        </div>
+                    </div>
+
+                    {/* Preview Panel */}
+                    <div className={cn(
+                        "w-full lg:w-auto xl:flex-1 bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col",
+                        "print:w-full print:h-auto print:shadow-none print:rounded-none print:block print:overflow-visible",
+                        "lg:flex",
+                        showPreview ? "flex" : "hidden lg:flex"
+                    )} style={{ height: 750, minWidth: 620, flexShrink: 0 }}>
+                        <div className="print:hidden" style={{ borderBottom: '1px solid var(--border, #e5e7eb)', padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flexShrink: 0 }}>
+                            {!isNew && (
+                                <span className="text-xs text-muted-foreground mr-auto">
+                                    {saveStatus === 'saving'
+                                        ? 'Autosaving...'
+                                        : saveStatus === 'saved'
+                                            ? 'All changes saved'
+                                            : saveStatus === 'error'
+                                                ? 'Autosave failed'
+                                                : 'Autosave on'}
+                                </span>
+                            )}
+                            <Button size="sm" variant="outline" onClick={handleSave} disabled={isSaving} className="flex items-center gap-2 px-3 py-2">
+                                <Save className="w-4 h-4" />{isSaving ? 'Saving…' : 'Save'}
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={handleImportJSON} className="flex items-center gap-2 px-3 py-2">
+                                <Upload className="w-4 h-4" />Import
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={handleExportJSON} className="flex items-center gap-2 px-3 py-2">
+                                <FileDown className="w-4 h-4" />Export
+                            </Button>
+                            <Button size="sm" variant="default" onClick={handleDownloadPDF} className="flex items-center gap-2 px-3 py-2">
+                                <Download className="w-4 h-4" />PDF
+                            </Button>
+                        </div>
+                        <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" style={{ display: 'none' }} />
+                        <div
+                            id="resume-print-area"
+                            data-page-format={state.resumeData.pageFormat}
+                            style={{ flex: 1, overflow: 'auto', background: 'var(--bg-secondary, #f9fafb)' }}
+                        >
+                            <ResumePreview />
+                        </div>
+                    </div>
+
+                    {/* AI Suggestions Panel */}
+                    {showAiPanel && (
+                        <div className={cn(
+                            "w-full xl:w-[400px] bg-white dark:bg-[var(--card)] rounded-xl shadow-lg overflow-hidden flex flex-col print:hidden",
+                            "hidden xl:flex"
+                        )} style={{ height: 750, flexShrink: 0 }}>
+                            <div style={{ flex: 1, overflow: 'hidden', padding: 8 }}>
+                                <AiSuggestions />
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
-      </div>
-    </>
-  );
+    );
+};
+
+/* ── Page Wrapper ── */
+export default function FaloodStudioBasePage() {
+    const params = useParams<{ baseResumeId: string }>();
+    const baseResumeId = params?.baseResumeId || 'new';
+
+    return (
+        <ResumeProvider>
+            <Suspense fallback={<div className="flex items-center justify-center h-screen"><p>Loading builder…</p></div>}>
+                <ResumeContent baseResumeId={baseResumeId} />
+            </Suspense>
+        </ResumeProvider>
+    );
 }

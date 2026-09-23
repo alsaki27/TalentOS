@@ -104,7 +104,13 @@ function parseJsonLoose(value: string | undefined): unknown {
   try {
     return JSON.parse(t);
   } catch {
-    return t;
+    // The value isn't valid JSON.  Wrap it so it's safe for a jsonb column.
+    // If it looks like a comma-separated list, store as a JSON array;
+    // otherwise store as a single-element array.
+    if (t.includes(",")) {
+      return t.split(",").map((s) => s.trim()).filter(Boolean);
+    }
+    return [t];
   }
 }
 

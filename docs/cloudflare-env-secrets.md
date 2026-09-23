@@ -46,16 +46,10 @@ npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 ```bash
 npx wrangler secret put AI_KEYS_ENCRYPTION_SECRET
 # Paste: 32-byte hex string (e.g., from openssl rand -hex 32)
-
-npx wrangler secret put ANTHROPIC_API_KEY
-# Paste: your Anthropic API key (if using Anthropic)
-
-npx wrangler secret put NVIDIA_API_KEY
-# Paste: your NVIDIA API key (if using NVIDIA)
-
-npx wrangler secret put OPENAI_API_KEY
-# Paste: your OpenAI API key (if using OpenAI — optional)
 ```
+
+Provider API keys, gateway credentials, endpoints, and model aliases belong in
+the Neon-backed AI Control Center (`/admin/ai`), not Cloudflare or GitHub secrets.
 
 ### App Security
 
@@ -126,7 +120,7 @@ SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 AI_KEYS_ENCRYPTION_SECRET=your-encryption-secret
 CRON_SECRET=your-cron-secret
-ANTHROPIC_API_KEY=your-anthropic-key
+# Provider credentials are added through /admin/ai after startup.
 ```
 
 **Note:** `wrangler dev` reads `.dev.vars` automatically. `next dev` still uses `.env.local` for local Next.js development.

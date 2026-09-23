@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { hashPublicApiKey } from "./publicApiAuth";
-import { supabase } from "./supabase";
+import { queryOne, execute } from "@/server/db/neon";
 
 export interface ApiKeyValidationResult {
   valid: boolean;
@@ -25,22 +25,20 @@ export async function validateApiKey(req: NextRequest): Promise<ApiKeyValidation
   const key = authHeader.replace("Bearer ", "");
 
   // 1. Check against public_api_keys table (jobs:import or crawler scope)
-  const { data, error } = await supabase
-    .from("public_api_keys")
-    .select("id, scopes, revoked_at, expires_at")
-    .eq("key_hash", await hashPublicApiKey(key))
-    .maybeSingle();
+  const data = await queryOne<{ id: string; scopes: string[]; revoked_at: string | null; expires_at: string | null }>(
+    "SELECT id, scopes, revoked_at, expires_at FROM public_api_keys WHERE key_hash = $1",
+    [await hashPublicApiKey(key)]
+  );
 
-  if (!error && data) {
+  if (data) {
     if (!data.revoked_at && (!data.expires_at || new Date(data.expires_at).getTime() > Date.now())) {
       const scopes = Array.isArray(data.scopes) ? data.scopes : [];
       if (scopes.includes("jobs:import") || scopes.includes("crawler")) {
         // Touch last_used_at
-        await supabase
-          .from("public_api_keys")
-          .update({ last_used_at: new Date().toISOString() })
-          .eq("id", data.id)
-          .then(() => {}); // fire-and-forget
+        await execute(
+          "UPDATE public_api_keys SET last_used_at = $1 WHERE id = $2",
+          [new Date().toISOString(), data.id]
+        );
         return { valid: true, keyId: data.id };
       }
     }

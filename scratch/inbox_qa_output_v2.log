@@ -1,0 +1,57 @@
+
+=== Login ===
+  [HTTP 403] https://talent.skarion.com/api/saved-job-searches
+  OK
+
+=== Navigate to /inbox with a real candidateId, wait for candidates to populate ===
+  [HTTP 403] https://talent.skarion.com/api/jobs/categorize/process
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots_v2\01_inbox_with_candidate_param.png
+  OK
+
+=== Report all <select> elements and their option counts/text ===
+  select count on page: 3
+  select[0] (1 options): ["Select client candidate…"]
+  select[1] (1 options): ["All candidates"]
+  select[2] (9 options): ["All categories","interview invite","scheduling","offer","recruiter reply","application invite","application confirmation","rejection"]
+  OK
+
+=== Wait for 'Loading mailbox...' to disappear and check conversation count ===
+  still loading after 15s: page.waitForFunction: Timeout 30000ms exceeded.
+  conversations count text: 0 conversations
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots_v2\02_inbox_after_loading_resolved.png
+  OK
+
+=== Click Approvals tab for this candidate and look for real pending card + Show Details ===
+  [screenshot] C:\Users\iamsh\AppData\Local\Temp\claude\c--Shohan-Skarion\824636f5-7e26-4ece-9df1-dc037f8d73ca\scratchpad\inbox_qa_screenshots_v2\03_approvals_tab_real_candidate.png
+  Approvals tab body text (first 500 chars): "Skarion Tracker\nCandidates\nDashboard\nJobs\nFalood AI\nApplication Queue\nFollow-ups\nInbox\nMore\n▾\nAccount\n+ New Application\nDark\nQA Test Account (Claude - temporary)\nApplication Engineer\nSign out\nCandidate Inbox\nPending Approvals\nCOMMUNICATION INTELLIGENCE\nCandidate Inbox\n\nRecruiting email, AI findings, application matches, and AE follow-up in one place.\n\nConnect a client Gmail\nAdmins and managers can start OAuth for a selected candidate. The client signs into Google and grants mailbox access.\nSelec"
+  'Show Details' still not found even for the targeted candidate.
+  OK
+
+
+================ 4xx/5xx API RESPONSES + CONSOLE ERRORS ================
+[
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "Failed to load resource: the server responded with a status of 403 ()"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "Failed to load resource: the server responded with a status of 403 ()"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12342\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12592\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12694\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  },
+  {
+    "url": "https://talent.skarion.com/jobs",
+    "text": "TypeError: Failed to fetch\n    at https://talent.skarion.com/_next/static/chunks/app/jobs/page-dd63f824e49d2e98.js:1:12442\n    at aW (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:73244)\n    at oe (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:84685)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85323)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85303)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)\n    at or (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:85207)\n    at ol (https://talent.skarion.com/_next/static/chunks/fd9d1056-008c043adf1bdefc.js:1:86268)"
+  }
+]

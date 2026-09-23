@@ -4,9 +4,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { CardSkeleton } from "../Skeleton";
 import CrawlerStatusLive from "./CrawlerStatusLive";
 import AiKeyManager from "./components/ai-key-manager";
+import AiTaskRouting from "./components/ai-task-routing";
+import AiAgentManager from "./components/ai-agent-manager";
 
 interface ImportRun {
   id: string;
@@ -25,12 +28,26 @@ interface ImportSource {
   last_result: { imported?: number; skipped?: number; error?: string } | null;
 }
 
+interface AiCategoryStatus {
+  configured: boolean;
+  provider: string | null;
+  source: "override" | "default_chain";
+}
+
 interface OpsStatus {
   supabase: { healthy: boolean; latencyMs: number; error: string | null };
   counts: { candidates: number; jobs: number; applications: number; resumes: number };
   recentImportRuns: ImportRun[];
   importSources: ImportSource[];
-  aiAssistant: { configured: boolean; provider: string | null };
+  aiAssistant: {
+    default: AiCategoryStatus;
+    categories: {
+      resume_studio: AiCategoryStatus;
+      chat_assistant: AiCategoryStatus;
+      parsing_extraction: AiCategoryStatus;
+      content_generation: AiCategoryStatus;
+    };
+  };
 }
 
 interface BackupFile {
@@ -44,6 +61,9 @@ interface Digest {
   content: string;
   provider: string;
   generated_at: string;
+  last_success_at: string | null;
+  last_error: string | null;
+  data_summary: Record<string, number> | null;
 }
 
 interface CategorizationRun {
@@ -78,6 +98,26 @@ interface CategorizationStatus {
   categories: JobCategory[];
 }
 
+interface BackupHealth {
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  lastFailureError: string | null;
+  backupAgeHours: number | null;
+  backupAgeDays: number | null;
+  totalStored: number;
+}
+
+interface SchedJobRun {
+  job_name: string;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+  last_duration_ms: number | null;
+  last_result_summary: string | null;
+}
+
 export default function OpsPage() {
   const [status, setStatus] = useState<OpsStatus | null>(null);
   const [backups, setBackups] = useState<BackupFile[]>([]);
@@ -95,20 +135,26 @@ export default function OpsPage() {
   const [processingCategorization, setProcessingCategorization] = useState(false);
   const [categorizationError, setCategorizationError] = useState("");
   const [reviewChoice, setReviewChoice] = useState<Record<string, string>>({});
+  const [backupHealth, setBackupHealth] = useState<BackupHealth | null>(null);
+  const [schedJobs, setSchedJobs] = useState<SchedJobRun[]>([]);
 
   async function load() {
     setLoading(true);
-    const [statusRes, backupsRes, digestsRes, categorizationRes] = await Promise.all([
+    const [statusRes, backupsRes, digestsRes, categorizationRes, backupHealthRes, schedRes] = await Promise.all([
       fetch("/api/ops/status"),
       fetch("/api/ops/backups"),
       fetch("/api/ops/digests"),
       fetch("/api/ops/categorize"),
+      fetch("/api/ops/backup-status"),
+      fetch("/api/ops/scheduled-job-status"),
     ]);
     if (statusRes.status === 403) { setForbidden(true); setLoading(false); return; }
     setStatus(await statusRes.json());
     setBackups(backupsRes.ok ? await backupsRes.json() : []);
     setDigests(digestsRes.ok ? await digestsRes.json() : []);
     setCategorization(categorizationRes.ok ? await categorizationRes.json() : null);
+    setBackupHealth(backupHealthRes.ok ? await backupHealthRes.json() : null);
+    setSchedJobs(schedRes.ok ? await schedRes.json() : []);
     setLoading(false);
   }
 
@@ -117,21 +163,37 @@ export default function OpsPage() {
     if (res.ok) setCategorization(await res.json());
   }
 
-  async function processCategorization() {
+  async function processCategorization(batchLimit?: number) {
     setProcessingCategorization(true);
     setCategorizationError("");
-    const res = await fetch("/api/ops/categorize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "process" }),
-    });
-    setProcessingCategorization(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setCategorizationError(data.error || "Could not process pending jobs.");
-      return;
+    const target = batchLimit ?? 20;
+    const perBatch = 5;
+    let totalProcessed = 0;
+    let totalFailed = 0;
+    const loops = Math.ceil(target / perBatch);
+    for (let i = 0; i < loops; i++) {
+      const res = await fetch("/api/ops/categorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "process", limit: perBatch }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setCategorizationError(data.error || "Could not process pending jobs.");
+        break;
+      }
+      const data = await res.json();
+      totalProcessed += data.processed ?? 0;
+      totalFailed += data.failed ?? 0;
+      if (data.remainingPending === 0) break;
     }
+    setProcessingCategorization(false);
     await loadCategorization();
+    setCategorizationError(
+      totalProcessed > 0 || totalFailed > 0
+        ? `Processed ${totalProcessed} jobs (${totalFailed} failed). Remaining: ${categorization?.pendingCount ?? 0}`
+        : ""
+    );
   }
 
   async function requeueAllCategorization() {
@@ -242,7 +304,7 @@ export default function OpsPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 12, marginBottom: 24 }}>
         <StatusCard
           label="Supabase"
           value={status.supabase.healthy ? "Healthy" : "Down"}
@@ -253,9 +315,29 @@ export default function OpsPage() {
         <StatCard label="Jobs" value={status.counts.jobs} />
         <StatCard label="Applications" value={status.counts.applications} />
         <StatusCard
-          label="AI assistant"
-          value={status.aiAssistant.configured ? `${status.aiAssistant.provider}` : "Not configured"}
-          tone={status.aiAssistant.configured ? "ok" : "danger"}
+          label="AI (default)"
+          value={status.aiAssistant.default.configured ? `${status.aiAssistant.default.provider}` : "Not configured"}
+          tone={status.aiAssistant.default.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (resume)"
+          value={status.aiAssistant.categories.resume_studio.configured ? `${status.aiAssistant.categories.resume_studio.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.resume_studio.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (chat)"
+          value={status.aiAssistant.categories.chat_assistant.configured ? `${status.aiAssistant.categories.chat_assistant.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.chat_assistant.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (parsing)"
+          value={status.aiAssistant.categories.parsing_extraction.configured ? `${status.aiAssistant.categories.parsing_extraction.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.parsing_extraction.configured ? "ok" : "danger"}
+        />
+        <StatusCard
+          label="AI (content)"
+          value={status.aiAssistant.categories.content_generation.configured ? `${status.aiAssistant.categories.content_generation.provider}` : "Not configured"}
+          tone={status.aiAssistant.categories.content_generation.configured ? "ok" : "danger"}
         />
       </div>
 
@@ -282,28 +364,70 @@ export default function OpsPage() {
       {status.recentImportRuns.length === 0 ? (
         <div className="empty">No import runs recorded yet.</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Source</th>
-              <th>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {status.recentImportRuns.map((run) => (
-              <tr key={run.id}>
-                <td className="muted" style={{ fontSize: 12 }}>{new Date(run.ran_at).toLocaleString()}</td>
-                <td>{sourcesById.get(run.import_source_id) ?? run.import_source_id.slice(0, 8)}</td>
-                <td>
-                  {run.error
-                    ? <span style={{ color: "var(--danger)" }}>{run.error}</span>
-                    : <span className="muted">{run.imported ?? 0} imported, {run.skipped ?? 0} skipped</span>}
-                </td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Source</th>
+                <th>Result</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {status.recentImportRuns.map((run) => (
+                <tr key={run.id}>
+                  <td className="muted" style={{ fontSize: 12 }}>{new Date(run.ran_at).toLocaleString()}</td>
+                  <td>{sourcesById.get(run.import_source_id) ?? run.import_source_id.slice(0, 8)}</td>
+                  <td>
+                    {run.error
+                      ? <span style={{ color: "var(--danger)" }}>{run.error}</span>
+                      : <span className="muted">{run.imported ?? 0} imported, {run.skipped ?? 0} skipped</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Backup health</h2>
+      {backupHealth ? (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
+            <StatCard label="Last backup attempt" value={backupHealth.lastAttemptAt ? new Date(backupHealth.lastAttemptAt).toLocaleString() : "Never"} />
+            <StatCard label="Last successful backup" value={backupHealth.lastSuccessAt ? new Date(backupHealth.lastSuccessAt).toLocaleString() : "Never"} />
+            <StatCard
+              label="Backup age"
+              value={
+                backupHealth.backupAgeHours != null
+                  ? backupHealth.backupAgeHours < 1
+                    ? "Just now"
+                    : backupHealth.backupAgeHours < 24
+                      ? `${backupHealth.backupAgeHours}h ago`
+                      : `${backupHealth.backupAgeDays}d ago`
+                  : "—"
+              }
+            />
+          </div>
+          {backupHealth.lastFailureAt && (
+            <div className="card" style={{ marginBottom: 12, borderColor: "var(--danger)" }}>
+              <label style={{ color: "var(--danger)" }}>Last backup failure</label>
+              <p style={{ margin: "6px 0 0", fontSize: 13 }}>
+                {new Date(backupHealth.lastFailureAt).toLocaleString()}
+                {backupHealth.lastFailureError ? ` — ${backupHealth.lastFailureError}` : ""}
+              </p>
+            </div>
+          )}
+          {!backupHealth.lastAttemptAt && (
+            <div className="card" style={{ marginBottom: 12 }}>
+              <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                No backup attempts recorded yet — ensure daily cron is configured with <code>CRON_SECRET</code>.
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="empty" style={{ marginBottom: 12 }}>Loading backup health...</div>
       )}
 
       <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Stored backups</h2>
@@ -315,24 +439,26 @@ export default function OpsPage() {
       {backups.length === 0 ? (
         <div className="empty">No automated backups yet — the daily cron hasn't run, or `CRON_SECRET` isn't set.</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>File</th>
-              <th>Created</th>
-              <th>Size</th>
-            </tr>
-          </thead>
-          <tbody>
-            {backups.map((b) => (
-              <tr key={b.name}>
-                <td className="muted" style={{ fontSize: 12 }}>{b.name}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{b.createdAt ? new Date(b.createdAt).toLocaleString() : "—"}</td>
-                <td className="muted" style={{ fontSize: 12 }}>{b.sizeBytes ? `${Math.round(b.sizeBytes / 1024)} KB` : "—"}</td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>File</th>
+                <th>Created</th>
+                <th>Size</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {backups.map((b) => (
+                <tr key={b.name}>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.name}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.createdAt ? new Date(b.createdAt).toLocaleString() : "—"}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{b.sizeBytes ? `${Math.round(b.sizeBytes / 1024)} KB` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="card" style={{ marginTop: 12 }}>
@@ -375,17 +501,87 @@ export default function OpsPage() {
         )}
       </div>
 
+      <h2 style={{ fontSize: 16, margin: "24px 0 12px" }}>Scheduled job runs</h2>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+        Status of cron-triggered jobs — updated on each run.
+      </p>
+      {schedJobs.length === 0 ? (
+        <div className="empty" style={{ marginBottom: 12 }}>No scheduled jobs have run yet.</div>
+      ) : (
+        <div className="table-shell" style={{ marginBottom: 16 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Last attempt</th>
+                <th>Last success</th>
+                <th>Last failure</th>
+                <th>Duration</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedJobs.map((job) => (
+                <tr key={job.job_name}>
+                  <td><code>{job.job_name}</code></td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_attempt_at ? new Date(job.last_attempt_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_success_at ? new Date(job.last_success_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_failure_at ? new Date(job.last_failure_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="muted" style={{ fontSize: 12 }}>
+                    {job.last_duration_ms != null ? `${job.last_duration_ms}ms` : "—"}
+                  </td>
+                  <td>
+                    {job.last_error ? (
+                      <span style={{ color: "var(--danger)", fontSize: 12 }}>{job.last_error.slice(0, 80)}{job.last_error.length > 80 ? "…" : ""}</span>
+                    ) : (
+                      <span className="muted" style={{ fontSize: 12 }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="alert alert-info" style={{ marginBottom: 16 }}>
+        {"\u26A0 "}AI management has moved to the AI Control Center at{" "}
+        <Link href="/admin/ai">/admin/ai</Link>. This page is read-only for reference and will be removed in a future update.
+      </div>
+
       <AiKeyManager />
+      <AiTaskRouting />
+      <AiAgentManager />
 
       <div className="page-header" style={{ marginTop: 24 }}>
         <h2 style={{ fontSize: 16, margin: 0 }}>AI daily digest</h2>
-        <button onClick={generateDigest} disabled={generatingDigest || !status.aiAssistant.configured}>
+        <button onClick={generateDigest} disabled={generatingDigest || !status.aiAssistant.categories.content_generation.configured}>
           {generatingDigest ? "Generating..." : "Generate now"}
         </button>
       </div>
       <p className="muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 12 }}>
         Single-shot summary (new jobs, overdue tickets, today's applications, pipeline count) —
         no tool-calling, generated automatically once daily via <code>/api/cron/digest</code>.
+        {digests.length > 0 && (() => {
+          const latestMs = new Date(digests[0].generated_at).getTime();
+          const hoursAgo = Math.round((Date.now() - latestMs) / 3600000);
+          const daysAgo = Math.round((Date.now() - latestMs) / 86400000);
+          const stale = hoursAgo > 24;
+          let stalenessLabel = "";
+          if (hoursAgo < 1) stalenessLabel = " (just now)";
+          else if (hoursAgo < 24) stalenessLabel = ` (${hoursAgo}h ago)`;
+          else stalenessLabel = ` (${hoursAgo}h / ${daysAgo}d ago)`;
+          return (
+            <span style={{ color: stale ? "var(--danger)" : "var(--ink-soft)", fontWeight: stale ? 600 : 400 }}>
+              {" — latest: "}{new Date(digests[0].generated_at).toLocaleDateString()}{stalenessLabel}
+            </span>
+          );
+        })()}
       </p>
       {digestError && <p style={{ color: "var(--danger)", fontSize: 13 }}>{digestError}</p>}
       {digests.length === 0 ? (
@@ -393,11 +589,28 @@ export default function OpsPage() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {digests.map((d) => (
-            <div key={d.id} className="card">
+            <div key={d.id} className="card" style={d.last_error ? { borderColor: "var(--danger)" } : undefined}>
               <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
                 {new Date(d.generated_at).toLocaleString()} · <span className="badge">{d.provider}</span>
+                {d.last_success_at && (
+                  <span style={{ color: "var(--accent)" }}> · success</span>
+                )}
               </div>
-              <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+              {d.last_error ? (
+                <p style={{ margin: 0, color: "var(--danger)", whiteSpace: "pre-wrap" }}>{d.last_error}</p>
+              ) : (
+                <>
+                  <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{d.content}</p>
+                  {d.data_summary && (
+                    <details style={{ marginTop: 8 }}>
+                      <summary className="muted" style={{ fontSize: 11, cursor: "pointer" }}>Raw data</summary>
+                      <pre style={{ fontSize: 11, margin: "4px 0 0", padding: 6, background: "var(--bg)", borderRadius: 4 }}>
+                        {JSON.stringify(d.data_summary, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                </>
+              )}
             </div>
           ))}
         </div>
@@ -409,10 +622,17 @@ export default function OpsPage() {
           <button onClick={requeueAllCategorization}>Re-run on all categorized jobs</button>
           <button
             className="btn-primary"
-            onClick={processCategorization}
+            onClick={() => processCategorization(100)}
             disabled={processingCategorization || !categorization || categorization.pendingCount === 0}
           >
-            {processingCategorization ? "Processing..." : `Process pending now (${categorization?.pendingCount ?? 0})`}
+            {processingCategorization ? "Processing..." : `Process 100 (${categorization?.pendingCount ?? 0})`}
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => processCategorization()}
+            disabled={processingCategorization || !categorization || categorization.pendingCount === 0}
+          >
+            {processingCategorization ? "Processing..." : `Process 20 (${categorization?.pendingCount ?? 0})`}
           </button>
         </div>
       </div>
@@ -426,16 +646,17 @@ export default function OpsPage() {
       {categorization && categorization.needsReview.length > 0 && (
         <>
           <h3 style={{ fontSize: 14, margin: "12px 0 8px" }}>Needs review ({categorization.needsReview.length})</h3>
-          <table className="table" style={{ marginBottom: 16 }}>
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>AI suggested</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {categorization.needsReview.map((job) => (
+          <div className="table-shell">
+            <table className="table" style={{ marginBottom: 16 }}>
+              <thead>
+                <tr>
+                  <th>Job</th>
+                  <th>AI suggested</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categorization.needsReview.map((job) => (
                 <tr key={job.id}>
                   <td>{job.title} {job.company ? <span className="muted">— {job.company}</span> : null}</td>
                   <td className="muted">{job.ai_suggested_category ?? "—"}</td>
@@ -465,15 +686,17 @@ export default function OpsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         </>
       )}
 
       {categorization && categorization.recentRuns.length > 0 && (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Started</th>
-              <th>Triggered by</th>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Started</th>
+                <th>Triggered by</th>
               <th>Result</th>
             </tr>
           </thead>
@@ -491,6 +714,7 @@ export default function OpsPage() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </>
   );

@@ -1,5 +1,3 @@
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export interface CompanyDirectoryJob {
@@ -73,37 +71,20 @@ export async function syncCompanyDirectoryFromJobs(jobs: CompanyDirectoryJob[]) 
     });
 
     let company: any;
-    if (isNeon()) {
-      const keys = Object.keys(companyPayload);
-      const setClause = keys.map((k, i) => `${k} = EXCLUDED.${k}`).join(", ");
-      const insertCols = keys.join(", ");
-      const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
-      const values = keys.map((k) => (companyPayload as any)[k]);
-      company = await queryOne(
-        `INSERT INTO companies (${insertCols}) VALUES (${placeholders}) ON CONFLICT (normalized_name) DO UPDATE SET ${setClause} RETURNING *`,
-        values
-      );
-      if (!company) continue;
-    } else {
-      const { data: companyData, error: companyError } = await supabase
-        .from("companies")
-        .upsert(companyPayload, { onConflict: "normalized_name" })
-        .select("*")
-        .single();
-      if (companyError || !companyData) continue;
-      company = companyData;
-    }
+    const companyKeys = Object.keys(companyPayload);
+    const setClause = companyKeys.map((k, i) => `${k} = EXCLUDED.${k}`).join(", ");
+    const insertCols = companyKeys.join(", ");
+    const placeholders = companyKeys.map((_, i) => `$${i + 1}`).join(", ");
+    const companyValues = companyKeys.map((k) => (companyPayload as any)[k]);
+    company = await queryOne(
+      `INSERT INTO companies (${insertCols}) VALUES (${placeholders}) ON CONFLICT (normalized_name) DO UPDATE SET ${setClause} RETURNING *`,
+      companyValues
+    );
+    if (!company) continue;
     companiesTouched++;
 
     if (job.id) {
-      if (isNeon()) {
-        await execute("UPDATE jobs SET company_id = $1 WHERE id = $2", [company.id, job.id]);
-      } else {
-        await supabase
-          .from("jobs")
-          .update({ company_id: company.id })
-          .eq("id", job.id);
-      }
+      await execute("UPDATE jobs SET company_id = $1 WHERE id = $2", [company.id, job.id]);
     }
 
     const personName = clean(job.job_poster_name);
@@ -125,59 +106,40 @@ export async function syncCompanyDirectoryFromJobs(jobs: CompanyDirectoryJob[]) 
     const linkedinUrl = clean(job.job_poster_profile_url);
     const normalizedPersonName = normalizeCompanyName(personName);
 
-    if (isNeon()) {
-      let existingId: string | null = null;
-      if (linkedinUrl) {
-        const existing = await queryOne<{ id: string }>(
-          "SELECT id FROM company_people WHERE company_id = $1 AND linkedin_url = $2 LIMIT 1",
-          [company.id, linkedinUrl]
-        );
-        existingId = existing?.id ?? null;
-      } else {
-        const existing = await queryOne<{ id: string }>(
-          "SELECT id FROM company_people WHERE company_id = $1 AND normalized_name = $2 LIMIT 1",
-          [company.id, normalizedPersonName]
-        );
-        existingId = existing?.id ?? null;
-      }
-
-      const keys = Object.keys(personPayload);
-      if (existingId) {
-        const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-        const values = keys.map((k) => (personPayload as any)[k]);
-        values.push(existingId);
-        await execute(
-          `UPDATE company_people SET ${setClause} WHERE id = $${keys.length + 1}`,
-          values
-        );
-      } else {
-        const insertCols = keys.join(", ");
-        const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
-        const values = keys.map((k) => (personPayload as any)[k]);
-        await execute(
-          `INSERT INTO company_people (${insertCols}) VALUES (${placeholders})`,
-          values
-        );
-      }
-      peopleTouched++;
+    let existingId: string | null = null;
+    if (linkedinUrl) {
+      const existing = await queryOne<{ id: string }>(
+        "SELECT id FROM company_people WHERE company_id = $1 AND linkedin_url = $2 LIMIT 1",
+        [company.id, linkedinUrl]
+      );
+      existingId = existing?.id ?? null;
     } else {
-      let existingQuery = supabase
-        .from("company_people")
-        .select("id")
-        .eq("company_id", company.id)
-        .limit(1);
-
-      const { data: existing } = linkedinUrl
-        ? await existingQuery.eq("linkedin_url", linkedinUrl)
-        : await existingQuery.eq("normalized_name", normalizedPersonName);
-
-      const existingId = existing?.[0]?.id;
-      const { error: personError } = existingId
-        ? await supabase.from("company_people").update(personPayload).eq("id", existingId)
-        : await supabase.from("company_people").insert(personPayload);
-
-      if (!personError) peopleTouched++;
+      const existing = await queryOne<{ id: string }>(
+        "SELECT id FROM company_people WHERE company_id = $1 AND normalized_name = $2 LIMIT 1",
+        [company.id, normalizedPersonName]
+      );
+      existingId = existing?.id ?? null;
     }
+
+    const keys = Object.keys(personPayload);
+    if (existingId) {
+      const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+      const values = keys.map((k) => (personPayload as any)[k]);
+      values.push(existingId);
+      await execute(
+        `UPDATE company_people SET ${setClause} WHERE id = $${keys.length + 1}`,
+        values
+      );
+    } else {
+      const insertCols = keys.join(", ");
+      const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
+      const values = keys.map((k) => (personPayload as any)[k]);
+      await execute(
+        `INSERT INTO company_people (${insertCols}) VALUES (${placeholders})`,
+        values
+      );
+    }
+    peopleTouched++;
   }
 
   return { companiesTouched, peopleTouched };

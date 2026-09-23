@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { processEmailQueue } from "@/lib/emailQueue";
+import { recordJobAttempt, recordJobSuccess, recordJobFailure } from "@/server/services/scheduledJobService";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +19,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await processEmailQueue();
-  return NextResponse.json({ ok: true, ...result });
+  const startedMs = Date.now();
+  await recordJobAttempt("email-queue");
+
+  try {
+    const result = await processEmailQueue();
+    const durationMs = Date.now() - startedMs;
+    await recordJobSuccess("email-queue", durationMs, JSON.stringify(result));
+    return NextResponse.json({ ok: true, ...result });
+  } catch (err: any) {
+    const durationMs = Date.now() - startedMs;
+    await recordJobFailure("email-queue", err.message ?? "email queue failed", durationMs);
+    return NextResponse.json({ error: err.message ?? "email queue failed" }, { status: 500 });
+  }
 }

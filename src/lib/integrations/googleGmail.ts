@@ -1,15 +1,21 @@
 // src/lib/integrations/googleGmail.ts
 // Gmail OAuth helpers. Uses Web Crypto API for Cloudflare Workers compatibility.
+import { gmailOAuthRedirectUri } from "@/server/runtimeConfig";
 
 export const GMAIL_SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
-export function googleRedirectUri(origin: string) {
-  return process.env.GOOGLE_OAUTH_REDIRECT_URI || `${origin}/api/integrations/gmail/callback`;
+// Never derive this from the incoming request's origin — confirmed unreliable
+// inside this Worker runtime (a sibling route's req.url resolved to "http://n"
+// in production). GMAIL_OAUTH_REDIRECT_URI is intentionally separate from
+// the Google identity login configuration so mailbox consent can rotate
+// without changing staff/candidate Google sign-in.
+export function googleRedirectUri() {
+  return gmailOAuthRedirectUri();
 }
 
 export function newOAuthState(): string {
@@ -21,13 +27,13 @@ export function newOAuthState(): string {
     .replace(/=+$/, "");
 }
 
-export function gmailAuthUrl(params: { state: string; origin: string }) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) throw new Error("GOOGLE_CLIENT_ID is required.");
+export function gmailAuthUrl(params: { state: string }) {
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  if (!clientId) throw new Error("GMAIL_CLIENT_ID is required for Gmail mailbox access.");
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", clientId);
-  url.searchParams.set("redirect_uri", googleRedirectUri(params.origin));
+  url.searchParams.set("redirect_uri", googleRedirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", GMAIL_SCOPES.join(" "));
   url.searchParams.set("access_type", "offline");
@@ -37,11 +43,11 @@ export function gmailAuthUrl(params: { state: string; origin: string }) {
   return url.toString();
 }
 
-export async function exchangeGmailCode(code: string, origin: string) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+export async function exchangeGmailCode(code: string) {
+  const clientId = process.env.GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
-    throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required.");
+    throw new Error("GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET are required for Gmail mailbox access.");
   }
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -51,7 +57,7 @@ export async function exchangeGmailCode(code: string, origin: string) {
       code,
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: googleRedirectUri(origin),
+      redirect_uri: googleRedirectUri(),
       grant_type: "authorization_code",
     }),
   });
@@ -68,6 +74,26 @@ export async function exchangeGmailCode(code: string, origin: string) {
     token_type?: string;
     id_token?: string;
   };
+}
+
+export async function getGrantedGmailScopes(accessToken: string, returnedScope?: string): Promise<string[]> {
+  let scopeText = returnedScope?.trim() || "";
+  if (!scopeText) {
+    const response = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+      { cache: "no-store" },
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || typeof data.scope !== "string") {
+      throw new Error("Could not verify the Gmail scopes granted by Google.");
+    }
+    scopeText = data.scope;
+  }
+  const scopes = Array.from(new Set(scopeText.split(/\s+/).filter(Boolean)));
+  if (!scopes.includes("https://www.googleapis.com/auth/gmail.modify")) {
+    throw new Error("Google did not grant the required gmail.modify permission. Reconnect and approve Gmail access.");
+  }
+  return scopes;
 }
 
 function base64urlDecode(str: string): string {

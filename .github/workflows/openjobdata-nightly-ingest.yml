@@ -1,0 +1,152 @@
+name: OpenJobData Nightly Ingest (Job Agent)
+
+# Nightly "broad net" ingestion — scans openjobdata.com's daily delta for every
+# Job Agent role group and pushes matches into TalentOS's job_agent staging
+# pipeline (POST /api/job-agent/openjobdata-ingest), where they're deduped,
+# AI-classified, and staged for review exactly like an Apify run. Apify stays
+# reserved for on-demand/real-time recruiter searches — see comparison_report.md
+# for the reasoning (openjobdata has no pagination cap and costs $0/job; Apify
+# is real-time but capped at a few hundred results per query and costs ~$0.003
+# per result).
+#
+# Why a GitHub Actions job and not a Cloudflare cron route: the dataset is a
+# Hugging Face Storage Bucket, reachable only through the Python huggingface_hub
+# client (hf:// scheme) — no plain-HTTPS or Node/edge path exists to it. See
+# scripts/openjobdata_common.py's module docstring for the full explanation.
+# This is the same reason scripts/openjobdata_export.py / the sibling
+# openjobdata-osp-export.yml workflow also run here rather than as a Worker cron.
+
+on:
+  schedule:
+    # Trigger at 20:00 UTC (02:00 AM BDT)
+    - cron: "00 20 * * *"
+  workflow_dispatch:
+    inputs:
+      role_group:
+        description: "Role group id (A-L), or 'all' for every group."
+        required: false
+        default: "all"
+      days:
+        description: "Number of trailing days to scan (default: 2)."
+        required: false
+        default: "2"
+      dry_run:
+        description: "If true, scan and print counts but don't POST to TalentOS."
+        required: false
+        default: "false"
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    # Python ingest (~10 min) + 50-min dispatch loop + 5-min buffer = 65 min needed.
+    # Set to 75 to give headroom without risking GitHub's 6-hour hard cap.
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: neon-cloudflare-migration
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements-openjobdata.txt
+
+      - name: Run ingest
+        env:
+          # BASE_URL is what openjobdata_ingest.py reads (os.environ.get("BASE_URL")).
+          # TALENTOS_INGEST_URL kept as an alias in case other scripts use it.
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          TALENTOS_INGEST_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          # INGEST_SECRET is what openjobdata_ingest.py reads for the bearer token.
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          ARGS=(--role-group "${{ github.event.inputs.role_group || 'all' }}")
+          DAYS="${{ github.event.inputs.days || '2' }}"
+          ARGS+=(--days "$DAYS")
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/openjobdata_ingest.py "${ARGS[@]}"
+
+      - name: Drive Job CEO pipeline to completion
+        # Immediately after ingest, poll /api/job-ceo/dispatch in a tight loop
+        # until needsDispatch=false (run fully complete) or 50-minute wall time.
+        # This prevents the "stuck after ingesting" problem caused by Cloudflare's
+        # ctx.waitUntil backgroundDispatch being unreliable between stages, and
+        # eliminates the up-to-10-minute gap before the separate job-ceo-dispatch
+        # cron would otherwise pick up the run.
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          echo "Starting Job CEO dispatch loop — driving pipeline to completion..."
+          WALL_END=$((SECONDS + 3000))   # 50 minutes (leaves 10-minute buffer before GHA 60-min job timeout)
+          CALLS=0
+          FAILURES=0
+          CONSECUTIVE_FAILURES=0
+          MAX_CONSECUTIVE_FAILURES=5
+
+          while [ $SECONDS -lt $WALL_END ]; do
+            CALLS=$((CALLS + 1))
+
+            CLEAN_BASE_URL=$(echo "${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}" | tr -d '[:space:]')
+            
+            # Use the exact curl invocation format from scheduled-jobs.yml which is known to work
+            RESPONSE=$(curl -sS -w "\n%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+              -H "Content-Type: application/json" \
+              --max-time 300 \
+              "$CLEAN_BASE_URL/api/job-ceo/dispatch" 2>&1 || echo -e "\n000")
+            
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1 | tr -d '[:space:]')
+            BODY=$(echo "$RESPONSE" | sed '$d')
+
+
+            # Sanitise: strip whitespace, default to "000" if empty/non-numeric
+            HTTP_CODE=$(echo "$HTTP_CODE" | tr -d '[:space:]')
+            if ! echo "$HTTP_CODE" | grep -qE '^[0-9]+$'; then
+              HTTP_CODE="000"
+            fi
+
+            if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+              FAILURES=$((FAILURES + 1))
+              CONSECUTIVE_FAILURES=$((CONSECUTIVE_FAILURES + 1))
+              echo "::warning::Call $CALLS: HTTP $HTTP_CODE — $(echo "$BODY" | head -c 300)"
+              if [ "$CONSECUTIVE_FAILURES" -ge "$MAX_CONSECUTIVE_FAILURES" ]; then
+                echo "::error::$CONSECUTIVE_FAILURES consecutive failures — aborting dispatch loop."
+                exit 1
+              fi
+              sleep 10
+              continue
+            fi
+
+            CONSECUTIVE_FAILURES=0
+
+            NEEDS_DISPATCH=$(echo "$BODY" | grep -o '"needsDispatch":[^,}]*' | grep -o 'true\|false' | head -1)
+            NEEDS_DISPATCH="${NEEDS_DISPATCH:-true}"
+            STAGE=$(echo "$BODY" | grep -o '"stage":"[^"]*"' | grep -o '"[^"]*"$' | tr -d '"' | head -1)
+            STAGE="${STAGE:-unknown}"
+            COUNT=$(echo "$BODY" | grep -o '"count":[0-9]*' | grep -o '[0-9]*' | head -1)
+            COUNT="${COUNT:-0}"
+
+            echo "Call $CALLS: stage=$STAGE count=$COUNT needsDispatch=$NEEDS_DISPATCH (HTTP $HTTP_CODE)"
+
+            if [ "$NEEDS_DISPATCH" = "false" ]; then
+              echo "✓ Job CEO pipeline complete after $CALLS dispatch calls."
+              break
+            fi
+
+            sleep 5
+          done
+
+          echo "Dispatch loop finished: $CALLS calls, $FAILURES failures."
+          # Only fail if a majority of calls failed (transient blips are acceptable)
+          if [ "$CALLS" -gt 0 ] && [ "$FAILURES" -gt "$((CALLS / 2))" ]; then
+            echo "::error::$FAILURES of $CALLS dispatch calls failed"
+            exit 1
+          fi

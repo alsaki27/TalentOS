@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
+import { query, queryOne } from "@/server/db/neon";
 
 const ALLOWED_FILTERS = [
   "search",
@@ -9,6 +9,13 @@ const ALLOWED_FILTERS = [
   "active",
   "employmentType",
   "category",
+  "workAuthorization",
+  "dateStart",
+  "dateEnd",
+  "candidate",
+  "assignedBy",
+  "owner",
+  "score",
   "sort",
 ] as const;
 
@@ -26,14 +33,10 @@ export async function GET() {
   const { context, response } = await requireCurrentUser(MASTER_DATA_MANAGER_ROLES);
   if (response) return response;
 
-  const { data, error } = await supabase
-    .from("saved_job_searches")
-    .select("*")
-    .order("created_at", { ascending: false });
+  let data: any[] = [];
+  data = await query<any>(`SELECT * FROM saved_job_searches ORDER BY created_at DESC`);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  const visible = (data ?? []).filter((search: any) =>
+  const visible = data.filter((search: any) =>
     search.is_shared || search.owner_user_id === context.profile.user_id
   );
   return NextResponse.json(visible);
@@ -52,17 +55,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Save at least one active filter." }, { status: 400 });
   }
 
-  const { data, error } = await supabase
-    .from("saved_job_searches")
-    .insert({
-      label,
-      filters,
-      is_shared: body.is_shared !== false,
-      owner_user_id: context.profile.user_id,
-    })
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const data = await queryOne<any>(`INSERT INTO saved_job_searches (label, filters, is_shared, owner_user_id) VALUES ($1, $2, $3, $4) RETURNING *`, [label, filters, body.is_shared !== false, context.profile.user_id]);
   return NextResponse.json(data, { status: 201 });
 }

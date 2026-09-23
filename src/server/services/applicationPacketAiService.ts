@@ -3,8 +3,9 @@
 // NEVER invents experience, degree, certification, employer, project, or visa status.
 // NEVER uses rejected keywords. NEVER claims missing-evidence keywords.
 
-import { getActiveProviderAsync } from "@/lib/ai";
+import { callWithUsageTracking } from "@/lib/ai/routing";
 import { textOf } from "@/lib/ai/provider";
+import { MISSION_CONTEXT } from "@/lib/ai/missionContext";
 import { findApplicationById } from "@/server/repositories/applicationsRepository";
 import { findCandidateById } from "@/server/repositories/candidatesRepository";
 import { findJobById } from "@/server/repositories/jobsRepository";
@@ -58,9 +59,6 @@ export async function generateCoverLetterDraft(
     }
   }
 
-  const active = await getActiveProviderAsync();
-  if (!active) return errorCoverLetter("No AI provider configured");
-
   const warnings: string[] = [];
 
   for (const kw of approvedKeywords) {
@@ -88,13 +86,15 @@ export async function generateCoverLetterDraft(
   });
 
   try {
-    const response = await active.provider.send({
-      system: buildCoverLetterSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("cover_letter_gen", undefined, async (provider) => {
+      return provider.send({
+        system: buildCoverLetterSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    const raw = textOf(response.content)
+    const raw = textOf(result.content)
       .trim()
       .replace(/^```(?:markdown)?\s*/i, "")
       .replace(/```\s*$/i, "")
@@ -136,9 +136,6 @@ export async function generateRecruiterMessageDraft(
     }
   }
 
-  const active = await getActiveProviderAsync();
-  if (!active) return errorRecruiterMessage("No AI provider configured");
-
   const warnings: string[] = [];
 
   for (const kw of approvedKeywords) {
@@ -166,13 +163,15 @@ export async function generateRecruiterMessageDraft(
   });
 
   try {
-    const response = await active.provider.send({
-      system: buildRecruiterMessageSystemPrompt(),
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("recruiter_message_gen", undefined, async (provider) => {
+      return provider.send({
+        system: buildRecruiterMessageSystemPrompt(),
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    const raw = textOf(response.content)
+    const raw = textOf(result.content)
       .trim()
       .replace(/^```(?:markdown)?\s*/i, "")
       .replace(/```\s*$/i, "")
@@ -203,9 +202,6 @@ export async function generatePacketSummary(applicationId: string): Promise<stri
 
   const context = app.candidate_id ? await buildResumeContext(app.candidate_id) : null;
 
-  const active = await getActiveProviderAsync();
-  if (!active) return "No AI provider configured";
-
   const prompt = buildSummaryPrompt({
     candidateName: candidate?.name ?? null,
     jobTitle: job?.title ?? null,
@@ -217,14 +213,16 @@ export async function generatePacketSummary(applicationId: string): Promise<stri
   });
 
   try {
-    const response = await active.provider.send({
-      system:
-        "You are a concise packet reviewer. Summarize the readiness and key points of a job application packet in 2-4 sentences. Be factual, not promotional. Note strengths and gaps.",
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
-      tools: [],
+    const { result } = await callWithUsageTracking("cover_letter_gen", undefined, async (provider) => {
+      return provider.send({
+        system:
+          "You are a concise packet reviewer. Summarize the readiness and key points of a job application packet in 2-4 sentences. Be factual, not promotional. Note strengths and gaps.",
+        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        tools: [],
+      });
     });
 
-    return textOf(response.content).trim();
+    return textOf(result.content).trim();
   } catch (err: any) {
     return `Summary generation failed: ${err.message ?? "Unknown error"}`;
   }
@@ -248,7 +246,9 @@ interface PromptData {
 
 function buildCoverLetterSystemPrompt(): string {
   return [
-    "You are a precise cover letter writer. You write short, natural, professional cover letters.",
+    MISSION_CONTEXT,
+    "",
+    "You are a precise cover letter writer. You write short, natural, professional cover letters - this one is fully human-facing text a recruiter reads directly, not data that gets filtered through any other system, so directly write something a real person would not flag as AI-generated boilerplate or pad with empty enthusiasm just to fill space.",
     "",
     "SAFETY RULES (never violate):",
     "1. Do NOT invent experience, degree, certification, employer, project, visa status, or years of experience.",
@@ -260,6 +260,20 @@ function buildCoverLetterSystemPrompt(): string {
     "7. 3-5 short paragraphs max.",
     "8. Every claim must be supported by the candidate's evidence.",
     "9. If evidence is missing for a keyword, do not mention it.",
+    "",
+    "CRAFT RULES (what makes it land):",
+    "10. Length: 150-250 words. A recruiter skims this in seconds; every sentence must earn its place.",
+    "11. Opening line: name the specific role and company, then the candidate's single strongest evidenced",
+    "    match to what this job actually asks for. NEVER open with 'I am writing to express my interest',",
+    "    'I am excited to apply', or any variation — those are instant AI-boilerplate tells.",
+    "12. Middle: 1-2 paragraphs of proof, not adjectives. Each proof point ties a real, evidenced piece of",
+    "    the candidate's experience to a stated requirement, using the JD's own keyword phrasing naturally",
+    "    in prose. Include a real number when the evidence contains one; never invent one.",
+    "13. Say only what is specific to THIS candidate and THIS job — any sentence that could be pasted into",
+    "    another candidate's letter unchanged should be cut or rewritten.",
+    "14. Closing: one short, confident sentence — availability to discuss plus contact expectation. No",
+    "    begging, no 'I would be honored', no restating the whole letter.",
+    "15. Do not mention or describe the resume ('as you can see in my resume') — the letter stands alone.",
     "",
     "Output the cover letter as plain text. Optionally include a subject line on the first line prefixed with 'Subject: '.",
   ].join("\n");
@@ -332,7 +346,9 @@ function buildCoverLetterPrompt(data: PromptData): string {
 
 function buildRecruiterMessageSystemPrompt(): string {
   return [
-    "You are a concise recruiter outreach writer. You write short, professional messages for LinkedIn or email.",
+    MISSION_CONTEXT,
+    "",
+    "You are a concise recruiter outreach writer. You write short, professional messages for LinkedIn or email - this is the candidate's one shot at a direct, human impression with whoever's hiring, so it needs to read as a real, specific message about this candidate and this role, not a template.",
     "",
     "SAFETY RULES (never violate):",
     "1. Do NOT invent experience, degree, certification, employer, project, visa status, or years of experience.",
@@ -342,6 +358,18 @@ function buildRecruiterMessageSystemPrompt(): string {
     "5. Tone: professional, direct, human. No fake enthusiasm.",
     "6. Every claim must be supported by the candidate's evidence.",
     "7. If evidence is missing, do not mention that keyword.",
+    "",
+    "CRAFT RULES (hook → proof → ask):",
+    "8. 60-120 words total. Recruiters triage inbound messages in seconds on a phone screen.",
+    "9. Hook (first sentence): the candidate's single strongest evidenced match to this specific role —",
+    "   lead with the fact, not a greeting ritual. Never open with 'I hope this message finds you well'",
+    "   or 'I came across your posting' — both are template tells.",
+    "10. Proof (1-3 sentences): the most concrete, evidenced qualifications, using the JD's own keyword",
+    "    phrasing naturally. Include a real number if the evidence has one; never invent one.",
+    "11. Ask (last sentence): one specific, low-friction call to action — a short call, or an invitation",
+    "    to review the attached resume. One ask only.",
+    "12. Subject line (if used): under 8 words, concrete — role name + strongest hook ('OSP Designer,",
+    "    5 yrs Vetro FiberMap'), never 'Great candidate for your role'.",
     "",
     "Output the message as plain text. Optionally include a subject line on the first line prefixed with 'Subject: '.",
   ].join("\n");

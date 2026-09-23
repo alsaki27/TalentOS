@@ -6,9 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne } from "@/server/db/neon";
+import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
@@ -18,55 +17,50 @@ export async function GET(req: NextRequest) {
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
   const status = url.searchParams.get("status") || "";
   const tier = url.searchParams.get("tier") || "";
+  const pipelineStage = url.searchParams.get("pipelineStage") || "";
 
-  if (isNeon()) {
-    const offset = (page - 1) * pageSize;
-    const searchParam = `%${search}%`;
-    const columns = compact
-      ? "id, name, resume_url, resume_filename"
-      : "id, name, email, phone, status, target_tier, resume_filename, avatar_url, created_at";
-
-    const dataSql = `
-      SELECT ${columns} FROM candidates
-      WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-        AND ($3 = '' OR status = $3)
-        AND ($4 = '' OR target_tier = $4)
-      ORDER BY created_at DESC
-      OFFSET $5 LIMIT $6
-    `;
-    const countSql = `
-      SELECT COUNT(*)::int as total FROM candidates
-      WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-        AND ($3 = '' OR status = $3)
-        AND ($4 = '' OR target_tier = $4)
-    `;
-
-    try {
-      const data = await query<Record<string, any>>(dataSql, [search, searchParam, status, tier, offset, pageSize]);
-      const countRow = await queryOne<{ total: number }>(countSql, [search, searchParam, status, tier]);
-      return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize });
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-  }
-
+  const offset = (page - 1) * pageSize;
+  const searchParam = `%${search}%`;
   const columns = compact
-    ? "id, name, resume_url, resume_filename"
-    : "id, name, email, phone, status, target_tier, resume_filename, avatar_url, created_at";
+    ? "c.id, c.name, c.resume_url, c.resume_filename, EXISTS(SELECT 1 FROM base_resumes br WHERE br.candidate_id = c.id) as has_base_resume"
+    : "c.id, c.name, c.email, c.phone, c.status, c.pipeline_stage, c.target_tier, c.resume_filename, c.avatar_url, c.created_at";
 
-  let dbQuery = supabase.from("candidates").select(columns, { count: "exact" });
+  // Actively-applying candidates surface first, then not-started, then placed, then dropped last.
+  const stageOrder = `CASE c.pipeline_stage
+      WHEN 'applying' THEN 0
+      WHEN 'not_started' THEN 1
+      WHEN 'paused' THEN 2
+      WHEN 'placed' THEN 3
+      WHEN 'dropped' THEN 4
+      ELSE 5
+    END`;
 
-  if (search) dbQuery = dbQuery.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
-  if (status) dbQuery = dbQuery.eq("status", status);
-  if (tier) dbQuery = dbQuery.eq("target_tier", tier);
+  const dataSql = `
+    SELECT ${columns} FROM candidates c
+    WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
+      AND ($3 = '' OR c.status = $3)
+      AND ($4 = '' OR c.target_tier = $4)
+      AND ($5 = '' OR c.pipeline_stage = $5)
+    ORDER BY ${stageOrder}, c.name ASC
+    OFFSET $6 LIMIT $7
+  `;
+  const countSql = `
+    SELECT COUNT(*)::int as total FROM candidates
+    WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
+      AND ($3 = '' OR status = $3)
+      AND ($4 = '' OR target_tier = $4)
+      AND ($5 = '' OR pipeline_stage = $5)
+  `;
 
-  const from = (page - 1) * pageSize;
-  const { data, error, count } = await dbQuery
-    .order("created_at", { ascending: false })
-    .range(from, from + pageSize - 1);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ items: data ?? [], total: count ?? 0, page, pageSize });
+  try {
+    const [data, countRow] = await Promise.all([
+      query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]),
+      queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]),
+    ]);
+    return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -79,79 +73,56 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
   }
 
-  if (isNeon()) {
-    try {
-      const sql = `
-        INSERT INTO candidates (name, email, phone, status, target_tier, notes)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING *
-      `;
-      const data = await queryOne<Record<string, any>>(sql, [
-        body.name,
-        body.email ?? null,
-        body.phone ?? null,
-        body.status ?? "active",
-        body.target_tier ?? null,
-        body.notes ?? null,
-      ]);
-      if (!data) throw new Error("Insert failed");
+  if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
+    return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
+  }
 
-      if (context && data) {
-        await logActivity({
-          userId: context.profile.user_id,
-          actorName: context.profile.display_name || context.profile.email || undefined,
-          type: "create",
-          description: `Created candidate ${data.name}`,
-          entityType: "candidate",
-          entityId: data.id,
-          entityName: data.name,
-        });
-        void triggerWebhooks("candidate.created", {
-          candidate_id: data.id,
-          name: data.name,
-          email: data.email,
-          created_by: context.profile.user_id,
-        });
-      }
+  try {
+    const sql = `
+      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      RETURNING *
+    `;
+    const data = await queryOne<Record<string, any>>(sql, [
+      body.name,
+      body.email ?? null,
+      body.phone ?? null,
+      body.status ?? "active",
+      body.pipeline_stage ?? "not_started",
+      body.target_tier ?? null,
+      body.notes ?? null,
+      body.linkedin_url ?? null,
+      body.github_url ?? null,
+      body.portfolio_url ?? null,
+      body.visa_status ?? null,
+      body.target_industries ?? null,
+      body.location_preference ?? null,
+      body.work_mode_preference ?? null,
+      body.available_start_date ?? null,
+      body.target_roles ?? null,
+    ]);
+    if (!data) throw new Error("Insert failed");
 
-      return NextResponse.json(data, { status: 201 });
-    } catch (error: any) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (context && data) {
+      await logActivity({
+        userId: context.profile.user_id,
+        actorName: context.profile.display_name || context.profile.email || undefined,
+        type: "create",
+        description: `Created candidate ${data.name}`,
+        entityType: "candidate",
+        entityId: data.id,
+        entityName: data.name,
+      });
+      void triggerWebhooks("candidate.created", {
+        candidate_id: data.id,
+        name: data.name,
+        email: data.email,
+        created_by: context.profile.user_id,
+      });
     }
+
+    return NextResponse.json(data, { status: 201 });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  const { data, error } = await supabase
-    .from("candidates")
-    .insert({
-      name: body.name,
-      email: body.email ?? null,
-      phone: body.phone ?? null,
-      status: body.status ?? "active",
-      target_tier: body.target_tier ?? null,
-      notes: body.notes ?? null,
-    })
-    .select()
-    .single();
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  if (context && data) {
-    await logActivity({
-      userId: context.profile.user_id,
-      actorName: context.profile.display_name || context.profile.email || undefined,
-      type: "create",
-      description: `Created candidate ${data.name}`,
-      entityType: "candidate",
-      entityId: data.id,
-      entityName: data.name,
-    });
-    void triggerWebhooks("candidate.created", {
-      candidate_id: data.id,
-      name: data.name,
-      email: data.email,
-      created_by: context.profile.user_id,
-    });
-  }
-
-  return NextResponse.json(data, { status: 201 });
 }

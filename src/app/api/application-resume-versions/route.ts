@@ -4,8 +4,8 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 import { logActivity } from "@/lib/activity";
+import { query, queryOne } from "@/server/db/neon";
 
 export async function GET(req: NextRequest) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -14,11 +14,42 @@ export async function GET(req: NextRequest) {
   const candidateId = new URL(req.url).searchParams.get("candidateId");
   if (!candidateId) return NextResponse.json({ error: "candidateId is required" }, { status: 400 });
 
-  const { data, error } = await supabase
-    .from("application_resume_versions")
-    .select("id, candidate_id, base_resume_id, source_resume_id, target_job_id, title, version_label, generated_text, status, source_type, ats_score, truth_score, one_page_fit_score, created_by, created_at, updated_at, target_jobs(job_id, jobs(title, company))")
-    .eq("candidate_id", candidateId)
-    .order("created_at", { ascending: false });
+  let data: any;
+  let error: any;
+
+  const rows = await query(
+    `SELECT arv.id, arv.candidate_id, arv.base_resume_id, arv.source_resume_id, arv.target_job_id, arv.title, arv.version_label, arv.generated_text, arv.status, arv.source_type, arv.ats_score, arv.truth_score, arv.one_page_fit_score, arv.created_by, arv.created_at, arv.updated_at, arv.application_id, tj.job_id as target_job_job_id, j.title as job_title, j.company as job_company, a.status as application_status, a.application_stage, a.proof_url as application_proof_url, a.proof_filename as application_proof_filename, a.applied_at as application_applied_at,
+            e.storage_url as pdf_storage_url, e.storage_item_id as pdf_storage_item_id,
+            EXISTS(SELECT 1 FROM application_resume_exports e2 WHERE e2.application_id = arv.application_id AND e2.resume_version_id = arv.id AND e2.export_type = 'pdf' AND e2.status = 'created') AS pdf_available
+     FROM application_resume_versions arv LEFT JOIN target_jobs tj ON tj.id = arv.target_job_id LEFT JOIN jobs j ON j.id = tj.job_id LEFT JOIN applications a ON a.id = arv.application_id
+     LEFT JOIN LATERAL (SELECT storage_url, storage_item_id FROM application_resume_exports WHERE application_id = arv.application_id AND resume_version_id = arv.id AND export_type = 'pdf' AND status = 'created' ORDER BY created_at DESC LIMIT 1) e ON true
+     WHERE arv.candidate_id = $1 ORDER BY arv.created_at DESC`,
+    [candidateId]
+  );
+  data = (rows ?? []).map((row: any) => {
+    const { target_job_job_id, job_title, job_company, application_status, application_stage, application_proof_url, application_proof_filename, application_applied_at, pdf_storage_url, pdf_storage_item_id, pdf_available, ...rest } = row;
+    return {
+      ...rest,
+      target_jobs: {
+        job_id: target_job_job_id,
+        jobs: {
+          title: job_title,
+          company: job_company,
+        },
+      },
+      applications: rest.application_id ? {
+        status: application_status,
+        stage: application_stage,
+        proof_url: application_proof_url,
+        proof_filename: application_proof_filename,
+        applied_at: application_applied_at,
+      } : null,
+      pdf_available: Boolean(pdf_available),
+      pdf_storage_url: pdf_storage_url ?? null,
+      pdf_storage_item_id: pdf_storage_item_id ?? null,
+    };
+  });
+  error = null;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data ?? []);
@@ -51,11 +82,14 @@ export async function POST(req: NextRequest) {
 
   if (baseResumeId) {
     // Base resume path: copy content from base_resume
-    const { data: baseResume, error: baseError } = await supabase
-      .from("base_resumes")
-      .select("content, candidate_id")
-      .eq("id", baseResumeId)
-      .single();
+    let baseResume: any;
+    let baseError: any;
+
+      baseResume = await queryOne(
+        `SELECT content, candidate_id FROM base_resumes WHERE id = $1`,
+        [baseResumeId]
+      );
+      baseError = baseResume ? null : { message: "Base resume not found" };
 
     if (baseError || !baseResume) {
       return NextResponse.json({ error: "Base resume not found" }, { status: 404 });
@@ -78,7 +112,7 @@ export async function POST(req: NextRequest) {
       education: [],
       formatting: {
         styleId: "skarion_compact_professional",
-        pageFormat: "letter",
+        pageFormat: "a4",
         fontFamily: "Calibri",
         fontSize: 10.5,
         marginTop: 0.5,
@@ -100,7 +134,7 @@ export async function POST(req: NextRequest) {
           {
             id: `tailored-markdown-${Date.now()}`,
             title: "Tailored Markdown Draft",
-            bullets: generatedText.split(/\r?\n/).filter((line) => line.trim()).map((line, index) => ({
+            bullets: generatedText.split(/\r?\n/).filter((line: string) => line.trim()).map((line: string, index: number) => ({
               id: `tailored-line-${index}`,
               text: line,
               riskLevel: "low",
@@ -116,11 +150,14 @@ export async function POST(req: NextRequest) {
   insertData.source_resume_id = baseResumeId ?? null;
   insertData.content = resolvedContent;
 
-  const { data, error } = await supabase
-    .from("application_resume_versions")
-    .insert(insertData)
-    .select()
-    .single();
+  let data: any;
+  let error: any;
+
+  data = await queryOne(
+    `INSERT INTO application_resume_versions (target_job_id, status, source_type, created_by, candidate_id, base_resume_id, content, title, version_label, generated_text, source_resume_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [targetJobId, "draft", sourceType, context!.profile.user_id, insertData.candidate_id, insertData.base_resume_id, resolvedContent, title || null, versionLabel || null, generatedText || null, baseResumeId ?? null]
+  );
+  error = data ? null : { message: "Insert failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

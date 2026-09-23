@@ -1,16 +1,18 @@
 // src/components/QuickApplicationModal.tsx
 // Quick Application modal — 4-step workflow:
 // 1. Select candidate
-// 2. Paste JD and auto-analyze
+// 2. Paste JD (with toggle to search existing jobs)
 // 3. Review job (handle duplicates)
-// 4. Create application
+// 4. Create application → optional Falood AI build
 //
 // Uses existing API routes only. No direct Supabase calls.
 
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { resolveFaloodStudioUrl } from "@/lib/falood/openStudio";
 
 /* ─────────── types ─────────── */
 
@@ -18,6 +20,19 @@ interface Candidate {
   id: string;
   name: string;
   email: string | null;
+}
+
+interface BaseResume {
+  id: string;
+  name: string;
+  status: string;
+}
+
+interface UploadedResume {
+  id: string;
+  label: string;
+  filename: string;
+  is_original_upload: boolean;
 }
 
 interface JdAnalysis {
@@ -60,18 +75,22 @@ interface ApplicationResult {
   status: string;
 }
 
+interface JobSearchResult {
+  id: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  source: string;
+  employment_type: string | null;
+  seniority_level: string | null;
+}
+
 interface Props {
   onClose: () => void;
+  userRole?: string;
 }
 
 const STEP_LABELS = ["Candidate", "Paste JD", "Review Job", "Create Application"];
-
-const SOURCE_TYPES = [
-  { value: "base_resume", label: "Base Resume" },
-  { value: "original_resume", label: "Original Resume" },
-  { value: "blank", label: "Blank" },
-  { value: "manual", label: "Manual" },
-];
 
 const STATUS_OPTIONS = [
   { value: "stacked", label: "Stacked" },
@@ -80,7 +99,10 @@ const STATUS_OPTIONS = [
   { value: "applied", label: "Applied" },
 ];
 
-export default function QuickApplicationModal({ onClose }: Props) {
+export default function QuickApplicationModal({ onClose, userRole = "" }: Props) {
+  const router = useRouter();
+  const canCreateJob = ["admin", "manager"].includes(userRole);
+
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -90,6 +112,11 @@ export default function QuickApplicationModal({ onClose }: Props) {
   const [candidateSearch, setCandidateSearch] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
+
+  // Candidate assets (base resumes + uploaded resumes)
+  const [candidateBaseResumes, setCandidateBaseResumes] = useState<BaseResume[]>([]);
+  const [candidateResumes, setCandidateResumes] = useState<UploadedResume[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
 
   // Step 2: JD
   const [rawText, setRawText] = useState("");
@@ -106,12 +133,23 @@ export default function QuickApplicationModal({ onClose }: Props) {
 
   // Step 4: Application
   const [sourceType, setSourceType] = useState("base_resume");
+  const sourceTypeTouchedRef = useRef(false);
+  const [selectedBaseResumeId, setSelectedBaseResumeId] = useState("");
   const [status, setStatus] = useState("stacked");
   const [notes, setNotes] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
   const [createdApp, setCreatedApp] = useState<ApplicationResult | null>(null);
   const [appError, setAppError] = useState("");
+  const [faloodLoading, setFaloodLoading] = useState(false);
+  const [faloodError, setFaloodError] = useState("");
+
+  // Job search mode (alternative to pasting JD)
+  const [jdMode, setJdMode] = useState<"paste" | "search">("paste");
+  const [jobSearchInput, setJobSearchInput] = useState("");
+  const [jobSearchResults, setJobSearchResults] = useState<JobSearchResult[]>([]);
+  const [jobSearchLoading, setJobSearchLoading] = useState(false);
+  const jobSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /* ── fetch candidates ── */
   const fetchCandidates = useCallback(async () => {
@@ -131,6 +169,32 @@ export default function QuickApplicationModal({ onClose }: Props) {
   useEffect(() => {
     fetchCandidates();
   }, [fetchCandidates]);
+
+  /* ── fetch candidate assets when selected ── */
+  async function fetchCandidateAssets(candidateId: string) {
+    setAssetsLoading(true);
+    const [baseRes, resumeRes] = await Promise.all([
+      fetch(`/api/base-resumes?candidateId=${candidateId}`),
+      fetch(`/api/candidates/${candidateId}`),
+    ]);
+    const baseData = baseRes.ok ? await baseRes.json() : [];
+    setCandidateBaseResumes(baseData);
+    setSelectedBaseResumeId(baseData[0]?.id ?? "");
+
+    const candidateData = resumeRes.ok ? await resumeRes.json() : null;
+    const resumes = candidateData?.resumes ?? [];
+    setCandidateResumes(resumes);
+    setAssetsLoading(false);
+  }
+
+  function handleSelectCandidate(c: Candidate) {
+    setSelectedCandidate(c);
+    setCandidateBaseResumes([]);
+    setCandidateResumes([]);
+    setSelectedBaseResumeId("");
+    sourceTypeTouchedRef.current = false;
+    fetchCandidateAssets(c.id);
+  }
 
   /* ── step 1 confirm ── */
   function goToStep2() {
@@ -263,7 +327,6 @@ export default function QuickApplicationModal({ onClose }: Props) {
     if (selectedJob) {
       body.job_id = selectedJob.id;
     } else {
-      // ad-hoc only: send raw text and parsed analysis as adhoc data
       body.adhoc_job_raw_text = rawText.trim();
       body.adhoc_job_data = analysis;
     }
@@ -299,7 +362,123 @@ export default function QuickApplicationModal({ onClose }: Props) {
     setStep(4);
   }
 
-  /* ── render helpers ── */
+  /* ── build with Falood AI ── */
+  async function buildWithFalood() {
+    if (!createdApp || !selectedCandidate) return;
+    setFaloodLoading(true);
+    setFaloodError("");
+
+    const jobId = selectedJob?.id ?? createdApp.job_id;
+    if (!jobId) {
+      setFaloodError("Cannot build with Falood AI for an ad-hoc application without a masterlist job.");
+      setFaloodLoading(false);
+      return;
+    }
+
+    const res = await fetch("/api/quick-application/falood-setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: selectedCandidate.id,
+        jobId,
+        applicationId: createdApp.id,
+        baseResumeId: sourceType === "base_resume" && selectedBaseResumeId ? selectedBaseResumeId : null,
+        sourceType: sourceType === "base_resume" && selectedBaseResumeId ? "base_resume" : "blank",
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    setFaloodLoading(false);
+
+    if (!res.ok) {
+      setFaloodError(data.error || "Failed to set up Falood AI.");
+      return;
+    }
+
+    // Close modal and redirect to Falood studio
+    onClose();
+    router.push(await resolveFaloodStudioUrl("application_resume_version", data.versionId));
+  }
+
+  /* ── create blank base resume inline ── */
+  async function createBlankBaseResume() {
+    if (!selectedCandidate) return;
+    setLoading(true);
+    const res = await fetch("/api/base-resumes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        candidateId: selectedCandidate.id,
+        name: `${selectedCandidate.name} — Base Resume`,
+        startingSource: "blank",
+      }),
+    });
+    setLoading(false);
+    if (res.ok) {
+      const newBase = await res.json();
+      setCandidateBaseResumes((prev) => [newBase, ...prev]);
+      setSelectedBaseResumeId(newBase.id);
+      setSourceType("base_resume");
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setAppError(data.error || "Failed to create blank base resume.");
+    }
+  }
+
+  /* ── search existing jobs ── */
+  async function searchExistingJobs(query: string) {
+    if (!query.trim()) { setJobSearchResults([]); return; }
+    setJobSearchLoading(true);
+    const params = new URLSearchParams();
+    params.set("search", query.trim());
+    params.set("pageSize", "15");
+    const res = await fetch(`/api/jobs?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      setJobSearchResults(data.jobs ?? []);
+    }
+    setJobSearchLoading(false);
+  }
+
+  useEffect(() => {
+    if (jdMode !== "search") return;
+    if (jobSearchTimerRef.current) clearTimeout(jobSearchTimerRef.current);
+    jobSearchTimerRef.current = setTimeout(() => {
+      searchExistingJobs(jobSearchInput);
+    }, 300);
+    return () => { if (jobSearchTimerRef.current) clearTimeout(jobSearchTimerRef.current); };
+  }, [jobSearchInput, jdMode]);
+
+  function handleSelectExistingJob(job: JobSearchResult) {
+    setSelectedJob({ id: job.id, title: job.title, company: job.company });
+    setStep(4);
+  }
+
+  /* ── helpers ── */
+  const hasBaseResumes = candidateBaseResumes.length > 0;
+  const hasOriginalResume = candidateResumes.some((r) => r.is_original_upload);
+
+  const availableSourceTypes = [
+    { value: "base_resume", label: "Base Resume", enabled: hasBaseResumes },
+    { value: "original_resume", label: "Uploaded Resume", enabled: hasOriginalResume },
+    { value: "blank", label: "Blank Canvas", enabled: true },
+    { value: "manual", label: "Manual", enabled: true },
+  ];
+
+  // Pick the best available source type once candidate assets finish loading
+  // (base resume > uploaded resume > blank), unless the user already picked
+  // one themselves. Runs after assetsLoading flips false so it doesn't act
+  // on the momentarily-empty state right after a candidate is selected and
+  // downgrade to "blank" before candidateBaseResumes has actually loaded.
+  useEffect(() => {
+    if (!selectedCandidate || assetsLoading || sourceTypeTouchedRef.current) return;
+    const current = availableSourceTypes.find((s) => s.value === sourceType);
+    if (!current?.enabled) {
+      const best = availableSourceTypes.find((s) => s.enabled);
+      if (best) setSourceType(best.value);
+    }
+  }, [selectedCandidate, assetsLoading, hasBaseResumes, hasOriginalResume]);
+
   function stepClass(s: number) {
     return s === step ? "badge" : s < step ? "muted" : "muted";
   }
@@ -348,7 +527,7 @@ export default function QuickApplicationModal({ onClose }: Props) {
                 {candidates.map((c) => (
                   <div
                     key={c.id}
-                    onClick={() => setSelectedCandidate(c)}
+                    onClick={() => handleSelectCandidate(c)}
                     style={{
                       padding: "8px 10px",
                       borderRadius: 6,
@@ -365,6 +544,12 @@ export default function QuickApplicationModal({ onClose }: Props) {
             {selectedCandidate && (
               <p style={{ marginTop: 10, fontSize: 13 }}>
                 Selected: <strong>{selectedCandidate.name}</strong>
+                {assetsLoading && <span className="muted" style={{ marginLeft: 8 }}>(loading assets…)</span>}
+                {!assetsLoading && (
+                  <span className="muted" style={{ marginLeft: 8 }}>
+                    · {candidateBaseResumes.length} base resume(s) · {candidateResumes.length} uploaded file(s)
+                  </span>
+                )}
               </p>
             )}
             <div className="modal-actions">
@@ -376,70 +561,137 @@ export default function QuickApplicationModal({ onClose }: Props) {
           </>
         )}
 
-        {/* ── Step 2: Paste JD ── */}
+        {/* ── Step 2: Paste JD or Search existing jobs ── */}
         {step === 2 && (
           <>
-            <div className="field-group">
-              <label>Job Description</label>
-              <textarea
-                value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-                placeholder="Paste the full job description here..."
-                rows={8}
-                style={{ resize: "vertical" }}
-              />
-              <p className="muted" style={{ fontSize: 11 }}>{rawText.length} characters (minimum 100, max 30,000)</p>
+            <div className="filter-bar" style={{ marginBottom: 16 }}>
+              {[
+                { value: "paste", label: "Paste new JD" },
+                { value: "search", label: "Search existing jobs" },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => { setJdMode(opt.value as "paste" | "search"); setError(""); }}
+                  style={{
+                    borderRadius: "var(--radius)",
+                    padding: "6px 12px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    border: "1px solid var(--border)",
+                    background: jdMode === opt.value ? "var(--accent-soft)" : "var(--surface)",
+                    color: jdMode === opt.value ? "var(--accent)" : "var(--ink)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
-            <div className="field-group">
-              <label>Source URL (optional)</label>
-              <input
-                value={sourceUrl}
-                onChange={(e) => setSourceUrl(e.target.value)}
-                placeholder="https://..."
-              />
-            </div>
-            {analyzeError && <p style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{analyzeError}</p>}
-            {analysis && (
-              <div className="card" style={{ marginBottom: 14, borderColor: "var(--accent)" }}>
-                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>AI Analysis</h3>
-                <p><strong>Title:</strong> {analysis.title ?? "—"}</p>
-                <p><strong>Company:</strong> {analysis.company ?? "—"}</p>
-                <p><strong>Location:</strong> {analysis.location ?? "—"}</p>
-                <p><strong>Workplace:</strong> {analysis.workplaceType}</p>
-                <p><strong>Employment:</strong> {analysis.employmentType}</p>
-                <p><strong>Seniority:</strong> {analysis.seniorityLevel ?? "—"}</p>
-                <p><strong>Salary:</strong> {analysis.salaryMin ?? "—"} — {analysis.salaryMax ?? "—"} {analysis.salaryCurrency}</p>
-                <p><strong>Confidence:</strong> {Math.round((analysis.confidenceScore ?? 0) * 100)}%</p>
-                {analysis.requiredSkills.length > 0 && (
-                  <p><strong>Required:</strong> {analysis.requiredSkills.join(", ")}</p>
+
+            {jdMode === "paste" && (
+              <>
+                <div className="field-group">
+                  <label>Job Description</label>
+                  <textarea
+                    value={rawText}
+                    onChange={(e) => setRawText(e.target.value)}
+                    placeholder="Paste the full job description here..."
+                    rows={8}
+                    style={{ resize: "vertical" }}
+                  />
+                  <p className="muted" style={{ fontSize: 11 }}>{rawText.length} characters (minimum 100, max 30,000)</p>
+                </div>
+                <div className="field-group">
+                  <label>Source URL (optional)</label>
+                  <input
+                    value={sourceUrl}
+                    onChange={(e) => setSourceUrl(e.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+                {analyzeError && <p style={{ color: "var(--danger)", fontSize: 13, marginBottom: 12 }}>{analyzeError}</p>}
+                {analysis && (
+                  <div className="card" style={{ marginBottom: 14, borderColor: "var(--accent)" }}>
+                    <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>AI Analysis</h3>
+                    <p><strong>Title:</strong> {analysis.title ?? "—"}</p>
+                    <p><strong>Company:</strong> {analysis.company ?? "—"}</p>
+                    <p><strong>Location:</strong> {analysis.location ?? "—"}</p>
+                    <p><strong>Workplace:</strong> {analysis.workplaceType}</p>
+                    <p><strong>Employment:</strong> {analysis.employmentType}</p>
+                    <p><strong>Seniority:</strong> {analysis.seniorityLevel ?? "—"}</p>
+                    <p><strong>Salary:</strong> {analysis.salaryMin ?? "—"} — {analysis.salaryMax ?? "—"} {analysis.salaryCurrency}</p>
+                    <p><strong>Confidence:</strong> {Math.round((analysis.confidenceScore ?? 0) * 100)}%</p>
+                    {analysis.requiredSkills.length > 0 && (
+                      <p><strong>Required:</strong> {analysis.requiredSkills.join(", ")}</p>
+                    )}
+                    {analysis.preferredSkills.length > 0 && (
+                      <p><strong>Preferred:</strong> {analysis.preferredSkills.join(", ")}</p>
+                    )}
+                    {analysis.redFlags.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <strong>Red Flags:</strong>
+                        {analysis.redFlags.map((f, i) => (
+                          <div key={i} style={{ fontSize: 12, color: f.severity === "high" ? "var(--danger)" : "var(--warning)" }}>
+                            • {f.flag} ({f.severity}): {f.reason}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 )}
-                {analysis.preferredSkills.length > 0 && (
-                  <p><strong>Preferred:</strong> {analysis.preferredSkills.join(", ")}</p>
+                <div className="modal-actions">
+                  <button onClick={() => setStep(1)}>Back</button>
+                  <button onClick={analyzeJD} disabled={loading || rawText.length < 100} className="btn-primary">
+                    {loading ? "Analyzing..." : "Auto-Analyze JD"}
+                  </button>
+                  <button onClick={goToStep3} disabled={!analysis || !analysis.title} className="btn-primary">
+                    Next: Review Job
+                  </button>
+                </div>
+              </>
+            )}
+
+            {jdMode === "search" && (
+              <>
+                <div className="field-group">
+                  <label>Search existing jobs</label>
+                  <input
+                    value={jobSearchInput}
+                    onChange={(e) => setJobSearchInput(e.target.value)}
+                    placeholder="Search by title, company..."
+                  />
+                </div>
+                {jobSearchLoading && <div className="empty">Searching...</div>}
+                {!jobSearchLoading && jobSearchInput.trim() && jobSearchResults.length === 0 && (
+                  <div className="empty">No jobs found for "{jobSearchInput}".</div>
                 )}
-                {analysis.redFlags.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
-                    <strong>Red Flags:</strong>
-                    {analysis.redFlags.map((f, i) => (
-                      <div key={i} style={{ fontSize: 12, color: f.severity === "high" ? "var(--danger)" : "var(--warning)" }}>
-                        • {f.flag} ({f.severity}): {f.reason}
+                {jobSearchResults.length > 0 && (
+                  <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8, padding: 4, marginBottom: 14 }}>
+                    {jobSearchResults.map((job) => (
+                      <div
+                        key={job.id}
+                        onClick={() => handleSelectExistingJob(job)}
+                        style={{
+                          padding: "8px 10px",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          background: "transparent",
+                        }}
+                        onMouseEnter={(e) => { (e.target as HTMLDivElement).style.background = "var(--accent-bg)"; }}
+                        onMouseLeave={(e) => { (e.target as HTMLDivElement).style.background = "transparent"; }}
+                      >
+                        <strong>{job.title}</strong>
+                        {job.company && <span className="muted" style={{ marginLeft: 8 }}>{job.company}</span>}
+                        {job.location && <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>— {job.location}</span>}
                       </div>
                     ))}
                   </div>
                 )}
-                <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-                  Editing extracted fields will come in a future update.
-                </p>
-              </div>
+                <div className="modal-actions">
+                  <button onClick={() => setStep(1)}>Back</button>
+                </div>
+              </>
             )}
-            <div className="modal-actions">
-              <button onClick={() => setStep(1)}>Back</button>
-              <button onClick={analyzeJD} disabled={loading || rawText.length < 100} className="btn-primary">
-                {loading ? "Analyzing..." : "Auto-Analyze JD"}
-              </button>
-              <button onClick={goToStep3} disabled={!analysis || !analysis.title} className="btn-primary">
-                Next: Review Job
-              </button>
-            </div>
           </>
         )}
 
@@ -498,18 +750,35 @@ export default function QuickApplicationModal({ onClose }: Props) {
               </div>
             ) : (
               <div className="card" style={{ marginBottom: 14 }}>
-                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>Create job from pasted JD</h3>
+                <h3 style={{ fontSize: 14, margin: "0 0 8px" }}>
+                  {canCreateJob ? "Create job from pasted JD" : "Ad-hoc application"}
+                </h3>
                 <p className="muted" style={{ fontSize: 12 }}>
                   Title: <strong>{analysis?.title}</strong> · {analysis?.company} · {analysis?.location}
                 </p>
-                <p style={{ marginTop: 8, fontSize: 12 }}>
-                  Click "Create Job" to save this as a masterlist job. If duplicates exist, you will be prompted to choose.
-                </p>
-                <div style={{ marginTop: 10 }}>
-                  <button className="btn-primary" onClick={() => createJobFromJD()} disabled={loading}>
-                    {loading ? "Creating..." : "Create Job"}
-                  </button>
-                </div>
+                {canCreateJob ? (
+                  <>
+                    <p style={{ marginTop: 8, fontSize: 12 }}>
+                      Click "Create Job" to save this as a masterlist job. If duplicates exist, you will be prompted to choose.
+                    </p>
+                    <div style={{ marginTop: 10 }}>
+                      <button className="btn-primary" onClick={() => createJobFromJD()} disabled={loading}>
+                        {loading ? "Creating..." : "Create Job"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+                      Application engineers can create ad-hoc applications without saving a masterlist job. The JD analysis and raw text will be attached to the application ticket.
+                    </p>
+                    <div style={{ marginTop: 10 }}>
+                      <button className="btn-primary" onClick={() => { setSelectedJob(null); setStep(4); }} disabled={loading}>
+                        Continue to Ad-hoc Application
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
@@ -533,21 +802,33 @@ export default function QuickApplicationModal({ onClose }: Props) {
                 <p><strong>Candidate:</strong> {selectedCandidate?.name}</p>
                 <p><strong>Job:</strong> {selectedJob?.title ?? "Ad-hoc application"}</p>
                 <p><strong>Status:</strong> {createdApp.status}</p>
+                <p><strong>Source:</strong> {sourceType.replaceAll("_", " ")}</p>
+                {faloodError && <p style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>{faloodError}</p>}
                 <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
                   {selectedCandidate && (
-                    <Link href={`/candidates/${selectedCandidate.id}`}>
+                    <Link href={`/candidates/${selectedCandidate.id}`} onClick={onClose}>
                       <button className="btn-primary">View Candidate</button>
                     </Link>
                   )}
                   {selectedJob && (
-                    <Link href={`/jobs/${selectedJob.id}`}>
+                    <Link href={`/jobs/${selectedJob.id}`} onClick={onClose}>
                       <button>View Job</button>
                     </Link>
                   )}
-                  <Link href="/application-queue">
+                  <Link href="/application-queue" onClick={onClose}>
                     <button>Go to Queue</button>
                   </Link>
+                  {selectedJob && (
+                    <button className="btn-primary" onClick={buildWithFalood} disabled={faloodLoading} style={{ background: "var(--accent)", color: "white" }}>
+                      {faloodLoading ? "Setting up Falood…" : "🤖 Build with Falood AI"}
+                    </button>
+                  )}
                 </div>
+                {!selectedJob && (
+                  <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                    Ad-hoc applications cannot be built with Falood AI until linked to a masterlist job. Open the candidate profile and create a job link first.
+                  </p>
+                )}
               </div>
             ) : (
               <>
@@ -565,14 +846,58 @@ export default function QuickApplicationModal({ onClose }: Props) {
                     )}
                   </p>
                 </div>
+
+                {/* Resume Source */}
                 <div className="field-group">
                   <label>Resume Source</label>
-                  <select value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
-                    {SOURCE_TYPES.map((s) => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
+                  <select
+                    value={sourceType}
+                    onChange={(e) => {
+                      sourceTypeTouchedRef.current = true;
+                      setSourceType(e.target.value);
+                    }}
+                  >
+                    {availableSourceTypes.map((s) => (
+                      <option key={s.value} value={s.value} disabled={!s.enabled}>
+                        {s.label}{!s.enabled ? " (not available)" : ""}
+                      </option>
                     ))}
                   </select>
+
+                  {/* No base resume warning */}
+                  {sourceType === "base_resume" && !hasBaseResumes && (
+                    <div className="card" style={{ marginTop: 10, borderColor: "var(--warning)", background: "#fff8e1" }}>
+                      <p style={{ fontSize: 13, margin: "0 0 8px" }}>
+                        <strong>⚠ No base resume found</strong>
+                      </p>
+                      <p className="muted" style={{ fontSize: 12, margin: "0 0 10px" }}>
+                        You need a base resume to build a tailored application with Falood AI. Choose one of the options below:
+                      </p>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button className="btn-primary" onClick={createBlankBaseResume} disabled={loading}>
+                          {loading ? "Creating…" : "Create blank canvas → open Falood"}
+                        </button>
+                        <Link href={`/candidates/${selectedCandidate?.id}`} onClick={onClose}>
+                          <button>Upload resume first</button>
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Base resume selector */}
+                  {sourceType === "base_resume" && hasBaseResumes && (
+                    <select
+                      value={selectedBaseResumeId}
+                      onChange={(e) => setSelectedBaseResumeId(e.target.value)}
+                      style={{ marginTop: 8 }}
+                    >
+                      {candidateBaseResumes.map((br) => (
+                        <option key={br.id} value={br.id}>{br.name} ({br.status})</option>
+                      ))}
+                    </select>
+                  )}
                 </div>
+
                 <div className="field-group">
                   <label>Application Status</label>
                   <select value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -627,14 +952,6 @@ export default function QuickApplicationModal({ onClose }: Props) {
                   </button>
                 </div>
               </>
-            )}
-            {!createdApp && (
-              <p className="muted" style={{ fontSize: 11, marginTop: 8 }}>
-                Or skip creating a masterlist job and create an ad-hoc application.
-                <button className="btn-danger" onClick={() => { setSelectedJob(null); createApplication(); }} disabled={loading} style={{ marginLeft: 8 }}>
-                  Create ad-hoc only
-                </button>
-              </p>
             )}
           </>
         )}

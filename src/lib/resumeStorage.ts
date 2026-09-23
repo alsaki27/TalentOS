@@ -1,25 +1,98 @@
 // src/lib/resumeStorage.ts
-// Pluggable resume storage backend: Supabase Storage (default, unchanged behavior) or
-// SharePoint (RESUME_STORAGE_PROVIDER=sharepoint, see src/lib/integrations/sharepoint.ts).
-// Same provider-selection pattern as src/lib/ai/index.ts's getActiveProvider() — pick
-// one explicit backend, fail clearly if the selected one isn't configured, never guess.
+// Pluggable resume storage backend: R2 (default) or SharePoint.
+// Set RESUME_STORAGE_PROVIDER=sharepoint to use SharePoint (requires MS_* env vars).
+// If the selected provider is not configured, a clear error is thrown on upload.
 
-import { supabase } from "@/lib/supabase";
-import { uploadToSharePoint } from "@/lib/integrations/sharepoint";
+import { uploadToSharePoint, deleteFromSharePoint, downloadFromSharePoint } from "@/lib/integrations/sharepoint";
+import { uploadFile, deleteStorageFile, downloadFile } from "@/server/storage/storageApi";
 
-export type ResumeStorageProvider = "supabase" | "sharepoint";
+export type ResumeStorageProvider = "r2" | "sharepoint";
 
 export function activeResumeStorageProvider(): ResumeStorageProvider {
-  return (process.env.RESUME_STORAGE_PROVIDER || "").toLowerCase() === "sharepoint" ? "sharepoint" : "supabase";
+  const p = (process.env.RESUME_STORAGE_PROVIDER || "").toLowerCase();
+  return p === "sharepoint" ? "sharepoint" : "r2";
 }
 
-export async function uploadResumeFile(path: string, buffer: Uint8Array, contentType: string): Promise<{ url: string }> {
-  if (activeResumeStorageProvider() === "sharepoint") {
-    return uploadToSharePoint(path, buffer, contentType);
+export function isProviderConfigured(provider: ResumeStorageProvider): boolean {
+  if (provider === "r2") {
+    return !!(
+      process.env.R2_ACCOUNT_ID &&
+      process.env.R2_ACCESS_KEY_ID &&
+      process.env.R2_SECRET_ACCESS_KEY &&
+      process.env.R2_BUCKET_NAME
+    );
+  }
+  if (provider === "sharepoint") {
+    return !!(
+      process.env.MS_TENANT_ID &&
+      process.env.MS_CLIENT_ID &&
+      process.env.MS_CLIENT_SECRET &&
+      process.env.SHAREPOINT_SITE_ID
+    );
+  }
+  return false;
+}
+
+function assertProviderConfigured(provider: ResumeStorageProvider): void {
+  if (!isProviderConfigured(provider)) {
+    const missing =
+      provider === "r2"
+        ? "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME"
+        : "MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET, SHAREPOINT_SITE_ID";
+    const nextStep =
+      provider === "r2"
+        ? "Configure the required R2 credentials or switch to SharePoint with RESUME_STORAGE_PROVIDER=sharepoint."
+        : "Configure the required SharePoint credentials or switch to R2 with RESUME_STORAGE_PROVIDER=r2.";
+    throw new Error(
+      `Resume storage provider '${provider}' is selected but not configured. Missing env vars: ${missing}. ` +
+      nextStep
+    );
+  }
+}
+
+export async function uploadResumeFile(
+  path: string,
+  buffer: Uint8Array,
+  contentType: string
+): Promise<{ url: string; provider: ResumeStorageProvider; itemId?: string }> {
+  const provider = activeResumeStorageProvider();
+  assertProviderConfigured(provider);
+
+  if (provider === "sharepoint") {
+    const result = await uploadToSharePoint(path, buffer, contentType);
+    return { url: result.url, provider, itemId: result.itemId };
   }
 
-  const { error } = await supabase.storage.from("resumes").upload(path, buffer, { contentType, upsert: true });
-  if (error) throw new Error(error.message);
-  const { data } = supabase.storage.from("resumes").getPublicUrl(path);
-  return { url: data.publicUrl };
+  const { url } = await uploadFile(path, buffer, contentType);
+  return { url, provider };
+}
+
+export async function downloadResumeFile(provider: string | null, filePath: string, storageUrl?: string | null): Promise<{ buffer: Uint8Array; contentType: string }> {
+  if (provider === "sharepoint") {
+    const result = await downloadFromSharePoint(storageUrl || filePath);
+    return { buffer: result.buffer, contentType: result.contentType };
+  }
+  const blob = await downloadFile(filePath);
+  return { buffer: new Uint8Array(await blob.arrayBuffer()), contentType: blob.type || "application/octet-stream" };
+}
+
+export async function deleteResumeFile(url: string | null | undefined): Promise<void> {
+  if (!url) return;
+
+  // If the URL is clearly a SharePoint URL, try SharePoint deletion first
+  if (url.includes("sharepoint.com") || url.includes("onedrive")) {
+    try {
+      await deleteFromSharePoint(url);
+      return;
+    } catch (err) {
+      console.warn("SharePoint delete failed, falling back to R2 delete:", err);
+    }
+  }
+
+  // R2 deletion (also handles URLs that look like R2 public URLs or generic paths)
+  try {
+    await deleteStorageFile(url);
+  } catch (err) {
+    console.warn("R2 delete failed:", err);
+  }
 }

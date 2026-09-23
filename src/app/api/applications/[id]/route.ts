@@ -7,14 +7,33 @@ import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
-import { supabase } from "@/lib/supabase";
-import { isNeon } from "@/server/db";
-import { query, queryOne, execute } from "@/server/db/neon";
+import { queryOne, execute } from "@/server/db/neon";
 import {
   findApplicationById,
   updateApplication,
   deleteApplication,
 } from "@/server/repositories/applicationsRepository";
+import { APPLICATION_STAGES } from "@/lib/applicationStages";
+
+const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
+
+// Had no GET handler at all (only PATCH/DELETE) - same missing-method pattern
+// already found and fixed on the workflow status route. Confirmed live via
+// the E2E test's status-poll: "SyntaxError: Unexpected end of JSON input" on
+// r.json(), from Next.js's default empty-body 405 for an unmatched method.
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) {
+    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+  }
+
+  const application = await findApplicationById(params.id);
+  if (!application) {
+    return NextResponse.json({ error: "Application not found" }, { status: 404 });
+  }
+
+  return NextResponse.json(application);
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json();
@@ -31,10 +50,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "priority", "review_status", "review_note", "reviewed_by_user_id", "reviewed_at",
     "adhoc_job_data", "adhoc_job_raw_text", "source_type",
     "proof_url", "proof_filename", "proof_uploaded_at", "proof_uploaded_by_user_id",
+    // ae_stage is deliberately NOT in assignmentFields below - both AEs and
+    // managers can move it, unlike the assignment/review fields it sits next to.
+    "ae_stage", "application_stage",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
+  }
+
+  if ("ae_stage" in updates && !AE_STAGES.includes(updates.ae_stage as typeof AE_STAGES[number])) {
+    return NextResponse.json({ error: "Invalid AE stage." }, { status: 400 });
+  }
+  if ("application_stage" in updates && !APPLICATION_STAGES.includes(updates.application_stage as typeof APPLICATION_STAGES[number])) {
+    return NextResponse.json({ error: "Invalid application stage." }, { status: 400 });
+  }
+
+  // application_stage is the canonical lifecycle field. ae_stage remains a
+  // compatibility mirror until the queue and old clients are fully migrated.
+  if ("application_stage" in updates && !("ae_stage" in updates)) {
+    updates.ae_stage = updates.application_stage;
   }
 
   if ("follow_up_at" in updates) {
@@ -70,10 +105,65 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   let previousStatus: string | null = null;
   let previousReviewStatus: string | null = null;
-  if ("status" in updates) {
-    const current = await findApplicationById(params.id);
-    previousStatus = current?.status ?? null;
-    previousReviewStatus = current?.review_status ?? null;
+  let previousAeStage: string | null = null;
+  let currentApplication: Awaited<ReturnType<typeof findApplicationById>> = null;
+  
+  if ("status" in updates || "ae_stage" in updates) {
+    currentApplication = await findApplicationById(params.id);
+    previousStatus = currentApplication?.status ?? null;
+    previousReviewStatus = currentApplication?.review_status ?? null;
+    previousAeStage = currentApplication?.ae_stage ?? null;
+  }
+
+  // AE hand-off stage: In AI Pipeline -> Ready for AE Review -> Ready for AE
+  // Application -> AE Applied. Anyone touching it (AE or manager - no role
+  // gate here, unlike assignmentFields above) gets stamped as the last editor.
+  // The reviewer identity is captured separately and persists even after the
+  // ticket moves on to "applied", so whoever applies can see who reviewed it.
+  if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+    if (updates.ae_stage === "in_ai_pipeline" && currentApplication?.resume_generation_status === "ready") {
+      return NextResponse.json(
+        { error: "Cannot move back to AI Pipeline when a resume is already generated. Please use 'Regenerate' if you need a new draft." },
+        { status: 400 }
+      );
+    }
+
+    updates.application_stage = updates.ae_stage;
+    updates.ae_stage_updated_at = new Date().toISOString();
+    updates.ae_stage_updated_by_user_id = currentUser.profile.user_id;
+    updates.ae_stage_updated_by_name = currentUser.profile.display_name || currentUser.profile.email;
+
+    if (previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application") {
+      updates.ae_reviewed_by_user_id = currentUser.profile.user_id;
+      updates.ae_reviewed_by_name = currentUser.profile.display_name || currentUser.profile.email;
+      updates.ae_reviewed_at = new Date().toISOString();
+    }
+
+    // Same pattern as the reviewer capture above, for the final hand-off:
+    // whoever moves it to "applied" is attributed here, and (like the
+    // reviewer field) this is never overwritten by any later transition.
+    if (updates.ae_stage === "applied") {
+      updates.ae_applied_by_user_id = currentUser.profile.user_id;
+      updates.ae_applied_by_name = currentUser.profile.display_name || currentUser.profile.email;
+      updates.ae_applied_at = new Date().toISOString();
+    }
+
+    // AE Applied is a real lifecycle transition, not only a display label.
+    // Keep the legacy status fields synchronized so candidate dashboards,
+    // follow-up views, exports, and analytics all see the same truth.
+    if (updates.ae_stage === "applied") {
+      const appliedAt = currentApplication?.applied_at ?? new Date().toISOString();
+      updates.status = "applied";
+      updates.applied_at = appliedAt;
+      updates.completed_at = currentApplication?.completed_at ?? appliedAt;
+    } else {
+      updates.status = "in_progress";
+      if (previousAeStage === "applied") {
+        updates.applied_at = null;
+        updates.completed_at = null;
+      }
+    }
+
   }
 
   if (updates.status === "applied") {
@@ -108,45 +198,32 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   try {
     const data = await updateApplication(params.id, updates);
 
+    if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
+      await execute(
+        'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [params.id, previousAeStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
+      );
+    }
+
     if ("status" in updates && updates.status !== previousStatus) {
-      if (isNeon()) {
-        await execute(
-          'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
-          [params.id, previousStatus, updates.status, body.event_note ?? null]
-        );
-      } else {
-        await supabase.from("application_events").insert({
-          application_id: params.id,
-          from_status: previousStatus,
-          to_status: updates.status,
-          note: body.event_note ?? null,
-        });
-      }
+      await execute(
+        'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
+        [params.id, previousStatus, updates.status, body.event_note ?? ("ae_stage" in updates ? `AE stage moved to ${updates.ae_stage}.` : null)]
+      );
     }
 
     if (currentUser) {
-      if (isNeon()) {
-        await execute(
-          'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
-          [
-            currentUser.profile.user_id,
-            currentUser.profile.email,
-            'application.updated',
-            'application',
-            params.id,
-            JSON.stringify({ fields: Object.keys(updates) }),
-          ]
-        );
-      } else {
-        await supabase.from("audit_logs").insert({
-          actor_user_id: currentUser.profile.user_id,
-          actor_email: currentUser.profile.email,
-          action: "application.updated",
-          entity_type: "application",
-          entity_id: params.id,
-          metadata: { fields: Object.keys(updates) },
-        });
-      }
+      await execute(
+        'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+        [
+          currentUser.profile.user_id,
+          currentUser.profile.email,
+          'application.updated',
+          'application',
+          params.id,
+          JSON.stringify({ fields: Object.keys(updates) }),
+        ]
+      );
 
       await logActivity({
         userId: currentUser.profile.user_id,
@@ -183,26 +260,16 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
     await deleteApplication(params.id);
 
     if (currentUser) {
-      if (isNeon()) {
-        await execute(
-          'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)',
-          [
-            currentUser.profile.user_id,
-            currentUser.profile.email,
-            'application.deleted',
-            'application',
-            params.id,
-          ]
-        );
-      } else {
-        await supabase.from("audit_logs").insert({
-          actor_user_id: currentUser.profile.user_id,
-          actor_email: currentUser.profile.email,
-          action: "application.deleted",
-          entity_type: "application",
-          entity_id: params.id,
-        });
-      }
+      await execute(
+        'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)',
+        [
+          currentUser.profile.user_id,
+          currentUser.profile.email,
+          'application.deleted',
+          'application',
+          params.id,
+        ]
+      );
 
       await logActivity({
         userId: currentUser.profile.user_id,

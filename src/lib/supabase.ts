@@ -31,6 +31,8 @@ function getClient() {
 // Proxy so that existing code using `supabase.from(...)` still works without
 // calling createClient at module-import time. Build passes even when env vars
 // are absent; runtime requests fail with a clear error if they are missing.
+// Returns the actual client method reference so chained calls like
+// `supabase.from("jobs").select("*")` continue to work correctly.
 export const supabase: any = new Proxy({} as any, {
   get(_target, prop) {
     return getClient()[prop];

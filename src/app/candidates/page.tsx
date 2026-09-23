@@ -6,6 +6,7 @@ import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
 import Pagination from "@/components/Pagination";
+import { CANDIDATE_PIPELINE_STAGES, CANDIDATE_STAGE_BADGE_CLASSES } from "@/lib/candidatePipeline";
 
 interface Candidate {
   id: string;
@@ -13,6 +14,7 @@ interface Candidate {
   email: string | null;
   phone: string | null;
   status: string;
+  pipeline_stage: string;
   target_tier: string | null;
   resume_filename: string | null;
   avatar_url: string | null;
@@ -31,15 +33,16 @@ export default function CandidatesPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [stageFilter, setStageFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
+  const [stageUpdating, setStageUpdating] = useState<string>("");
 
   function buildParams(pageNum: number, size: number) {
     const params = new URLSearchParams();
     params.set("page", String(pageNum));
     params.set("pageSize", String(size));
     if (search) params.set("search", search);
-    if (statusFilter) params.set("status", statusFilter);
+    if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
     return params;
   }
@@ -62,7 +65,25 @@ export default function CandidatesPage() {
   }
 
   // Any filter/search change re-queries from page 1.
-  useEffect(() => { load(1, pageSize); }, [search, statusFilter, tierFilter, pageSize]);
+  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, pageSize]);
+
+  async function changeStage(id: string, stage: string) {
+    setStageUpdating(id);
+    setItems((prev) => prev.map((c) => (c.id === id ? { ...c, pipeline_stage: stage } : c)));
+    try {
+      const res = await fetch(`/api/candidates/${id}`, {
+        method: "PATCH",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pipeline_stage: stage }),
+      });
+      if (!res.ok) throw new Error("Update failed");
+    } catch {
+      load(page, pageSize); // revert optimistic update on failure
+    } finally {
+      setStageUpdating("");
+    }
+  }
 
   function toggleOne(id: string) {
     setSelected((prev) => {
@@ -86,7 +107,11 @@ export default function CandidatesPage() {
 
   async function deleteSelected() {
     if (!confirm(`Delete ${selected.size} selected candidate(s)? This also removes their applications and resume variants.`)) return;
-    await Promise.all(Array.from(selected).map((id) => fetch(`/api/candidates/${id}`, { method: "DELETE", cache: "no-store" })));
+    await fetch("/api/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "DELETE", table: "candidates", ids: Array.from(selected) })
+    });
     load(page, pageSize);
   }
 
@@ -94,14 +119,14 @@ export default function CandidatesPage() {
     const res = await fetch(`/api/candidates?${buildParams(1, 1000)}`, { cache: "no-store" });
     const data = await res.json();
     const rows = data.items ?? [];
-    const csv = toCsv(rows, ["name", "email", "phone", "status", "target_tier", "resume_filename"]);
+    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "target_tier", "resume_filename"]);
     downloadCsv("candidates.csv", csv);
   }
 
-  const filtersActive = search || statusFilter || tierFilter;
+  const filtersActive = search || stageFilter || tierFilter;
 
   return (
-    <>
+    <div className="candidates-page">
       <div className="page-header">
         <h1>Candidates</h1>
         <button className="btn-primary" onClick={() => setShowAdd(true)}>+ Add candidate</button>
@@ -109,9 +134,10 @@ export default function CandidatesPage() {
 
       <div className="filter-bar">
         <input placeholder="Search name or email…" value={search} onChange={(e) => setSearch(e.target.value)} />
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
+        <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}>
+          <option value="">All stages</option>
+          <option value="not_started">Not Started</option>
+          <option value="applying">Actively Applying</option>
           <option value="placed">Placed</option>
           <option value="paused">Paused</option>
           <option value="dropped">Dropped</option>
@@ -123,7 +149,7 @@ export default function CandidatesPage() {
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setStatusFilter(""); setTierFilter(""); }}>Clear filters</button>
+          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
         <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
@@ -141,41 +167,56 @@ export default function CandidatesPage() {
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th style={{ width: 28 }}>
-                <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
-              </th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Target tier</th>
-              <th>Status</th>
-              <th>Resume</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => (
-              <tr key={c.id}>
-                <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
-                <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  {c.avatar_url ? (
-                    <img className="avatar-circle" src={c.avatar_url} alt={c.name} />
-                  ) : (
-                    <span className="avatar-circle">{initials(c.name)}</span>
-                  )}
-                  <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
-                </td>
-                <td className="muted">{c.email || "—"}</td>
-                <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
-                <td className="muted">{c.status}</td>
-                <td className="muted">{c.resume_filename || "Not uploaded"}</td>
-                <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
+        <div className="table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ width: 28 }}>
+                  <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
+                </th>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Target tier</th>
+                <th>Stage</th>
+                <th>Resume</th>
+                <th></th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((c) => (
+                <tr key={c.id}>
+                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
+                  <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {c.avatar_url ? (
+                      <img className="avatar-circle" src={c.avatar_url} alt={c.name} />
+                    ) : (
+                      <span className="avatar-circle">{initials(c.name)}</span>
+                    )}
+                    <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
+                    {c.email?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
+                  </td>
+                  <td className="muted">{c.email || "—"}</td>
+                  <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
+                  <td>
+                    <select
+                      value={c.pipeline_stage}
+                      disabled={stageUpdating === c.id}
+                      onChange={(e) => changeStage(c.id, e.target.value)}
+                      className={`badge ${CANDIDATE_STAGE_BADGE_CLASSES[c.pipeline_stage as keyof typeof CANDIDATE_STAGE_BADGE_CLASSES] ?? ""}`}
+                      style={{ cursor: "pointer", border: "none" }}
+                    >
+                      {Object.entries(CANDIDATE_PIPELINE_STAGES).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="muted">{c.resume_filename || "Not uploaded"}</td>
+                  <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {total > 0 && (
@@ -194,7 +235,7 @@ export default function CandidatesPage() {
           onCreated={() => { setShowAdd(false); load(1, pageSize); }}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -221,6 +262,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   function reset() {
     setStep(1);
@@ -239,6 +281,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     setTargetRoles("");
     setFile(null);
     setError("");
+    setFeedback(null);
   }
 
   useEffect(() => {
@@ -249,6 +292,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     if (!name.trim()) { setError("Name is required."); return; }
     setSaving(true);
     setError("");
+    setFeedback(null);
 
     const payload = {
       name,
@@ -266,42 +310,47 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
       target_roles: targetRoles.split(",").map((s) => s.trim()).filter(Boolean),
     };
 
-    const res = await fetch("/api/candidates", {
-      method: "POST",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const res = await fetch("/api/candidates", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-    if (!res.ok) {
-      setSaving(false);
-      const data = await res.json();
-      setError(data.error || "Something went wrong.");
-      return;
-    }
-
-    const candidate = await res.json();
-    const candidateId = candidate.id;
-
-    if (file && candidateId) {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("label", "Original Upload");
-      formData.append("kind", "resume");
-      formData.append("is_original_upload", "true");
-      try {
-        await fetch(`/api/candidates/${candidateId}/resumes`, {
-          method: "POST",
-          cache: "no-store",
-          body: formData,
-        });
-      } catch {
-        // Upload failure is non-blocking; candidate already created.
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setFeedback({ kind: "error", text: data.error || "Something went wrong." });
+        return;
       }
-    }
 
-    setSaving(false);
-    onCreated();
+      const candidate = await res.json();
+      const candidateId = candidate.id;
+
+      if (file && candidateId) {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("label", "Original Upload");
+        formData.append("kind", "resume");
+        formData.append("is_original_upload", "true");
+        try {
+          await fetch(`/api/candidates/${candidateId}/resumes`, {
+            method: "POST",
+            cache: "no-store",
+            body: formData,
+          });
+        } catch {
+          // Upload failure is non-blocking; candidate already created.
+        }
+      }
+
+      setFeedback({ kind: "success", text: `Candidate "${name}" created.` });
+      setTimeout(() => onCreated(), 800);
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Network error." });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -389,6 +438,13 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
         )}
 
         {error && <p style={{ color: "var(--danger)", fontSize: 13 }}>{error}</p>}
+
+        {feedback && (
+          <div className={`alert ${feedback.kind === "error" ? "alert-error" : "alert-success"}`} style={{ marginTop: 8 }}>
+            {feedback.text}
+            <button className="alert-close" onClick={() => setFeedback(null)}>&times;</button>
+          </div>
+        )}
 
         <div className="modal-actions">
           {step === 1 ? (

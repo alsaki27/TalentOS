@@ -1,30 +1,132 @@
 #:schema node_modules/wrangler/config-schema.json
-# Cloudflare Workers FREE TIER configuration
-# Limits: 100,000 requests/day, 10ms CPU per request, 128MB memory
-# No Hyperdrive, no Durable Objects, no paid bindings.
+# Cloudflare Workers PAID plan (upgraded 2026-07-13).
+# Limits: 128MB memory, 10,000 subrequests/invocation (default).
 name = "skarion-talent-os"
-main = ".worker-next/index.mjs"
-compatibility_date = "2026-07-07"
-# nodejs_compat enables some Node.js APIs on the free tier (e.g., Buffer)
+account_id = "7595fba95de8cc0c74a379329c18fd29"
+main = "worker-entry.mjs"
+compatibility_date = "2025-06-20"
+# nodejs_compat enables some Node.js APIs (e.g., Buffer)
 compatibility_flags = ["nodejs_compat"]
 
-# Workers + Assets: host static frontend files (free tier)
-assets = { directory = ".worker-next/assets", binding = "ASSETS" }
+# Workers + Assets: host static frontend files
+assets = { directory = ".open-next/assets", binding = "ASSETS" }
+
+[vars]
+TALENTOS_BASE_URL = "https://talent.skarion.com"
+STAFF_GOOGLE_AUTH_ENABLED = "true"
+CANDIDATE_GOOGLE_AUTH_ENABLED = "true"
+CANDIDATE_MFA_ENABLED = "true"
+# Candidate-owned Gmail is retired. All application mail is forwarded into
+# the one shared mailbox configured below.
+CANDIDATE_GMAIL_ENABLED = "false"
+GMAIL_SHARED_EMAIL = "mail.skarion@gmail.com"
+BASE_RESUME_KEYWORD_AGENT_ENABLED = "true"
+CANDIDATE_JOB_MATCHER_ENABLED = "true"
+CANDIDATE_JOB_MATCHER_MODE = "dry_run"
+
+# CPU-time budget for this Worker. This is actual JS compute time only -
+# time spent awaiting a fetch() to an upstream API (Gemini/Vertex, Neon,
+# etc.) does NOT count against it (see Cloudflare's CPU-time docs). On the
+# free tier this defaulted to 10ms, which was nowhere near enough for the
+# real compute here: building large prompts (full base resume + evidence
+# bank + job analysis get embedded into the Resume Forge/Hiring
+# Panel/Final Polish prompts), then JSON.parse + Zod-validating a full
+# tailored-resume-shaped response. Confirmed live: every single Resume
+# Forge stage_run got silently killed mid-request under the free tier's
+# 10ms ceiling - no error, no timeout, just orphaned - while the lighter
+# Job Lens stage (smaller prompt/response) usually stayed under it.
+#
+# 30_000ms (30s) is the Workers Paid plan's own documented default and is
+# used here explicitly rather than left implicit, so it's a deliberate,
+# visible setting instead of "whatever the platform happens to default
+# to." It leaves generous headroom (the actual JS work above is realistically
+# low tens-of-milliseconds even for a large resume, not seconds) without
+# reaching for the 300_000ms (5min) max, which would mask genuinely
+# runaway code for minutes before Cloudflare ever intervened.
+[limits]
+cpu_ms = 30_000
 
 [observability]
 enabled = true
 
+# ───────────────────────────────────────────────────────────────
+# Hyperdrive — how the Worker reaches the self-hosted Postgres
+# ───────────────────────────────────────────────────────────────
+# TalentOS' database moved from Neon (reached over HTTP) to Postgres on a private
+# VPS, which a Worker can only reach over TCP. The Worker cannot verify that
+# server's self-signed certificate: pg-cloudflare calls
+# startTls({ secureTransport: "starttls" }) and Cloudflare's socket API accepts no
+# CA and no way to skip verification. Hyperdrive fixes that by connecting from
+# Cloudflare's network, and it pools connections to the origin, which matters here
+# because a Worker would otherwise dial Postgres once per unit of work.
+#
+# Create it once (the VPS credentials stay inside Cloudflare, not in this file):
+#
+#   npx wrangler hyperdrive create talentos-pg \
+#     --connection-string="postgresql://USER:PASSWORD@40.160.139.188:5432/talentos?sslmode=require"
+#
+# then paste the printed id below and uncomment the block. worker-entry.mjs copies
+# env.HYPERDRIVE.connectionString into process.env.DATABASE_URL, so no application
+# code needs to know Hyperdrive exists. Until the block is uncommented the Worker
+# falls back to the DATABASE_URL secret and connects directly, which will fail TLS
+# against a self-signed certificate — so this is required for production.
+#
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "30402bc671364a7686899a2bec4befb1"
+
 # Secrets are set via `wrangler secret put`, not here:
-# DATABASE_URL, NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT
+# DATABASE_URL — the Postgres connection string. Used by Node scripts, CI and as
+#   the Worker's fallback; Hyperdrive overrides it at runtime when bound.
+#   src/server/db/neon.ts picks its driver from this value: a *.neon.tech host uses
+#   the Neon HTTP driver, anything else uses node-postgres over TCP. Switching
+#   databases is therefore a secret change, and so is rolling back.
+# NEON_DATABASE_URL, NEON_DATABASE_URL_DIRECT — legacy aliases, still read as a
+#   fallback for DATABASE_URL.
+# CRM_INTEGRATION_SECRET â€” server-to-server company directory access for Skarion CRM
 # SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
 # AI_KEYS_ENCRYPTION_SECRET, CRON_SECRET, CRAWLER_API_KEY
-# ANTHROPIC_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY
+# AI provider credentials and endpoints live in encrypted Neon Control Center records.
+# JOB_CEO_INGEST_SECRET — used by /api/job-ceo/ingest endpoint; must match GitHub secret
+# AUDIT_DB_URL — base URL of the spare-PC audit-db HTTP bridge (Cloudflare Tunnel hostname)
+# AUDIT_DB_TOKEN — bearer token for the audit-db HTTP bridge (matches a row in its api_tokens table)
 # GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, etc.
+# Do not add provider API keys, gateway credentials, model aliases, or AI endpoint
+# URLs here. Configure and rotate them at /admin/ai; only AI_KEYS_ENCRYPTION_SECRET
+# remains a deployment bootstrap so a database leak alone cannot decrypt the keys.
 #
 # Free tier: all secrets are free to set. Only KV and R2 have quotas.
+# OPENCODE_DIRECT_API_KEY is the env-managed direct OpenCode Go credential used
+# by the tertiary route at https://opencode.ai/zen/go/v1.
 
 # Optional (free tier): ISR cache via KV
 # KV limits on free tier: 1,000 reads/day, 1,000 writes/day, 1GB storage
 # [[kv_namespaces]]
 # binding = "NEXT_CACHE_WORKERS_KV"
 # id = "..."
+
+# ───────────────────────────────────────────────────────────────
+# Cron Triggers (NOT available on Cloudflare Workers free tier)
+# ───────────────────────────────────────────────────────────────
+# The app uses Vercel-style cron jobs defined in vercel.json, but
+# Cloudflare Workers free tier does NOT support cron triggers.
+#
+# Workaround: Use an external scheduler (cron-job.org, EasyCron, or
+# a GitHub Actions workflow) to call these endpoints with the
+# CRON_SECRET bearer token:
+#
+#   GET /api/cron/digest             — daily AI digest (0 7 * * *)
+#   GET /api/cron/import-sources     — run import sources (0 6 * * *)
+#   GET /api/cron/backup             — daily DB backup (0 5 * * *)
+#   GET /api/cron/categorize-jobs    — AI job categorization (0 8 * * *)
+#   GET /api/cron/ai-usage-rollup    — AI usage aggregation (0 4 * * *)
+#
+# If you upgrade to a paid Cloudflare Workers plan ($5/month), add:
+# Scheduled execution is owned by .github/workflows/scheduled-jobs.yml.
+# OpenNext does not export a Cloudflare scheduled() handler for these routes;
+# leaving [triggers] enabled causes every Cloudflare cron invocation to fail
+# with "Handler does not export a scheduled() function".
+
+# Explicitly replace any previously attached Cloudflare schedules with none.
+[triggers]
+crons = []
