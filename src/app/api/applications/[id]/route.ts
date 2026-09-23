@@ -38,7 +38,14 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const body = await req.json();
-  const currentUser = await getCurrentUserContext();
+  // The auth lookup and the pre-update read are independent, so run them in
+  // parallel. Each is a full round trip to the VPS through Hyperdrive; doing
+  // them back to back added a whole extra round trip to every status change.
+  const needsCurrentApplication = "status" in body || "ae_stage" in body || "application_stage" in body;
+  const [currentUser, prefetchedApplication] = await Promise.all([
+    getCurrentUserContext(),
+    needsCurrentApplication ? findApplicationById(params.id) : Promise.resolve(null),
+  ]);
   if (!currentUser) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
@@ -110,7 +117,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   let currentApplication: Awaited<ReturnType<typeof findApplicationById>> = null;
   
   if ("status" in updates || "ae_stage" in updates) {
-    currentApplication = await findApplicationById(params.id);
+    currentApplication = prefetchedApplication;
     previousStatus = currentApplication?.status ?? null;
     previousReviewStatus = currentApplication?.review_status ?? null;
     previousAeStage = currentApplication?.ae_stage ?? null;

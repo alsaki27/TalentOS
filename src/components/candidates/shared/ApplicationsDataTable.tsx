@@ -298,7 +298,10 @@ export default function ApplicationsDataTable({
                     ) : (
                       <select
                         value={app.status}
-                        disabled={isLoading}
+                        // Not disabled while saving: the parent applies the change
+                        // optimistically, so locking the control only made users
+                        // wait out the full PATCH round trip before the next edit.
+                        aria-busy={isLoading}
                         className={`badge badge-${app.status}`}
                         onChange={function (e) { handleStatusChange(app.application_id, e.target.value); }}
                         style={{

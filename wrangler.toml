@@ -49,6 +49,13 @@ cpu_ms = 30_000
 [observability]
 enabled = true
 
+# Run the Worker near the database instead of near the user. Every request
+# makes several sequential Postgres round trips; from an edge in Asia each one
+# crosses to the US VPS separately. Smart Placement moves execution next to
+# the origin, so a request pays that long hop once instead of per query.
+[placement]
+mode = "smart"
+
 # ───────────────────────────────────────────────────────────────
 # Hyperdrive — how the Worker reaches the self-hosted Postgres
 # ───────────────────────────────────────────────────────────────
