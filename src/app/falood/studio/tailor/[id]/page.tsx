@@ -28,6 +28,23 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const [activePanel, setActivePanel] = useState<'form' | 'customize' | 'settings'>('form');
     const fileInputRef = useRef<HTMLInputElement>(null);
     const lastSavedSnapshotRef = useRef<string | null>(null);
+    // Synchronous mutual-exclusion for saves, mirroring the base resume
+    // builder's persistBaseResume (see src/app/falood/studio/base/[baseResumeId]/page.tsx
+    // for the full history: an unguarded PATCH there once let two overlapping
+    // saves race and clobber each other, since each PATCH fully overwrites
+    // the row and out-of-order responses let an older save win). This save
+    // path has the same shape and was missing the same guard. A save this
+    // skips is never lost - the debounce effect below re-runs the instant
+    // isSaving clears and retries with the freshest state.
+    const isSavingRef = useRef(false);
+    // Mirrors the fields persistTailoredApplication snapshots, so the
+    // unload/unmount safety net below always reads the latest edits without
+    // depending on state directly (which would re-attach a global listener
+    // on every keystroke).
+    const latestStateRef = useRef({ resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions });
+    useEffect(() => {
+        latestStateRef.current = { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions };
+    }, [state.resumeData, state.chatHistory, state.jobDescription, state.versions]);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
     const [candidateId, setCandidateId] = useState<string | null>(null);
     const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
@@ -84,6 +101,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     }, [applicationId, company, jobTitle, dispatch]);
 
     const persistTailoredApplication = useCallback(async (showSuccessToast = false) => {
+        // Never let two PATCHes race - see isSavingRef's declaration for why.
+        // The debounce effect below re-checks and retries once this clears,
+        // so a save that's skipped here is never silently lost.
+        if (isSavingRef.current) return false;
+
         const snapshot = JSON.stringify({
             resumeData: state.resumeData,
             chatHistory: state.chatHistory,
@@ -95,6 +117,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             return true;
         }
 
+        isSavingRef.current = true;
         setIsSaving(true);
         setSaveStatus('saving');
         try {
@@ -124,6 +147,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             if (showSuccessToast) showToast('Save failed.');
             return false;
         } finally {
+            isSavingRef.current = false;
             setIsSaving(false);
         }
     }, [applicationId, company, state.chatHistory, state.jobDescription, state.resumeData]);
@@ -206,6 +230,46 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
         return () => window.clearTimeout(timeoutId);
     }, [hasLoadedInitialData, isLoading, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData]);
+
+    // Autosave is debounced by 1s, and even the explicit Save button's PATCH
+    // is a real network round trip - closing the tab or navigating away
+    // inside that window has always silently discarded the edit, but that
+    // window got much easier to lose the moment the database moved off
+    // Neon's fast HTTP driver onto a TCP connection through Hyperdrive (a
+    // real per-save round trip instead of a near-instant stateless request) -
+    // and this endpoint additionally chains a base-resume sync write server
+    // side (see the PATCH handler), making its round trip longer still. This
+    // is exactly the "saved with no error, but reopening shows the old
+    // content unless I wait a few seconds first" report. `beforeunload`
+    // covers a real tab close/refresh; the cleanup below covers a same-tab
+    // client-side navigation away from this route, which never fires
+    // beforeunload at all. Both flush with `keepalive` - the same guarantee
+    // sendBeacon relies on to survive page unload - since sendBeacon itself
+    // can only send POST, not PATCH.
+    useEffect(() => {
+        const isDirty = () => JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
+        const flushBeacon = () => {
+            const { resumeData, chatHistory, jobDescription, versions } = latestStateRef.current;
+            fetch(`/api/falood/applications?id=${applicationId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory, versions }),
+                keepalive: true,
+            }).catch(() => {});
+        };
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            if (!isDirty()) return;
+            flushBeacon();
+            event.preventDefault();
+            event.returnValue = '';
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            if (isDirty()) flushBeacon();
+        };
+    }, [applicationId, company]);
 
     const handleDownloadPDF = () => window.print();
 

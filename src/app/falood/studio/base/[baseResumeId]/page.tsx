@@ -214,6 +214,14 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     // ever in flight; the debounce effect below retries with the freshest
     // state once it clears.
     const isSavingRef = useRef(false);
+    // Mirrors state.resumeData so the unload/unmount safety net below (which
+    // must never depend on state directly - that would re-attach a global
+    // listener on every keystroke) always reads the latest edits instead of
+    // whatever was current when the effect first ran.
+    const resumeDataRef = useRef(state.resumeData);
+    useEffect(() => {
+        resumeDataRef.current = state.resumeData;
+    }, [state.resumeData]);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
@@ -369,6 +377,45 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
 
         return () => window.clearTimeout(timeoutId);
     }, [hasLoadedInitialData, isLoading, isNew, isSaving, persistBaseResume, state.resumeData]);
+
+    // Autosave is debounced by 1s, and even the explicit Save button's PATCH
+    // is a real network round trip - closing the tab or navigating away
+    // inside that window has always silently discarded the edit, but that
+    // window got much easier to lose the moment the database moved off
+    // Neon's fast HTTP driver onto a TCP connection through Hyperdrive (a
+    // real per-save round trip instead of a near-instant stateless request).
+    // This is exactly the "saved with no error, but reopening shows the old
+    // content unless I wait a few seconds first" report. `beforeunload`
+    // covers a real tab close/refresh; the cleanup below covers a same-tab
+    // client-side navigation away from this route, which never fires
+    // beforeunload at all. Both flush with `keepalive` - the same guarantee
+    // sendBeacon relies on to survive page unload - since sendBeacon itself
+    // can only send POST, not PATCH.
+    useEffect(() => {
+        if (isNew) return;
+
+        const isDirty = () => JSON.stringify(resumeDataRef.current) !== lastSavedSnapshotRef.current;
+        const flushBeacon = () => {
+            fetch(`/api/base-resumes/${baseResumeId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: resumeDataRef.current }),
+                keepalive: true,
+            }).catch(() => {});
+        };
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            if (!isDirty()) return;
+            flushBeacon();
+            event.preventDefault();
+            event.returnValue = '';
+        };
+
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => {
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            if (isDirty()) flushBeacon();
+        };
+    }, [baseResumeId, isNew]);
 
     const handleTailorSubmit = async (data: { jobTitle: string; company: string; jobDescription: string }) => {
         setShowTailorModal(false);
