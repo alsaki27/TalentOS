@@ -1629,8 +1629,20 @@ function PipelineActions({
   const wfStatus = item.workflow_status;
   const formattedWorkflowScore = formatScoreOutOfTen(item.workflow_score);
 
-  // Ready — show the tailored resume link
-  if (genStatus === "ready" && item.workflow_resume_version_id) {
+  // Ready — show the tailored resume link. Gated on the real resume link
+  // itself, not only resume_generation_status: an application can carry
+  // more than one application_ai_workflows row over time (retries,
+  // regenerates), and resume_generation_status reflects whichever workflow
+  // touched it last - which can be a different, still-in-progress or
+  // freshly re-queued row than the one that actually produced the resume
+  // currently linked via tailored_resume_version_id. Confirmed live: an
+  // application already showing a real Avg/Final score and a TAILORED
+  // resume id still fell through to "Resume link missing" because a
+  // sibling workflow's reset had just set resume_generation_status back to
+  // 'queued'. wfStatus === "completed" is this workflow's own authoritative
+  // terminal state, so a real resume id alongside it is trustworthy
+  // regardless of what the shared status column currently says.
+  if (item.workflow_resume_version_id && (genStatus === "ready" || wfStatus === "completed")) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         <span className="badge badge-success">✅ Generated</span>
