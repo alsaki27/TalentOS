@@ -65,12 +65,21 @@ async function checkRouteHealth(
   automationId: string,
   provider: string,
   model: string | null | undefined,
+  routeRank?: number,
 ): Promise<{ blocked: boolean; reason?: string }> {
   // This is intentionally limited to OpenCode. Vertex is the configured
   // safety net and must remain available even when it has a transient error;
   // blocking the only fallback would turn a recoverable provider incident
   // into a hard pipeline failure.
   if (provider !== "opencode" || !model) return { blocked: false };
+  // The application pipeline's third route is an explicit last-resort
+  // provider. Do not let the normal OpenCode circuit breaker make that route
+  // unreachable after the two Vertex gateways have already failed; the
+  // provider call itself remains the source of truth and can still fall
+  // through to a retryable workflow error.
+  if (automationId.startsWith("application_") && (routeRank ?? 0) >= 3) {
+    return { blocked: false };
+  }
 
   try {
     const health = await queryOne<RouteHealthRow>(
@@ -324,7 +333,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel);
+        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
           await recordUsageEvent({
@@ -397,7 +406,7 @@ export async function getProviderForAutomation(
         }
 
         const effectiveModel = route.model_override ?? keyRow.model;
-        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel);
+        const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
           await recordUsageEvent({
