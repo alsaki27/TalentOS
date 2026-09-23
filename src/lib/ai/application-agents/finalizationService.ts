@@ -41,7 +41,10 @@ export async function finalizeWorkflow(
   // introduced caching that didn't exist against the old Neon endpoint. The
   // caller already has the authoritative post-write artifact list in hand,
   // so prefer that over re-querying through the cache.
-  const artifacts = preloadedArtifacts ?? (await listArtifacts(workflowId));
+  // If the caller did not already hold the authoritative post-write list,
+  // force a locking read. A plain SELECT can be served from Hyperdrive's
+  // read cache immediately after Final Polish commits its artifact.
+  const artifacts = preloadedArtifacts ?? (await listArtifacts(workflowId, { fresh: true }));
 
   const wf = await queryOne<{
     id: string; application_id: string; candidate_id: string; job_id: string | null; base_resume_id: string | null;

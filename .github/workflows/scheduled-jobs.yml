@@ -107,7 +107,7 @@ jobs:
     name: Workflow dispatcher
     # Second layer over the loop's own ~270s wall clock below, same
     # belt-and-suspenders pattern as job-ceo-dispatch's timeout-minutes: 60.
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Call Workflow dispatcher (looped)
         run: |
@@ -128,7 +128,12 @@ jobs:
           FAILURES=0
           while [ $SECONDS -lt $END ]; do
             CALLS=$((CALLS + 1))
-            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 --connect-timeout 15 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
+            # A dispatch call owns one complete AI stage. The outer stage
+            # guard is timeout_ms*2+5s; current production defaults permit
+            # up to 445s for Final Polish, and database-configured agents may
+            # use 300s (605s with the fallback budget). A 60s client timeout
+            # let the request disappear while the Worker still held the lease.
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 660 --connect-timeout 15 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/application-ai-workflows/dispatch")
             if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
               FAILURES=$((FAILURES + 1))
               echo "::warning::Dispatch call failed with HTTP $HTTP_CODE"

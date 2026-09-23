@@ -71,6 +71,7 @@ import {
   findWorkflowById,
   createStageRun,
   listStageRuns,
+  listArtifacts,
   updateStageRun,
   updateWorkflowStatus,
 } from "@/server/repositories/applicationAiWorkflowRepository";
@@ -237,5 +238,32 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       (c: any[]) => c[1]?.status === "failed",
     );
     expect(failedStageCall?.[1]?.error_code).toBe("invalid_output");
+  });
+
+  it("uses a fresh artifact read when recovering at the finalization boundary", async () => {
+    const completedStageWorkflow = {
+      ...hiringPanelWorkflow(),
+      status: "running",
+      current_stage: 11,
+      lock_version: 7,
+    };
+    (findWorkflowById as any).mockResolvedValue(completedStageWorkflow);
+    const artifacts = [{
+      id: "artifact-final",
+      workflow_id: "wf-1",
+      automation_id: "application_final_polish",
+      sequence_number: 4,
+      schema_version: "FinalResumeV1",
+      content_hash: "hash",
+      data: { exportReady: true },
+      created_at: new Date().toISOString(),
+    }];
+    (listArtifacts as any).mockResolvedValue(artifacts);
+
+    await processWorkflowStage("wf-1", 7);
+
+    expect(listArtifacts).toHaveBeenCalledWith("wf-1", { fresh: true });
+    const { finalizeWorkflow } = await import("@/lib/ai/application-agents/finalizationService");
+    expect(finalizeWorkflow).toHaveBeenCalledWith("wf-1", 7, artifacts);
   });
 });

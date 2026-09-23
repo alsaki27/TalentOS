@@ -737,7 +737,12 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
   const currentIdx = wf.current_stage;
 
   if (currentIdx >= agentOrder.length) {
-    await finalizeWorkflow(workflowId, lockVersion);
+    // This recovery path can run after a stage-to-stage continuation was
+    // interrupted. Do not let finalization repeat a cached artifact read; the
+    // repository's fresh option uses a locking read to bypass Hyperdrive's
+    // stale SELECT cache.
+    const authoritativeArtifacts = await listArtifacts(workflowId, { fresh: true });
+    await finalizeWorkflow(workflowId, lockVersion, authoritativeArtifacts);
     return;
   }
 
