@@ -477,9 +477,19 @@ export async function createArtifact(input: {
   return rows[0];
 }
 
-export async function listArtifacts(workflowId: string): Promise<ArtifactRow[]> {
+export async function listArtifacts(
+  workflowId: string,
+  options?: { fresh?: boolean },
+): Promise<ArtifactRow[]> {
+  // Hyperdrive may cache an otherwise read-only SELECT. Control-plane callers
+  // that are reconciling a just-written artifact must opt into a locking read;
+  // FOR UPDATE makes the query non-cacheable and gives us read-after-write
+  // consistency without changing the normal dashboard/listing path.
+  const freshnessClause = options?.fresh ? " FOR UPDATE" : "";
   return query<ArtifactRow>(
-    "SELECT * FROM application_ai_artifacts WHERE workflow_id = $1 ORDER BY sequence_number",
+    `SELECT * FROM application_ai_artifacts
+      WHERE workflow_id = $1
+      ORDER BY sequence_number${freshnessClause}`,
     [workflowId]
   );
 }

@@ -107,13 +107,27 @@ function pgConnectionConfig(rawUrl: string) {
 // ── pg driver ───────────────────────────────────────────────────────────────
 
 let _pool: PgPool | null = null;
+let _poolUrl: string | null = null;
 
 async function getPool(): Promise<PgPool> {
-  if (!_pool) {
+  const rawUrl = getDatabaseUrl();
+  if (!_pool || _poolUrl !== rawUrl) {
     const { default: pg } = await import("pg");
-    const cfg = pgConnectionConfig(getDatabaseUrl());
+    const previousPool = _pool;
+    const cfg = pgConnectionConfig(rawUrl);
     console.log(`[DB] Initializing Postgres pool (host: ${new URL(cfg.connectionString).hostname})`);
     _pool = new pg.Pool({ ...cfg, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 });
+    _poolUrl = rawUrl;
+    // A Worker isolate can initialize the application bundle before the
+    // request-time Hyperdrive binding is available. If that first query built
+    // a pool from the fallback DATABASE_URL, do not keep reusing it after the
+    // binding arrives. Drain the old pool in the background so in-flight work
+    // can finish without leaking sockets.
+    if (previousPool && previousPool !== _pool) {
+      void previousPool.end().catch((err) =>
+        console.warn("[DB] Previous Postgres pool close failed after URL switch:", err?.message ?? err)
+      );
+    }
     // An idle-client error must never become an unhandled rejection that takes
     // the process down; the pool discards the client and the next query redials.
     _pool.on("error", (err) => console.error("[DB] Idle client error:", err.message));
@@ -267,14 +281,17 @@ function collectingSql(sink: LazyQuery<any>[]): SqlClient {
 // ── Neon driver (retained so the connection string alone decides) ───────────
 
 let _neonSql: any = null;
+let _neonUrl: string | null = null;
 
 async function getNeonSql() {
-  if (!_neonSql) {
+  const rawUrl = getDatabaseUrl();
+  if (!_neonSql || _neonUrl !== rawUrl) {
     const { neon } = await import("@neondatabase/serverless");
-    const url = new URL(getDatabaseUrl());
+    const url = new URL(rawUrl);
     url.searchParams.delete("channel_binding"); // TCP-only, rejected over HTTP
     console.log(`[DB] Initializing Neon HTTP connection (host: ${url.hostname})`);
     _neonSql = neon(url.toString(), { fetchOptions: { cache: "no-store" } });
+    _neonUrl = rawUrl;
   }
   return _neonSql;
 }
@@ -282,10 +299,16 @@ async function getNeonSql() {
 // ── public API (unchanged signatures - 361 modules depend on these) ────────
 
 let _client: SqlClient | null = null;
+let _clientUrl: string | null = null;
 
 function getClient(): SqlClient {
-  if (_client) return _client;
   const url = getDatabaseUrl();
+  // The Worker binding is only available inside fetch(request, env, ctx). A
+  // module imported earlier can therefore initialize this adapter against the
+  // fallback DATABASE_URL. Cache by URL, not just by module lifetime, so the
+  // first real request switches to Hyperdrive instead of silently continuing
+  // to use the direct VPS connection for the entire isolate lifetime.
+  if (_client && _clientUrl === url) return _client;
 
   if (isNeon(url)) {
     // Defer to the Neon driver, adapting its (already lazy) results to the same
@@ -306,6 +329,7 @@ function getClient(): SqlClient {
   } else {
     _client = makePgSql();
   }
+  _clientUrl = url;
   return _client;
 }
 
