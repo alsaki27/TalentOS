@@ -1371,12 +1371,60 @@ export async function cancelWorkflow(workflowId: string): Promise<void> {
   await syncWorkflowToApplication(workflowId, "cancelled");
 }
 
+/**
+ * Re-pin a workflow to the currently active routing state without touching its
+ * immutable job/resume/evidence inputs or its completed stage artifacts.
+ *
+ * Workflows intentionally keep a routing snapshot for replayability. That is
+ * correct while a workflow is running, but a queued/terminal workflow should
+ * not remain pinned to a provider configuration that has since been retired.
+ * Queue repair calls this only before a new attempt is dispatched.
+ */
+export async function refreshWorkflowRoutingSnapshot(workflowId: string): Promise<boolean> {
+  const wf = await findWorkflowById(workflowId);
+  if (!wf) return false;
+
+  const runtime = await getAiRuntimeConfig();
+  if (!runtime.active_routing_state_id) return false;
+
+  const routeSnapshot = await query(
+    `SELECT automation_id, rank, ai_key_id, provider, model_override, reasoning_effort
+       FROM ai_routing_state_routes
+      WHERE state_id = $1 AND is_enabled = true
+      ORDER BY automation_id, rank`,
+    [runtime.active_routing_state_id],
+  );
+  const configSnapshot = {
+    ...((wf.config_snapshot ?? {}) as Record<string, unknown>),
+    routingStateId: runtime.active_routing_state_id,
+    routeSnapshot,
+  };
+
+  await execute(
+    `UPDATE application_ai_workflows
+        SET routing_state_id = $1,
+            route_snapshot = $2::jsonb,
+            config_snapshot = $3::jsonb,
+            updated_at = NOW()
+      WHERE id = $4
+        AND status IN ('queued', 'failed', 'cancelled')`,
+    [
+      runtime.active_routing_state_id,
+      JSON.stringify(routeSnapshot),
+      JSON.stringify(configSnapshot),
+      workflowId,
+    ],
+  );
+  return true;
+}
+
 /** Retry a failed/cancelled workflow from its current stage (preserves progress). */
 export async function retryWorkflow(workflowId: string): Promise<void> {
   const wf = await findWorkflowById(workflowId);
   if (!wf || (wf.status !== "failed" && wf.status !== "cancelled")) return;
   await closeOrphanedStageRuns(workflowId);
   await refreshWorkflowBaseResume(workflowId, wf);
+  await refreshWorkflowRoutingSnapshot(workflowId);
   // last_error must be cleared here, not just status - otherwise the Kanban
   // (and Application Queue) keep showing the PREVIOUS failure's message
   // indefinitely after a successful retry, since nothing else ever
@@ -1420,6 +1468,7 @@ export async function rerunFromStage(workflowId: string, stage: number): Promise
   if (!wf) return;
   await closeOrphanedStageRuns(workflowId);
   await refreshWorkflowBaseResume(workflowId, wf);
+  await refreshWorkflowRoutingSnapshot(workflowId);
   await updateWorkflowStatus(workflowId, "queued", {
     current_stage: Math.max(0, stage),
     last_error: null,
