@@ -15,6 +15,15 @@
   margin: 0;
 }
 
+/* globals.css reserves body { padding-top: var(--nav-height) } for the
+   internal staff NavBar, which returns null on every /portal route - so
+   that reserved strip renders empty, filled with body's own near-black
+   background, above this page's own topbar. Zero it out only when this
+   page is present. */
+body:has(.portal-root) {
+  padding-top: 0;
+}
+
 .portal-root {
   /* --p-navy is the ACCENT role (icons, links, borders, focus rings on
      tinted surfaces) - it shifts to a lighter, still-navy-hued blue in dark

@@ -128,7 +128,6 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
           <CollapsibleCard title="Application overview">
             <dl className="portal-detail-facts">
               <div><dt>Submitted</dt><dd>{formatDate(application.submitted_at)}</dd></div>
-              <div><dt>Source</dt><dd>{application.job?.source || "Unknown"}</dd></div>
               <div><dt>Next action</dt><dd>{application.next_action || "No action scheduled"}</dd></div>
               <div><dt>Follow-up</dt><dd>{formatDate(application.follow_up_at)}</dd></div>
             </dl>

@@ -76,11 +76,6 @@ function formatDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? "No date" : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function sourceLabel(source: string | null) {
-  if (!source) return "Unknown source";
-  return source === "company_site" ? "Company site" : source.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
 // ARCHIVED 2026-09-08 — backed the resume-readiness pill/filter, both hidden
 // pending a future redesign of that feature. To restore: uncomment this.
 // function resumeLabel(status: PortalApplication["resume"]["status"]) {
@@ -149,10 +144,6 @@ export default function CandidatePortalApplications({ applications, total, page,
           <label className="portal-filter-field"><span>From</span><input type="date" value={filters.dateFrom} onChange={(event) => onFiltersChange({ dateFrom: event.target.value, page: 1 })} /></label>
           <label className="portal-filter-field"><span>To</span><input type="date" value={filters.dateTo} onChange={(event) => onFiltersChange({ dateTo: event.target.value, page: 1 })} /></label>
         </>}
-        <FilterSelect label="Source" value={filters.source} onChange={(value) => onFiltersChange({ source: value, page: 1 })}>
-          <option value="">All sources</option>
-          {Object.entries(sourceCounts).map(([source, count]) => <option key={source} value={source}>{sourceLabel(source)} ({count})</option>)}
-        </FilterSelect>
         {/* ARCHIVED 2026-09-08 — "Resume" status filter hidden pending a
             future redesign of the resume-readiness feature. The underlying
             filters.resumeStatus state, URL param, and API support are left
@@ -213,7 +204,6 @@ export default function CandidatePortalApplications({ applications, total, page,
                     <div className="portal-app-company">{application.job?.company ?? "Company unavailable"}</div>
                     <div className="portal-app-meta">
                       {application.job?.location && <span>{application.job.location}</span>}
-                      <span>{sourceLabel(application.job?.source ?? null)}</span>
                       <span>Submitted {formatDate(application.submitted_at)}</span>
                       {salaryLabel(application.job) && <span>{salaryLabel(application.job)}</span>}
                       <span>Updated {formatDate(application.updated_at)}</span>
