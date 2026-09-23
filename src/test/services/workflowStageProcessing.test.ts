@@ -22,7 +22,16 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
   updateWorkflowStatus: vi.fn().mockResolvedValue(undefined),
   createStageRun: vi.fn().mockResolvedValue({ id: "stage-run-1" }),
   updateStageRun: vi.fn().mockResolvedValue(true),
-  createArtifact: vi.fn().mockResolvedValue({ id: "artifact-1" }),
+  createArtifact: vi.fn().mockImplementation(async (input: any) => ({
+    id: "artifact-1",
+    workflow_id: input.workflowId,
+    automation_id: input.automationId,
+    sequence_number: input.sequenceNumber,
+    schema_version: input.schemaVersion,
+    content_hash: input.contentHash,
+    data: input.data,
+    created_at: new Date().toISOString(),
+  })),
   listStageRuns: vi.fn().mockResolvedValue([]),
   listArtifacts: vi.fn().mockResolvedValue([]),
   claimWorkflowById: vi.fn().mockResolvedValue({
@@ -248,16 +257,21 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
       lock_version: 7,
     };
     (findWorkflowById as any).mockResolvedValue(completedStageWorkflow);
-    const artifacts = [{
-      id: "artifact-final",
+    const artifacts = [
+      "application_job_lens",
+      "application_resume_forge",
+      "application_hiring_panel",
+      "application_final_polish",
+    ].map((automation_id, index) => ({
+      id: `artifact-${index + 1}`,
       workflow_id: "wf-1",
-      automation_id: "application_final_polish",
-      sequence_number: 4,
-      schema_version: "FinalResumeV1",
-      content_hash: "hash",
+      automation_id,
+      sequence_number: index + 1,
+      schema_version: "v1",
+      content_hash: `hash-${index + 1}`,
       data: { exportReady: true },
       created_at: new Date().toISOString(),
-    }];
+    }));
     (listArtifacts as any).mockResolvedValue(artifacts);
 
     await processWorkflowStage("wf-1", 7);
@@ -265,5 +279,28 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     expect(listArtifacts).toHaveBeenCalledWith("wf-1", { fresh: true });
     const { finalizeWorkflow } = await import("@/lib/ai/application-agents/finalizationService");
     expect(finalizeWorkflow).toHaveBeenCalledWith("wf-1", 7, artifacts);
+  });
+
+  it("rewinds final polish to the first missing required agent artifact", async () => {
+    const finalPolishWorkflow = {
+      ...hiringPanelWorkflow(),
+      status: "running",
+      current_stage: 3,
+      lock_version: 9,
+    };
+    (findWorkflowById as any).mockResolvedValue(finalPolishWorkflow);
+    (listArtifacts as any).mockResolvedValue([
+      { automation_id: "application_job_lens" },
+      { automation_id: "application_resume_forge" },
+    ]);
+
+    await processWorkflowStage("wf-1", 9);
+
+    const rewind = (updateWorkflowStatus as any).mock.calls.find(
+      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2,
+    );
+    expect(rewind?.[2]?.last_error).toContain("application_hiring_panel");
+    const { finalizeWorkflow } = await import("@/lib/ai/application-agents/finalizationService");
+    expect(finalizeWorkflow).not.toHaveBeenCalled();
   });
 });

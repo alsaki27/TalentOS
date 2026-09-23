@@ -74,6 +74,34 @@ function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
   }));
 }
 
+const REQUIRED_APPLICATION_AGENT_IDS = APPLICATION_AGENT_IDS.slice(0, 4);
+
+function firstMissingApplicationStage(artifacts: ArtifactRow[]): number {
+  return REQUIRED_APPLICATION_AGENT_IDS.findIndex((automationId) =>
+    !artifacts.some((artifact) => artifact.automation_id === automationId)
+  );
+}
+
+async function requeueFromMissingApplicationStage(
+  workflowId: string,
+  missingStage: number,
+  lockVersion: number,
+  artifacts: ArtifactRow[],
+): Promise<void> {
+  const missingAgent = REQUIRED_APPLICATION_AGENT_IDS[missingStage];
+  const updated = await updateWorkflowStatus(workflowId, "queued", {
+    current_stage: missingStage,
+    stage_retry_count: 0,
+    last_error: `Pipeline integrity repair: missing ${missingAgent} artifact; requeued from stage ${missingStage}`,
+  }, lockVersion);
+  if (!updated) throw new Error("Workflow claim lost while requeuing an incomplete pipeline");
+  await syncWorkflowToApplication(workflowId, "queued", missingStage);
+  console.warn(
+    `[Dispatch Chain] Requeued incomplete workflow ${workflowId} from stage ${missingStage}; ` +
+      `artifacts=${artifacts.map((artifact) => artifact.automation_id).join(",")}`,
+  );
+}
+
 export interface DispatchResult {
   dispatched: boolean;
   workflowId: string | null;
@@ -742,6 +770,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     // repository's fresh option uses a locking read to bypass Hyperdrive's
     // stale SELECT cache.
     const authoritativeArtifacts = await listArtifacts(workflowId, { fresh: true });
+    const missingStage = firstMissingApplicationStage(authoritativeArtifacts);
+    if (missingStage >= 0) {
+      await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, authoritativeArtifacts);
+      return;
+    }
     await finalizeWorkflow(workflowId, lockVersion, authoritativeArtifacts);
     return;
   }
@@ -1009,7 +1042,13 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         // re-query through Hyperdrive's cache - see comment in
         // finalizeWorkflow for why that re-query can miss this exact
         // artifact.
-        await finalizeWorkflow(workflowId, lockVersion, [...previousArtifacts, artifact]);
+        const finalArtifacts = [...previousArtifacts, artifact];
+        const missingStage = firstMissingApplicationStage(finalArtifacts);
+        if (missingStage >= 0) {
+          await requeueFromMissingApplicationStage(workflowId, missingStage, lockVersion, finalArtifacts);
+          return;
+        }
+        await finalizeWorkflow(workflowId, lockVersion, finalArtifacts);
       } catch (finalizeErr: any) {
         console.error(`[Workflow ${workflowId}] finalizeWorkflow threw:`, finalizeErr?.message ?? finalizeErr);
         // Check whether the core transaction committed despite the exception.
