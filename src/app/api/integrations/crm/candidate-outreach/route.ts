@@ -4,10 +4,15 @@ import {
   CRM_RECRUITER_APPLICATION_RECENCY_DAYS,
   CRM_RECRUITER_APPLICATION_STAGES,
   CRM_RECRUITER_BLOCKING_STAGES,
+  CRM_RECRUITER_CANDIDATE_PIPELINE_STAGE,
+  CRM_RECRUITER_CANDIDATE_STATUS,
   CRM_RECRUITER_LEGACY_STATUSES,
   crmRecruiterApplicationStage,
 } from "@/lib/crmCandidateEligibility";
 import { fetchJobPageText, isSafeExternalUrl } from "@/lib/ai/job-agents/fetchJobPage";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function authorized(req: NextRequest) {
   const secret = process.env.CRM_INTEGRATION_SECRET;
@@ -121,6 +126,7 @@ export async function GET(req: NextRequest) {
   const blockingStages = CRM_RECRUITER_BLOCKING_STAGES.map((stage) => `'${stage}'`).join(", ");
   const canonicalStage = "lower(NULLIF(trim(a.application_stage), ''))";
   const legacyStatus = "lower(NULLIF(trim(a.status), ''))";
+  const applicationLoggedAt = "COALESCE(a.applied_at, a.ae_applied_at, a.created_at)";
   const eligibleApplication = `(
     ${canonicalStage} IN (${canonicalStages})
     OR ((${canonicalStage} IS NULL OR ${canonicalStage} NOT IN (${blockingStages}))
@@ -133,7 +139,7 @@ export async function GET(req: NextRequest) {
        c.phone AS candidate_phone, c.linkedin_url AS candidate_linkedin_url,
        c.target_roles, c.target_industries, c.location_preference, c.work_mode_preference,
        a.id AS application_id, a.job_id, a.status AS raw_application_status,
-       a.application_stage, a.applied_at, a.created_at AS application_created_at,
+       a.application_stage, a.applied_at, a.ae_applied_at, a.created_at AS application_created_at,
        a.tailored_resume_version_id, a.resume_generation_status,
        COALESCE(NULLIF(j.title, ''), NULLIF(a.adhoc_job_data->>'title', '')) AS job_title,
        COALESCE(NULLIF(j.company, ''), NULLIF(a.adhoc_job_data->>'company', '')) AS job_company,
@@ -148,13 +154,14 @@ export async function GET(req: NextRequest) {
      LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
      LEFT JOIN base_resumes br ON br.id = a.base_resume_id
      WHERE c.id = $1::uuid
-       AND lower(COALESCE(c.status, '')) = 'active'
+       AND lower(COALESCE(c.status, '')) = $3
+       AND lower(COALESCE(c.pipeline_stage, '')) = $4
        AND ${eligibleApplication}
-       AND COALESCE(a.applied_at, a.created_at) >= NOW() - INTERVAL '${CRM_RECRUITER_APPLICATION_RECENCY_DAYS} days'
+       AND ${applicationLoggedAt} >= NOW() - INTERVAL '${CRM_RECRUITER_APPLICATION_RECENCY_DAYS} days'
        AND ($2::uuid IS NULL OR a.id = $2::uuid)
-     ORDER BY COALESCE(a.applied_at, a.created_at) DESC, a.id DESC
+     ORDER BY ${applicationLoggedAt} DESC, a.id DESC
      LIMIT 1`,
-    [candidateId, applicationId]
+    [candidateId, applicationId, CRM_RECRUITER_CANDIDATE_STATUS, CRM_RECRUITER_CANDIDATE_PIPELINE_STAGE]
   );
   if (!row) return NextResponse.json({ error: "Eligible candidate application not found." }, { status: 404 });
 
@@ -190,7 +197,7 @@ export async function GET(req: NextRequest) {
       company: textValue(row.job_company) || null,
       location: textValue(row.job_location) || null,
       postedAt: textValue(row.job_posted_at) || null,
-      appliedAt: textValue(row.applied_at) || textValue(row.application_created_at) || null,
+      appliedAt: textValue(row.applied_at) || textValue(row.ae_applied_at) || textValue(row.application_created_at) || null,
       status: crmRecruiterApplicationStage(row.application_stage, row.raw_application_status),
       sourceUrl: textValue(row.job_source_url) || null,
       applyUrl: textValue(row.job_apply_url) || null,

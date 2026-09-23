@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { crmRecruiterApplicationStage } from "@/lib/crmCandidateEligibility";
+import {
+  crmRecruiterApplicationStage,
+  isCrmRecruiterCandidate,
+} from "@/lib/crmCandidateEligibility";
 
 describe("crmRecruiterApplicationStage", () => {
   it.each(["applied", "screening", "interview", "offer"])(
@@ -29,5 +32,21 @@ describe("crmRecruiterApplicationStage", () => {
   it("rejects unsupported or empty application states", () => {
     expect(crmRecruiterApplicationStage(null, "assigned")).toBeNull();
     expect(crmRecruiterApplicationStage("", "  ")).toBeNull();
+  });
+});
+
+describe("isCrmRecruiterCandidate", () => {
+  it("requires the account to be active and the pipeline stage to be Actively Applying", () => {
+    expect(isCrmRecruiterCandidate("active", "applying")).toBe(true);
+    expect(isCrmRecruiterCandidate("ACTIVE", "APPLYING")).toBe(true);
+  });
+
+  it.each([
+    ["active", "not_started"],
+    ["active", "paused"],
+    ["placed", "applying"],
+    [null, "applying"],
+  ])("rejects status %s with pipeline stage %s", (status, pipelineStage) => {
+    expect(isCrmRecruiterCandidate(status, pipelineStage)).toBe(false);
   });
 });

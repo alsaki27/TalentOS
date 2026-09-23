@@ -4,8 +4,13 @@ import {
   CRM_RECRUITER_APPLICATION_STAGES,
   CRM_RECRUITER_APPLICATION_RECENCY_DAYS,
   CRM_RECRUITER_BLOCKING_STAGES,
+  CRM_RECRUITER_CANDIDATE_PIPELINE_STAGE,
+  CRM_RECRUITER_CANDIDATE_STATUS,
   CRM_RECRUITER_LEGACY_STATUSES,
 } from "@/lib/crmCandidateEligibility";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function authorized(req: NextRequest) {
   const secret = process.env.CRM_INTEGRATION_SECRET;
@@ -27,7 +32,8 @@ export async function GET(req: NextRequest) {
   // This feed is intentionally limited to active candidate accounts. The
   // application-stage qualification below is separate from this candidate
   // lifecycle status and must not be widened by a caller-provided status.
-  const status = "active";
+  const status = CRM_RECRUITER_CANDIDATE_STATUS;
+  const pipelineStage = CRM_RECRUITER_CANDIDATE_PIPELINE_STAGE;
   const offset = (page - 1) * pageSize;
   const canonicalStages = CRM_RECRUITER_APPLICATION_STAGES.map((stage) => `'${stage}'`).join(", ");
   const legacyStatuses = CRM_RECRUITER_LEGACY_STATUSES
@@ -45,12 +51,17 @@ export async function GET(req: NextRequest) {
       AND ${legacyStatus} IN (${legacyStatuses})
     )
   )`;
-  const recentApplication = `COALESCE(a.applied_at, a.created_at) >= NOW() - INTERVAL '${CRM_RECRUITER_APPLICATION_RECENCY_DAYS} days'`;
+  // Some migrated application rows recorded the submission timestamp in
+  // ae_applied_at while applied_at remained null. Keep the recency rule the
+  // same, but use the complete application timestamp contract.
+  const applicationLoggedAt = "COALESCE(a.applied_at, a.ae_applied_at, a.created_at)";
+  const recentApplication = `${applicationLoggedAt} >= NOW() - INTERVAL '${CRM_RECRUITER_APPLICATION_RECENCY_DAYS} days'`;
 
   const totalRow = await queryOne<{ total: number }>(
     `SELECT COUNT(DISTINCT c.id)::int AS total
      FROM candidates c
      WHERE lower(COALESCE(c.status, '')) = $1
+       AND lower(COALESCE(c.pipeline_stage, '')) = $2
        AND EXISTS (
          SELECT 1
          FROM applications a
@@ -58,7 +69,7 @@ export async function GET(req: NextRequest) {
            AND ${eligibleApplication}
            AND ${recentApplication}
        )`,
-    [status]
+    [status, pipelineStage]
   );
   const data = await query(
     `SELECT
@@ -93,13 +104,14 @@ export async function GET(req: NextRequest) {
              'raw_status', a.status,
              'application_stage', a.application_stage,
              'applied_at', a.applied_at,
+             'ae_applied_at', a.ae_applied_at,
              'application_created_at', a.created_at
              , 'tailored_resume_version_id', a.tailored_resume_version_id
              , 'resume_generation_status', a.resume_generation_status
              , 'job_source_url', j.source_url
              , 'job_apply_url', j.apply_url
            )
-           ORDER BY COALESCE(a.applied_at, a.created_at) DESC, a.id DESC
+           ORDER BY ${applicationLoggedAt} DESC, a.id DESC
          ) FILTER (WHERE a.id IS NOT NULL),
          '[]'::jsonb
        ) AS applications
@@ -107,6 +119,7 @@ export async function GET(req: NextRequest) {
      JOIN applications a ON a.candidate_id = c.id
      LEFT JOIN jobs j ON j.id = a.job_id
      WHERE lower(COALESCE(c.status, '')) = $1
+       AND lower(COALESCE(c.pipeline_stage, '')) = $2
        AND ${eligibleApplication}
        AND ${recentApplication}
      GROUP BY
@@ -125,16 +138,20 @@ export async function GET(req: NextRequest) {
        c.work_mode_preference,
        c.available_start_date
      ORDER BY c.name ASC, c.id ASC
-     OFFSET $2 LIMIT $3`,
-    [status, offset, pageSize]
+     OFFSET $3 LIMIT $4`,
+    [status, pipelineStage, offset, pageSize]
   );
-  return NextResponse.json({
-    data: data ?? [],
-    total: totalRow?.total ?? 0,
-    page,
-    pageSize,
-    status,
-    applicationRecencyDays: CRM_RECRUITER_APPLICATION_RECENCY_DAYS,
-    applicationStages: CRM_RECRUITER_APPLICATION_STAGES,
-  });
+  return NextResponse.json(
+    {
+      data: data ?? [],
+      total: totalRow?.total ?? 0,
+      page,
+      pageSize,
+      status,
+      pipelineStage,
+      applicationRecencyDays: CRM_RECRUITER_APPLICATION_RECENCY_DAYS,
+      applicationStages: CRM_RECRUITER_APPLICATION_STAGES,
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
