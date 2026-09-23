@@ -1486,10 +1486,15 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                 <h4>Routes</h4>
                 {editRoutes.map((r, i) => {
                   const routeModelInfo = r.keyId ? keyModelsMap[r.keyId] : null;
-                  const routeDiscovered = routeModelInfo?.models?.filter((m: any) => m.source === "provider") || [];
-                  const routePresets = routeModelInfo?.models?.filter((m: any) => m.source === "preset") || [];
+                  // A provider model-discovery response can be present but
+                  // malformed while a key is failing. Keep the route editor
+                  // usable so admins can enter a custom model and repair the
+                  // route instead of crashing the whole control center.
+                  const routeModels = Array.isArray(routeModelInfo?.models) ? routeModelInfo.models : [];
+                  const routeDiscovered = routeModels.filter((m: any) => m.source === "provider");
+                  const routePresets = routeModels.filter((m: any) => m.source === "preset");
                   const isRouteModelCustom = !!(r.modelOverride && routeModelInfo &&
-                    !routeModelInfo.models.some((m: any) => m.id === r.modelOverride));
+                    !routeModels.some((m: any) => m.id === r.modelOverride));
                   const selectedKey = r.keyId ? enabledKeys.find(k => k.id === r.keyId) : null;
                   const capabilityWarnings: string[] = [];
                   if (editingAgent && PIPELINE_AGENT_IDS.has(editingAgent) && selectedKey) {
