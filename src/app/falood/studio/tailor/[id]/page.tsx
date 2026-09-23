@@ -124,12 +124,12 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
+                keepalive: true,
                 body: JSON.stringify({
                     jobDescription: state.jobDescription,
                     companyName: company || null,
                     resumeData: state.resumeData,
                     chatHistory: state.chatHistory,
-                    versions: state.versions,
                 }),
             });
 
@@ -181,6 +181,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
+                keepalive: true,
                 body: JSON.stringify({
                     versions: updatedVersions,
                     resumeData: state.resumeData,
@@ -206,6 +207,12 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             } else {
                 showToast(`Saved version: ${versionName} (no linked application archive)`);
             }
+            lastSavedSnapshotRef.current = JSON.stringify({
+                resumeData: state.resumeData,
+                chatHistory: state.chatHistory,
+                jobDescription: state.jobDescription,
+                versions: updatedVersions,
+            });
         } catch (error) {
             showToast(error instanceof Error ? error.message : 'Failed to save version');
         } finally {
@@ -249,11 +256,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     useEffect(() => {
         const isDirty = () => JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
         const flushBeacon = () => {
-            const { resumeData, chatHistory, jobDescription, versions } = latestStateRef.current;
+            const { resumeData, chatHistory, jobDescription } = latestStateRef.current;
             fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory, versions }),
+                body: JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory }),
                 keepalive: true,
             }).catch(() => {});
         };
@@ -265,8 +272,13 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         };
 
         window.addEventListener('beforeunload', handleBeforeUnload);
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'hidden' && isDirty()) flushBeacon();
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => {
             window.removeEventListener('beforeunload', handleBeforeUnload);
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
             if (isDirty()) flushBeacon();
         };
     }, [applicationId, company]);

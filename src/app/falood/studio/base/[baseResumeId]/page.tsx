@@ -299,6 +299,7 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
             const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
+                keepalive: true,
                 body: JSON.stringify({
                     content: state.resumeData,
                 }),

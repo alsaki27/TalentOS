@@ -9,27 +9,24 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 // pipeline stage and leaving a workflow stuck until the 5-minute cron
 // dispatcher (or a manual retry) picks it back up.
 //
-// MUST be awaited by the caller before the route handler returns its
-// response. A first attempt at this used a fire-and-forget dynamic
-// import().then() chain that the caller never awaited - the registration
-// itself raced the response being sent and, confirmed live, never won:
-// zero stage_runs were ever created for an auto-triggered workflow even
-// after several minutes, worse than the plain .catch() it replaced.
-// getCloudflareContext() must resolve, and ctx.waitUntil() must actually
-// be called, while the request's execution context is still active -
-// i.e. before the handler returns - not in a detached microtask chain
-// racing the response.
+// getCloudflareContext() and ctx.waitUntil() are called synchronously while
+// the request's execution context is still active. Callers may still use
+// `await backgroundDispatch(...)` for readability; the function itself does
+// not add an asynchronous delay before the route can return its response.
 //
 // Falls back to just letting the promise run un-awaited (the old
 // behavior) when not running inside a real Cloudflare Workers request -
 // e.g. local dev via `next dev`. Never throws: a failure to register with
 // waitUntil should never break the caller's actual response.
-export async function backgroundDispatch(promise: Promise<unknown>): Promise<void> {
+export function backgroundDispatch(promise: Promise<unknown>): void {
   const suppressed = promise.catch((err) => {
     console.error(`[Dispatch Chain] backgroundDispatch promise rejected:`, err);
   });
   try {
-    const { ctx } = await getCloudflareContext();
+    // The request context is installed synchronously by the Worker entrypoint.
+    // Register waitUntil synchronously so callers do not delay their response
+    // on an unnecessary promise turn or context lookup.
+    const { ctx } = getCloudflareContext();
     ctx.waitUntil(suppressed);
     console.log(`[Dispatch Chain] backgroundDispatch registered with ctx.waitUntil successfully.`);
   } catch (err) {
