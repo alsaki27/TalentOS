@@ -390,14 +390,14 @@ export async function createStageRun(input: {
                   ) AS attempt_number
              FROM application_ai_stage_runs sr
             CROSS JOIN allocation_lock
-            WHERE sr.workflow_id = $1 AND sr.sequence_number = $3
+            WHERE sr.workflow_id = $1::uuid AND sr.sequence_number = $3::int
          )
      INSERT INTO application_ai_stage_runs
       (workflow_id, automation_id, sequence_number, attempt_number, status)
      SELECT $1, $2, $3, next_attempt.attempt_number, 'pending'
        FROM application_ai_workflows w
        CROSS JOIN next_attempt
-      WHERE w.id = $1 AND w.status = 'running'${claimClause}
+      WHERE w.id = $1::uuid AND w.status = 'running'${claimClause}
      RETURNING *`,
     params,
   );
