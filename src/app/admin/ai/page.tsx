@@ -1056,7 +1056,7 @@ function RouteModelCombobox({ keyId, discovered, presets, value, isCustom, onCha
   const allModels = [
     ...discovered.map((m: any) => ({ ...m, source: "provider" as const })),
     ...presets.map((m: any) => ({ ...m, source: "preset" as const })),
-  ];
+  ].filter((m: any) => typeof m?.id === "string" && m.id.trim());
 
   const filtered = allModels.filter((m: any) =>
     !search || m.id.toLowerCase().includes(search.toLowerCase()) || (m.label && m.label.toLowerCase().includes(search.toLowerCase()))
