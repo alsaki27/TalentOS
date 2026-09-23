@@ -362,6 +362,15 @@ async function main() {
       where id = $1
     `, [newKeyId, "mix 9.23 OpenCode Go smoke tests passed for Mimo V2.6 Flash, DeepSeek V4 Flash, DeepSeek V4 Pro, and LongCat 2.0."]);
 
+    // Historical routing states retain their shape after old credentials are
+    // removed. A NULL key alone violates their route check constraint, so
+    // preserve the provider identity before the FK applies ON DELETE SET NULL.
+    await client.query(`
+      update ai_routing_state_routes
+      set ai_key_id = null, provider = coalesce(provider, 'opencode')
+      where ai_key_id = any($1::uuid[])
+    `, [oldKeysResult.rows.map((row) => row.id)]);
+
     await client.query("delete from ai_api_keys where provider = 'opencode' and id <> $1", [newKeyId]);
 
     const counts = await client.query(`
