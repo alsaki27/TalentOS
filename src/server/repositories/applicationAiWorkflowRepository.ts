@@ -381,10 +381,22 @@ export async function createStageRun(input: {
     : "";
   if (typeof input.expectedLockVersion === "number") params.push(input.expectedLockVersion);
   const rows = await query<StageRunRow>(
-    `INSERT INTO application_ai_stage_runs
+    `WITH allocation_lock AS (
+           SELECT pg_advisory_xact_lock(hashtext($1::text || ':' || $3::text))
+         ), next_attempt AS (
+           SELECT GREATEST(
+                    $4::int,
+                    COALESCE(MAX(sr.attempt_number), 0) + 1
+                  ) AS attempt_number
+             FROM application_ai_stage_runs sr
+            CROSS JOIN allocation_lock
+            WHERE sr.workflow_id = $1 AND sr.sequence_number = $3
+         )
+     INSERT INTO application_ai_stage_runs
       (workflow_id, automation_id, sequence_number, attempt_number, status)
-     SELECT $1, $2, $3, $4, 'pending'
+     SELECT $1, $2, $3, next_attempt.attempt_number, 'pending'
        FROM application_ai_workflows w
+       CROSS JOIN next_attempt
       WHERE w.id = $1 AND w.status = 'running'${claimClause}
      RETURNING *`,
     params,

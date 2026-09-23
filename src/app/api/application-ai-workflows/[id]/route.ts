@@ -5,6 +5,8 @@ import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } 
 import { advanceAeStageAfterAiCompletion } from "@/server/repositories/applicationsRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
+import { APPLICATION_AGENT_IDS } from "@/lib/ai/application-agents/types";
+import { queryOne } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
@@ -128,6 +130,27 @@ export async function POST(
       }
 
       const isCompleted = targetStage === 5;
+
+      if (isCompleted) {
+        const artifacts = await listArtifacts(workflowId, { fresh: true });
+        const missingArtifacts = APPLICATION_AGENT_IDS.slice(0, 4)
+          .filter((automationId) => !artifacts.some((artifact) => artifact.automation_id === automationId));
+        const completion = await queryOne<{ resume_generation_status: string | null; version_id: string | null }>(
+          `SELECT a.resume_generation_status, v.id AS version_id
+             FROM applications a
+             LEFT JOIN application_resume_versions v
+               ON v.id = a.tailored_resume_version_id AND v.workflow_id = $2
+            WHERE a.id = $1`,
+          [wf.application_id, workflowId],
+        );
+        if (missingArtifacts.length > 0 || completion?.resume_generation_status !== "ready" || !completion.version_id) {
+          return NextResponse.json({
+            error: "Cannot manually mark an incomplete AI pipeline as completed",
+            missingArtifacts,
+            resumeReady: completion?.resume_generation_status === "ready" && Boolean(completion.version_id),
+          }, { status: 409 });
+        }
+      }
 
       const updates: Record<string, unknown> = {
         current_stage: targetStage,
