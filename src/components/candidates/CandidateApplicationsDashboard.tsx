@@ -7,6 +7,7 @@ import ApplicationStatusChart from "./shared/ApplicationStatusChart";
 import ApplicationSourceChart from "./shared/ApplicationSourceChart";
 import ApplicationsDataTable from "./shared/ApplicationsDataTable";
 import ApplicationNotesModal from "./shared/ApplicationNotesModal";
+import { DISPLAY_GROUPS } from "@/lib/applicationDisplayStatus";
 
 interface DashboardRow {
   application_id: string;
@@ -100,8 +101,16 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
     var rollbackStatus = previousStatus;
     setData(function (previous) {
       if (!previous) return previous;
+      var fromGroup = DISPLAY_GROUPS[rollbackStatus] || rollbackStatus;
+      var toGroup = DISPLAY_GROUPS[newStatus] || newStatus;
+      var statusCounts = { ...previous.statusCounts };
+      if (fromGroup !== toGroup) {
+        if (fromGroup in statusCounts) statusCounts[fromGroup] = Math.max(0, (statusCounts[fromGroup] || 0) - 1);
+        statusCounts[toGroup] = (statusCounts[toGroup] || 0) + 1;
+      }
       return {
         ...previous,
+        statusCounts,
         applications: previous.applications.map(function (application) {
           return application.application_id === applicationId
             ? { ...application, status: newStatus }
@@ -115,12 +124,32 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
         body: JSON.stringify({ status: newStatus }),
       }).then(function (res) {
         if (!res.ok) throw new Error("Failed");
-        void fetchData();
+        return res.json();
+      }).then(function (updated) {
+        setData(function (previous) {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            applications: previous.applications.map(function (application) {
+              return application.application_id === applicationId
+                ? { ...application, status: newStatus, applied_at: updated?.applied_at ?? application.applied_at }
+                : application;
+            }),
+          };
+        });
       }).catch(function (err) {
       setData(function (previous) {
         if (!previous) return previous;
+        var fromGroup = DISPLAY_GROUPS[newStatus] || newStatus;
+        var toGroup = DISPLAY_GROUPS[rollbackStatus] || rollbackStatus;
+        var statusCounts = { ...previous.statusCounts };
+        if (fromGroup !== toGroup) {
+          if (fromGroup in statusCounts) statusCounts[fromGroup] = Math.max(0, (statusCounts[fromGroup] || 0) - 1);
+          statusCounts[toGroup] = (statusCounts[toGroup] || 0) + 1;
+        }
         return {
           ...previous,
+          statusCounts,
           applications: previous.applications.map(function (application) {
             return application.application_id === applicationId
               ? { ...application, status: rollbackStatus }

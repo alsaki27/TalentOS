@@ -37,6 +37,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     // skips is never lost - the debounce effect below re-runs the instant
     // isSaving clears and retries with the freshest state.
     const isSavingRef = useRef(false);
+    const pendingSaveRef = useRef(false);
     // Mirrors the fields persistTailoredApplication snapshots, so the
     // unload/unmount safety net below always reads the latest edits without
     // depending on state directly (which would re-attach a global listener
@@ -104,13 +105,17 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         // Never let two PATCHes race - see isSavingRef's declaration for why.
         // The debounce effect below re-checks and retries once this clears,
         // so a save that's skipped here is never silently lost.
-        if (isSavingRef.current) return false;
+        if (isSavingRef.current) {
+            pendingSaveRef.current = true;
+            return false;
+        }
 
+        const latestState = latestStateRef.current;
         const snapshot = JSON.stringify({
-            resumeData: state.resumeData,
-            chatHistory: state.chatHistory,
-            jobDescription: state.jobDescription,
-            versions: state.versions,
+            resumeData: latestState.resumeData,
+            chatHistory: latestState.chatHistory,
+            jobDescription: latestState.jobDescription,
+            versions: latestState.versions,
         });
 
         if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
@@ -126,10 +131,10 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 headers: { 'Content-Type': 'application/json' },
                 keepalive: true,
                 body: JSON.stringify({
-                    jobDescription: state.jobDescription,
+                    jobDescription: latestState.jobDescription,
                     companyName: company || null,
-                    resumeData: state.resumeData,
-                    chatHistory: state.chatHistory,
+                    resumeData: latestState.resumeData,
+                    chatHistory: latestState.chatHistory,
                 }),
             });
 
@@ -149,14 +154,22 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         } finally {
             isSavingRef.current = false;
             setIsSaving(false);
+            if (pendingSaveRef.current) {
+                pendingSaveRef.current = false;
+                window.setTimeout(() => void persistTailoredApplication(false), 0);
+            }
         }
-    }, [applicationId, company, state.chatHistory, state.jobDescription, state.resumeData]);
+    }, [applicationId, company]);
 
     const handleSave = async () => {
         await persistTailoredApplication(true);
     };
 
     const handleSaveVersion = async () => {
+        if (isSavingRef.current) {
+            pendingSaveRef.current = true;
+            return;
+        }
         if (state.versions && state.versions.length > 0) {
             const lastVersion = state.versions[0];
             if (JSON.stringify(lastVersion.resumeData) === JSON.stringify(state.resumeData)) {
@@ -176,6 +189,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         const updatedVersions = [newVersion, ...(state.versions || [])];
         dispatch({ type: 'SET_VERSIONS', payload: updatedVersions });
         
+        isSavingRef.current = true;
         setIsSaving(true);
         try {
             const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
@@ -216,7 +230,12 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         } catch (error) {
             showToast(error instanceof Error ? error.message : 'Failed to save version');
         } finally {
+            isSavingRef.current = false;
             setIsSaving(false);
+            if (pendingSaveRef.current) {
+                pendingSaveRef.current = false;
+                window.setTimeout(() => void persistTailoredApplication(false), 0);
+            }
         }
     };
 
@@ -233,10 +252,10 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
         const timeoutId = window.setTimeout(() => {
             void persistTailoredApplication(false);
-        }, 1000);
+        }, 250);
 
         return () => window.clearTimeout(timeoutId);
-    }, [hasLoadedInitialData, isLoading, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData]);
+    }, [hasLoadedInitialData, isLoading, isSaving, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData, state.versions]);
 
     // Autosave is debounced by 1s, and even the explicit Save button's PATCH
     // is a real network round trip - closing the tab or navigating away
