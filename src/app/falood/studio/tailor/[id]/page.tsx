@@ -38,6 +38,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     // isSaving clears and retries with the freshest state.
     const isSavingRef = useRef(false);
     const pendingSaveRef = useRef(false);
+    // An explicit Save click that lands while an autosave is in flight is
+    // queued, not dropped, and still gets its confirmation toast.
+    const pendingToastRef = useRef(false);
     // Mirrors the fields persistTailoredApplication snapshots, so the
     // unload/unmount safety net below always reads the latest edits without
     // depending on state directly (which would re-attach a global listener
@@ -107,6 +110,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         // so a save that's skipped here is never silently lost.
         if (isSavingRef.current) {
             pendingSaveRef.current = true;
+            if (showSuccessToast) pendingToastRef.current = true;
             return false;
         }
 
@@ -118,7 +122,10 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             versions: latestState.versions,
         });
 
-        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
+        if (snapshot === lastSavedSnapshotRef.current) {
+            // Autosave already persisted exactly this content - confirm
+            // instantly instead of re-sending the whole document.
+            if (showSuccessToast) { setSaveStatus('saved'); showToast('Tailored resume saved!'); }
             return true;
         }
 
@@ -129,7 +136,6 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                keepalive: true,
                 body: JSON.stringify({
                     jobDescription: latestState.jobDescription,
                     companyName: company || null,
@@ -156,10 +162,15 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             setIsSaving(false);
             if (pendingSaveRef.current) {
                 pendingSaveRef.current = false;
-                window.setTimeout(() => void persistTailoredApplication(false), 0);
+                const withToast = pendingToastRef.current;
+                pendingToastRef.current = false;
+                window.setTimeout(() => void persistTailoredApplication(withToast), 0);
             }
         }
     }, [applicationId, company]);
+
+    const persistRef = useRef(persistTailoredApplication);
+    persistRef.current = persistTailoredApplication;
 
     const handleSave = async () => {
         await persistTailoredApplication(true);
@@ -195,7 +206,6 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                keepalive: true,
                 body: JSON.stringify({
                     versions: updatedVersions,
                     resumeData: state.resumeData,
@@ -252,7 +262,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
         const timeoutId = window.setTimeout(() => {
             void persistTailoredApplication(false);
-        }, 250);
+        }, 800);
 
         return () => window.clearTimeout(timeoutId);
     }, [hasLoadedInitialData, isLoading, isSaving, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData, state.versions]);
@@ -276,11 +286,16 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         const isDirty = () => JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
         const flushBeacon = () => {
             const { resumeData, chatHistory, jobDescription } = latestStateRef.current;
+            const body = JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory });
+            // Browsers cap in-flight keepalive bodies at 64KB total and reject
+            // anything over it outright. Use keepalive only when it fits;
+            // otherwise a plain fetch (still completes on in-app navigation,
+            // and beforeunload below warns before a real close/refresh).
             fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory }),
-                keepalive: true,
+                body,
+                keepalive: new Blob([body]).size < 60_000,
             }).catch(() => {});
         };
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -292,7 +307,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
         window.addEventListener('beforeunload', handleBeforeUnload);
         const handleVisibilityChange = () => {
-            if (document.visibilityState === 'hidden' && isDirty()) flushBeacon();
+            // Switching tabs doesn't unload the page, so a normal guarded
+            // save is enough - no need to race a second request.
+            if (document.visibilityState === 'hidden' && isDirty()) void persistRef.current(false);
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => {
@@ -394,7 +411,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                         <Button size="sm" variant="outline" onClick={handleSaveVersion} disabled={isSaving} className="flex items-center gap-2">
                             Save as Version
                         </Button>
-                        <Button size="sm" variant="outline" onClick={handleSave} disabled={isSaving} className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={handleSave} className="flex items-center gap-2">
                             <Save className="w-4 h-4" />{isSaving ? 'Saving…' : 'Save'}
                         </Button>
                         <Button size="sm" variant="default" onClick={handleDownloadPDF} className="flex items-center gap-2">

@@ -299,7 +299,6 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
             const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                keepalive: true,
                 body: JSON.stringify({
                     content: state.resumeData,
                 }),
@@ -397,11 +396,14 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
 
         const isDirty = () => JSON.stringify(resumeDataRef.current) !== lastSavedSnapshotRef.current;
         const flushBeacon = () => {
+            const body = JSON.stringify({ content: resumeDataRef.current });
+            // keepalive bodies are capped at 64KB in flight; over that the
+            // browser rejects the request outright, so only use it when it fits.
             fetch(`/api/base-resumes/${baseResumeId}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content: resumeDataRef.current }),
-                keepalive: true,
+                body,
+                keepalive: new Blob([body]).size < 60_000,
             }).catch(() => {});
         };
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
