@@ -326,18 +326,18 @@ async function main() {
 
     await client.query(`
       update ai_task_category_config
-      set ai_key_id = $1, provider = 'opencode', updated_at = now(), updated_by = $2
-      where ai_key_id = any($3::uuid[])
-    `, [newKeyId, "mix923-automation", oldKeysResult.rows.map((row) => row.id)]);
+      set ai_key_id = $1, provider = 'opencode', updated_at = now(), updated_by = null
+      where ai_key_id = any($2::uuid[])
+    `, [newKeyId, oldKeysResult.rows.map((row) => row.id)]);
 
     await client.query("delete from ai_automation_routes where automation_id = any($1::text[])", [automationsResult.rows.map((row) => row.id)]);
     await client.query(`
       insert into ai_automation_routes
         (automation_id, rank, ai_key_id, provider, model_override, is_enabled, updated_at, updated_by)
-      select automation_id, rank, ai_key_id, provider, model_override, is_enabled, now(), $2
+      select automation_id, rank, ai_key_id, provider, model_override, is_enabled, now(), null
       from ai_routing_state_routes
       where state_id = $1
-    `, [stateId, "mix923-automation"]);
+    `, [stateId]);
 
     await client.query("update ai_api_keys set label = 'Vertex A', updated_at = now() where id = $1", [vertexA.id]);
     await client.query("update ai_api_keys set label = 'Vertex B', updated_at = now() where id = $1", [vertexB.id]);
