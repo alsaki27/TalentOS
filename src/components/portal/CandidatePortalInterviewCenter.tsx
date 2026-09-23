@@ -1,5 +1,14 @@
 "use client";
 
+import { CalendarClock } from "lucide-react";
+
+// ARCHIVED 2026-09-23 — the full interview center (mini calendar, upcoming/
+// history tabs, meeting links, panel + team-update details) is being
+// redesigned. Kept intact below rather than deleted so the redesign can pick
+// up the existing data wiring (GET /api/portal/me/interviews is unchanged).
+// To restore: delete the placeholder export at the bottom of this file and
+// uncomment this entire block.
+/*
 import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, Video, MapPin, Users, CalendarX2 } from "lucide-react";
 
@@ -106,4 +115,14 @@ export default function CandidatePortalInterviewCenter() {
     <div className="portal-tab-list" role="tablist" aria-label="Interview history tabs"><button className={`portal-tab ${tab === "upcoming" ? "portal-tab-active" : ""}`} role="tab" aria-selected={tab === "upcoming"} onClick={() => setTab("upcoming")}>Upcoming</button><button className={`portal-tab ${tab === "history" ? "portal-tab-active" : ""}`} role="tab" aria-selected={tab === "history"} onClick={() => setTab("history")}>History</button></div>
     {loading ? <div className="portal-skeleton" style={{ height: 90 }} /> : error ? <p className="portal-error">{error}</p> : visible.length === 0 ? <div className="portal-empty portal-action-empty"><div className="portal-empty-icon"><CalendarX2 size={26} /></div><strong>{tab === "upcoming" ? "No upcoming interviews." : "No interview history yet."}</strong><span>Interview details and meeting links will appear here when the team records them.</span></div> : <div className="portal-interview-center-list">{visible.map((interview) => <article className="portal-interview-center-card" key={`${interview.application_id}:${interview.id || "unscheduled"}`}><div className="portal-interview-center-main"><div className="portal-interview-center-title"><strong>{interview.round_name}</strong><span className={`portal-interview-status portal-interview-status-${interview.status}`}>{statusLabel(interview.status)}</span></div><h3>{interview.job_title}</h3><p>{interview.company_name || "Company unavailable"}</p><p className="portal-interview-time"><CalendarClock size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{formatDateTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</p>{interview.location && <p><MapPin size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{interview.location}</p>}{interview.panel.length > 0 && <p><Users size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{interview.panel.join(", ")}</p>}{interview.visible_updates.length > 0 && <div className="portal-interview-updates"><strong>Team update</strong><p>{interview.visible_updates[0].body}</p><span>{interview.visible_updates[0].author} · {formatDate(interview.visible_updates[0].created_at)}</span></div>}</div>{interview.meeting_link && interview.status === "upcoming" && <a className="portal-btn portal-btn-primary portal-btn-small" href={interview.meeting_link} target="_blank" rel="noreferrer"><Video size={13} style={{ marginRight: 4 }} />Open meeting</a>}</article>)}</div>}
   </section>;
+}
+*/
+
+export default function CandidatePortalInterviewCenter() {
+  return (
+    <div className="portal-empty portal-coming-soon">
+      <div className="portal-empty-icon"><CalendarClock size={28} /></div>
+      <strong>Coming Soon</strong>
+    </div>
+  );
 }

@@ -1298,6 +1298,35 @@ body:has(.portal-root) {
   opacity: 0.7;
 }
 
+/* Interviews page placeholder while that section is redesigned - same
+   dashed-card empty state used elsewhere, just given room to stand on its
+   own as full-page content instead of sitting inside another section. */
+.portal-coming-soon {
+  min-height: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.portal-coming-soon .portal-empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--p-navy-soft);
+  color: var(--p-navy);
+  opacity: 1;
+}
+
+.portal-coming-soon strong {
+  color: var(--p-ink);
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
 /* ---------- Skeletons ---------- */
 
 .portal-skeleton {
