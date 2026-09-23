@@ -59,6 +59,10 @@ function getWorkerHyperdriveUrl(): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function isWorkerHyperdriveUrl(rawUrl: string) {
+  return rawUrl === getWorkerHyperdriveUrl();
+}
+
 function getDatabaseUrl(): string {
   // OpenNext can initialize the bundled server before the Worker fetch handler
   // runs. Keep the request-time Hyperdrive binding in an isolate-local global
@@ -86,6 +90,13 @@ function getDatabaseUrl(): string {
  * disabling TLS, which would put the password on the wire in clear text.
  */
 function pgConnectionConfig(rawUrl: string) {
+  // Hyperdrive provides a Worker-only connection string for node-postgres.
+  // Pass it through unchanged: direct-VPS TLS overrides do not apply to this
+  // local Hyperdrive endpoint and can add avoidable connection work.
+  if (isWorkerHyperdriveUrl(rawUrl)) {
+    return { connectionString: rawUrl };
+  }
+
   const url = new URL(rawUrl);
   const sslmode = url.searchParams.get("sslmode");
   // channel_binding is Neon-specific and rejected by plain Postgres.
@@ -148,6 +159,7 @@ let warnedNoHyperdrive = false;
  */
 function warnIfWorkerWithoutHyperdrive(url: string) {
   if (warnedNoHyperdrive) return;
+  if (isWorkerHyperdriveUrl(url)) return;
   const host = (() => {
     try {
       return new URL(url).hostname;
