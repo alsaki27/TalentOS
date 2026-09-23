@@ -20,6 +20,14 @@ export interface JobCeoRunRow {
   updated_at: string;
 }
 
+export interface JobCeoRunStats {
+  totalRuns: number;
+  activeRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  totalLogged: number;
+}
+
 export async function createRun(input: {
   source?: string;
   triggerType?: string;
@@ -102,7 +110,41 @@ export async function bumpRunCounts(
 
 export async function findEarliestActiveRun(): Promise<JobCeoRunRow | null> {
   return queryOne<JobCeoRunRow>(
-    "SELECT * FROM job_ceo_runs WHERE status IN ('ingesting','qa','deep_fetch','matchmaking') ORDER BY created_at ASC LIMIT 1"
+    `SELECT r.*
+     FROM job_ceo_runs r
+     WHERE r.status IN ('ingesting','qa','deep_fetch','matchmaking')
+     ORDER BY
+       CASE
+         -- Prefer runs that have work for their current stage and whose rows
+         -- are available now. This prevents an older empty/stalled run from
+         -- starving a newer run that can make progress.
+         WHEN r.status = 'ingesting' AND EXISTS (
+           SELECT 1 FROM job_ceo_staging s
+           WHERE s.run_id = r.id
+             AND s.stage = 'ingested'
+             AND (s.claim_expires_at IS NULL OR s.claim_expires_at < NOW())
+         ) THEN 0
+         WHEN r.status = 'qa' AND EXISTS (
+           SELECT 1 FROM job_ceo_staging s
+           WHERE s.run_id = r.id
+             AND s.stage = 'researched'
+             AND (s.claim_expires_at IS NULL OR s.claim_expires_at < NOW())
+         ) THEN 0
+         WHEN r.status = 'deep_fetch' AND EXISTS (
+           SELECT 1 FROM job_ceo_staging s
+           WHERE s.run_id = r.id
+             AND s.stage = 'qa_passed'
+             AND (s.claim_expires_at IS NULL OR s.claim_expires_at < NOW())
+         ) THEN 0
+         -- Matchmaking is the final run-level phase and has no input stage.
+         WHEN r.status = 'matchmaking' THEN 0
+         ELSE 1
+       END ASC,
+       -- Round-robin active work by last progress instead of creation time.
+       -- A large run therefore cannot monopolize every dispatch invocation.
+       r.updated_at ASC,
+       r.created_at ASC
+     LIMIT 1`
   );
 }
 
@@ -111,6 +153,32 @@ export async function listRuns(limit: number): Promise<JobCeoRunRow[]> {
     "SELECT * FROM job_ceo_runs ORDER BY created_at DESC LIMIT $1",
     [limit]
   );
+}
+
+export async function getRunStats(): Promise<JobCeoRunStats> {
+  const row = await queryOne<{
+    total_runs: number | string;
+    active_runs: number | string;
+    completed_runs: number | string;
+    failed_runs: number | string;
+    total_logged: number | string;
+  }>(
+    `SELECT
+       COUNT(*)::int AS total_runs,
+       COUNT(*) FILTER (WHERE status IN ('ingesting','qa','deep_fetch','matchmaking'))::int AS active_runs,
+       COUNT(*) FILTER (WHERE status = 'completed')::int AS completed_runs,
+       COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_runs,
+       COALESCE(SUM(logged_count), 0)::int AS total_logged
+     FROM job_ceo_runs`
+  );
+
+  return {
+    totalRuns: Number(row?.total_runs ?? 0),
+    activeRuns: Number(row?.active_runs ?? 0),
+    completedRuns: Number(row?.completed_runs ?? 0),
+    failedRuns: Number(row?.failed_runs ?? 0),
+    totalLogged: Number(row?.total_logged ?? 0),
+  };
 }
 
 export async function deleteRun(id: string): Promise<void> {

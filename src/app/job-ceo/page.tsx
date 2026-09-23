@@ -21,6 +21,14 @@ interface RunRow {
   updated_at: string;
 }
 
+interface RunStats {
+  totalRuns: number;
+  activeRuns: number;
+  completedRuns: number;
+  failedRuns: number;
+  totalLogged: number;
+}
+
 interface KeywordGroup {
   id: string;
   label: string;
@@ -258,6 +266,7 @@ function ScheduleCard({
 
 export default function JobCeoPage() {
   const [runs, setRuns] = useState<RunRow[]>([]);
+  const [runStats, setRunStats] = useState<RunStats | null>(null);
   const [keywordGroups, setKeywordGroups] = useState<KeywordGroup[]>([]);
   const [roleGroups, setRoleGroups] = useState<RoleGroup[]>([]);
   const [schedule, setSchedule] = useState<ScheduleRow | null>(null);
@@ -284,6 +293,7 @@ export default function JobCeoPage() {
       if (!res.ok) return;
       const data = await res.json();
       setRuns(data.runs ?? []);
+      setRunStats(data.stats ?? null);
     } catch { /* ignore poll errors */ }
   }, []);
 
@@ -436,10 +446,11 @@ export default function JobCeoPage() {
 
   // ─── Stats ────────────────────────────────────────────────────────────────
 
-  const totalRuns = runs.length;
-  const completedCount = runs.filter((r) => r.status === "completed").length;
-  const failedCount = runs.filter((r) => r.status === "failed").length;
-  const totalLogged = runs.reduce((sum, r) => sum + (r.logged_count || 0), 0);
+  const totalRuns = runStats?.totalRuns ?? runs.length;
+  const activeCount = runStats?.activeRuns ?? activeRuns.length;
+  const completedCount = runStats?.completedRuns ?? runs.filter((r) => r.status === "completed").length;
+  const failedCount = runStats?.failedRuns ?? runs.filter((r) => r.status === "failed").length;
+  const totalLogged = runStats?.totalLogged ?? runs.reduce((sum, r) => sum + (r.logged_count || 0), 0);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -481,7 +492,7 @@ export default function JobCeoPage() {
         </div>
         <div className="stat-card">
           <span className="stat-label">Active Now</span>
-          <span className="stat-value">{activeRuns.length}</span>
+          <span className="stat-value">{activeCount}</span>
         </div>
         <div className="stat-card">
           <span className="stat-label">Completed</span>
