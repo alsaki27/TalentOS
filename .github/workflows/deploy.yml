@@ -1,10 +1,8 @@
 name: Deploy TalentOS (Cloudflare)
 
-# Every deploy goes through this pipeline, off a real commit, with CI as a
-# pre-flight gate. The CI workflow (ci.yml) handles typecheck, lint, unit
-# tests, E2E tests, and Cloudflare build — this workflow only runs after CI
-# passes, then performs deploy-specific steps (size check, schema fixes,
-# deploy, post-deploy health checks).
+# Every automatic deploy runs only after CI succeeds. Database SQL scripts are
+# reserved for an explicitly requested manual deployment; normal code deploys
+# must not modify the TalentOS database.
 #
 # `wrangler deploy` does NOT wipe a Worker's existing secrets - only a
 # named `wrangler secret put` changes that one secret. This workflow only
@@ -17,15 +15,6 @@ name: Deploy TalentOS (Cloudflare)
 # this workflow - add an explicit `secret put` step here if one of those
 # ever needs to be rotated through CI instead of by hand.
 on:
-  # GitHub evaluates a workflow_run trigger against the copy of THIS FILE on
-  # the repo's default branch (main), not the branch that ran CI - main's
-  # deploy.yml still has the old `on: push` trigger (never synced), so the
-  # workflow_run trigger below has been silently dead since it was added:
-  # zero Deploy runs fired despite CI succeeding repeatedly. Restoring a
-  # direct push trigger so deploy actually runs; keeping workflow_run too in
-  # case main gets synced later and CI-gating becomes real.
-  push:
-    branches: [neon-cloudflare-migration]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -33,9 +22,9 @@ on:
   workflow_dispatch:
     inputs:
       skip_schema_fixes:
-        description: "Skip already-applied additive Neon schema fixes"
+        description: "Skip SQL database scripts; disable only for an intentional migration"
         required: false
-        default: false
+        default: true
         type: boolean
 
 concurrency:
@@ -44,7 +33,7 @@ concurrency:
 
 jobs:
   build-and-deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -121,12 +110,13 @@ jobs:
       - name: Re-validate production wiring before deploy
         run: npm run cf:verify -- --production
 
-      - name: Run schema fixes (sql/neon_fixes/)
+      - name: Run TalentOS SQL migrations (manual dispatch only)
         # Directory name is historical; the database is now self-hosted Postgres.
         # psql is fine against its self-signed certificate: libpq reads
         # sslmode=require as "encrypt, do not verify", unlike node-postgres which
         # treats it as verify-full (see src/server/db/neon.ts).
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_schema_fixes != true }}
+        # Only an intentional manual dispatch may run SQL against TalentOS.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_schema_fixes != true }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           # Fail loudly and specifically if the database is simply unreachable.
