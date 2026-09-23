@@ -394,7 +394,7 @@ export async function createStageRun(input: {
          )
      INSERT INTO application_ai_stage_runs
       (workflow_id, automation_id, sequence_number, attempt_number, status)
-     SELECT $1, $2, $3, next_attempt.attempt_number, 'pending'
+     SELECT $1::uuid, $2::text, $3::int, next_attempt.attempt_number, 'pending'
        FROM application_ai_workflows w
        CROSS JOIN next_attempt
       WHERE w.id = $1::uuid AND w.status = 'running'${claimClause}
@@ -420,7 +420,7 @@ export async function updateStageRun(
     values.push(ownership.workflowId, ownership.lockVersion);
     where += ` AND EXISTS (
       SELECT 1 FROM application_ai_workflows w
-      WHERE w.id = $${keys.length + 2}
+      WHERE w.id = $${keys.length + 2}::uuid
         AND w.id = application_ai_stage_runs.workflow_id
         AND w.status = 'running'
         AND w.lock_version = $${keys.length + 3}
@@ -436,7 +436,7 @@ export async function updateStageRun(
 
 export async function listStageRuns(workflowId: string): Promise<StageRunRow[]> {
   return query<StageRunRow>(
-    "SELECT * FROM application_ai_stage_runs WHERE workflow_id = $1 ORDER BY sequence_number, attempt_number",
+    "SELECT * FROM application_ai_stage_runs WHERE workflow_id = $1::uuid ORDER BY sequence_number, attempt_number",
     [workflowId]
   );
 }
@@ -482,7 +482,7 @@ export async function createArtifact(input: {
   const rows = await query<ArtifactRow>(
     `INSERT INTO application_ai_artifacts
       (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1::uuid, $2::text, $3::int, $4::text, $5::text, $6::jsonb)
      RETURNING *`,
     [input.workflowId, input.automationId, input.sequenceNumber, input.schemaVersion, input.contentHash, JSON.stringify(input.data)]
   );
@@ -500,7 +500,7 @@ export async function listArtifacts(
   const freshnessClause = options?.fresh ? " FOR UPDATE" : "";
   return query<ArtifactRow>(
     `SELECT * FROM application_ai_artifacts
-      WHERE workflow_id = $1
+      WHERE workflow_id = $1::uuid
       ORDER BY sequence_number${freshnessClause}`,
     [workflowId]
   );
