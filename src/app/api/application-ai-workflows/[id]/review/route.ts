@@ -60,7 +60,7 @@ export async function POST(
       );
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
+         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
         [workflowId, `review_${Date.now()}`, artifactData]
       );
 
@@ -89,7 +89,7 @@ export async function POST(
       );
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
+         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
         [workflowId, `review_${Date.now()}`, artifactData]
       );
 
@@ -107,7 +107,7 @@ export async function POST(
       );
       await query(
         `INSERT INTO application_ai_artifacts (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
-         VALUES ($1, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
+         VALUES ($1::uuid, 'human_review', 3, 'HumanReviewV1', $2, $3)`,
         [workflowId, `review_${Date.now()}`, artifactData]
       );
 

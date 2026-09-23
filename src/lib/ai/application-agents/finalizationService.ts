@@ -254,7 +254,7 @@ export async function finalizeWorkflow(
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
             title, content, source_type, status, ats_score, truth_score, recruiter_score, role_fit_score,
             one_page_fit_score, page_fit_metrics, created_at)
-         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}, ${realBaseResumeId},
+         VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}::uuid, ${realBaseResumeId},
                  ${title}, ${contentJson}, 'ai_agent', 'draft', ${finalAtsScore}, ${finalTruthScore},
                  ${finalScores.recruiterScore}, ${finalScores.roleFitScore}, ${onePageFitScore}, ${pageFitMetricsJson}, NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
@@ -266,7 +266,7 @@ export async function finalizeWorkflow(
        )
        UPDATE applications SET
          tailored_resume_version_id = inserted.id,
-         ai_workflow_id = ${workflowId},
+         ai_workflow_id = ${workflowId}::uuid,
          resume_generation_status = 'ready',
          resume_generation_completed_at = NOW(),
          ae_stage = CASE WHEN applications.ae_stage = 'in_ai_pipeline' THEN 'ready_for_review' ELSE applications.ae_stage END,
@@ -286,7 +286,7 @@ export async function finalizeWorkflow(
           ${wf.application_id},
           ${realBaseResumeId},
           ${tj.id},
-          (SELECT id FROM application_resume_versions WHERE workflow_id = ${workflowId} ORDER BY created_at DESC LIMIT 1),
+          (SELECT id FROM application_resume_versions WHERE workflow_id = ${workflowId}::uuid ORDER BY created_at DESC LIMIT 1),
           NULL
         )
         ON CONFLICT (application_id) DO UPDATE SET
