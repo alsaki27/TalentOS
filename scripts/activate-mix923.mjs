@@ -406,6 +406,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`mix 9.23 activation failed: ${error.message}`);
+  const detail = [error.detail, error.constraint, error.table].filter(Boolean).join(" | ");
+  console.error(`mix 9.23 activation failed: ${error.message}${detail ? ` (${detail})` : ""}`);
   process.exitCode = 1;
 });
