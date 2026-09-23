@@ -67,6 +67,39 @@ describe("extractGenericJobKey — any platform, no per-site code", () => {
     expect(extractGenericJobKey(null)).toBeNull();
     expect(extractGenericJobKey("not a url")).toBeNull();
   });
+
+  it("recognizes UKG Pro/UltiPro's opportunityId - the real Fleet Farm gap", () => {
+    // Real captures: the SAME "Auto Service Technician" posting at Fleet Farm was
+    // scraped 8 times over 6 days, each time with a different opportunityId, and
+    // every single one was stored as a separate job because nothing recognized
+    // this param. The mid-path uuid is NOT usable instead - confirmed live it is
+    // the employer's shared board id, identical across 35 different real job
+    // titles at one company.
+    const a = extractGenericJobKey(
+      "https://recruiting2.ultipro.com/mil1013mlsc/JobBoard/5bc917b0-472e-447d-b652-3599543b6e78/OpportunityDetail?opportunityId=ed9680e1-c25c-41ca-a47f-2d30b3dc16f0"
+    );
+    const b = extractGenericJobKey(
+      "https://recruiting2.ultipro.com/mil1013mlsc/JobBoard/5bc917b0-472e-447d-b652-3599543b6e78/OpportunityDetail?opportunityId=cf618980-11c6-49aa-96ec-98affc5336b2"
+    );
+    expect(a).not.toBeNull();
+    expect(a).not.toBe(b); // different real opportunityIds ARE different postings
+    expect(a).toBe("recruiting2.ultipro.com:ed9680e1-c25c-41ca-a47f-2d30b3dc16f0");
+  });
+
+  it("tolerates Workday's revision suffix on a requisition slug - the real ABB gap", () => {
+    // Unmodified, the trailing-digit-run pattern required digits to end the
+    // string, so this real ABB slug matched nothing at all and fell through to
+    // whole-url normalization.
+    expect(
+      extractGenericJobKey(
+        "https://abb.wd3.myworkdayjobs.com/External_Career_Page/job/Atlanta-Georgia-United-States-of-America/Senior-Field-Service-Technician_JR00030949-1"
+      )
+    ).toBe("abb.wd3.myworkdayjobs.com:00030949");
+  });
+
+  it("does not mistake a real 4-digit year suffix for a Workday revision number", () => {
+    expect(extractGenericJobKey("https://careers.example.com/jobs/summer-internship-program-2026")).toBeNull();
+  });
 });
 
 describe("looksLikeSearchOrListingUrl", () => {

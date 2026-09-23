@@ -48,6 +48,8 @@ interface Job {
   work_authorization: string | null;
   applicant_count: number;
   applicants: Applicant[];
+  content_duplicate_of: string | null;
+  content_duplicate_reason: string | null;
   raw_description?: string | null;
   parsed_description?: unknown | null;
   source_url?: string | null;
@@ -1003,6 +1005,21 @@ export default function JobsPage() {
                   <td>
                     <Link className="row-link" href={`/jobs/${job.id}`}>{job.title}</Link>
                     {job.source_url?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
+                    {job.content_duplicate_of && (
+                      // The cross-platform duplicate detector marks a match this
+                      // way (is_active=false + content_duplicate_of) but never
+                      // deletes or blocks it - it stays in this list, silently
+                      // indistinguishable from a real active job, unless flagged
+                      // here. That silence was the reported symptom: detection
+                      // was working, nothing surfaced that it had.
+                      <span
+                        className="badge badge-warning"
+                        style={{ marginLeft: 8, fontSize: 10, cursor: "help" }}
+                        title={job.content_duplicate_reason ?? `Auto-hidden as a duplicate of job ${job.content_duplicate_of}`}
+                      >
+                        Duplicate
+                      </span>
+                    )}
                     <div className="muted" style={{ fontSize: 12 }}>{job.location}</div>
                     {(job.salary_min || job.salary_max) ? (
                       <div className="muted" style={{ fontSize: 12 }}>

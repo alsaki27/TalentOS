@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 // rows including them ballooned the list payload to 24MB on every page load.
 const LIST_COLUMNS = `
   id, company_id, title, company, location, source, role_tier, salary_range, source_url, notes,
-  is_active, seniority_level, employment_type, applicants_count, company_employees_count,
+  is_active, content_duplicate_of, content_duplicate_reason, seniority_level, employment_type, applicants_count, company_employees_count,
   company_website, posted_at, external_job_id, tracking_id, ref_id, apply_url,
   job_function, industries, input_url, company_linkedin_url,
   company_logo_url, company_slogan, job_poster_name, job_poster_title,

@@ -159,6 +159,20 @@ export function extractCanonicalJobKey(rawUrl: string | null | undefined): strin
 const ID_PARAMS = new Set([
   "jobid", "job_id", "jid", "id", "requisitionid", "requisition_id", "reqid", "req_id",
   "vacancyid", "vacancy_id", "postingid", "posting_id", "jk", "vjk", "gh_jid", "offerid",
+  // UKG Pro / UltiPro's job-board URL shape is
+  // recruiting2.ultipro.com/<company-slug>/JobBoard/<company-board-uuid>/OpportunityDetail?opportunityId=<uuid>.
+  // Verified live and dangerous to get wrong: the board uuid in the PATH is
+  // shared across every one of that employer's postings (confirmed against real
+  // data - one company had 35 distinct job titles all under the identical board
+  // uuid), so it must never be treated as a posting id. opportunityId is the
+  // part that actually varies per posting, and was unrecognized by every rule
+  // here - not this list, not a tracking param to strip - so it fell through to
+  // whole-URL normalization and every capture became a "new" job. Real
+  // production impact: 555+ rows across 208 companies used this exact URL
+  // shape, with real duplicates (a Fleet Farm "Auto Service Technician"
+  // posting captured 8 times over 6 days, one per crawl) going completely
+  // undetected under the old fingerprint.
+  "opportunityid", "opportunity_id",
 ]);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -201,7 +215,16 @@ export function extractGenericJobKey(rawUrl: string | null | undefined): string 
     if (UUID_RE.test(seg)) return `${host}:${seg.toLowerCase()}`;
     if (/^[0-9a-f]{12,}$/i.test(seg)) return `${host}:${seg.toLowerCase()}`;
     // Trailing digit run, e.g. "...-mid-atlantic-region-5163929" -> 5163929.
-    const trailing = seg.match(/(?:^|[^0-9])(\d{5,})$/);
+    // The optional "-\d{1,3}" tolerates Workday's own revision suffix
+    // ("..._JR00030949-1") without it: unmodified, this pattern required the
+    // digit run to end the string, so a real ABB slug
+    // "Senior-Field-Service-Technician_JR00030949-1" matched nothing at all,
+    // falling through to whole-URL normalization. Two captures of the SAME
+    // requisition that differ only in whether Workday appended that suffix
+    // would then never be recognized as one job. Bounded to 1-3 digits
+    // specifically so a real 4-digit year suffix in a slug is never mistaken
+    // for a revision number.
+    const trailing = seg.match(/(?:^|[^0-9])(\d{5,})(?:-\d{1,3})?$/);
     if (trailing) return `${host}:${trailing[1]}`;
   }
 
