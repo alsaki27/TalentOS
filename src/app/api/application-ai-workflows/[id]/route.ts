@@ -139,7 +139,7 @@ export async function POST(
           `SELECT a.resume_generation_status, v.id AS version_id
              FROM applications a
              LEFT JOIN application_resume_versions v
-               ON v.id = a.tailored_resume_version_id AND v.workflow_id = $2
+               ON v.id = a.tailored_resume_version_id AND v.workflow_id = $2::uuid
             WHERE a.id = $1`,
           [wf.application_id, workflowId],
         );

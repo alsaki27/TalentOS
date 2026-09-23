@@ -852,7 +852,7 @@ async function recordUsageEvent(input: UsageEventInput): Promise<void> {
          latency_ms, input_tokens, output_tokens, estimated_cost_usd,
          error_message, error_code, triggered_by_user_id,
          route_rank, attempt_number, workflow_id, application_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::uuid, $16::uuid)`,
       [
         input.automationId,
         input.aiKeyId,
