@@ -150,7 +150,8 @@ function CandidateDashboardInner() {
 
     try {
       var res = await fetch("/api/applications/" + applicationId, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
+        method: "PATCH", cache: "no-store", keepalive: true,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) throw new Error("Failed");

@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUserContext, ALL_USER_ROLES } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
-import { DISPLAY_GROUPS, STATUSES_BY_GROUP, STATUS_EXPR, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
+import { DISPLAY_GROUPS, STATUSES_BY_GROUP, emptyStatusCounts } from "@/lib/applicationDisplayStatus";
 
 export const dynamic = "force-dynamic";
+
+// This is an editable application-status table, so its read path must return
+// the exact value written by PATCH /api/applications/:id. STATUS_EXPR is a
+// legacy reporting projection that can turn assigned/stacked/in_progress back
+// into "applied" whenever ae_stage is still "applied"; using it here made a
+// successful status save appear to revert after a refresh.
+const EDITABLE_STATUS_EXPR = "a.status";
 
 // Escapes ILIKE wildcard/escape characters in free-text search input so a
 // literal "%", "_", or "\" the user typed is matched literally, not as a
@@ -70,7 +77,7 @@ export async function GET(req: NextRequest) {
     company_name: "j.company",
     job_title: "j.title",
     applied_at: "COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END)",
-    status: STATUS_EXPR,
+    status: EDITABLE_STATUS_EXPR,
     candidate_name: "c.name",
   };
 
@@ -98,7 +105,7 @@ export async function GET(req: NextRequest) {
     }
 
     var statusCountRows = await query<{ raw_status: string; n: number }>(
-      `SELECT ${STATUS_EXPR} AS raw_status, COUNT(*)::int AS n
+      `SELECT ${EDITABLE_STATUS_EXPR} AS raw_status, COUNT(*)::int AS n
          FROM applications a
          JOIN jobs j ON a.job_id = j.id
        ${candidateWhere}
@@ -146,7 +153,7 @@ export async function GET(req: NextRequest) {
     if (statusGroup) {
       var rawStatuses = STATUSES_BY_GROUP[statusGroup] || [];
       if (rawStatuses.length) {
-        whereClause += " AND " + STATUS_EXPR + " = ANY($" + (params.length + 1) + ")";
+        whereClause += " AND " + EDITABLE_STATUS_EXPR + " = ANY($" + (params.length + 1) + ")";
         params.push(rawStatuses);
       } else {
         whereClause += " AND 1=0";
@@ -166,7 +173,7 @@ export async function GET(req: NextRequest) {
     var rows = await query<DashboardRow & { total_count: number }>(
       `SELECT
         a.id AS application_id,
-        ${STATUS_EXPR} AS status,
+        ${EDITABLE_STATUS_EXPR} AS status,
         a.ae_stage,
         a.priority,
         COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,
