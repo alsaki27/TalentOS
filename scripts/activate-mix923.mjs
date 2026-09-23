@@ -6,7 +6,12 @@ const { Pool } = pg;
 const DATABASE_URL = process.env.TALENTOS_DATABASE_URL || process.env.DATABASE_URL;
 const OPENCODE_GO_KEY = process.env.MIX923_OPENCODE_GO_KEY;
 const ENCRYPTION_SECRET = process.env.AI_KEYS_ENCRYPTION_SECRET;
-const EXPECTED_DB_HOST = process.env.MIX923_EXPECTED_DB_HOST || "40.160.139.188";
+const EXPECTED_DB_HOSTS = new Set(
+  (process.env.MIX923_EXPECTED_DB_HOSTS || "40.160.139.188,172.18.0.2/32")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 const OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1";
 const SESSION_ID = "talentos-mix-9.23";
 const STATE_NAME = "mix 9.23";
@@ -169,8 +174,13 @@ async function main() {
     const dbIdentity = await client.query(
       "select inet_server_addr()::text as server_addr, current_database() as database_name"
     );
-    if (dbIdentity.rows[0]?.server_addr !== EXPECTED_DB_HOST) {
-      fail(`Refusing to mutate unexpected database host: ${dbIdentity.rows[0]?.server_addr || "unknown"}`);
+    if (
+      !EXPECTED_DB_HOSTS.has(dbIdentity.rows[0]?.server_addr) ||
+      dbIdentity.rows[0]?.database_name !== "talentos"
+    ) {
+      fail(
+        `Refusing to mutate unexpected database: ${dbIdentity.rows[0]?.server_addr || "unknown"}/${dbIdentity.rows[0]?.database_name || "unknown"}`
+      );
     }
 
     const activeResult = await client.query(`
