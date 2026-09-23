@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { query } from "@/server/db/neon";
-import { retryWorkflow } from "@/server/services/applicationAiWorkflowService";
+import {
+  refreshWorkflowRoutingSnapshot,
+  retryWorkflow,
+} from "@/server/services/applicationAiWorkflowService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Requeue only terminal AI workflows. Queued/running rows are deliberately
- * left alone: the normal dispatcher owns those states and already reclaims
- * expired leases. Retrying a queued row here would create duplicate claims
- * and amplify provider rate limits.
+ * Requeue only terminal AI workflows. Queued rows may optionally have their
+ * route snapshot refreshed, while running rows are deliberately left alone:
+ * the normal dispatcher owns those states and already reclaims expired leases.
  */
 async function repairQueue(req: NextRequest) {
   const { response } = await requireCurrentUser(["admin"]);
@@ -20,6 +22,28 @@ async function repairQueue(req: NextRequest) {
   const url = new URL(req.url);
   const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? 100)));
   const since = url.searchParams.get("since") ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const refreshQueued = url.searchParams.get("refreshQueued") === "1";
+  const errors: { workflowId: string; message: string }[] = [];
+
+  let queuedRefreshed = 0;
+  if (refreshQueued) {
+    const queued = await query<{ id: string }>(
+      `SELECT id
+         FROM application_ai_workflows
+        WHERE status = 'queued'
+          AND created_at >= $1
+        ORDER BY created_at ASC
+        LIMIT $2`,
+      [since, limit],
+    );
+    for (const workflow of queued) {
+      try {
+        if (await refreshWorkflowRoutingSnapshot(workflow.id)) queuedRefreshed += 1;
+      } catch (error: any) {
+        errors.push({ workflowId: workflow.id, message: error?.message ?? String(error) });
+      }
+    }
+  }
 
   const workflows = await query<{ id: string }>(
     `SELECT id
@@ -31,7 +55,6 @@ async function repairQueue(req: NextRequest) {
     [since, limit],
   );
 
-  const errors: { workflowId: string; message: string }[] = [];
   let retried = 0;
   for (const workflow of workflows) {
     try {
@@ -58,8 +81,11 @@ async function repairQueue(req: NextRequest) {
     since,
     found: workflows.length,
     retried,
+    queuedRefreshed,
     errors,
-    note: "Queued and running workflows were left for the normal lease-aware dispatcher.",
+    note: refreshQueued
+      ? "Queued workflows were re-pinned to the active routing state; running workflows were left untouched for lease-safe completion."
+      : "Queued and running workflows were left for the normal lease-aware dispatcher.",
   });
 }
 
