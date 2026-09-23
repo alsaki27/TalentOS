@@ -1,0 +1,34 @@
+name: Activate TalentOS AI routing state mix 9.23
+
+# Guarded one-time production operation. It is deliberately manual and refuses
+# to run unless the database resolves to the VPS host selected for this rollout.
+# The provider credential and encryption root are GitHub Secrets only; neither
+# is ever committed, echoed, or stored in workflow artifacts.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: neon-cloudflare-migration
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Activate routing state through guarded database transaction
+        run: node scripts/activate-mix923.mjs
+        env:
+          TALENTOS_DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          AI_KEYS_ENCRYPTION_SECRET: ${{ secrets.AI_KEYS_ENCRYPTION_SECRET }}
+          MIX923_OPENCODE_GO_KEY: ${{ secrets.MIX923_OPENCODE_GO_KEY }}
+          MIX923_EXPECTED_DB_HOST: 40.160.139.188
