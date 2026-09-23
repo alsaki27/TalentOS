@@ -8,6 +8,7 @@ import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { queryOne, execute } from "@/server/db/neon";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 import {
   findApplicationById,
   updateApplication,
@@ -197,23 +198,24 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   try {
     const data = await updateApplication(params.id, updates);
+    const backgroundTasks: Promise<unknown>[] = [];
 
     if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
-      await execute(
+      backgroundTasks.push(execute(
         'INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_user_id, changed_by_name, reason, source) VALUES ($1, $2, $3, $4, $5, $6, $7)',
         [params.id, previousAeStage, updates.ae_stage, currentUser.profile.user_id, currentUser.profile.display_name || currentUser.profile.email, body.event_note ?? null, 'queue']
-      );
+      ));
     }
 
     if ("status" in updates && updates.status !== previousStatus) {
-      await execute(
+      backgroundTasks.push(execute(
         'INSERT INTO application_events (application_id, from_status, to_status, note) VALUES ($1, $2, $3, $4)',
         [params.id, previousStatus, updates.status, body.event_note ?? ("ae_stage" in updates ? `AE stage moved to ${updates.ae_stage}.` : null)]
-      );
+      ));
     }
 
     if (currentUser) {
-      await execute(
+      backgroundTasks.push(execute(
         'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
         [
           currentUser.profile.user_id,
@@ -223,9 +225,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
           params.id,
           JSON.stringify({ fields: Object.keys(updates) }),
         ]
-      );
+      ));
 
-      await logActivity({
+      backgroundTasks.push(logActivity({
         userId: currentUser.profile.user_id,
         actorName: currentUser.profile.display_name || currentUser.profile.email || undefined,
         type: "update",
@@ -233,12 +235,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         entityType: "application",
         entityId: params.id,
         metadata: { fields: Object.keys(updates) },
-      });
+      }));
+      backgroundDispatch(Promise.all(backgroundTasks));
       void triggerWebhooks("application.updated", {
         application_id: params.id,
         updates: Object.keys(updates),
         updated_by: currentUser.profile.user_id,
       });
+    } else if (backgroundTasks.length > 0) {
+      backgroundDispatch(Promise.all(backgroundTasks));
     }
 
     return NextResponse.json(data);

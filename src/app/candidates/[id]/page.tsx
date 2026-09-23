@@ -451,7 +451,10 @@ export default function CandidateProfilePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     });
-    if (res.ok) loadBaseResumes();
+    if (res.ok) {
+      setBaseResumes((prev) => prev.map((resume) => resume.id === baseResumeId ? { ...resume, status } : resume));
+      void loadBaseResumes();
+    }
   }
 
   async function submitBaseResumeRename(b: BaseResumeSummary, name: string) {
@@ -594,14 +597,25 @@ export default function CandidateProfilePage() {
 
   async function markResumeApplied(t: TailoredResumeEntry) {
     if (!t.applicationId) return;
+    const appliedAt = new Date().toISOString();
+    const previousResume = t;
+    setTailoredResumes((prev) => prev.map((resume) => resume.id === t.id
+      ? { ...resume, applicationStatus: "applied", applicationStage: "applied", appliedAt }
+      : resume));
     setResumeActionLoading(`${t.id}:applied`);
     try {
       const res = await fetch(`/api/applications/${t.applicationId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "applied", applied_at: new Date().toISOString() }),
+        body: JSON.stringify({ status: "applied", applied_at: appliedAt }),
       });
-      if (res.ok) await loadTailoredResumes();
+      if (res.ok) {
+        void loadTailoredResumes();
+      } else {
+        setTailoredResumes((prev) => prev.map((resume) => resume.id === t.id ? previousResume : resume));
+      }
+    } catch {
+      setTailoredResumes((prev) => prev.map((resume) => resume.id === t.id ? previousResume : resume));
     } finally {
       setResumeActionLoading(null);
     }
@@ -921,8 +935,8 @@ export default function CandidateProfilePage() {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ follow_up_at: value || null }),
-    });
-    load();
+      });
+    void load();
   }
 
   async function toggleHistory(applicationId: string) {

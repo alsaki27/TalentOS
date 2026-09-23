@@ -92,15 +92,44 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
     router.push("?" + next.toString());
   }
 
-  async function handleStatusChange(applicationId: string, newStatus: string) {
-    try {
-      var res = await fetch("/api/applications/" + applicationId, {
+  function handleStatusChange(applicationId: string, newStatus: string) {
+    var previousStatus = data?.applications.find(function (application) {
+      return application.application_id === applicationId;
+    })?.status;
+    if (previousStatus === undefined) return;
+    var rollbackStatus = previousStatus;
+    setData(function (previous) {
+      if (!previous) return previous;
+      return {
+        ...previous,
+        applications: previous.applications.map(function (application) {
+          return application.application_id === applicationId
+            ? { ...application, status: newStatus }
+            : application;
+        }),
+      };
+    });
+
+    void fetch("/api/applications/" + applicationId, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: newStatus }),
+      }).then(function (res) {
+        if (!res.ok) throw new Error("Failed");
+        void fetchData();
+      }).catch(function (err) {
+      setData(function (previous) {
+        if (!previous) return previous;
+        return {
+          ...previous,
+          applications: previous.applications.map(function (application) {
+            return application.application_id === applicationId
+              ? { ...application, status: rollbackStatus }
+              : application;
+          }),
+        };
       });
-      if (!res.ok) throw new Error("Failed");
-      fetchData();
-    } catch (err) { console.error("Status change failed:", err); }
+      console.error("Status change failed:", err);
+      });
   }
 
   var statusCounts = data?.statusCounts ?? {};

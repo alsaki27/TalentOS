@@ -10,6 +10,7 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 import { deleteStorageFile } from "@/lib/storage";
 import { deleteResumeFile } from "@/lib/resumeStorage";
 import { query, queryOne, execute } from "@/server/db/neon";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -83,7 +84,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (!data) throw new Error("Update failed");
 
     if (context && data) {
-      await logActivity({
+      backgroundDispatch(logActivity({
         userId: context.profile.user_id,
         actorName: context.profile.display_name || context.profile.email || undefined,
         type: "update",
@@ -92,7 +93,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         entityId: params.id,
         entityName: data.name,
         metadata: { fields: Object.keys(updates) },
-      });
+      }));
       void triggerWebhooks("candidate.updated", {
         candidate_id: params.id,
         updates: Object.keys(updates),

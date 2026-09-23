@@ -26,7 +26,7 @@ interface DashboardApplication {
 
 interface ApplicationsDataTableProps {
   applications: DashboardApplication[];
-  onStatusChange?: (applicationId: string, newStatus: string) => void;
+  onStatusChange?: (applicationId: string, newStatus: string) => void | Promise<void>;
   onNotesOpen?: (applicationId: string) => void;
   readOnly?: boolean;
   totalCount?: number;
@@ -110,10 +110,9 @@ export default function ApplicationsDataTable({
   function handleStatusChange(applicationId: string, newStatus: string) {
     if (!onStatusChange) return;
     setLocalStatusLoading(function (prev) { var next: Record<string, boolean> = {}; for (var k in prev) next[k] = prev[k]; next[applicationId] = true; return next; });
-    onStatusChange(applicationId, newStatus);
-    setTimeout(function () {
+    void Promise.resolve(onStatusChange(applicationId, newStatus)).finally(function () {
       setLocalStatusLoading(function (prev) { var next: Record<string, boolean> = {}; for (var k in prev) next[k] = prev[k]; delete next[applicationId]; return next; });
-    }, 2000);
+    });
   }
 
   function handleToggle(applicationId: string, currentStatus: string, targetStatus: string) {
