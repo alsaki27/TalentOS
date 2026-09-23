@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
  * expired leases. Retrying a queued row here would create duplicate claims
  * and amplify provider rate limits.
  */
-export async function POST(req: NextRequest) {
+async function repairQueue(req: NextRequest) {
   const { response } = await requireCurrentUser(["admin"]);
   if (response) return response;
 
@@ -61,4 +61,18 @@ export async function POST(req: NextRequest) {
     errors,
     note: "Queued and running workflows were left for the normal lease-aware dispatcher.",
   });
+}
+
+export async function POST(req: NextRequest) {
+  return repairQueue(req);
+}
+
+// This is intentionally opt-in and admin-gated so the authenticated control
+// center can execute the repair when a direct POST client is unavailable.
+// Without execute=1 it remains read-only rather than mutating on navigation.
+export async function GET(req: NextRequest) {
+  if (new URL(req.url).searchParams.get("execute") !== "1") {
+    return NextResponse.json({ error: "Use POST, or GET with execute=1 from the authenticated admin control center." }, { status: 405 });
+  }
+  return repairQueue(req);
 }
