@@ -81,6 +81,25 @@ function isMcpApiPath(pathname: string) {
   return pathname === "/api/mcp";
 }
 
+// CRM calls these machine-to-machine endpoints with CRM_INTEGRATION_SECRET.
+// Let only those exact paths through the session gate after validating that
+// credential here; each route handler repeats the check as defense in depth.
+const CRM_INTEGRATION_PATHS = new Set([
+  "/api/integrations/crm/companies",
+  "/api/integrations/crm/candidates",
+  "/api/integrations/crm/candidate-outreach",
+]);
+
+function isCrmIntegrationAuthorized(req: NextRequest, pathname: string) {
+  if (!CRM_INTEGRATION_PATHS.has(pathname)) return false;
+  const secret = process.env.CRM_INTEGRATION_SECRET;
+  if (!secret) return false;
+  const presented =
+    req.headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ||
+    req.headers.get("x-crm-integration-secret")?.trim();
+  return Boolean(presented && presented === secret);
+}
+
 function getExtensionCorsResponse(req: NextRequest): NextResponse {
   const origin = req.headers.get("origin") || "*";
   if (req.method === "OPTIONS") {
@@ -222,6 +241,7 @@ export async function middleware(req: NextRequest) {
   // via withExtensionCors(). Intercepting here drops CORS headers on Cloudflare Workers.
   if (isExtensionApiPath(pathname)) return NextResponse.next();
   if (isMcpApiPath(pathname)) return NextResponse.next();
+  if (isCrmIntegrationAuthorized(req, pathname)) return NextResponse.next();
   if (isCronAuthorized(req, pathname)) return NextResponse.next();
   if (isCrawlerAuthorized(req, pathname)) return NextResponse.next();
   if (isOpenJobDataIngestAuthorized(req, pathname)) return NextResponse.next();
