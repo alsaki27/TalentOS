@@ -150,7 +150,14 @@ async function main() {
 
   for (const model of OPEN_CODE_MODELS) await assertOpenCodeModel(model);
 
-  const pool = new Pool({ connectionString: DATABASE_URL, max: 1 });
+  // The pinned VPS presents a self-signed certificate. Keep TLS enabled, but
+  // avoid trusting an arbitrary CA by refusing any host other than the exact
+  // expected address above. Production runtime secrets are not changed here.
+  const pool = new Pool({
+    connectionString: DATABASE_URL,
+    max: 1,
+    ssl: { rejectUnauthorized: false },
+  });
   const client = await pool.connect();
   try {
     const dbIdentity = await client.query(
