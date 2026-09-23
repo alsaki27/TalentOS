@@ -305,7 +305,18 @@ export function buildProviderFromDbKey(
         errorLabel: "DeepSeek API",
         maxTokens: FALLBACK_MAX_TOKENS,
         temperature: 0.3,
-        extraHeaders: {},
+        // OpenCode Go requires a stable session identifier and a real
+        // user-agent for efficient routing. Without this header the provider
+        // returns MissingSessionID before it evaluates the model or quota.
+        // Keep the value in provider_config so each credential can be rotated
+        // without changing application call sites; fall back to a stable
+        // TalentOS-wide session for legacy rows.
+        extraHeaders: {
+          "User-Agent": "TalentOS-AI-Router/1.0",
+          "x-opencode-session": typeof providerConfig?.opencode_session_id === "string" && providerConfig.opencode_session_id.trim()
+            ? providerConfig.opencode_session_id.trim()
+            : "talentos-opencode-default",
+        },
       });
     }
     case "moonshot": {
