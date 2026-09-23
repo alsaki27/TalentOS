@@ -7,6 +7,7 @@ import { query, queryOne, execute } from "@/server/db/neon";
 import {
   mergeResumifyEditorIntoBaseResume,
 } from "@/lib/falood/resumeDocumentAdapters";
+import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 export const runtime = "nodejs";
 
@@ -193,9 +194,7 @@ export async function PATCH(req: NextRequest) {
       `UPDATE falood_saved_applications
        SET ${updates.join(", ")}
        WHERE id = $${values.length + 1}
-       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt",
-                 name, job_description AS "jobDescription", company_name AS "companyName",
-                 skills, resume_data AS "resumeData", chat_history AS "chatHistory", versions`,
+       RETURNING id, created_at AS "createdAt", updated_at AS "updatedAt", name`,
       [...values, id]
     );
 
@@ -220,31 +219,42 @@ export async function PATCH(req: NextRequest) {
       const match = /^base_resume:([0-9a-f-]{36})$/i.exec(row.name.trim());
       if (match) {
         const baseResumeId = match[1];
-        try {
-          const baseRow = await queryOne<{ content: any }>(
-            "SELECT content FROM base_resumes WHERE id = $1",
-            [baseResumeId]
-          );
-          if (baseRow) {
-            const mergedContent = mergeResumifyEditorIntoBaseResume(
-              baseRow.content,
-              body.resumeData,
-            );
-            await execute(
-              "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
-              [JSON.stringify(mergedContent), baseResumeId]
-            );
-          }
-        } catch (syncErr: any) {
-          console.error(
-            "[Falood Applications PATCH] Base resume sync failed (non-critical):",
-            syncErr?.message || syncErr
-          );
-        }
+
+        // The saved application is the authoritative write for this endpoint.
+        // Mirroring the editor content into base_resumes is a derived sync and
+        // must not make the Save button wait on two more database round trips.
+        await backgroundDispatch(
+          (async () => {
+            try {
+              const baseRow = await queryOne<{ content: any }>(
+                "SELECT content FROM base_resumes WHERE id = $1",
+                [baseResumeId]
+              );
+              if (!baseRow) return;
+
+              const mergedContent = mergeResumifyEditorIntoBaseResume(
+                baseRow.content,
+                body.resumeData,
+              );
+              await execute(
+                "UPDATE base_resumes SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
+                [JSON.stringify(mergedContent), baseResumeId]
+              );
+            } catch (syncErr: any) {
+              console.error(
+                "[Falood Applications PATCH] Base resume sync failed (non-critical):",
+                syncErr?.message || syncErr
+              );
+            }
+          })()
+        );
       }
     }
 
-    return NextResponse.json({ success: true, data: normalizeRow(row) });
+    return NextResponse.json({
+      success: true,
+      data: { id: row.id, createdAt: row.createdAt, updatedAt: row.updatedAt },
+    });
   } catch (e: any) {
     console.error("[Falood Applications PATCH]", e);
     return NextResponse.json({ success: false, error: e.message }, { status: 500 });
