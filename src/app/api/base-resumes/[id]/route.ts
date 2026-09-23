@@ -51,24 +51,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   );
   if (!data) return NextResponse.json({ error: "Update failed" }, { status: 500 });
 
-  // If content changed, invalidate match scores for this candidate
-  if (body.content && data?.candidate_id) {
-    await execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]);
-  }
-
   if ((body.content || body.target_industry || body.target_roles) && data?.candidate_id) {
-    // Dispatched in the background instead of awaited: this used to block the
-    // response on a full AI keyword-generation call. The editor autosaves on
-    // every edit (1s debounce) and awaited AI calls can take several seconds,
-    // so two saves (e.g. an autosave and the explicit Save button, or two
-    // autosaves in a row) could easily be in flight at once - and since each
-    // PATCH does a full-object overwrite of `content`, their responses could
-    // arrive out of order and let an older, in-flight save silently clobber
-    // a newer one (confirmed as the cause of deleted custom sections
-    // reappearing). Not awaiting this call removes the multi-second window
-    // that made that race routine, without changing what the keyword agent
-    // does - failures were already just logged, never surfaced to the caller.
-    await backgroundDispatch(
+    // Neither score invalidation nor keyword generation is part of saving the
+    // resume itself. Both can take a noticeable amount of time, especially
+    // over the production database connection, so register them with
+    // waitUntil and let the PATCH response return as soon as the UPDATE has
+    // committed. The editor autosaves frequently and the explicit Save button
+    // should not wait for derived data to be rebuilt.
+    const backgroundTasks: Promise<unknown>[] = [];
+
+    if (body.content) {
+      backgroundTasks.push(
+        execute('DELETE FROM job_match_scores WHERE candidate_id = $1', [data.candidate_id]).catch(
+          (scoreError: any) => {
+            console.error("[BASE_RESUME_UPDATE] match-score invalidation failed", scoreError?.message || scoreError);
+          }
+        )
+      );
+    }
+
+    backgroundTasks.push(
       generateBaseResumeJobSearchProfile({
         baseResumeId: data.id,
         triggerType: "resume_updated",
@@ -77,6 +79,8 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         console.error("[BASE_RESUME_UPDATE] keyword agent failed", keywordError?.message || keywordError);
       })
     );
+
+    await backgroundDispatch(Promise.all(backgroundTasks));
   }
 
   return NextResponse.json(data);
