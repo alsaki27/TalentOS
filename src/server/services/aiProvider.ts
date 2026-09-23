@@ -35,6 +35,38 @@ const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 // than the env-key path's 8192 — same call, different limit.
 const FALLBACK_MAX_TOKENS = 8192;
 
+const DEFAULT_OPENCODE_SESSION_ID = "talentos-opencode-default";
+
+function buildOpenCodeHeaders(
+  customHeaders?: Record<string, string> | null,
+  providerConfig?: Record<string, unknown> | null,
+): Record<string, string> {
+  const configuredSession = providerConfig?.opencode_session_id;
+  const customSession = Object.entries(customHeaders ?? {})
+    .find(([name]) => name.toLowerCase() === "x-opencode-session")?.[1];
+  const sessionId = typeof configuredSession === "string" && configuredSession.trim()
+    ? configuredSession.trim()
+    : typeof customSession === "string" && customSession.trim()
+      ? customSession.trim()
+      : DEFAULT_OPENCODE_SESSION_ID;
+
+  // Remove case variants supplied through custom_headers before adding the
+  // canonical header. Headers are case-insensitive, but keeping one explicit
+  // value avoids duplicate/merged values in Fetch implementations.
+  const passthroughHeaders = Object.fromEntries(
+    Object.entries(customHeaders ?? {}).filter(([name]) => {
+      const normalized = name.toLowerCase();
+      return normalized !== "x-opencode-session" && normalized !== "user-agent";
+    }),
+  );
+
+  return {
+    ...passthroughHeaders,
+    "User-Agent": customHeaders?.["User-Agent"] ?? "TalentOS-AI-Router/1.0",
+    "x-opencode-session": sessionId,
+  };
+}
+
 /**
  * Build an AI provider from a DB-managed key.
  * Returns null if the provider adapter is not implemented for this provider type.
@@ -341,6 +373,7 @@ export function buildProviderFromDbKey(
           model: selectedModel,
           maxOutputTokens: 8192,
           errorLabel: "OpenCode API",
+          extraHeaders: buildOpenCodeHeaders(customHeaders, providerConfig),
         });
       }
       const normalizedReasoning = reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : null;
@@ -369,7 +402,7 @@ export function buildProviderFromDbKey(
           ...(deepSeekV4ProBody ?? {}),
           ...(kimiK27Body ?? {}),
         },
-        extraHeaders: {},
+        extraHeaders: buildOpenCodeHeaders(customHeaders, providerConfig),
       });
     }
     case "openai_compatible": {

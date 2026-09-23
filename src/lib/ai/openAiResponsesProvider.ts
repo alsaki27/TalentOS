@@ -137,6 +137,7 @@ export interface OpenAiResponsesConfig {
   apiKey: string;
   model: string;
   maxOutputTokens?: number;
+  extraHeaders?: Record<string, string>;
   errorLabel: string;
 }
 
@@ -168,6 +169,7 @@ export function createOpenAiResponsesProvider(config: OpenAiResponsesConfig): Ai
             Authorization: `Bearer ${config.apiKey}`,
             "Content-Type": "application/json",
             Accept: "application/json",
+            ...config.extraHeaders,
           },
           body: JSON.stringify(body),
         });
