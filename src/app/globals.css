@@ -776,6 +776,15 @@ body::before {
   padding-right: 16px;
 }
 
+/* The candidate detail page's Applications dashboard (stat tiles, two
+   charts, and a 9-10 column data table) was cramped into the default
+   1100px content shell - same full-bleed treatment as the pages above. */
+.page:has(.candidate-detail-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 .job-agent-page .job-agent-header-row {
   display: flex;
   align-items: center;

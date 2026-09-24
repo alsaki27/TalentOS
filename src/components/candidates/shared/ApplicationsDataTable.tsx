@@ -127,8 +127,15 @@ export default function ApplicationsDataTable({
 
   return (
     <>
-      <div className="table-shell" style={{ borderRadius: 10, border: "1px solid var(--border)", overflow: "hidden" }}>
-        <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
+      {/* .table-shell already provides border/radius/shadow AND overflow-x:
+          auto (globals.css) - the inline style this div used to carry set
+          overflow:hidden, which wins the cascade over the class and silently
+          disabled that class's horizontal scroll for this one table. On a
+          narrow viewport, with the table below pinned to a comfortable
+          minWidth instead of shrinking to fit, that meant every column got
+          crushed illegibly instead of the row simply scrolling sideways. */}
+      <div className="table-shell">
+        <table className="table" style={{ width: "100%", minWidth: 1050, borderCollapse: "collapse", fontSize: 13, tableLayout: "fixed" }}>
           <thead>
             <tr>
               {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "10%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}

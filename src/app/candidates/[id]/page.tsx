@@ -1021,7 +1021,7 @@ export default function CandidateProfilePage() {
   const primaryResume = candidate.resumes.find((r) => r.is_original_upload) ?? candidate.resumes[0] ?? null;
 
   return (
-    <>
+    <div className="candidate-detail-page">
       <div className="page-header">
         <h1>{candidate.name}</h1>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
@@ -1052,7 +1052,16 @@ export default function CandidateProfilePage() {
         </div>
       </div>
 
-      <div className="tabs" style={{ marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
+      <div
+        className="tabs"
+        style={{
+          marginBottom: 20,
+          borderBottom: "1px solid var(--border)",
+          display: "flex",
+          overflowX: "auto",
+          WebkitOverflowScrolling: "touch",
+        }}
+      >
         {(["Applications", "Profile Overview", "Training Audit", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
@@ -1064,6 +1073,8 @@ export default function CandidateProfilePage() {
               fontWeight: activeTab === tab ? 600 : 400,
               background: "none",
               borderRadius: 0,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             {tab}
@@ -1677,7 +1688,7 @@ export default function CandidateProfilePage() {
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
