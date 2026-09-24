@@ -49,10 +49,13 @@ export async function POST(
 
   switch (action) {
     case "approve": {
-      // Advance to Final Polish (stage 3 = Hiring Panel done, now stage 4 = Final Polish)
+      // Advance to Final Polish. current_stage is 0-indexed into
+      // APPLICATION_AGENT_IDS (0=resume_forge, 1=hiring_panel, 2=final_polish)
+      // - a workflow reaches "waiting" (human review) only after Hiring
+      // Panel has already run, so approving it means Final Polish is next.
       await query(
         "UPDATE application_ai_workflows SET status = 'queued', current_stage = $1, last_error = NULL WHERE id = $2",
-        [3, workflowId]
+        [2, workflowId]
       );
       await query(
         "UPDATE applications SET resume_generation_status = 'resume_review', resume_generation_error = NULL WHERE id = $1",
