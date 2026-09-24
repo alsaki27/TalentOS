@@ -13,8 +13,23 @@
 //   resume_forge:  p99  75s / max 115s  -> unchanged, 180s already generous
 //   hiring_panel:  p99 103s / max 119s  -> 150s (was 120s)
 //   final_polish:  p99 157s / max 179s  -> 220s (was 180s)
+//
+// resume_forge bumped again 2026-09 (180s -> 240s) when Job Lens's work
+// (job-only extraction + per-candidate requirement classification, each its
+// own provider call) was folded into this stage instead of running as its
+// own - see resumeForge.ts's analyzeJob(). Up to 4 sequential provider calls
+// can now happen in one stage attempt (job-only extraction, requirement
+// analysis, draft, optional coverage retry) where at most 2 happened before;
+// each still gets its own full timeoutMs individually, but the *outer*
+// per-attempt guard in processWorkflowStage (timeoutMs*2+5s) needed more
+// headroom for the realistic combined case.
 
 export const AGENT_CONFIG_DEFAULTS = {
+  // No longer its own pipeline stage (folded into application_resume_forge -
+  // see resumeForge.ts's analyzeJob()). Kept only as a fallback default for
+  // historical ai_agent_configs lookups against already-written
+  // application_job_lens stage_runs/artifacts; never used to drive a live
+  // pipeline call.
   application_job_lens: {
     displayName: "Job Lens",
     temperature: 0.2,
@@ -28,7 +43,7 @@ export const AGENT_CONFIG_DEFAULTS = {
     displayName: "Resume Forge",
     temperature: 0.3,
     maxOutputTokens: 32768,
-    timeoutMs: 180_000,
+    timeoutMs: 240_000,
     maxAttempts: 2,
     approvalPolicy: "risk_based" as const,
     minimumScore: 0,
@@ -129,7 +144,8 @@ export const SCHEMA_VERSIONS = {
   jobAnalysis: "JobAnalysisV1",
   // Distinct from jobAnalysis above: this versions jobs.job_analysis's cached
   // shape (JobOnlyAnalysisV1 - job-only fields, no requirementAnalysis), not
-  // the full per-application JobAnalysisV1 runJobLens returns. A future
+  // the full per-application JobAnalysisV1 resumeForge.ts's analyzeJob()
+  // returns. A future
   // change to the job-only field set bumps this independently, so a stale
   // cache entry is detected and re-extracted rather than silently merged
   // with a shape it no longer matches.

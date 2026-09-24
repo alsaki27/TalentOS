@@ -8,11 +8,12 @@
 //
 // One AI call per job now does FOUR things at once: picks 3-4 precise
 // categorization tags, cleans salary_range into structured min/max/currency/
-// period, classifies work authorization, AND extracts the job-only Job Lens
-// analysis (093_job_analysis_cache.sql) that runJobLens would otherwise have
-// to re-extract on every single application against this job. The job-only
-// extraction instructions are shared verbatim with prompts/jobLens.ts's
-// buildJobOnlyLensPrompt() so the two never drift on what "job-only" means.
+// period, classifies work authorization, AND extracts the job-only analysis
+// (093_job_analysis_cache.sql) that Resume Forge's analyzeJob() (formerly
+// the standalone Job Lens stage) would otherwise have to re-extract on every
+// single application against this job. The job-only extraction instructions
+// are shared verbatim with prompts/jobLens.ts's buildJobOnlyLensPrompt() so
+// the two never drift on what "job-only" means.
 // Jobs are processed strictly sequentially (processPendingCategorization),
 // never in parallel — gentle on provider rate limits and keeps import fast
 // since categorization always happens after the insert, not as part of it.
@@ -20,7 +21,7 @@
 // The job-only-analysis half of this call is independent of the
 // categorization half: a malformed/missing job-only response is recorded via
 // job_analysis_error/job_analysis_attempts and simply leaves the cache cold
-// (runJobLens's own inline fallback will fill it on the first real
+// (Resume Forge's own inline fallback will fill it on the first real
 // application), but never blocks or fails categorization itself, matching
 // this codebase's existing pattern of independent, gracefully-degrading
 // gates (see description_enrich_attempts for the precedent this mirrors).

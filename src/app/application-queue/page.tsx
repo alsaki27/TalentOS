@@ -180,18 +180,23 @@ function ColumnResizeHandle({ columnId, currentWidth, onResize }: { columnId: st
   );
 }
 
-// current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens, resume_forge,
-// hiring_panel, final_polish) - it names the stage currently running/about to
-// run, not a count of completed stages. Confirmed live: this table previously
-// shifted every label by one (stage 1 shown as "Job Lens" while the actual
-// stage_run row was already application_resume_forge), making the whole batch
-// look stuck a step earlier than it actually was. "Queued" isn't a stage at
-// all - that's conveyed by the separate wfStatus badge next to this label.
+// current_stage is 0-indexed into APPLICATION_AGENT_IDS (resume_forge,
+// hiring_panel, final_polish) - it names the stage currently running/about
+// to run, not a count of completed stages. Resume Forge's stage now also
+// does the job-analysis work Job Lens used to do as its own stage (see
+// resumeForge.ts's analyzeJob()), so there is no separate "Job Lens" label
+// here anymore - it's covered by the Resume Forge label. Confirmed live
+// (pre-merge): this table previously shifted every label by one (stage 1
+// shown as "Job Lens" while the actual stage_run row was already
+// application_resume_forge), making the whole batch look stuck a step
+// earlier than it actually was - keep these indices matched exactly to
+// current_stage, not to any assumption about label order. "Queued" isn't a
+// stage at all - that's conveyed by the separate wfStatus badge next to this
+// label.
 const WORKFLOW_LABELS: Record<number, string> = {
-  0: "🔍 Job Lens",
-  1: "📝 Resume Forge",
-  2: "👥 Hiring Panel",
-  3: "✨ Final Polish",
+  0: "📝 Resume Forge",
+  1: "👥 Hiring Panel",
+  2: "✨ Final Polish",
 };
 
 // same convention as src/app/candidates/page.tsx -- keep in sync if that one changes
@@ -1276,7 +1281,7 @@ export default function ApplicationQueuePage() {
                           // Patch in place, mirroring exactly what the route
                           // just wrote server-side for each action - no reload.
                           if (action === "approve") {
-                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 3, resume_generation_status: "resume_review" });
+                            patchItemLocally(item.id, { workflow_status: "queued", workflow_stage: 2, resume_generation_status: "resume_review" });
                           } else if (action === "reject") {
                             patchItemLocally(item.id, { workflow_status: "failed", resume_generation_status: "failed" });
                           } else if (action === "reject_and_restart") {
@@ -1306,7 +1311,7 @@ export default function ApplicationQueuePage() {
                             </div>
                           );
                         })()}
-                        {(item.workflow_stage ?? 0) >= 2 && (
+                        {(item.workflow_stage ?? 0) >= 1 && (
                           <QueueFindingsPanel details={workflowDetails[item.workflow_id]} />
                         )}
                         <Link href="/resume-parsing-status" style={{ fontSize: 12, textDecoration: "underline", display: "inline-block", marginTop: 4 }}>
@@ -1602,7 +1607,7 @@ function QueueFindingsPanel({ details }: { details: any }) {
 }
 
 function FindingsButton({ item, onFetchDetails, expandedWorkflow }: { item: QueueItem; onFetchDetails: (item: QueueItem) => void; expandedWorkflow: string | null }) {
-  if (!item.workflow_id || (item.workflow_stage ?? 0) < 2) return null;
+  if (!item.workflow_id || (item.workflow_stage ?? 0) < 1) return null;
   return (
     <button className="btn-compact btn-sm" onClick={() => onFetchDetails(item)} title="Show Hiring Panel and Final Polish findings inline">
       {expandedWorkflow === item.workflow_id ? "▲ Hide findings" : "📋 Findings"}

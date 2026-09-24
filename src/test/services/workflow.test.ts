@@ -143,7 +143,6 @@ describe("applicationAiWorkflowService", () => {
   it("agent ordering is correct", async () => {
     const { APPLICATION_AGENT_IDS } = await import("@/lib/ai/application-agents/types");
     expect(APPLICATION_AGENT_IDS).toEqual([
-      "application_job_lens",
       "application_resume_forge",
       "application_hiring_panel",
       "application_final_polish",

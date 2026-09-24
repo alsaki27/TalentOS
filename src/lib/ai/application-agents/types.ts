@@ -19,7 +19,6 @@ export type ApplicationAgentId =
   | "copilot_cover_letter";
 
 export const APPLICATION_AGENT_IDS: ApplicationAgentId[] = [
-  "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
@@ -40,28 +39,33 @@ export interface ApplicationAgentMeta {
 }
 
 export const APPLICATION_AGENT_METAS: Record<ApplicationAgentId, ApplicationAgentMeta> = {
+  // No longer its own pipeline stage (folded into Resume Forge - see
+  // resumeForge.ts's analyzeJob()) but kept here, at Resume Forge's own
+  // sequenceNumber, so historical stage_runs/artifacts written before the
+  // merge (automation_id = 'application_job_lens') still render a real
+  // label instead of falling through to an "unknown automation" display.
   application_job_lens: {
     id: "application_job_lens",
     displayName: "Job Lens",
     sequenceNumber: 1,
-    description: "Analyze the JD and extract requirements",
+    description: "Analyze the JD and extract requirements (folded into Resume Forge)",
   },
   application_resume_forge: {
     id: "application_resume_forge",
     displayName: "Resume Forge",
-    sequenceNumber: 2,
-    description: "Produce an evidence-supported tailored draft",
+    sequenceNumber: 1,
+    description: "Analyze the job, then produce an evidence-supported tailored draft",
   },
   application_hiring_panel: {
     id: "application_hiring_panel",
     displayName: "Hiring Panel",
-    sequenceNumber: 3,
+    sequenceNumber: 2,
     description: "Grade as recruiter, HR manager, and ATS",
   },
   application_final_polish: {
     id: "application_final_polish",
     displayName: "Final Polish",
-    sequenceNumber: 4,
+    sequenceNumber: 3,
     description: "Apply approved feedback and run final QA",
   },
   copilot_fill_planner: {

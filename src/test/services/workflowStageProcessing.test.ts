@@ -38,7 +38,7 @@ vi.mock("@/server/repositories/applicationAiWorkflowRepository", () => ({
     id: "wf-1",
     application_id: "app-1",
     status: "running",
-    current_stage: 2,
+    current_stage: 1, // index 1 = application_hiring_panel (0=resume_forge, 1=hiring_panel, 2=final_polish)
     config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [], routingStateId: "state-1" },
     started_by: null,
     claimed_by: "dispatcher",
@@ -91,7 +91,7 @@ function hiringPanelWorkflow() {
     id: "wf-1",
     application_id: "app-1",
     status: "queued",
-    current_stage: 2, // index 2 = application_hiring_panel
+    current_stage: 1, // index 1 = application_hiring_panel (0=resume_forge, 1=hiring_panel, 2=final_polish)
     config_snapshot: { candidateId: "cand-1", job: {}, baseResume: {}, evidence: [], routingStateId: "state-1" },
     started_by: null,
   } as any;
@@ -200,7 +200,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
   it("allocates a new stage-run identity after a stale attempt already exists", async () => {
     (listStageRuns as any).mockResolvedValue([{
       automation_id: "application_hiring_panel",
-      sequence_number: 3,
+      sequence_number: 2,
       attempt_number: 1,
     }]);
 
@@ -208,7 +208,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 
     expect(createStageRun).toHaveBeenCalledWith(expect.objectContaining({
       workflowId: "wf-1",
-      sequenceNumber: 3,
+      sequenceNumber: 2,
       attemptNumber: 2,
     }));
   });
@@ -282,10 +282,16 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
   });
 
   it("rewinds final polish to the first missing required agent artifact", async () => {
+    // current_stage: 2 = application_final_polish under the 3-stage
+    // numbering (0=resume_forge, 1=hiring_panel, 2=final_polish). The
+    // artifacts fixture below (job_lens + resume_forge only, both written
+    // together by Resume Forge's merged stage - see resumeForge.ts's
+    // analyzeJob()) represents "Resume Forge done, Hiring Panel not yet
+    // run", so the rewind should land one stage back, at hiring_panel (1).
     const finalPolishWorkflow = {
       ...hiringPanelWorkflow(),
       status: "running",
-      current_stage: 3,
+      current_stage: 2,
       lock_version: 9,
     };
     (findWorkflowById as any).mockResolvedValue(finalPolishWorkflow);
@@ -297,7 +303,7 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     await processWorkflowStage("wf-1", 9);
 
     const rewind = (updateWorkflowStatus as any).mock.calls.find(
-      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2,
+      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 1,
     );
     expect(rewind?.[2]?.last_error).toContain("application_hiring_panel");
     const { finalizeWorkflow } = await import("@/lib/ai/application-agents/finalizationService");

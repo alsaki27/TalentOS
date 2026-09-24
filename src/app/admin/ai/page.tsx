@@ -177,7 +177,6 @@ const STATUS_BADGE: Record<string, string> = {
 // PROVIDER_NATIVE_DEFAULTS imported from @/lib/ai/providerPresets above
 
 const PIPELINE_AGENT_IDS = new Set([
-  "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",

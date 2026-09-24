@@ -6,7 +6,6 @@ import { query, queryOne } from "@/server/db/neon";
 export const dynamic = "force-dynamic";
 
 const CRITICAL_AGENT_IDS = [
-  "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",

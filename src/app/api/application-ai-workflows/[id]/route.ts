@@ -125,15 +125,22 @@ export async function POST(
       // the new stage). If dragged to "completed", marks done without AI.
       const body = await req.json().catch(() => ({}));
       const targetStage = typeof body.stage === "number" ? body.stage : null;
-      if (targetStage === null || targetStage < 0 || targetStage > 5) {
-        return NextResponse.json({ error: "stage must be an integer 0-5" }, { status: 400 });
+      if (targetStage === null || targetStage < 0 || targetStage > 4) {
+        return NextResponse.json({ error: "stage must be an integer 0-4" }, { status: 400 });
       }
 
-      const isCompleted = targetStage === 5;
+      const isCompleted = targetStage === 4;
 
       if (isCompleted) {
         const artifacts = await listArtifacts(workflowId, { fresh: true });
-        const missingArtifacts = APPLICATION_AGENT_IDS.slice(0, 4)
+        // The 3 real pipeline stages (application_resume_forge,
+        // application_hiring_panel, application_final_polish). Not
+        // application_job_lens explicitly - Resume Forge's stage always
+        // writes that artifact together with its own in the same call (see
+        // processWorkflowStage's split-artifact write for
+        // application_resume_forge), so its presence is already implied by
+        // application_resume_forge's.
+        const missingArtifacts = APPLICATION_AGENT_IDS.slice(0, 3)
           .filter((automationId) => !artifacts.some((artifact) => artifact.automation_id === automationId));
         const completion = await queryOne<{ resume_generation_status: string | null; version_id: string | null }>(
           `SELECT a.resume_generation_status, v.id AS version_id

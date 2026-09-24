@@ -23,6 +23,27 @@ function mockProvider(returnText: string): AiProvider {
   };
 }
 
+// runResumeForge now also does the job-analysis work formerly split out as
+// its own "Job Lens" stage (see resumeForge.ts's analyzeJob()), so a single
+// call to it makes up to 3 sequential provider.send calls in order:
+// (1) job-only extraction (skipped on a jobs.job_analysis cache hit),
+// (2) per-candidate requirement analysis (always runs), (3) the resume
+// draft itself (plus an optional 4th coverage-retry call). Returns each
+// text in `texts` in order for successive calls, then keeps returning the
+// last one for any calls beyond that (e.g. a coverage retry no fixture here
+// is expected to trigger, since the default job-analysis fixtures below
+// classify no requirements as missed).
+function mockProviderSequence(...texts: string[]): AiProvider {
+  const send = vi.fn();
+  for (const t of texts) {
+    send.mockResolvedValueOnce({ content: [{ type: "text", text: t }], stopReason: "end_turn" });
+  }
+  if (texts.length > 0) {
+    send.mockResolvedValue({ content: [{ type: "text", text: texts[texts.length - 1] }], stopReason: "end_turn" });
+  }
+  return { send };
+}
+
 function makeContext(overrides: Partial<AgentContext> = {}): AgentContext {
   return {
     applicationId: "app-1",
@@ -36,7 +57,25 @@ function makeContext(overrides: Partial<AgentContext> = {}): AgentContext {
   };
 }
 
-describe("runJobLens", () => {
+// Minimal fixtures for the two job-analysis sub-calls, reused by every
+// runResumeForge test below that doesn't care about job-analysis specifics -
+// classifies nothing as a missed-but-supported requirement, so no coverage
+// retry fires and the call sequence stays a predictable 3 calls long.
+const DEFAULT_JOB_ONLY = {
+  title: "Engineer", company: "Acme", location: "Remote",
+  requiredSkills: [], preferredSkills: [], tools: [], methodologies: [], certifications: [],
+  seniority: null, domain: null, atsKeywords: [], responsibilities: [],
+  evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "",
+};
+const DEFAULT_REQUIREMENT_ANALYSIS = { requirementAnalysis: [] };
+
+const MINIMAL_VALID_DRAFT = {
+  summary: null, skills: [], experience: [], education: [],
+  certifications: [], projects: [], changeLog: [],
+  missingRequirements: [], excludedKeywords: [], truthRisks: [],
+};
+
+describe("runResumeForge - job analysis (formerly the standalone Job Lens stage)", () => {
   it("validates valid job analysis output from AI", async () => {
     const validAnalysis = {
       title: "Senior Engineer",
@@ -56,58 +95,77 @@ describe("runJobLens", () => {
       ambiguities: ["Team size unknown"],
       rawSummary: "Senior infra role",
     };
-    const provider = mockProvider(JSON.stringify(validAnalysis));
+    const provider = mockProviderSequence(
+      JSON.stringify(validAnalysis),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
 
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    const result = await runJobLens({}, provider, makeContext());
-    expect(result.title).toBe("Senior Engineer");
-    expect(result.requiredSkills).toContain("Go");
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, makeContext());
+    expect(result.jobAnalysis.title).toBe("Senior Engineer");
+    expect(result.jobAnalysis.requiredSkills).toContain("Go");
     // Cache miss (the mock job has no job_analysis) -> job-only extraction
-    // call, then the always-fresh per-candidate requirement-analysis call.
-    expect(provider.send).toHaveBeenCalledTimes(2);
+    // call, the always-fresh requirement-analysis call, then the draft call.
+    expect(provider.send).toHaveBeenCalledTimes(3);
   });
 
   it("throws on invalid JSON from AI", async () => {
     const provider = mockProvider("not json at all");
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    await expect(runJobLens({}, provider, makeContext())).rejects.toThrow();
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
 
   it("falls back to the canonical job title when AI omits it", async () => {
-    const provider = mockProvider(JSON.stringify({ company: "Acme" }));
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    await expect(runJobLens({}, provider, makeContext())).resolves.toMatchObject({
-      title: "Engineer",
-      company: "Acme",
-    });
+    const provider = mockProviderSequence(
+      JSON.stringify({ company: "Acme" }),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, makeContext());
+    expect(result.jobAnalysis.title).toBe("Engineer");
+    expect(result.jobAnalysis.company).toBe("Acme");
   });
 
-  it("cache HIT: makes only one provider.send call (requirement analysis) when jobs.job_analysis is present and current", async () => {
+  it("cache HIT: skips the job-only extraction call (jobs.job_analysis present and current)", async () => {
     const requirementAnalysisOnly = {
       requirementAnalysis: [
-        { requirement: "Go", category: "skill", sourceEvidence: ["sot:Go"], status: "supported_but_not_surfaced", safeToAdd: true },
+        // sourceEvidence: [] deliberately - schemas.ts's parseRequirementAnalysis
+        // re-derives safeToAdd as `supported && sourceEvidence.length > 0`,
+        // ignoring whatever the raw JSON claims. With real sourceEvidence this
+        // row would be "addable", and since this test's draft never surfaces
+        // "Go" (MINIMAL_VALID_DRAFT has no skills/experience), that would
+        // correctly trigger Resume Forge's own coverage retry - a real 3rd
+        // provider.send call this test isn't exercising.
+        { requirement: "Go", category: "skill", sourceEvidence: [], status: "supported_but_not_surfaced", safeToAdd: true },
       ],
     };
-    const provider = mockProvider(JSON.stringify(requirementAnalysisOnly));
     const cachedJobOnly = {
       title: "Senior Engineer", company: "Acme Corp", location: "Remote",
       requiredSkills: ["Go"], preferredSkills: [], tools: [], methodologies: [], certifications: [],
       seniority: "Senior", domain: "Infrastructure", atsKeywords: ["Go"], responsibilities: [],
       evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "Senior infra role",
     };
+    // Cache hit skips extraction, so the sequence is requirement-analysis
+    // then the draft call - one fewer than the cache-miss case above.
+    const provider = mockProviderSequence(
+      JSON.stringify(requirementAnalysisOnly),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const ctx = makeContext({
       job: { ...makeContext().job, job_analysis: cachedJobOnly, job_analysis_schema_version: "JobOnlyAnalysisV1" } as any,
     });
 
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    const result = await runJobLens({}, provider, ctx);
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, ctx);
 
-    expect(provider.send).toHaveBeenCalledTimes(1);
+    expect(provider.send).toHaveBeenCalledTimes(2);
     // The cached job-only fields survive untouched into the merged result.
-    expect(result.title).toBe("Senior Engineer");
-    expect(result.atsKeywords).toEqual(["Go"]);
-    expect(result.requirementAnalysis).toHaveLength(1);
-    expect(result.requirementAnalysis[0].requirement).toBe("Go");
+    expect(result.jobAnalysis.title).toBe("Senior Engineer");
+    expect(result.jobAnalysis.atsKeywords).toEqual(["Go"]);
+    expect(result.jobAnalysis.requirementAnalysis).toHaveLength(1);
+    expect(result.jobAnalysis.requirementAnalysis[0].requirement).toBe("Go");
   });
 
   it("cache MISS due to a schema-version mismatch: re-extracts job-only analysis instead of trusting a stale cache shape", async () => {
@@ -117,17 +175,23 @@ describe("runJobLens", () => {
       seniority: "Senior", domain: "Infrastructure", atsKeywords: ["Go"], responsibilities: [],
       evidenceRequirements: [], prohibitedUnsupportedClaims: [], ambiguities: [], rawSummary: "Senior infra role",
     };
-    const provider = mockProvider(JSON.stringify(validAnalysis));
+    const provider = mockProviderSequence(
+      JSON.stringify(validAnalysis),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const ctx = makeContext({
       job: { ...makeContext().job, job_analysis: { title: "Stale" }, job_analysis_schema_version: "JobOnlyAnalysisV0-old" } as any,
     });
 
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    await runJobLens({}, provider, ctx);
-    expect(provider.send).toHaveBeenCalledTimes(2);
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, ctx);
+    // Job-only extraction + requirement-analysis + draft - the stale cache
+    // shape must not be trusted, so extraction still runs.
+    expect(provider.send).toHaveBeenCalledTimes(3);
   });
 
-  it("shape-equivalence: the merged result is structurally identical whether job-only data came from cache or a fresh extraction", async () => {
+  it("shape-equivalence: the merged job analysis is structurally identical whether job-only data came from cache or a fresh extraction", async () => {
     const jobOnlyFields = {
       title: "Senior Engineer", company: "Acme Corp", location: "Remote",
       requiredSkills: ["Go"], preferredSkills: [], tools: [], methodologies: [], certifications: [],
@@ -136,23 +200,29 @@ describe("runJobLens", () => {
     };
     const reqOnly = { requirementAnalysis: [] };
 
-    // Fresh path (cache miss): both calls return the same combined shape the
-    // mock always serves, exactly like the older single-call runJobLens did.
-    const freshProvider = mockProvider(JSON.stringify({ ...jobOnlyFields, ...reqOnly }));
-    const { runJobLens } = await import("@/lib/ai/application-agents/jobLens");
-    const freshResult = await runJobLens({}, freshProvider, makeContext());
+    // Fresh path (cache miss): job-only extraction, requirement analysis, draft.
+    const freshProvider = mockProviderSequence(
+      JSON.stringify({ ...jobOnlyFields, ...reqOnly }),
+      JSON.stringify(reqOnly),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const freshResult = await runResumeForge({}, freshProvider, makeContext());
 
     // Cached path: same job-only fields served from jobs.job_analysis, only
-    // the requirement-analysis call actually reaches the provider.
-    const cachedProvider = mockProvider(JSON.stringify(reqOnly));
+    // the requirement-analysis and draft calls actually reach the provider.
+    const cachedProvider = mockProviderSequence(
+      JSON.stringify(reqOnly),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const cachedCtx = makeContext({
       job: { ...makeContext().job, job_analysis: jobOnlyFields, job_analysis_schema_version: "JobOnlyAnalysisV1" } as any,
     });
-    const cachedResult = await runJobLens({}, cachedProvider, cachedCtx);
+    const cachedResult = await runResumeForge({}, cachedProvider, cachedCtx);
 
-    expect(Object.keys(freshResult).sort()).toEqual(Object.keys(cachedResult).sort());
-    expect(freshResult).toMatchObject(jobOnlyFields);
-    expect(cachedResult).toMatchObject(jobOnlyFields);
+    expect(Object.keys(freshResult.jobAnalysis).sort()).toEqual(Object.keys(cachedResult.jobAnalysis).sort());
+    expect(freshResult.jobAnalysis).toMatchObject(jobOnlyFields);
+    expect(cachedResult.jobAnalysis).toMatchObject(jobOnlyFields);
   });
 });
 
@@ -170,41 +240,48 @@ describe("runResumeForge", () => {
       excludedKeywords: [],
       truthRisks: [],
     };
-    const provider = mockProvider(JSON.stringify(validDraft));
-    const ctx = makeContext({
-      previousOutputs: {
-        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: { title: "Engineer", company: "Acme" }, createdAt: "" },
-      },
-    });
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(validDraft),
+    );
 
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
-    const result = await runResumeForge({}, provider, ctx);
-    expect(result.skills[0]?.skills).toContain("Go");
-    expect(result.changeLog).toHaveLength(1);
+    const result = await runResumeForge({}, provider, makeContext());
+    expect(result.draft.skills[0]?.skills).toContain("Go");
+    expect(result.draft.changeLog).toHaveLength(1);
   });
 
   it("rejects truth risks with invalid severity instead of filtering", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [],
-      missingRequirements: [], excludedKeywords: [],
-      truthRisks: [{ risk: "Bad", severity: "extreme" }],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify({
+        summary: null, skills: [], experience: [], education: [],
+        certifications: [], projects: [], changeLog: [],
+        missingRequirements: [], excludedKeywords: [],
+        truthRisks: [{ risk: "Bad", severity: "extreme" }],
+      }),
+    );
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
 
   it("removes fabricated replacement roles and preserves legacy base identity and education month", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null,
-      skills: [],
-      experience: [
-        { title: "AutoCAD Drafter", company: "ALTERED COMPANY", startDate: "Wrong", endDate: "Wrong", bullets: ["Tailored first role"], evidenceIds: [] },
-        { title: "Invented Engineer", company: "Invented Employer", startDate: "2025", endDate: "Present", bullets: ["Fabricated role"], evidenceIds: [] },
-      ],
-      education: [{ degree: "Master of Engineering Management", school: "WUST", field: null, graduationDate: "2019" }],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify({
+        summary: null,
+        skills: [],
+        experience: [
+          { title: "AutoCAD Drafter", company: "ALTERED COMPANY", startDate: "Wrong", endDate: "Wrong", bullets: ["Tailored first role"], evidenceIds: [] },
+          { title: "Invented Engineer", company: "Invented Employer", startDate: "2025", endDate: "Present", bullets: ["Fabricated role"], evidenceIds: [] },
+        ],
+        education: [{ degree: "Master of Engineering Management", school: "WUST", field: null, graduationDate: "2019" }],
+        certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+      }),
+    );
     const ctx = makeContext({
       baseResume: {
         id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
@@ -217,29 +294,30 @@ describe("runResumeForge", () => {
           education: [{ degree: "Master of Engineering Management", school: "Washington University of Science and Technology (WUST)", graduationDate: "May 2024" }],
         },
       } as any,
-      previousOutputs: {
-        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-      },
     });
 
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     const result = await runResumeForge({}, provider, ctx);
 
-    expect(result.experience.map((entry) => [entry.title, entry.company])).toEqual([
+    expect(result.draft.experience.map((entry) => [entry.title, entry.company])).toEqual([
       ["AutoCAD Drafter", "SWOT Technologies"],
       ["Architectural Drafter", "Fiber-Grounded Ltd."],
     ]);
-    expect(result.experience[0]?.startDate).toBe("May 2024");
-    expect(result.experience[1]?.bullets).toContain("Base architecture bullet");
-    expect(result.education[0]?.school).toBe("Washington University of Science and Technology (WUST)");
-    expect(result.education[0]?.graduationDate).toBe("May 2024");
+    expect(result.draft.experience[0]?.startDate).toBe("May 2024");
+    expect(result.draft.experience[1]?.bullets).toContain("Base architecture bullet");
+    expect(result.draft.education[0]?.school).toBe("Washington University of Science and Technology (WUST)");
+    expect(result.draft.education[0]?.graduationDate).toBe("May 2024");
   });
 
   it("restores the base professional summary when the AI returns null", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify({
+        summary: null, skills: [], experience: [], education: [],
+        certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+      }),
+    );
     const ctx = makeContext({
       baseResume: {
         id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
@@ -248,25 +326,30 @@ describe("runResumeForge", () => {
     });
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     const result = await runResumeForge({}, provider, ctx);
-    expect(result.summary).toBe("Staff Accountant with progressive experience supporting accounting operations.");
+    expect(result.draft.summary).toBe("Staff Accountant with progressive experience supporting accounting operations.");
   });
 
   it("forces summary to null when the base resume has no professional summary", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: "Invented summary that must be discarded",
-      skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify({
+        summary: "Invented summary that must be discarded",
+        skills: [], experience: [], education: [],
+        certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
+      }),
+    );
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     const result = await runResumeForge({}, provider, makeContext());
-    expect(result.summary).toBeNull();
+    expect(result.draft.summary).toBeNull();
   });
 
   it("strips personalInfo.email/phone, experience dates, AND experience bullets from the raw-JSON block (dates/contact are force-overwritten regardless of the model's output, and bullets are fully duplicated by the EXPERIENCE SNAPSHOT), while both still reach the model via the snapshot section", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const ctx = makeContext({
       baseResume: {
         id: "res-1", title: "Base", skills: [], experience: [], education: [], certifications: [],
@@ -279,7 +362,9 @@ describe("runResumeForge", () => {
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await runResumeForge({}, provider, ctx);
 
-    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    // Call index 2 = the resume-drafting call (0 = job-only extraction,
+    // 1 = requirement analysis, 2 = the draft prompt itself).
+    const sentText = (provider.send as any).mock.calls[2][0].messages[0].content[0].text as string;
     // "EXPERIENCE SNAPSHOT —" (with the dash) matches only the real section
     // header, not the raw-JSON heading's own inline mention of it.
     const rawJsonSection = sentText.slice(sentText.indexOf("BASE RESUME — RAW JSON"), sentText.indexOf("EXPERIENCE SNAPSHOT —"));
@@ -295,10 +380,11 @@ describe("runResumeForge", () => {
   });
 
   it("preserves full bullet fidelity via the EXPERIENCE SNAPSHOT even when a large base resume would have truncated the 12,000-char raw-JSON block under the old behavior (bullets are no longer duplicated into that block at all, so truncation can no longer garble them)", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     // Many roles with long bullets - large enough that the raw-JSON block's
     // 12,000-char slice would have cut into the bullets under the old
     // (bullets-included) behavior.
@@ -318,7 +404,7 @@ describe("runResumeForge", () => {
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await runResumeForge({}, provider, ctx);
 
-    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    const sentText = (provider.send as any).mock.calls[2][0].messages[0].content[0].text as string;
     // The very last role's very last bullet - the one most likely to have
     // been cut off by truncation if bullets still lived in the raw-JSON
     // block - must still reach the model intact via the snapshot.
@@ -326,10 +412,11 @@ describe("runResumeForge", () => {
   });
 
   it("sends verifiedSkills and Source of Truth confirmedSkills as one merged, provenance-tagged list instead of two separate arrays", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const ctx = makeContext({
       verifiedSkills: ["AutoCAD", "Excel"],
       sourceOfTruth: { confirmedSkills: ["AutoCAD", "ArcGIS Pro"], notesContext: null },
@@ -337,7 +424,7 @@ describe("runResumeForge", () => {
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await runResumeForge({}, provider, ctx);
 
-    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    const sentText = (provider.send as any).mock.calls[2][0].messages[0].content[0].text as string;
     expect(sentText).toMatch(/CONFIRMED\/VERIFIED SKILLS/);
     expect(sentText).toMatch(/AutoCAD \(verified, confirmed\)/);
     expect(sentText).toMatch(/ArcGIS Pro \(confirmed\)/);
@@ -347,14 +434,15 @@ describe("runResumeForge", () => {
   });
 
   it("sends the JSON-output instruction exactly once, not the redundant mid-prompt copy", async () => {
-    const provider = mockProvider(JSON.stringify({
-      summary: null, skills: [], experience: [], education: [],
-      certifications: [], projects: [], changeLog: [], missingRequirements: [], excludedKeywords: [], truthRisks: [],
-    }));
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
     await runResumeForge({}, provider, makeContext());
 
-    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    const sentText = (provider.send as any).mock.calls[2][0].messages[0].content[0].text as string;
     expect(sentText).not.toMatch(/Output only the final resume in valid JSON format/);
     expect(sentText).toMatch(/Return ONLY valid JSON\. No markdown fences, no explanation\./);
   });
@@ -370,7 +458,7 @@ describe("runHiringPanel", () => {
     const ctx = makeContext({
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
       },
     });
     const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
@@ -409,7 +497,7 @@ describe("runHiringPanel", () => {
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
         application_resume_forge: {
-          id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def",
+          id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def",
           data: { experience: [{ title: "Engineer", company: "Acme", evidenceIds: ["ev-1", "ev-fake"] }], changeLog: [] },
           createdAt: "",
         },
@@ -450,8 +538,8 @@ describe("runFinalPolish", () => {
     const ctx = makeContext({
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
-        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 2, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
       },
     });
     const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
@@ -474,8 +562,8 @@ describe("runFinalPolish", () => {
       } as any,
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: { summary: "Tailored financial analyst summary." }, createdAt: "" },
-        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def", data: { summary: "Tailored financial analyst summary." }, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 2, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
       },
     });
     const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
@@ -502,8 +590,8 @@ describe("runFinalPolish", () => {
       } as any,
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "a", data: {}, createdAt: "" },
-        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "b", data: { experience: baseExperience }, createdAt: "" },
-        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "c", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "b", data: { experience: baseExperience }, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 2, schemaVersion: "ReviewScoreV1", contentHash: "c", data: {}, createdAt: "" },
       },
     });
 
@@ -539,8 +627,8 @@ describe("runFinalPolish", () => {
     const ctx = makeContext({
       previousOutputs: {
         application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
-        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 2, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
-        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 3, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 2, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
       },
     });
     const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");

@@ -123,11 +123,16 @@ vi.mock("@/server/services/sourceOfTruthService", () => ({ getSourceOfTruth: vi.
 vi.mock("@/lib/ai/selectBestBaseResume", () => ({ selectBestBaseResume: vi.fn() }));
 vi.mock("@/server/repositories/targetJobsRepository", () => ({ upsertTargetJobByCandidateAndJob: vi.fn() }));
 
-vi.mock("@/lib/ai/application-agents/jobLens", () => ({
-  runJobLens: vi.fn().mockResolvedValue({ requirements: [], mustHave: [], niceToHave: [] }),
-}));
+// runResumeForge now also does the job-analysis work formerly split out as
+// its own "Job Lens" stage (see resumeForge.ts's analyzeJob()), returning
+// both pieces together - processWorkflowStage destructures this into two
+// separate artifacts (application_job_lens, application_resume_forge)
+// under the same stage.
 vi.mock("@/lib/ai/application-agents/resumeForge", () => ({
-  runResumeForge: vi.fn().mockResolvedValue({ summary: "Evidence-backed summary", experience: [], education: [], skills: [] }),
+  runResumeForge: vi.fn().mockResolvedValue({
+    jobAnalysis: { requirements: [], mustHave: [], niceToHave: [] },
+    draft: { summary: "Evidence-backed summary", experience: [], education: [], skills: [] },
+  }),
 }));
 vi.mock("@/lib/ai/application-agents/hiringPanel", () => ({
   runHiringPanel: vi.fn().mockResolvedValue({ atsScore: 8, recruiterScore: 8, roleFitScore: 8, truthfulnessRisk: 1, passFail: "pass" }),
@@ -185,10 +190,10 @@ describe("application AI pipeline reliability — 10-log E2E state machine", () 
     }
   });
 
-  it("runs ten independent logs through all four stages without duplicate claims or recursive dispatch", async () => {
+  it("runs ten independent logs through all three stages without duplicate claims or recursive dispatch", async () => {
     for (let i = 1; i <= 10; i += 1) {
       const id = `historical-log-${i}`;
-      for (let stage = 0; stage < 4; stage += 1) {
+      for (let stage = 0; stage < 3; stage += 1) {
         await processWorkflowStage(id);
       }
 
@@ -197,15 +202,21 @@ describe("application AI pipeline reliability — 10-log E2E state machine", () 
       const outputs = h.artifacts.get(id) ?? [];
 
       expect(workflow.status).toBe("completed");
-      expect(runs).toHaveLength(4);
-      expect(runs.map((run) => run.sequence_number)).toEqual([1, 2, 3, 4]);
+      // 3 stage_runs (one per pipeline stage - resume_forge, hiring_panel,
+      // final_polish), even though resume_forge's stage_run produces two
+      // output artifacts (application_job_lens + application_resume_forge -
+      // see processWorkflowStage's split-artifact write).
+      expect(runs).toHaveLength(3);
+      expect(runs.map((run) => run.sequence_number)).toEqual([1, 2, 3]);
       expect(runs.every((run) => run.status === "success")).toBe(true);
       expect(new Set(runs.map((run) => run.attempt_number)).size).toBe(1);
-      expect(outputs.filter((artifact) => artifact.automation_id.endsWith(":input"))).toHaveLength(4);
+      expect(outputs.filter((artifact) => artifact.automation_id.endsWith(":input"))).toHaveLength(3);
+      // 4 non-input artifacts: job_lens + resume_forge (both from the
+      // resume_forge stage) + hiring_panel + final_polish.
       expect(outputs.filter((artifact) => !artifact.automation_id.endsWith(":input"))).toHaveLength(4);
     }
 
-    expect(h.claimWorkflowById).toHaveBeenCalledTimes(40);
+    expect(h.claimWorkflowById).toHaveBeenCalledTimes(30);
     expect(finalizeWorkflow).toHaveBeenCalledTimes(10);
     expect(h.updateStageRun).toHaveBeenCalled();
     expect(h.markOrphanedStageRuns).not.toHaveBeenCalled();

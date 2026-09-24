@@ -8,7 +8,6 @@ import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
-import { runJobLens } from "@/lib/ai/application-agents/jobLens";
 import { resolveJobDescription } from "@/lib/ai/application-agents/prompts/jobLens";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
@@ -74,7 +73,12 @@ function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
   }));
 }
 
-const REQUIRED_APPLICATION_AGENT_IDS = APPLICATION_AGENT_IDS.slice(0, 4);
+// The 3 real pipeline stages. Not application_job_lens explicitly - Resume
+// Forge's stage always writes that artifact together with its own in the
+// same call (see processWorkflowStage's split-artifact write for
+// application_resume_forge), so its presence is already implied by
+// application_resume_forge's.
+const REQUIRED_APPLICATION_AGENT_IDS = APPLICATION_AGENT_IDS.slice(0, 3);
 
 function firstMissingApplicationStage(artifacts: ArtifactRow[]): number {
   return REQUIRED_APPLICATION_AGENT_IDS.findIndex((automationId) =>
@@ -240,8 +244,9 @@ export type TriggerWorkflowResult =
  * problem (no job description on file, no target_job link) just reproduces
  * the identical failure - the pipeline logic hasn't changed, only re-running
  * it does nothing until the underlying data does. Re-checks the SAME
- * preconditions the pipeline itself enforces (resolveJobDescription from
- * jobLens.ts, the target_jobs lookup finalizationService.ts uses) against
+ * preconditions the pipeline itself enforces (resolveJobDescription, checked
+ * by Resume Forge's own job-analysis guard, and the target_jobs lookup
+ * finalizationService.ts uses) against
  * current data rather than trusting the frozen error text, so a job that's
  * since had its description added is never blocked by a stale reason.
  * Returns a human-readable block reason, or null if it's fine to proceed
@@ -989,14 +994,42 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       }
     }
 
-    const artifact = await createArtifact({
-      workflowId,
-      automationId: agentId,
-      sequenceNumber: currentIdx + 1,
-      schemaVersion: getSchemaVersion(agentId),
-      contentHash: sha256(JSON.stringify(agentOutput)),
-      data: agentOutput,
-    });
+    // Resume Forge now also does the job-analysis work that used to be its
+    // own "Job Lens" stage (see resumeForge.ts's analyzeJob()). It returns
+    // both pieces; write them as two separate artifacts under this same
+    // stage so every downstream reader (Hiring Panel, Final Polish,
+    // finalizeWorkflow's scoring, requirementCoverage.ts, disposition.ts)
+    // keeps finding an 'application_job_lens' artifact exactly where it
+    // always has, with zero changes to any of them.
+    let artifact: Awaited<ReturnType<typeof createArtifact>>;
+    if (agentId === "application_resume_forge") {
+      const { jobAnalysis, draft } = agentOutput as { jobAnalysis: unknown; draft: unknown };
+      await createArtifact({
+        workflowId,
+        automationId: "application_job_lens",
+        sequenceNumber: currentIdx + 1,
+        schemaVersion: getSchemaVersion("application_job_lens"),
+        contentHash: sha256(JSON.stringify(jobAnalysis)),
+        data: jobAnalysis,
+      });
+      artifact = await createArtifact({
+        workflowId,
+        automationId: agentId,
+        sequenceNumber: currentIdx + 1,
+        schemaVersion: getSchemaVersion(agentId),
+        contentHash: sha256(JSON.stringify(draft)),
+        data: draft,
+      });
+    } else {
+      artifact = await createArtifact({
+        workflowId,
+        automationId: agentId,
+        sequenceNumber: currentIdx + 1,
+        schemaVersion: getSchemaVersion(agentId),
+        contentHash: sha256(JSON.stringify(agentOutput)),
+        data: agentOutput,
+      });
+    }
 
     await ownedStageUpdate({
       status: "success",
@@ -1303,7 +1336,6 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
 
 function getAgentFn(id: ApplicationAgentId): (options: AgentOptions, provider: AiProvider, ctx: AgentContext) => Promise<any> {
   switch (id) {
-    case "application_job_lens": return runJobLens;
     case "application_resume_forge": return runResumeForge;
     case "application_hiring_panel": return runHiringPanel;
     case "application_final_polish": return runFinalPolish;

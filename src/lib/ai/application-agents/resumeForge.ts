@@ -1,13 +1,28 @@
 // Resume Forge agent — produces an evidence-supported tailored draft.
+//
+// Also runs the job-analysis work that used to be its own "Job Lens" stage
+// (folded in so the pipeline has one fewer stage; see the removed
+// jobLens.ts). Two sub-parts, same as before the merge:
+//   - job-only extraction (title, skills, tools, ATS keywords - everything
+//     the posting alone determines), cached once per job in
+//     jobs.job_analysis (093_job_analysis_cache.sql) so it isn't re-run by
+//     every application against the same job.
+//   - per-candidate requirementAnalysis (classifying those requirements
+//     against THIS candidate's evidence), always run fresh - never cached,
+//     since it depends on who's applying.
+// Both now run under Resume Forge's own AgentOptions/provider (temperature,
+// timeout, routing) rather than Job Lens's separate ones - one merged
+// pipeline stage, one tracked provider call.
 
 import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
-import { ResumeDraftSchema, type ResumeDraftV1 } from "./schemas";
+import { ResumeDraftSchema, type ResumeDraftV1, JobAnalysisSchema, type JobAnalysisV1, type JobOnlyAnalysisV1 } from "./schemas";
 import { RESUME_DRAFT_JSON_SCHEMA } from "./jsonSchemas";
 import {
   buildResumeForgePrompt,
   buildResumeForgeMissedRetryPrompt,
 } from "./prompts/resumeForge";
+import { buildJobOnlyLensPrompt, buildRequirementAnalysisPrompt, resolveJobDescription } from "./prompts/jobLens";
 import { textOf } from "@/lib/ai/provider";
 import {
   enforceEducationIntegrity,
@@ -20,11 +35,157 @@ import {
   listMissedSupported,
 } from "./requirementCoverage";
 import { validateEvidenceCitations } from "./evidenceAudit";
+import { SCHEMA_VERSIONS } from "./constants";
+import { execute } from "@/server/db/neon";
+
+export interface ResumeForgeResult {
+  jobAnalysis: JobAnalysisV1;
+  draft: ResumeDraftV1;
+}
 
 /** Strip markdown fences and parse raw model text into JSON. */
 function parseRawJson(raw: string): unknown {
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
   return JSON.parse(stripped);
+}
+
+// ── Job-analysis sub-step (formerly jobLens.ts) ──────────────────────────
+
+/** Extracts everything from a validated JobAnalysisV1 except requirementAnalysis - the job-only subset that gets cached. */
+function toJobOnly(validated: JobAnalysisV1): JobOnlyAnalysisV1 {
+  const { requirementAnalysis, ...jobOnly } = validated;
+  return jobOnly;
+}
+
+/** Robustly extracts a JSON object from provider text: strips markdown fences, then finds the outermost {...} to ignore any preamble/trailing commentary a fallback model adds. */
+function extractJsonObjectForJobAnalysis(raw: string): unknown {
+  let stripped = raw.trim();
+  stripped = stripped.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  const firstBrace = stripped.indexOf("{");
+  const lastBrace = stripped.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    stripped = stripped.slice(firstBrace, lastBrace + 1);
+  }
+  return JSON.parse(stripped);
+}
+
+/** Fills in title/company from the canonical job record when the model omits them - identity fields are authoritative from the DB, never worth failing the whole stage over. */
+function withCanonicalJobIdentity(parsed: unknown, job: any): unknown {
+  const canonicalTitle = typeof job?.title === "string" && job.title.trim()
+    ? job.title.trim()
+    : (typeof job?.job_title === "string" ? job.job_title.trim() : "");
+  const canonicalCompany = typeof job?.company === "string" && job.company.trim()
+    ? job.company.trim()
+    : (typeof job?.company_name === "string" ? job.company_name.trim() : "Unknown company");
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return parsed;
+  const p = parsed as Record<string, unknown>;
+  return {
+    ...p,
+    title: typeof p.title === "string" && p.title.trim() ? p.title : canonicalTitle,
+    company: typeof p.company === "string" && p.company.trim() ? p.company : canonicalCompany,
+  };
+}
+
+/** Job-only extraction call (cache-miss path) - title, skills, tools, ATS keywords, everything the posting alone determines. */
+async function extractJobOnlyAnalysis(provider: AiProvider, options: AgentOptions, job: any): Promise<JobOnlyAnalysisV1> {
+  const response = await provider.send({
+    system: "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
+    messages: [{ role: "user", content: [{ type: "text", text: buildJobOnlyLensPrompt(job) }] }],
+    tools: [],
+    temperature: options.temperature,
+    maxTokens: options.max_output_tokens,
+    timeoutMs: options.timeout_ms,
+  });
+  const parsed = withCanonicalJobIdentity(extractJsonObjectForJobAnalysis(textOf(response.content)), job);
+  const validated = JobAnalysisSchema.parse(parsed);
+  if ("error" in validated) throw new Error(`Job analysis validation failed: ${validated.error}`);
+  return toJobOnly(validated);
+}
+
+/**
+ * Analyzes the job and classifies its requirements against this candidate.
+ * Formerly the standalone Job Lens stage - now runs at the top of Resume
+ * Forge, under the same provider/options as the rest of this stage.
+ */
+async function analyzeJob(options: AgentOptions, provider: AiProvider, ctx: AgentContext): Promise<JobAnalysisV1> {
+  // ROOT CAUSE #3 GUARD: if the job has no usable description, fail immediately
+  // with a clear, actionable error rather than sending "No description available"
+  // to the AI and burning an expensive call that returns empty/useless analysis.
+  // That empty analysis then hard-fails the Hiring Panel quality gate (atsScore=0
+  // against minimum_score=6.0) two stages later, wasting the full pipeline cost.
+  const jobDescription = resolveJobDescription(ctx.job);
+  if (!jobDescription || jobDescription === "No description available") {
+    throw new Error(
+      `Resume Forge failed: no job description found for "${ctx.job?.title ?? ctx.job?.id ?? "this job"}". ` +
+      `Add description text (description_text or notes) to the job posting and retry.`
+    );
+  }
+
+  const jobRow = ctx.job as any;
+  const cachedAnalysis = jobRow?.job_analysis;
+  const cachedVersion = jobRow?.job_analysis_schema_version;
+  let jobOnly: JobOnlyAnalysisV1 | null = null;
+
+  if (cachedAnalysis && cachedVersion === SCHEMA_VERSIONS.jobOnlyAnalysis) {
+    const cacheParsed = JobAnalysisSchema.parse(cachedAnalysis);
+    if (!("error" in cacheParsed)) {
+      jobOnly = toJobOnly(cacheParsed);
+      console.log(`[Agent:ResumeForge] job_analysis cache HIT for job ${jobRow?.id} - skipping job-only extraction call`);
+    } else {
+      console.warn(`[Agent:ResumeForge] job_analysis cache present but failed validation (${cacheParsed.error}) - treating as a miss`);
+    }
+  }
+
+  if (!jobOnly) {
+    console.log(`[Agent:ResumeForge] job_analysis cache MISS/stale for job ${jobRow?.id} - running job-only extraction inline`);
+    jobOnly = await extractJobOnlyAnalysis(provider, options, ctx.job);
+
+    // Best-effort cache write-back: awaited so it reliably happens before
+    // this stage returns (a Cloudflare Workers request can be torn down
+    // once its response is sent), but a failure here only logs - it must
+    // never fail the pipeline stage.
+    if (jobRow?.id) {
+      try {
+        await execute(
+          `UPDATE jobs SET job_analysis = $1::jsonb, job_analysis_schema_version = $2, job_analysis_completed_at = NOW() WHERE id = $3`,
+          [JSON.stringify(jobOnly), SCHEMA_VERSIONS.jobOnlyAnalysis, jobRow.id]
+        );
+        console.log(`[Agent:ResumeForge] cached job_analysis for job ${jobRow.id}`);
+      } catch (err: any) {
+        console.warn(`[Agent:ResumeForge] failed to cache job_analysis for job ${jobRow?.id} (non-fatal): ${err?.message ?? err}`);
+      }
+    }
+  }
+
+  // Per-candidate requirement classification - always runs fresh.
+  const reqResponse = await provider.send({
+    system: "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: buildRequirementAnalysisPrompt(jobOnly, {
+              baseResume: ctx.baseResume,
+              evidence: ctx.evidence,
+              sourceOfTruth: ctx.sourceOfTruth,
+              verifiedSkills: ctx.verifiedSkills,
+            }),
+          },
+        ],
+      },
+    ],
+    tools: [],
+    temperature: options.temperature,
+    maxTokens: options.max_output_tokens,
+    timeoutMs: options.timeout_ms,
+  });
+  const reqParsed = extractJsonObjectForJobAnalysis(textOf(reqResponse.content)) as { requirementAnalysis?: unknown };
+
+  const merged = JobAnalysisSchema.parse({ ...jobOnly, requirementAnalysis: reqParsed?.requirementAnalysis });
+  if ("error" in merged) throw new Error(`Job analysis output validation failed: ${merged.error}`);
+  return merged;
 }
 
 /**
@@ -118,8 +279,8 @@ export async function runResumeForge(
   options: AgentOptions,
   provider: AiProvider,
   ctx: AgentContext
-): Promise<ResumeDraftV1> {
-  const jobAnalysis = ctx.previousOutputs["application_job_lens"]?.data ?? {};
+): Promise<ResumeForgeResult> {
+  const jobAnalysis = await analyzeJob(options, provider, ctx);
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   const rawBaseContent = (ctx.baseResume as any)?.content;
@@ -198,15 +359,11 @@ export async function runResumeForge(
   applyForgeGuards(validated, baseContent, baseExperience, baseEducation);
 
   // ── REQUIREMENT COVERAGE ─────────────────────────────────────────────────
-  // Deterministic check against Job Lens's classified requirements. Only
-  // supported requirements that failed to surface trigger the bounded retry;
-  // unsupported/hard_blocker gaps are never retried (nothing can truthfully
-  // add them) and stay visible as candidate evidence gaps.
-  const analysisForCoverage =
-    jobAnalysis && typeof jobAnalysis === "object" && !Array.isArray(jobAnalysis)
-      ? (jobAnalysis as { requirementAnalysis?: unknown })
-      : {};
-  let coverage = buildRequirementCoverage(analysisForCoverage as any, validated);
+  // Deterministic check against the classified requirements computed above.
+  // Only supported requirements that failed to surface trigger the bounded
+  // retry; unsupported/hard_blocker gaps are never retried (nothing can
+  // truthfully add them) and stay visible as candidate evidence gaps.
+  let coverage = buildRequirementCoverage(jobAnalysis, validated);
   const missed = listMissedSupported(coverage);
 
   if (missed.length > 0) {
@@ -250,7 +407,7 @@ export async function runResumeForge(
       console.warn(`[Agent:ResumeForge] COVERAGE RETRY failed (${err?.message ?? err}); keeping first draft`);
     }
 
-    coverage = buildRequirementCoverage(analysisForCoverage as any, validated);
+    coverage = buildRequirementCoverage(jobAnalysis, validated);
   }
 
   validated.requirementCoverage = coverage;
@@ -282,5 +439,5 @@ export async function runResumeForge(
   console.log("[Agent:ResumeForge] ───────────────────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
 
-  return validated;
+  return { jobAnalysis, draft: validated };
 }

@@ -2,7 +2,7 @@
 // (Planning MD Files/AI tailored Resume Pipeline Cost Optimization Plan 03-09-26.md).
 //
 // Read-only replay harness: pulls the most recent REAL applications that
-// completed all 4 pipeline stages, re-runs one (or all) stage(s) fresh
+// completed all pipeline stages, re-runs one (or all) stage(s) fresh
 // against the exact same stored inputs (config_snapshot + prior artifacts,
 // built the same way applicationAiWorkflowService.ts's buildAgentContext()
 // does), and diffs the fresh output against what was actually stored at the
@@ -10,38 +10,42 @@
 // or-better" before/after a prompt change, instead of trusting it by eye.
 //
 // NEVER writes to the database - only query()/queryOne() reads, plus the
-// pure agent run functions (runJobLens/runResumeForge/runHiringPanel/
-// runFinalPolish), none of which persist anything themselves. Re-running a
-// stage DOES make a real AI provider call (real cost) for each sampled
-// application, exactly like a live run would.
+// pure agent run functions (runResumeForge/runHiringPanel/runFinalPolish),
+// none of which persist anything themselves. Re-running a stage DOES make a
+// real AI provider call (real cost) for each sampled application, exactly
+// like a live run would.
+//
+// "job_lens" is no longer its own replayable stage: that work now runs
+// inside Resume Forge's own stage (see resumeForge.ts's analyzeJob()), so
+// replaying "resume_forge" exercises and diffs both halves together -
+// the job analysis (against the historical application_job_lens artifact)
+// and the tailored draft (against application_resume_forge) - in one pass.
 //
 // Usage:
 //   npx tsx --env-file=.env.local scripts/replay-pipeline-sample.ts
 //   STAGE=hiring_panel npx tsx --env-file=.env.local scripts/replay-pipeline-sample.ts
 //   STAGE=resume_forge LIMIT=5 CANDIDATE_ID=<uuid> npx tsx --env-file=.env.local scripts/replay-pipeline-sample.ts
 //
-// STAGE: job_lens | resume_forge | hiring_panel | final_polish | all (default: all)
+// STAGE: resume_forge | hiring_panel | final_polish | all (default: all)
 // LIMIT: how many recent completed applications to sample (default: 15)
 // CANDIDATE_ID: restrict the sample to one candidate (optional)
 
 import { query, queryOne } from "../src/server/db/neon";
 import { callWithUsageTracking } from "../src/lib/ai/routing";
 import { AGENT_CONFIG_DEFAULTS } from "../src/lib/ai/application-agents/constants";
-import { runJobLens } from "../src/lib/ai/application-agents/jobLens";
 import { runResumeForge } from "../src/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "../src/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "../src/lib/ai/application-agents/finalPolish";
 import type { AgentContext, AgentOptions, ApplicationAgentId, ArtifactRecord } from "../src/lib/ai/application-agents/types";
 import type { AiProvider } from "../src/lib/ai/provider";
 
-type StageKey = "job_lens" | "resume_forge" | "hiring_panel" | "final_polish";
+type StageKey = "resume_forge" | "hiring_panel" | "final_polish";
 const STAGE_TO_AGENT_ID: Record<StageKey, ApplicationAgentId> = {
-  job_lens: "application_job_lens",
   resume_forge: "application_resume_forge",
   hiring_panel: "application_hiring_panel",
   final_polish: "application_final_polish",
 };
-const ALL_STAGES: StageKey[] = ["job_lens", "resume_forge", "hiring_panel", "final_polish"];
+const ALL_STAGES: StageKey[] = ["resume_forge", "hiring_panel", "final_polish"];
 
 const stageArg = (process.env.STAGE ?? "all").trim().toLowerCase();
 const stagesToReplay: StageKey[] = stageArg === "all" ? ALL_STAGES : (stageArg.split(",").map((s) => s.trim()) as StageKey[]);
@@ -123,7 +127,6 @@ async function runStage(stage: StageKey, options: AgentOptions, ctx: AgentContex
   const agentId = STAGE_TO_AGENT_ID[stage];
   const { result } = await callWithUsageTracking(agentId, { applicationId: ctx.applicationId }, async (provider: AiProvider) => {
     switch (stage) {
-      case "job_lens": return runJobLens(options, provider, ctx);
       case "resume_forge": return runResumeForge(options, provider, ctx);
       case "hiring_panel": return runHiringPanel(options, provider, ctx);
       case "final_polish": return runFinalPolish(options, provider, ctx);
@@ -136,21 +139,31 @@ async function runStage(stage: StageKey, options: AgentOptions, ctx: AgentContex
 function summarize(stage: StageKey, output: any): Record<string, unknown> {
   if (!output) return { present: false };
   switch (stage) {
-    case "job_lens":
+    case "resume_forge": {
+      // output is { jobAnalysis, draft } - resume_forge now does both the
+      // job-analysis work (formerly the standalone Job Lens stage, see
+      // resumeForge.ts's analyzeJob()) and the tailored draft in one call.
+      // Fall back to the raw output itself for the historical stored side:
+      // application_resume_forge's stored artifact is the flat draft alone
+      // (pre- and post-merge), never a {jobAnalysis, draft} wrapper.
+      const draft = output.draft ?? output;
+      const jobAnalysis = output.jobAnalysis;
       return {
-        requiredSkillsCount: output.requiredSkills?.length ?? 0,
-        preferredSkillsCount: output.preferredSkills?.length ?? 0,
-        requirementAnalysisCount: Array.isArray(output.requirementAnalysis) ? output.requirementAnalysis.length : undefined,
+        ...(jobAnalysis
+          ? {
+              requiredSkillsCount: jobAnalysis.requiredSkills?.length ?? 0,
+              preferredSkillsCount: jobAnalysis.preferredSkills?.length ?? 0,
+              requirementAnalysisCount: Array.isArray(jobAnalysis.requirementAnalysis) ? jobAnalysis.requirementAnalysis.length : undefined,
+            }
+          : {}),
+        experienceRoles: draft.experience?.length ?? 0,
+        bulletsPerRole: (draft.experience ?? []).map((e: any) => e.bullets?.length ?? 0),
+        skillCategories: draft.skills?.length ?? 0,
+        evidenceIdsCited: (draft.experience ?? []).flatMap((e: any) => e.evidenceIds ?? []).length,
+        changeLogEntries: draft.changeLog?.length ?? 0,
+        missingRequirements: draft.missingRequirements?.length ?? 0,
       };
-    case "resume_forge":
-      return {
-        experienceRoles: output.experience?.length ?? 0,
-        bulletsPerRole: (output.experience ?? []).map((e: any) => e.bullets?.length ?? 0),
-        skillCategories: output.skills?.length ?? 0,
-        evidenceIdsCited: (output.experience ?? []).flatMap((e: any) => e.evidenceIds ?? []).length,
-        changeLogEntries: output.changeLog?.length ?? 0,
-        missingRequirements: output.missingRequirements?.length ?? 0,
-      };
+    }
     case "hiring_panel":
       return {
         atsScore: output.atsScore,

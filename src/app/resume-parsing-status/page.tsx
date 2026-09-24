@@ -31,26 +31,31 @@ interface ColumnDef {
   getStage: (wf: WorkflowCard) => boolean;
 }
 
-// current_stage is 0-indexed into APPLICATION_AGENT_IDS (job_lens=0,
-// resume_forge=1, hiring_panel=2, final_polish=3) - it names the stage
-// currently running/about to run. Confirmed live: this board previously
+// current_stage is 0-indexed into APPLICATION_AGENT_IDS (resume_forge=0,
+// hiring_panel=1, final_polish=2) - it names the stage currently
+// running/about to run. Job Lens's work (extract requirements, classify
+// against the candidate) is now done inside Resume Forge's own stage
+// instead of a separate one - see resumeForge.ts's analyzeJob() - so there
+// is no dedicated "Job Lens" column anymore; Resume Forge's card simply
+// covers that work too. Confirmed live (pre-merge): this board previously
 // shifted every column by one (a workflow whose stage_run was already
 // application_resume_forge still showed in the "Job Lens" column), making
-// an entire in-progress batch look stuck a step earlier than it really was.
+// an entire in-progress batch look stuck a step earlier than it really was -
+// keep the getStage checks matched exactly to current_stage, not to any
+// assumption about column order.
 // "Queued" means status === "queued", regardless of which stage it's queued
-// for - not "stage 0", which is also what a *running* Job Lens looks like.
+// for - not "stage 0", which is also what a *running* Resume Forge looks like.
 const COLUMNS: ColumnDef[] = [
   { id: "queued", label: "Queued", color: "var(--muted)", getStage: (w) => w.status === "queued" && (w.current_stage === 0 || w.current_stage == null) },
-  { id: "job_lens", label: "Job Lens", color: "var(--info)", getStage: (w) => (w.current_stage === 0 && w.status !== "queued") && w.status !== "completed" && w.status !== "failed" },
-  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => w.current_stage === 1 && w.status !== "completed" && w.status !== "failed" },
-  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.current_stage === 2 && w.status !== "completed" && w.status !== "failed" },
-  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.current_stage === 3 && w.status !== "completed" && w.status !== "failed" },
+  { id: "resume_forge", label: "Resume Forge", color: "#7c5cff", getStage: (w) => (w.current_stage === 0 && w.status !== "queued") && w.status !== "completed" && w.status !== "failed" },
+  { id: "hiring_panel", label: "Hiring Panel", color: "#e09f3e", getStage: (w) => w.current_stage === 1 && w.status !== "completed" && w.status !== "failed" },
+  { id: "final_polish", label: "Final Polish", color: "#2a9d8f", getStage: (w) => w.current_stage === 2 && w.status !== "completed" && w.status !== "failed" },
   { id: "completed", label: "Completed", color: "var(--success)", getStage: (w) => w.status === "completed" },
   { id: "failed", label: "Failed", color: "var(--danger)", getStage: (w) => w.status === "failed" },
 ];
 
-const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "job_lens", 2: "resume_forge", 3: "hiring_panel", 4: "final_polish", 5: "completed" };
-const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, job_lens: 1, resume_forge: 2, hiring_panel: 3, final_polish: 4, completed: 5 };
+const STAGE_TO_COLUMN: Record<number, string> = { 0: "queued", 1: "resume_forge", 2: "hiring_panel", 3: "final_polish", 4: "completed" };
+const COLUMN_TO_STAGE: Record<string, number> = { queued: 0, resume_forge: 1, hiring_panel: 2, final_polish: 3, completed: 4 };
 const WORKFLOW_DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 
 // updateWorkflowStatus() sets `updated_at = NOW()` on every status/stage
@@ -187,7 +192,7 @@ export default function ResumeParsingStatusPage() {
     // Optimistic update
     setWorkflows((prev) => prev.map((w) =>
       w.id === wfId
-        ? { ...w, current_stage: targetStage, status: targetStage === 5 ? "completed" : "waiting" }
+        ? { ...w, current_stage: targetStage, status: targetStage === COLUMN_TO_STAGE.completed ? "completed" : "waiting" }
         : w
     ));
 

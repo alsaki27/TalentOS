@@ -22,13 +22,20 @@ import { describe, test, expect } from "vitest";
 //   src/server/services/applicationPacketAiService.ts:166     -> recruiter_message_gen
 //   src/lib/ai/digest.ts:50                     -> ai_digest
 //   src/app/api/chat/route.ts:218               -> chat_assistant
-//   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_job_lens
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_resume_forge
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_hiring_panel
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_final_polish
+//
+// application_job_lens is deliberately absent from both lists below: its
+// work was folded into application_resume_forge (see resumeForge.ts's
+// analyzeJob()), so callWithUsageTracking() is never called with that ID
+// anymore. Its ai_agent_configs/ai_automations rows are kept (is_active =
+// false) rather than deleted, so historical stage_runs/artifacts stay
+// attributable - but this test is specifically about live
+// callWithUsageTracking() call sites, not every automation_id that has ever
+// existed in those tables.
 
 const AUTOMATION_IDS_FROM_CODE = [
-  "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
@@ -69,7 +76,6 @@ const SEEDED_AUTOMATIONS = new Set([
   "recruiter_message_gen",
   "ai_digest",
   "chat_assistant",
-  "application_job_lens",
   "application_resume_forge",
   "application_hiring_panel",
   "application_final_polish",
