@@ -9,6 +9,45 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
+interface StudentAuditEnrichmentRow {
+  candidate_id: string;
+  rating: string;
+  progress: number;
+  mock_interviews: number;
+}
+
+/**
+ * Attaches audit_status/audit_progress/audit_mock_interviews to each candidate
+ * row for the /candidates list columns, from the local student_audit_students
+ * table (kept in sync by scripts/importStudentAudit.mjs). Best-effort: any
+ * failure here (e.g. the tables don't exist yet) leaves candidates without
+ * audit fields rather than failing the whole list request.
+ */
+async function enrichWithStudentAudit(rows: Record<string, any>[]): Promise<Record<string, any>[]> {
+  if (rows.length === 0) return rows;
+  try {
+    const ids = rows.map((r) => r.id);
+    const enrichment = await query<StudentAuditEnrichmentRow>(
+      `SELECT l.candidate_id, s.rating, s.progress, s.mock_interviews
+       FROM student_audit_links l
+       JOIN student_audit_students s ON s.id = l.audit_student_id
+       WHERE l.candidate_id = ANY($1)`,
+      [ids]
+    );
+    if (enrichment.length === 0) return rows;
+
+    const byCandidateId = new Map(enrichment.map((e) => [e.candidate_id, e]));
+    return rows.map((row) => {
+      const e = byCandidateId.get(row.id);
+      if (!e) return row;
+      return { ...row, audit_status: e.rating, audit_progress: e.progress, audit_mock_interviews: e.mock_interviews };
+    });
+  } catch (err) {
+    console.error("[Candidates list] student-audit enrichment failed:", err);
+    return rows;
+  }
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const compact = url.searchParams.get("compact") === "1";
@@ -57,7 +96,8 @@ export async function GET(req: NextRequest) {
       query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]),
       queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]),
     ]);
-    return NextResponse.json({ items: data ?? [], total: countRow?.total ?? 0, page, pageSize });
+    const items = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
+    return NextResponse.json({ items, total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

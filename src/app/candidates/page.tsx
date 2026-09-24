@@ -18,7 +18,18 @@ interface Candidate {
   target_tier: string | null;
   resume_filename: string | null;
   avatar_url: string | null;
+  audit_status?: string | null;
+  audit_progress?: number | null;
+  audit_mock_interviews?: number | null;
 }
+
+const AUDIT_STATUS_LABELS: Record<string, string> = {
+  placed: "Placed",
+  excellent: "Excellent",
+  good: "Good",
+  needs_attention: "Needs Attention",
+  bad: "At Risk",
+};
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
@@ -119,7 +130,7 @@ export default function CandidatesPage() {
     const res = await fetch(`/api/candidates?${buildParams(1, 1000)}`, { cache: "no-store" });
     const data = await res.json();
     const rows = data.items ?? [];
-    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "target_tier", "resume_filename"]);
+    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "target_tier", "resume_filename", "audit_status", "audit_progress", "audit_mock_interviews"]);
     downloadCsv("candidates.csv", csv);
   }
 
@@ -163,7 +174,7 @@ export default function CandidatesPage() {
       )}
 
       {loading ? (
-        <TableSkeleton cols={7} />
+        <TableSkeleton cols={8} />
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
@@ -176,9 +187,10 @@ export default function CandidatesPage() {
                 </th>
                 <th>Name</th>
                 <th>Email</th>
-                <th>Target tier</th>
                 <th>Stage</th>
-                <th>Resume</th>
+                <th>Audit Status</th>
+                <th>Course Progress</th>
+                <th>Mock Interviews</th>
                 <th></th>
               </tr>
             </thead>
@@ -196,7 +208,6 @@ export default function CandidatesPage() {
                     {c.email?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
                   </td>
                   <td className="muted">{c.email || "—"}</td>
-                  <td>{c.target_tier ? <span className="badge">{c.target_tier}</span> : <span className="muted">—</span>}</td>
                   <td>
                     <select
                       value={c.pipeline_stage}
@@ -210,7 +221,9 @@ export default function CandidatesPage() {
                       ))}
                     </select>
                   </td>
-                  <td className="muted">{c.resume_filename || "Not uploaded"}</td>
+                  <td>{c.audit_status ? <span className="badge">{AUDIT_STATUS_LABELS[c.audit_status] ?? c.audit_status}</span> : <span className="muted">—</span>}</td>
+                  <td className="muted">{c.audit_progress != null ? `${c.audit_progress}%` : "—"}</td>
+                  <td className="muted">{c.audit_mock_interviews != null ? c.audit_mock_interviews : "—"}</td>
                   <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
                 </tr>
               ))}
