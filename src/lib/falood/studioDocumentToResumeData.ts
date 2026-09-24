@@ -134,6 +134,14 @@ function normalizeResumifyNative(d: any): ResumeData {
     title: asString(p?.title),
     description: asString(p?.description),
     technologies: asArray<string>(p?.technologies),
+    // Confirmed live: a base resume with a project's live/GitHub link or
+    // dates filled in lost them every time "Open in studio" was clicked
+    // again, because this mapping only carried title/description/
+    // technologies through - the round trip silently dropped the rest.
+    liveUrl: p?.liveUrl ? asString(p.liveUrl) : undefined,
+    githubUrl: p?.githubUrl ? asString(p.githubUrl) : undefined,
+    startDate: p?.startDate ? asString(p.startDate) : undefined,
+    endDate: p?.endDate ? asString(p.endDate) : undefined,
   }));
   const skillsRaw = d.skills && typeof d.skills === "object" && !Array.isArray(d.skills) ? d.skills : {};
   const categorized = asArray<any>(skillsRaw.categorized).map((g) => ({

@@ -81,3 +81,50 @@ describe("studioDocumentToResumeData - custom sections (header-shaped / studio-d
     expect(result.customSections[0].content).toBe("Paper A");
   });
 });
+
+describe("studioDocumentToResumeData - projects (Resumify-native / personalInfo-shaped input)", () => {
+  it("carries liveUrl/githubUrl/startDate/endDate through (previously dropped every re-open)", () => {
+    // This is the exact shape a base resume already edited in the studio is
+    // stored as (see mergeResumifyEditorIntoBaseResume): personalInfo present,
+    // so this hits normalizeResumifyNative, not the studio-document branch.
+    // Every "Open in studio" click re-derives resume_data from this content -
+    // before the fix, a project's link/GitHub/dates vanished on that very
+    // next open even though the save that added them succeeded.
+    const doc = {
+      personalInfo: { fullName: "Jane Doe" },
+      projects: [
+        {
+          id: "proj-1",
+          title: "Portfolio Site",
+          description: "Personal site",
+          technologies: ["React"],
+          liveUrl: "https://example.com",
+          githubUrl: "https://github.com/example/portfolio",
+          startDate: "2025-01",
+          endDate: "2025-06",
+        },
+      ],
+    };
+    const result = studioDocumentToResumeData(doc as any);
+    expect(result.projects).toHaveLength(1);
+    expect(result.projects[0]).toMatchObject({
+      title: "Portfolio Site",
+      liveUrl: "https://example.com",
+      githubUrl: "https://github.com/example/portfolio",
+      startDate: "2025-01",
+      endDate: "2025-06",
+    });
+  });
+
+  it("leaves the optional link/date fields undefined rather than empty strings when absent", () => {
+    const doc = {
+      personalInfo: { fullName: "Jane Doe" },
+      projects: [{ id: "proj-1", title: "No links", description: "", technologies: [] }],
+    };
+    const result = studioDocumentToResumeData(doc as any);
+    expect(result.projects[0].liveUrl).toBeUndefined();
+    expect(result.projects[0].githubUrl).toBeUndefined();
+    expect(result.projects[0].startDate).toBeUndefined();
+    expect(result.projects[0].endDate).toBeUndefined();
+  });
+});
