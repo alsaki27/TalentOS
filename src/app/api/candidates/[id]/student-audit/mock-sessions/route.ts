@@ -3,22 +3,18 @@ import { requireCurrentUser } from "@/lib/auth";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { parseAndOrganizeTranscript } from "@/lib/audit/transcriptParser";
 import { parseAuditAnalysis } from "@/lib/audit/auditAnalysisParser";
+import { ensureLinked } from "@/server/services/studentAuditLink";
 
 export async function GET(req: Request, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser();
   if (response) return response;
 
   try {
-    const link = await queryOne<{ audit_student_id: string }>(
-      `SELECT audit_student_id FROM student_audit_links WHERE candidate_id = $1`,
-      [params.id]
-    );
-    if (!link) return NextResponse.json({ sessions: [] });
-
+    const auditStudentId = await ensureLinked(params.id);
     const sessions = await query(
       `SELECT id, session_date, target_role, transcript_source, overall_score, overall_score_max, raw_analysis_text
        FROM student_audit_mock_sessions WHERE student_id = $1 ORDER BY session_date DESC, id DESC`,
-      [link.audit_student_id]
+      [auditStudentId]
     );
     return NextResponse.json({ sessions });
   } catch (err: any) {
@@ -32,13 +28,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   if (response) return response;
 
   try {
-    const link = await queryOne<{ audit_student_id: string }>(
-      `SELECT audit_student_id FROM student_audit_links WHERE candidate_id = $1`,
-      [params.id]
-    );
-    if (!link) {
-      return NextResponse.json({ error: "No student-audit record linked to this candidate" }, { status: 404 });
-    }
+    const auditStudentId = await ensureLinked(params.id);
 
     const body = await req.json().catch(() => ({}));
     const sessionDate = typeof body?.session_date === "string" && body.session_date ? body.session_date : new Date().toISOString().slice(0, 10);
@@ -65,7 +55,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
        RETURNING id, session_date, target_role, transcript_source, overall_score, overall_score_max, raw_analysis_text`,
       [
         id,
-        link.audit_student_id,
+        auditStudentId,
         sessionDate,
         targetRole,
         transcriptSource,
@@ -84,7 +74,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       `UPDATE student_audit_students SET mock_interviews = (
          SELECT COUNT(*)::int FROM student_audit_mock_sessions WHERE student_id = $1
        ) WHERE id = $1`,
-      [link.audit_student_id]
+      [auditStudentId]
     );
 
     return NextResponse.json({ session }, { status: 201 });

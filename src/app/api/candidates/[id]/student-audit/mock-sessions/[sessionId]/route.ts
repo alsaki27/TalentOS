@@ -26,17 +26,16 @@ export async function DELETE(req: Request, { params }: { params: { id: string; s
   if (response) return response;
 
   try {
-    const link = await queryOne<{ audit_student_id: string }>(
-      `SELECT audit_student_id FROM student_audit_links WHERE candidate_id = $1`,
-      [params.id]
+    const session = await queryOne<{ student_id: string }>(
+      `DELETE FROM student_audit_mock_sessions WHERE id = $1 RETURNING student_id`,
+      [params.sessionId]
     );
-    await execute(`DELETE FROM student_audit_mock_sessions WHERE id = $1`, [params.sessionId]);
-    if (link) {
+    if (session) {
       await execute(
         `UPDATE student_audit_students SET mock_interviews = (
            SELECT COUNT(*)::int FROM student_audit_mock_sessions WHERE student_id = $1
          ) WHERE id = $1`,
-        [link.audit_student_id]
+        [session.student_id]
       );
     }
     return NextResponse.json({ ok: true });

@@ -119,32 +119,59 @@ function pgConnectionConfig(rawUrl: string) {
 
 let _pool: PgPool | null = null;
 let _poolUrl: string | null = null;
+// Guards getPool() so two concurrent first-callers (e.g. the Promise.all in
+// GET /api/candidates) can't each build their own Pool and race to end()
+// each other's — the second create() would end the first's in-flight pool
+// out from under it ("Cannot use a pool after calling end on the pool").
+let _poolInit: Promise<PgPool> | null = null;
 
 async function getPool(): Promise<PgPool> {
   const rawUrl = getDatabaseUrl();
-  if (!_pool || _poolUrl !== rawUrl) {
+  if (_pool && _poolUrl === rawUrl) return _pool;
+  if (_poolInit) return _poolInit;
+
+  _poolInit = (async () => {
     const { default: pg } = await import("pg");
     const previousPool = _pool;
     const cfg = pgConnectionConfig(rawUrl);
     console.log(`[DB] Initializing Postgres pool (host: ${new URL(cfg.connectionString).hostname})`);
-    _pool = new pg.Pool({ ...cfg, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 });
+    const pool = new pg.Pool({ ...cfg, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 10_000 });
+    _pool = pool;
     _poolUrl = rawUrl;
     // A Worker isolate can initialize the application bundle before the
     // request-time Hyperdrive binding is available. If that first query built
     // a pool from the fallback DATABASE_URL, do not keep reusing it after the
     // binding arrives. Drain the old pool in the background so in-flight work
     // can finish without leaking sockets.
-    if (previousPool && previousPool !== _pool) {
+    if (previousPool && previousPool !== pool) {
       void previousPool.end().catch((err) =>
         console.warn("[DB] Previous Postgres pool close failed after URL switch:", err?.message ?? err)
       );
     }
     // An idle-client error must never become an unhandled rejection that takes
     // the process down; the pool discards the client and the next query redials.
-    _pool.on("error", (err) => console.error("[DB] Idle client error:", err.message));
+    pool.on("error", (err) => console.error("[DB] Idle client error:", err.message));
+    return pool;
+  })();
+
+  try {
+    return await _poolInit;
+  } finally {
+    _poolInit = null;
   }
-  return _pool;
 }
+
+/** Drops the cached pool so the next getPool() call dials a fresh one. */
+function discardPool(pool: PgPool) {
+  if (_pool === pool) {
+    _pool = null;
+    _poolUrl = null;
+  }
+  void pool.end().catch(() => {});
+}
+
+const isConnectionError = (err: unknown) =>
+  err instanceof Error && /Connection terminated|Cannot use a pool after calling end|timeout/i.test(err.message);
 
 let warnedNoHyperdrive = false;
 
@@ -192,13 +219,36 @@ async function withPgClient<T>(fn: (c: PoolClient | any) => Promise<T>): Promise
       await client.end().catch(() => {});
     }
   }
-  const pool = await getPool();
-  const client = await pool.connect();
-  try {
-    return await fn(client);
-  } finally {
-    client.release();
+  // A pooled connection to a remote, high-latency host can go stale between
+  // queries (dropped by the origin/network) or, previously, be raced out from
+  // under a concurrent first caller (see getPool()). Both surface as a
+  // connection error on an otherwise-valid query, and both are fixed by
+  // dropping the pool and dialing a fresh one. Local dev has been observed
+  // dropping twice in a row under real network conditions to this VPS, so
+  // this allows up to two retries (three attempts total) with a short
+  // backoff rather than surfacing a 500 for what is really a transient
+  // connectivity hiccup — this path is Node-only; Workers never reach it.
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const pool = await getPool();
+    try {
+      const client = await pool.connect();
+      try {
+        return await fn(client);
+      } finally {
+        client.release();
+      }
+    } catch (err) {
+      if (attempt < maxAttempts - 1 && isConnectionError(err)) {
+        console.warn(`[DB] Connection error (attempt ${attempt + 1}/${maxAttempts}), retrying with a fresh pool:`, (err as Error).message);
+        discardPool(pool);
+        await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
   }
+  throw new Error("unreachable");
 }
 
 function buildTemplate(strings: TemplateStringsArray, values: unknown[]) {

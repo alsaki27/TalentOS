@@ -1,20 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireCurrentUser } from "@/lib/auth";
 import { queryOne } from "@/server/db/neon";
+import { ensureLinked } from "@/server/services/studentAuditLink";
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser();
   if (response) return response;
 
   try {
-    const link = await queryOne<{ audit_student_id: string }>(
-      `SELECT audit_student_id FROM student_audit_links WHERE candidate_id = $1`,
-      [params.id]
-    );
-    if (!link) {
-      return NextResponse.json({ error: "No student-audit record linked to this candidate" }, { status: 404 });
-    }
-
+    const auditStudentId = await ensureLinked(params.id);
     const body = await req.json().catch(() => ({}));
     const content = typeof body?.content === "string" ? body.content.trim() : "";
     if (!content) {
@@ -22,8 +16,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     }
 
     const id = `note-${Date.now()}`;
-    const date = new Date().toISOString().slice(0, 10);
-    const author = context?.profile.display_name || context?.profile.email || "TalentOS";
+    const date = typeof body?.date === "string" && body.date ? body.date : new Date().toISOString().slice(0, 10);
+    const author =
+      typeof body?.author === "string" && body.author.trim()
+        ? body.author.trim()
+        : context?.profile.display_name || context?.profile.email || "TalentOS";
 
     const note = await queryOne(
       `INSERT INTO student_audit_sticky_notes (id, student_id, date, content, category, author, accent, pinned)
@@ -31,7 +28,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
        RETURNING id, date, content, category, author, accent, pinned`,
       [
         id,
-        link.audit_student_id,
+        auditStudentId,
         date,
         content,
         typeof body?.category === "string" && body.category ? body.category : "General",
