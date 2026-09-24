@@ -82,6 +82,30 @@ mode = "smart"
 binding = "HYPERDRIVE"
 id = "30402bc671364a7686899a2bec4befb1"
 
+# ───────────────────────────────────────────────────────────────
+# Service Bindings — Worker-to-Worker calls within this account
+# ───────────────────────────────────────────────────────────────
+# skarion-crm-platform (Skarion CRM) has no Custom Domain of its own -
+# crm.skarion.com is bound to its Pages frontend, not this Worker, so the
+# only public address for its API is the shared skarion-talentos.workers.dev
+# subdomain. That shared *.workers.dev domain gets Cloudflare's own
+# anti-abuse edge protection applied to server-to-server traffic - confirmed
+# via crm_contact_sync_queue: every push from skarionCrmContactSyncService.ts
+# failed with an edge-level "404, error code: 1042" (100% of attempts,
+# multiple days, both from this Worker and from an external curl to the same
+# host), while a browser hitting crm.skarion.com works fine. A Custom Domain
+# on the same skarion.com zone hit the identical block, which points at
+# zone-level Bot Fight Mode rather than something workers.dev-specific.
+#
+# A Service Binding sidesteps all of that: it is a direct Worker-to-Worker
+# call inside Cloudflare's own network and never touches the public edge, so
+# no WAF/Bot Fight Mode rule on any zone can apply to it. skarion-cron
+# already reaches this exact same Worker this way (see its wrangler.toml),
+# proving the pattern works for this account today.
+[[services]]
+binding = "CRM_SERVICE"
+service = "skarion-crm-platform"
+
 # Secrets are set via `wrangler secret put`, not here:
 # DATABASE_URL — the Postgres connection string. Used by Node scripts, CI and as
 #   the Worker's fallback; Hyperdrive overrides it at runtime when bound.

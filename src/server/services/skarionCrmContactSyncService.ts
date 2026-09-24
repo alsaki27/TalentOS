@@ -1,3 +1,4 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { execute, query, queryOne } from "@/server/db/neon";
 
 type ContactType = "recruiter" | "hiring_manager";
@@ -9,6 +10,35 @@ function splitName(displayName: string | null) {
 
 function crmBaseUrl() {
   return (process.env.SKARION_CRM_API_URL || "https://skarion-crm-platform.skarion-talentos.workers.dev").replace(/\/$/, "");
+}
+
+// Calls the CRM Worker through the Service Binding (wrangler.toml
+// [[services]] CRM_SERVICE) when one is available, instead of a public
+// fetch(). Confirmed root cause of every prior sync failure: the CRM
+// Worker's only public address is the shared *.workers.dev domain (it has
+// no Custom Domain of its own — crm.skarion.com is bound to its Pages
+// frontend, not this Worker), and that shared domain's edge protection
+// blocks non-browser traffic with a 404/"error code: 1042" — 100% of
+// attempts, confirmed both from this Worker and via an external curl to
+// the same host. A Custom Domain on the same skarion.com zone hit the
+// identical block, pointing at zone-level Bot Fight Mode rather than
+// anything workers.dev-specific. A Service Binding is a direct
+// Worker-to-Worker call inside Cloudflare's own network — it never
+// reaches the public edge, so no zone's WAF/Bot Fight Mode setting can
+// apply to it, regardless of which domain would otherwise front the call.
+// Falls back to the public URL when no binding is present (e.g. local
+// `next dev`, which has no live Cloudflare request context) so this can
+// never regress local development or hard-fail just because the faster
+// path isn't available.
+async function crmServiceFetch(path: string, init: RequestInit): Promise<Response> {
+  try {
+    const { env } = getCloudflareContext();
+    if (env.CRM_SERVICE) return await env.CRM_SERVICE.fetch(new Request(`https://crm.internal${path}`, init));
+  } catch {
+    // Not inside a live Cloudflare Workers request context, or the binding
+    // isn't wired up yet — fall through to the public URL below.
+  }
+  return fetch(`${crmBaseUrl()}${path}`, init);
 }
 
 export async function queueRecruitingContact(input: { candidateId: string; applicationId?: string | null; emailCommunicationId?: string | null; email: string; displayName?: string | null; contactType: ContactType; company?: string | null; subject?: string | null }) {
@@ -27,7 +57,7 @@ export async function syncQueuedRecruitingContact(id: string) {
   await execute("UPDATE crm_contact_sync_queue SET status='syncing', attempts=attempts+1, last_attempt_at=now() WHERE id=$1", [id]);
   const { firstName, lastName } = splitName(row.display_name);
   try {
-    const res = await fetch(`${crmBaseUrl()}/extension/leads`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, "X-Idempotency-Key": `talentos-email-contact-${row.candidate_id}-${row.contact_email}` }, body: JSON.stringify({ firstName, lastName, email: row.contact_email, companyName: row.company || null, source: "talentos_gmail", status: "new", outreachStatus: "not_contacted", tags: [row.contact_type, "talentos-gmail"], notes: `Discovered from ${row.candidate_name}'s recruiting email${row.source_subject ? `: ${row.source_subject}` : ""}. Candidate ID: ${row.candidate_id}. Application ID: ${row.application_id || "none"}.` }) });
+    const res = await crmServiceFetch("/extension/leads", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, "X-Idempotency-Key": `talentos-email-contact-${row.candidate_id}-${row.contact_email}` }, body: JSON.stringify({ firstName, lastName, email: row.contact_email, companyName: row.company || null, source: "talentos_gmail", status: "new", outreachStatus: "not_contacted", tags: [row.contact_type, "talentos-gmail"], notes: `Discovered from ${row.candidate_name}'s recruiting email${row.source_subject ? `: ${row.source_subject}` : ""}. Candidate ID: ${row.candidate_id}. Application ID: ${row.application_id || "none"}.` }) });
     if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
     const result: any = await res.json(); const record = result.contact || result.lead;
     if (!record?.id) throw new Error("CRM response did not include a record id");

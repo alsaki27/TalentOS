@@ -70,4 +70,11 @@ interface CloudflareEnv {
 
   // ── First admin bootstrap ──
   ADMIN_EMAIL?: string;
+
+  // ── Service Bindings ──
+  // Direct Worker-to-Worker binding to Skarion CRM (see wrangler.toml
+  // [[services]]) — bypasses the public edge entirely, unlike the
+  // SKARION_CRM_API_URL fallback below. Type per `wrangler types`' own
+  // output for a [[services]] binding (matches ASSETS below).
+  CRM_SERVICE?: Fetcher;
 }
