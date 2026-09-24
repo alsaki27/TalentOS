@@ -11,9 +11,23 @@ interface Props {
   candidateName?: string;
   targetRole?: string | null;
   onSaved: () => void;
+  // Defaults to the original skarion-student-audit-bridge endpoint (used by
+  // the Audit tab) when omitted, so existing callers are unaffected. The
+  // Training Audit tab passes its own local-table save instead.
+  onSave?: (rawText: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
-export function ExecutiveAuditReportModal({ onClose, candidateId, sessionId, rawText, candidateName, targetRole, onSaved }: Props) {
+async function defaultSave(candidateId: string, sessionId: string, rawText: string) {
+  const res = await fetch(`/api/candidates/${candidateId}/audit/mock-sessions/${sessionId}/analysis`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw_analysis_text: rawText }),
+  });
+  if (!res.ok) return { ok: false, error: (await res.text()) || "Failed to save analysis" };
+  return { ok: true };
+}
+
+export function ExecutiveAuditReportModal({ onClose, candidateId, sessionId, rawText, candidateName, targetRole, onSaved, onSave }: Props) {
   const [isEditing, setIsEditing] = useState(!rawText);
   const [draft, setDraft] = useState(rawText || "");
   const [saving, setSaving] = useState(false);
@@ -23,14 +37,9 @@ export function ExecutiveAuditReportModal({ onClose, candidateId, sessionId, raw
     setSaving(true);
     setError("");
     try {
-      const res = await fetch(`/api/candidates/${candidateId}/audit/mock-sessions/${sessionId}/analysis`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ raw_analysis_text: draft }),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        setError(body || "Failed to save analysis");
+      const result = await (onSave ? onSave(draft) : defaultSave(candidateId, sessionId, draft));
+      if (!result.ok) {
+        setError(result.error || "Failed to save analysis");
         return;
       }
       setIsEditing(false);
