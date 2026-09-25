@@ -44,6 +44,11 @@ const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
   "google_vertex_proxy",
 ]);
 
+/** Identity of one model served through one key, for per-model exclusion. */
+function keyModelId(keyId: string, model: string | null | undefined): string {
+  return `${keyId}|${model ?? ""}`;
+}
+
 // A provider credential can serve several model overrides.  Key-level health
 // alone is therefore too coarse: one unavailable OpenCode model must not
 // suppress a healthy Luna route on the same credential.  Keep this breaker
@@ -251,6 +256,10 @@ export async function getProviderForAutomation(
   excludeProviderNames?: Set<string>,
   excludeRouteIds?: Set<string>,
   routingStateId?: string | null,
+  // key+model pairs that already failed in this call (see keyModelId). Lets a
+  // later route reuse the same key with a DIFFERENT model - provider quotas
+  // are per model, so one exhausted model must not hide the others.
+  excludeKeyModels?: Set<string>,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -308,6 +317,7 @@ export async function getProviderForAutomation(
           ? anchor
           : await getAiKeyWithDecryptedKey(candidate.id);
         if (!keyRow || !keyRow.is_enabled || isKeyHealthBlocked(keyRow)) continue;
+        if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
@@ -558,6 +568,7 @@ export async function callWithUsageTracking<T>(
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
   const excludedRouteIds = new Set<string>();
+  const excludedKeyModels = new Set<string>();
 
   let lastError: Error | null = null;
   let lastResolved: AutomationRouteResult | null = null;
@@ -571,6 +582,7 @@ export async function callWithUsageTracking<T>(
         attempt > 0 ? excludedProviders : undefined,
         excludedRouteIds,
         ctx?.routingStateId,
+        excludedKeyModels,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -719,6 +731,19 @@ export async function callWithUsageTracking<T>(
         if (errorCode === "auth_error") {
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
+        } else if (
+          errorCode === "rate_limit" &&
+          resolved.aiKeyId &&
+          ROUND_ROBIN_POOL_PROVIDERS.has(resolved.name)
+        ) {
+          // Quotas are per model (Vertex: per model per project). Excluding
+          // the whole key here meant a later route using the same key with a
+          // different model was silently skipped - confirmed live: every
+          // Resume Forge run hit the flash-lite quota on Vertex A at rank 2,
+          // and rank 3 (gemini-3.1-pro-preview on that same key) was never
+          // attempted, so all routes looked exhausted. Exclude only this
+          // key+model; sibling keys and other models stay available.
+          excludedKeyModels.add(keyModelId(resolved.aiKeyId, resolved.model));
         } else if (resolved.aiKeyId) {
           // Keep the route rank alive and rotate to a sibling key for pooled
           // providers. The next route rank is reached only after the entire

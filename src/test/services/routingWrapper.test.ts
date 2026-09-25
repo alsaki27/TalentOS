@@ -308,6 +308,72 @@ describe("callWithUsageTracking error paths", () => {
   });
 });
 
+describe("callWithUsageTracking per-model rate-limit failover", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQuery.mockReset().mockResolvedValue([]);
+    mockQueryOne.mockReset().mockResolvedValue(null);
+    mockExecute.mockReset().mockResolvedValue({ rowCount: 1 });
+    mockListEnabledAiKeys.mockReset().mockResolvedValue([]);
+    mockGetAiKeyWithDecryptedKey.mockReset().mockResolvedValue(null);
+    mockRecordAiKeySuccess.mockReset().mockResolvedValue(undefined);
+    mockRecordAiKeyFailure.mockReset().mockResolvedValue(undefined);
+    mockBuildProviderFromDbKey.mockReset().mockReturnValue(null);
+    mockGetAiRuntimeConfig.mockReset().mockResolvedValue({ active_routing_state_id: null, allow_unrouted_fallback: false });
+    mockGetActiveProviderWithFallback.mockReset().mockResolvedValue(null);
+  });
+
+  // Mirrors the production Resume Forge routing state on 2026-09-25:
+  // rank 1 OpenCode (rate limited), rank 2 Vertex B with flash-lite (503),
+  // rank 3 Vertex A with pro-preview. Vertex keys are pooled, so rank 2 also
+  // tries Vertex A with flash-lite, which hits its per-model quota (429).
+  // Rank 3 must still get its turn with a different model on that same key.
+  it("reaches a later route that uses the same key with a different model after a rate limit", async () => {
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: "oc", provider: null, rank: 1, is_enabled: true, model_override: "gpt-5.6-luna" },
+      { id: "r2", automation_id: "application_resume_forge", ai_key_id: "vertex-b", provider: null, rank: 2, is_enabled: true, model_override: "gemini-2.5-flash-lite" },
+      { id: "r3", automation_id: "application_resume_forge", ai_key_id: "vertex-a", provider: null, rank: 3, is_enabled: true, model_override: "gemini-3.1-pro-preview" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keys = [
+      { id: "oc", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "vertex-b", provider: "google_vertex_proxy", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "vertex-a", provider: "google_vertex_proxy", priority: 20, created_at: "2026-01-02", status: "working" },
+    ];
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const k = keys.find((key) => key.id === id)!;
+      return { ...k, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    const calls: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        calls.push(`${key}:${model}`);
+        if (key === "oc") throw new Error("OpenCode API error (429): rate limit");
+        if (key === "vertex-b") throw new Error("Google Vertex Proxy error (503): service not available yet");
+        if (model === "gemini-2.5-flash-lite") throw new Error("Google Vertex Proxy: rate limit or quota exceeded.");
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const result = await callWithUsageTracking("application_resume_forge", undefined, (provider) =>
+      provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(calls).toEqual([
+      "oc:gpt-5.6-luna",
+      "vertex-b:gemini-2.5-flash-lite",
+      "vertex-a:gemini-2.5-flash-lite",
+      "vertex-a:gemini-3.1-pro-preview",
+    ]);
+    expect(result.aiKeyId).toBe("vertex-a");
+    expect(result.model).toBe("gemini-3.1-pro-preview");
+    expect(result.routeRank).toBe(3);
+  });
+});
+
 describe("buildProviderFromDbKey — new providers", () => {
   it("creates a Moonshot provider without throwing", async () => {
     const actual = await vi.importActual<typeof import("@/server/services/aiProvider")>("@/server/services/aiProvider");
