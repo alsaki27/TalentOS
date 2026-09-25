@@ -10,11 +10,8 @@ DECLARE
   v_automation record;
   v_primary record;
   v_fallback record;
-  v_target record;
-  v_live record;
   v_primary_found boolean;
   v_fallback_found boolean;
-  v_live_found boolean;
   v_primary_changed boolean;
   v_fallback_changed boolean;
   v_any_changed boolean;
@@ -113,47 +110,9 @@ BEGIN
          v_automation.fallback_model, NULL, true);
     END IF;
 
-    -- Keep the legacy live-route mirror consistent without touching other agents.
-    FOR v_target IN
-      SELECT desired.rank AS target_rank,
-             desired.model_override AS target_model,
-             desired.ai_key_id AS target_key_id,
-             desired.provider AS target_provider
-      FROM ai_routing_state_routes desired
-      WHERE desired.state_id = v_state_id
-        AND desired.automation_id = v_automation.automation_id
-        AND desired.rank IN (1, 2)
-      ORDER BY desired.rank
-    LOOP
-      SELECT COALESCE(l.provider, k.provider) AS effective_provider,
-             l.ai_key_id, l.model_override, l.provider, l.is_enabled
-      INTO v_live
-      FROM ai_automation_routes l
-      LEFT JOIN ai_api_keys k ON k.id = l.ai_key_id
-      WHERE l.automation_id = v_automation.automation_id
-        AND l.rank = v_target.target_rank
-      FOR UPDATE OF l;
-      v_live_found := FOUND;
-
-      IF v_live_found AND v_live.effective_provider IS DISTINCT FROM 'opencode' THEN
-        RAISE EXCEPTION 'Legacy route for % rank % uses %, expected opencode', v_automation.automation_id, v_target.target_rank, v_live.effective_provider;
-      END IF;
-
-      IF v_live_found THEN
-        IF v_live.model_override IS DISTINCT FROM v_target.target_model OR NOT v_live.is_enabled THEN
-          UPDATE ai_automation_routes
-          SET model_override = v_target.target_model, is_enabled = true, updated_at = now()
-          WHERE automation_id = v_automation.automation_id AND rank = v_target.target_rank;
-        END IF;
-      ELSE
-        INSERT INTO ai_automation_routes
-          (automation_id, rank, ai_key_id, provider, model_override, is_enabled, updated_at)
-        VALUES
-          (v_automation.automation_id, v_target.target_rank, v_target.target_key_id, v_target.target_provider,
-           v_target.target_model, true, now());
-      END IF;
-    END LOOP;
-
+    -- Do not mutate ai_automation_routes here: the active-state resolver uses
+    -- this state's rows whenever present, and legacy rows may intentionally
+    -- belong to a different provider setup.
     v_any_changed := v_primary_changed OR v_fallback_changed;
     IF v_any_changed THEN
       INSERT INTO ai_admin_audit_log (ai_key_id, automation_id, action, metadata)
