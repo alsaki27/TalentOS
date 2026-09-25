@@ -26,6 +26,11 @@ on:
         required: false
         default: true
         type: boolean
+      apply_resume_forge_qwen37_plus:
+        description: "Apply only migration 105 to set Resume Forge's active OpenCode route to Qwen 3.7 Plus"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: talentos-production-deploy
@@ -116,7 +121,7 @@ jobs:
         # sslmode=require as "encrypt, do not verify", unlike node-postgres which
         # treats it as verify-full (see src/server/db/neon.ts).
         # Only an intentional manual dispatch may run SQL against TalentOS.
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_schema_fixes != true }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.skip_schema_fixes != true || inputs.apply_resume_forge_qwen37_plus == true) }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           # Fail loudly and specifically if the database is simply unreachable.
@@ -128,7 +133,12 @@ jobs:
             exit 1
           fi
           FAILED_FILES=""
-          for f in sql/neon_fixes/*.sql; do
+          if [ "$APPLY_RESUME_FORGE_QWEN37_PLUS" = "true" ]; then
+            FILES="sql/neon_fixes/105_resume_forge_qwen37_plus.sql"
+          else
+            FILES="sql/neon_fixes/*.sql"
+          fi
+          for f in $FILES; do
             echo "::group::Applying $f"
             if psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" 2>&1; then
               echo "  OK"
@@ -144,6 +154,7 @@ jobs:
           fi
         env:
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
+          APPLY_RESUME_FORGE_QWEN37_PLUS: ${{ inputs.apply_resume_forge_qwen37_plus }}
 
       - name: Deploy Worker with secrets atomically
         # Wrangler 4 uploads the Worker code, Wrangler bindings, and this
