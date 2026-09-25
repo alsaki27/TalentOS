@@ -67,6 +67,96 @@ function buildOpenCodeHeaders(
   };
 }
 
+function createOpenCodeMessagesProvider(
+  apiKey: string,
+  model: string,
+  apiUrl: string,
+  customHeaders?: Record<string, string> | null,
+  providerConfig?: Record<string, unknown> | null,
+): AiProvider {
+  return {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+      const controller = new AbortController();
+      const timer = timeoutMs && timeoutMs > 0
+        ? setTimeout(() => controller.abort(), timeoutMs)
+        : undefined;
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            ...buildOpenCodeHeaders(customHeaders, providerConfig),
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: maxTokens ?? FALLBACK_MAX_TOKENS,
+            ...(temperature === undefined ? {} : { temperature }),
+            system,
+            messages: messages.map((message) => ({
+              role: message.role,
+              content: message.content.map((block) => {
+                if (block.type === "text") return { type: "text", text: block.text };
+                if (block.type === "tool_use") {
+                  return { type: "tool_use", id: block.id, name: block.name, input: block.input };
+                }
+                return {
+                  type: "tool_result",
+                  tool_use_id: block.toolUseId,
+                  content: block.content,
+                  is_error: block.isError ?? false,
+                };
+              }),
+            })),
+            tools: tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              input_schema: tool.inputSchema,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const body = await response.text();
+          throw new Error(`OpenCode Messages API error (${response.status}): ${body}`);
+        }
+
+        const data = await response.json();
+        return {
+          content: (Array.isArray(data.content) ? data.content : []).flatMap((block: any) => {
+            if (block?.type === "text") return [{ type: "text" as const, text: String(block.text ?? "") }];
+            if (block?.type === "tool_use") {
+              return [{
+                type: "tool_use" as const,
+                id: String(block.id ?? ""),
+                name: String(block.name ?? ""),
+                input: block.input && typeof block.input === "object" ? block.input : {},
+              }];
+            }
+            return [];
+          }),
+          stopReason: data.stop_reason ?? "end_turn",
+          usage: data.usage
+            ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens }
+            : undefined,
+        };
+      } catch (error: any) {
+        if (controller.signal.aborted) {
+          throw new Error(timeoutMs
+            ? `OpenCode Messages request timed out after ${timeoutMs}ms`
+            : "OpenCode Messages request timed out");
+        }
+        throw error;
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+  };
+}
+
 /**
  * Build an AI provider from a DB-managed key.
  * Returns null if the provider adapter is not implemented for this provider type.
@@ -363,6 +453,17 @@ export function buildProviderFromDbKey(
     }
     case "opencode": {
       const selectedModel = model || "deepseek-v4-flash";
+      if (/^qwen3\.7-plus$/i.test(selectedModel)) {
+        return createOpenCodeMessagesProvider(
+          apiKey,
+          selectedModel,
+          baseUrl
+            ? resolveApiUrl(baseUrl, "/messages", baseUrl)
+            : "https://opencode.ai/zen/go/v1/messages",
+          customHeaders,
+          providerConfig,
+        );
+      }
       const isGpt56Luna = /^gpt-5\.6-luna$/i.test(selectedModel);
       if (isGpt56Luna) {
         return createOpenAiResponsesProvider({

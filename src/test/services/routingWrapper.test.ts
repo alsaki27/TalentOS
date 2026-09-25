@@ -372,6 +372,87 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
     expect(result.model).toBe("gemini-3.1-pro-preview");
     expect(result.routeRank).toBe(3);
   });
+
+  it("promotes an OpenCode fallback account to primary after a primary account is rate-limited", async () => {
+    const roles = new Map<string, "primary" | "fallback">([
+      ["opencode-primary", "primary"],
+      ["opencode-fallback", "fallback"],
+    ]);
+    const primaryProvider = {
+      send: vi.fn().mockRejectedValue(new Error("OpenCode API error (429): rate limit exceeded")),
+    };
+    const fallbackProvider = {
+      send: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "valid output" }], stopReason: "end_turn" }),
+    };
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_automation_routes")) {
+        return [{
+          id: "route-1",
+          automation_id: "application_resume_forge",
+          ai_key_id: "opencode-primary",
+          provider: null,
+          rank: 1,
+          is_enabled: true,
+          model_override: "qwen3.7-plus",
+        }];
+      }
+      return [];
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_key_pool_cursors")) return { start_index: "0" };
+      if (sql.includes("opencode_primary_promoted_on_rate_limit")) {
+        roles.set("opencode-primary", "fallback");
+        roles.set("opencode-fallback", "primary");
+        return { promoted_key_id: "opencode-fallback", failed_key_id: "opencode-primary" };
+      }
+      return null;
+    });
+    mockListEnabledAiKeys.mockImplementation(async () =>
+      ["opencode-primary", "opencode-fallback"].map((id, index) => ({
+        id,
+        provider: "opencode",
+        priority: index + 1,
+        created_at: `2026-01-0${index + 1}`,
+        status: id === "opencode-primary" && roles.get(id) === "fallback" ? "rate_limited" : "working",
+        provider_config: roles.get(id) === "fallback" ? { opencode_pool_role: "fallback" } : {},
+      })) as any,
+    );
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
+      id,
+      provider: "opencode",
+      decrypted_key: id,
+      is_enabled: true,
+      status: id === "opencode-primary" && roles.get(id) === "fallback" ? "rate_limited" : "working",
+      model: "qwen3.7-plus",
+      base_url: "https://opencode.ai/zen/go/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: roles.get(id) === "fallback" ? { opencode_pool_role: "fallback" } : {},
+    }) as any);
+    mockRecordAiKeyFailure.mockResolvedValue(undefined);
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) =>
+      key === "opencode-primary" ? primaryProvider : fallbackProvider,
+    );
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const result = await callWithUsageTracking(
+      "application_resume_forge",
+      undefined,
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(primaryProvider.send).toHaveBeenCalledTimes(1);
+    expect(fallbackProvider.send).toHaveBeenCalledTimes(1);
+    expect(result.aiKeyId).toBe("opencode-fallback");
+    expect(result.model).toBe("qwen3.7-plus");
+    expect(roles.get("opencode-fallback")).toBe("primary");
+    expect(roles.get("opencode-primary")).toBe("fallback");
+    expect(mockQueryOne).toHaveBeenCalledWith(
+      expect.stringContaining("opencode_primary_promoted_on_rate_limit"),
+      ["opencode-primary", "application_resume_forge"],
+    );
+  });
 });
 
 describe("buildProviderFromDbKey — new providers", () => {

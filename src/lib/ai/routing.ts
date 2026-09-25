@@ -149,6 +149,91 @@ function isKeyHealthBlocked(
   return Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000;
 }
 
+type OpenCodePromotionResult = { promoted_key_id: string; failed_key_id: string };
+
+/**
+ * Swap a rate-limited OpenCode primary with the next eligible fallback. Pool
+ * roles are credential-level metadata, so this intentionally applies to the
+ * shared OpenCode pool across routing states. Changes and audit are atomic.
+ */
+async function promoteOpenCodeFallbackOnRateLimit(
+  failedKeyId: string,
+  automationId: string,
+): Promise<OpenCodePromotionResult | null> {
+  try {
+    return await queryOne<OpenCodePromotionResult>(
+      `WITH pool_lock AS MATERIALIZED (
+         SELECT pg_advisory_xact_lock(hashtext('opencode-primary-pool-promotion')) AS locked
+       ), failed AS MATERIALIZED (
+         SELECT k.id, k.label, k.status
+         FROM ai_api_keys k CROSS JOIN pool_lock
+         WHERE k.id = $1
+           AND k.provider = 'opencode'
+           AND k.is_enabled = true
+           AND k.status IN ('rate_limited', 'quota_exhausted')
+           AND COALESCE(k.provider_config->>'opencode_pool_role', 'primary') = 'primary'
+         FOR UPDATE OF k
+       ), candidate AS MATERIALIZED (
+         SELECT k.id, k.label
+         FROM ai_api_keys k CROSS JOIN failed f
+         WHERE k.provider = 'opencode'
+           AND k.is_enabled = true
+           AND k.provider_config->>'opencode_pool_role' = 'fallback'
+           AND k.status NOT IN ('disabled', 'invalid', 'invalid_credential', 'admin_limit_reached')
+           AND (
+             k.status NOT IN ('rate_limited', 'quota_exhausted')
+             OR k.last_failure_at IS NULL
+             OR k.last_failure_at <= now() - interval '15 minutes'
+           )
+         ORDER BY k.priority ASC, k.created_at ASC, k.id ASC
+         LIMIT 1
+         FOR UPDATE OF k SKIP LOCKED
+       ), demoted AS (
+         UPDATE ai_api_keys k
+         SET provider_config = jsonb_set(
+               COALESCE(k.provider_config, '{}'::jsonb),
+               '{opencode_pool_role}', to_jsonb('fallback'::text), true
+             ),
+             updated_at = now()
+         FROM failed f CROSS JOIN candidate c
+         WHERE k.id = f.id
+         RETURNING k.id
+       ), promoted AS (
+         UPDATE ai_api_keys k
+         SET provider_config = jsonb_set(
+               COALESCE(k.provider_config, '{}'::jsonb),
+               '{opencode_pool_role}', to_jsonb('primary'::text), true
+             ),
+             updated_at = now()
+         FROM candidate c CROSS JOIN demoted d
+         WHERE k.id = c.id
+         RETURNING k.id, k.label
+       ), audited AS (
+         INSERT INTO ai_admin_audit_log (action, ai_key_id, automation_id, metadata)
+         SELECT 'opencode_primary_promoted_on_rate_limit', p.id, $2,
+                jsonb_build_object(
+                  'failed_key_id', f.id,
+                  'failed_key_label', f.label,
+                  'failed_key_status', f.status,
+                  'promoted_key_label', p.label,
+                  'error_code', 'rate_limit',
+                  'pool_scope', 'global_opencode_pool'
+                )
+         FROM promoted p CROSS JOIN failed f
+         RETURNING id
+       )
+       SELECT p.id::text AS promoted_key_id, f.id::text AS failed_key_id
+       FROM promoted p CROSS JOIN failed f CROSS JOIN audited`,
+      [failedKeyId, automationId],
+    );
+  } catch (error) {
+    // The normal retry/fallback remains available if operational role
+    // promotion cannot be written; leave a server-side diagnostic.
+    console.error("[routing] OpenCode primary promotion failed after rate limit:", error);
+    return null;
+  }
+}
+
 async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?: string }> {
   if (keyRow.daily_request_limit) {
     const todayCalls = await queryOne<{ count: number }>(
@@ -713,6 +798,16 @@ export async function callWithUsageTracking<T>(
         routeRank: resolved.routeRank,
       });
       if (resolved.aiKeyId) await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
+
+      if (resolved.name === "opencode" && resolved.aiKeyId && errorCode === "rate_limit") {
+        const promotion = await promoteOpenCodeFallbackOnRateLimit(resolved.aiKeyId, automationId);
+        if (promotion) {
+          console.warn(
+            `[routing] OpenCode key ${promotion.failed_key_id} hit a rate limit; ` +
+              `promoted ${promotion.promoted_key_id} into the primary pool.`,
+          );
+        }
+      }
 
       // Provider transport failures and invalid model output are retryable.
       // Invalid output must advance the route: a model can be reachable and

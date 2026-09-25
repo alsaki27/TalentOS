@@ -138,6 +138,7 @@ export const PROVIDER_MODEL_PRESETS: Record<string, { id: string; label: string 
     { id: "kimi-k2.6", label: "Kimi K2.6" },
   ],
   opencode: [
+    { id: "qwen3.7-plus", label: "Qwen 3.7 Plus" },
     { id: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
     { id: "glm-5.2", label: "GLM 5.2" },
     { id: "kimi-k2.6", label: "Kimi K2.6" },
