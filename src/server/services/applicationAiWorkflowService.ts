@@ -10,7 +10,7 @@ import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import type { SourceOfTruthData } from "@/lib/ai/application-agents/types";
 import { resolveJobDescription } from "@/lib/ai/application-agents/prompts/jobLens";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
-import { runResumeForge } from "@/lib/ai/application-agents/resumeForge";
+import { runResumeForge, JOB_ANALYSIS_CHECKPOINT_ID } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
@@ -79,6 +79,29 @@ function mapArtifacts(rows: ArtifactRow[]): ArtifactRecord[] {
 // application_resume_forge), so its presence is already implied by
 // application_resume_forge's.
 const REQUIRED_APPLICATION_AGENT_IDS = APPLICATION_AGENT_IDS.slice(0, 3);
+
+// Hard ceiling for one stage attempt. A stage runs inside a single dispatch
+// request that scheduled-jobs.yml calls with `curl --max-time 660`, under a
+// 720s workflow claim - a stage allowed to run past ~605s gets cut off by the
+// client instead of failing cleanly. 605s is the budget that workflow file
+// already documents as safe.
+const STAGE_BUDGET_CEILING_MS = 605_000;
+
+/**
+ * Total time one stage attempt may take across all provider routes.
+ * Most stages make one provider call per route, so timeout*2 (+5s) covers a
+ * slow first route plus one fallover. Resume Forge now makes up to 4
+ * sequential calls per route (job extraction, requirement analysis, draft,
+ * optional coverage retry), so the flat timeout*2 budget - 365s with the
+ * live 180s ai_agent_configs timeout - was routinely exceeded and every
+ * such run failed as "Agent stage timed out". Give it room for its extra
+ * calls, capped at the dispatch ceiling.
+ */
+function stageTimeBudgetMs(agentId: ApplicationAgentId, timeoutMs: number): number {
+  const base = timeoutMs * 2 + 5_000;
+  if (agentId !== "application_resume_forge") return base;
+  return Math.max(base, Math.min(timeoutMs * 4 + 5_000, STAGE_BUDGET_CEILING_MS));
+}
 
 function firstMissingApplicationStage(artifacts: ArtifactRow[]): number {
   return REQUIRED_APPLICATION_AGENT_IDS.findIndex((automationId) =>
@@ -913,6 +936,29 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     });
     await ownedStageUpdate({ input_artifact_id: inputArtifact.id });
 
+    // Resume Forge: persist the job-analysis half the moment it exists, so a
+    // later timeout in the draft half (or a re-dispatched attempt) reuses it
+    // instead of paying for those provider calls again. Attached after the
+    // input artifact above so it is never serialized into it.
+    // Stored under its own automation id (not application_job_lens) so no
+    // downstream reader ever sees a half-finished stage's output, and tagged
+    // with the job + base resume it was computed for: retryWorkflow keeps
+    // artifacts but may switch the base resume, and requirement analysis is
+    // candidate-specific, so a checkpoint is only reused when both match.
+    if (agentId === "application_resume_forge") {
+      ctx.onJobAnalysis = async (analysis) => {
+        const data = { jobId: ctx.job?.id ?? null, baseResumeId: ctx.baseResume?.id ?? null, analysis };
+        await createArtifact({
+          workflowId,
+          automationId: JOB_ANALYSIS_CHECKPOINT_ID,
+          sequenceNumber: currentIdx + 1,
+          schemaVersion: "JobAnalysisCheckpointV1",
+          contentHash: sha256(JSON.stringify(data)),
+          data,
+        });
+      };
+    }
+
     // callWithUsageTracking owns the provider fallback chain. Keep the stage
     // itself to one routing call: wrapping it in another retry loop caused a
     // timeout to repeat the same OpenCode route instead of advancing to
@@ -952,6 +998,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
        let callResult;
        try {
         const timeoutMs = agentOptions.timeout_ms ?? 300_000;
+        const stageBudgetMs = stageTimeBudgetMs(agentId, timeoutMs);
         callResult = await withTimeout(
           callWithUsageTracking(
             agentId,
@@ -961,8 +1008,8 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
               return agentFn(agentOptions, provider, ctx);
             },
           ),
-          timeoutMs * 2 + 5_000,
-          `Agent stage timed out after ${timeoutMs * 2 + 5_000}ms`,
+          stageBudgetMs,
+          `Agent stage timed out after ${stageBudgetMs}ms`,
         );
       } finally {
         clearInterval(heartbeatTimer);

@@ -52,6 +52,18 @@ export function classifyWorkflowFailure(lastError: string | null | undefined): W
     };
   }
 
+  // Our own stage time budget, not the provider's connection: the step's AI
+  // calls (several, for Resume Forge) took longer in total than the step is
+  // allowed. Previously lumped into the "connection issue" wording below,
+  // which sent people looking at the AI provider instead of the pipeline.
+  if (message.includes("Agent stage timed out")) {
+    return {
+      category: "infra_transient",
+      reason: "The AI took longer than this step's time limit to finish (the resume-writing step makes several AI calls in a row). This is usually slow AI responses, not a problem with this application's data - retrying normally works.",
+      likelyRetriable: true,
+    };
+  }
+
   if (
     message.includes("orphaned without completing or erroring cleanly") ||
     message.includes("timed out") ||

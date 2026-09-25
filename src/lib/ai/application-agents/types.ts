@@ -141,6 +141,13 @@ export interface AgentContext {
   verifiedSkills: string[];
   previousOutputs: Record<string, ArtifactRecord>;
   sourceOfTruth: SourceOfTruthData | null;
+  // Resume Forge only (set by processWorkflowStage, never serialized into the
+  // stage input artifact). The merged stage can make up to 4 sequential
+  // provider calls; these let the job-analysis half survive a provider
+  // fallover (in-memory memo) or a timed-out attempt (persisted checkpoint)
+  // instead of being recomputed from scratch each time.
+  jobAnalysisMemo?: unknown;
+  onJobAnalysis?: (analysis: unknown) => Promise<void>;
 }
 
 export interface AgentJobData {

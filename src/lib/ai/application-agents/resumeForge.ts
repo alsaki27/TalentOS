@@ -275,12 +275,62 @@ function applyForgeGuards(
   }
 }
 
+/** Artifact id for Resume Forge's mid-stage job-analysis checkpoint. */
+export const JOB_ANALYSIS_CHECKPOINT_ID = "application_resume_forge:job_analysis_checkpoint";
+
+/**
+ * Returns the job analysis for this stage, computing it at most once.
+ *
+ * Folding Job Lens into this stage made a single attempt up to 4 sequential
+ * provider calls. callWithUsageTracking re-runs the WHOLE agent function on
+ * the next provider route after a timeout/rate-limit, and a timed-out stage
+ * attempt is re-dispatched from scratch - so without this, every fallover
+ * repeated the two job-analysis calls before even starting the draft, and
+ * stages routinely blew through the stage time budget (surfacing as
+ * "Agent stage timed out"). Order of preference:
+ *   1. already computed earlier in this same stage execution (other route)
+ *   2. checkpointed by an earlier attempt of this workflow's stage
+ *   3. compute now, then memoize + checkpoint immediately
+ */
+async function resolveJobAnalysis(
+  options: AgentOptions,
+  provider: AiProvider,
+  ctx: AgentContext,
+): Promise<JobAnalysisV1> {
+  if (ctx.jobAnalysisMemo) return ctx.jobAnalysisMemo as JobAnalysisV1;
+
+  const checkpoint = ctx.previousOutputs?.[JOB_ANALYSIS_CHECKPOINT_ID]?.data as
+    | { jobId?: string | null; baseResumeId?: string | null; analysis?: unknown }
+    | undefined;
+  if (
+    checkpoint?.analysis &&
+    checkpoint.jobId === (ctx.job?.id ?? null) &&
+    checkpoint.baseResumeId === ((ctx.baseResume as any)?.id ?? null)
+  ) {
+    const parsed = JobAnalysisSchema.parse(checkpoint.analysis);
+    if (!("error" in parsed)) {
+      console.log("[Agent:ResumeForge] reusing job analysis checkpoint from an earlier attempt");
+      ctx.jobAnalysisMemo = parsed;
+      return parsed;
+    }
+  }
+
+  const analysis = await analyzeJob(options, provider, ctx);
+  ctx.jobAnalysisMemo = analysis;
+  if (ctx.onJobAnalysis) {
+    await ctx.onJobAnalysis(analysis).catch((err: any) =>
+      console.warn(`[Agent:ResumeForge] job analysis checkpoint write failed (non-fatal): ${err?.message ?? err}`)
+    );
+  }
+  return analysis;
+}
+
 export async function runResumeForge(
   options: AgentOptions,
   provider: AiProvider,
   ctx: AgentContext
 ): Promise<ResumeForgeResult> {
-  const jobAnalysis = await analyzeJob(options, provider, ctx);
+  const jobAnalysis = await resolveJobAnalysis(options, provider, ctx);
 
   // ── DEBUG: Resume Forge ──────────────────────────────────────────
   const rawBaseContent = (ctx.baseResume as any)?.content;
