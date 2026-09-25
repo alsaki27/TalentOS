@@ -33,6 +33,7 @@ describe("PROVIDER_MODEL_PRESETS", () => {
     const ids = PROVIDER_MODEL_PRESETS["opencode"]?.map(p => p.id) || [];
     expect(ids).toContain("deepseek-v4-pro");
     expect(ids).toContain("glm-5.2");
+    expect(ids).toContain("glm-5.3");
   });
 });
 

@@ -477,6 +477,7 @@ export function buildProviderFromDbKey(
           extraHeaders: buildOpenCodeHeaders(customHeaders, providerConfig),
         });
       }
+      const isGlm53 = /^glm-5\.3$/i.test(selectedModel);
       const normalizedReasoning = reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : null;
       const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
         ? { thinking: { type: "enabled" }, reasoning_effort: normalizedReasoning || "high" }
@@ -493,7 +494,9 @@ export function buildProviderFromDbKey(
       return createOpenAiCompatibleProvider({
         apiUrl: baseUrl
           ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
-          : "https://api.opencode.ai/v1/chat/completions",
+          : isGlm53
+            ? "https://opencode.ai/zen/go/v1/chat/completions"
+            : "https://api.opencode.ai/v1/chat/completions",
         apiKey,
         model: selectedModel,
         errorLabel: "OpenCode API",

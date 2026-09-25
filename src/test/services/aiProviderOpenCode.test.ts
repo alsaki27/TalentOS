@@ -127,4 +127,30 @@ describe("database-managed OpenCode provider", () => {
     expect(result.content).toEqual([{ type: "text", text: "{\"summary\":\"Evidence-based summary\"}" }]);
     expect(result.usage).toEqual({ input_tokens: 120, output_tokens: 18 });
   });
+
+  it("uses OpenCode Go's chat-completions endpoint for GLM 5.3", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+    const provider = buildProviderFromDbKey(
+      "opencode",
+      "test-key",
+      "glm-5.3",
+      null,
+      null,
+      null,
+      { opencode_session_id: "talentos-glm53-test" },
+    );
+
+    await provider!.send(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://opencode.ai/zen/go/v1/chat/completions",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const init = fetchMock.mock.calls[0][1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer test-key");
+    expect(headers.get("x-opencode-session")).toBe("talentos-glm53-test");
+    expect(headers.get("user-agent")).toBe("TalentOS-AI-Router/1.0");
+    expect(JSON.parse(String(init?.body)).model).toBe("glm-5.3");
+  });
 });
