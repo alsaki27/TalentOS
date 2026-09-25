@@ -36,6 +36,11 @@ on:
         required: false
         default: false
         type: boolean
+      apply_resume_forge_fallback_order:
+        description: "Apply only migration 107: Resume Forge Qwen 3.7 Plus secondary and GPT-5.6 Luna tertiary"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: talentos-production-deploy
@@ -126,7 +131,7 @@ jobs:
         # sslmode=require as "encrypt, do not verify", unlike node-postgres which
         # treats it as verify-full (see src/server/db/neon.ts).
         # Only an intentional manual dispatch may run SQL against TalentOS.
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.skip_schema_fixes != true || inputs.apply_resume_forge_qwen37_plus == true || inputs.apply_resume_pipeline_opencode_model_routes == true) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.skip_schema_fixes != true || inputs.apply_resume_forge_qwen37_plus == true || inputs.apply_resume_pipeline_opencode_model_routes == true || inputs.apply_resume_forge_fallback_order == true) }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           # Fail loudly and specifically if the database is simply unreachable.
@@ -138,13 +143,19 @@ jobs:
             exit 1
           fi
           FAILED_FILES=""
-          if [ "$APPLY_RESUME_FORGE_QWEN37_PLUS" = "true" ] && [ "$APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES" = "true" ]; then
+          SELECTED_MIGRATIONS=0
+          for selected in "$APPLY_RESUME_FORGE_QWEN37_PLUS" "$APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES" "$APPLY_RESUME_FORGE_FALLBACK_ORDER"; do
+            if [ "$selected" = "true" ]; then SELECTED_MIGRATIONS=$((SELECTED_MIGRATIONS + 1)); fi
+          done
+          if [ "$SELECTED_MIGRATIONS" -gt 1 ]; then
             echo "::error::Choose at most one targeted routing migration per dispatch."
             exit 1
           elif [ "$APPLY_RESUME_FORGE_QWEN37_PLUS" = "true" ]; then
             FILES="sql/neon_fixes/105_resume_forge_qwen37_plus.sql"
           elif [ "$APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES" = "true" ]; then
             FILES="sql/neon_fixes/106_resume_pipeline_opencode_model_routes.sql"
+          elif [ "$APPLY_RESUME_FORGE_FALLBACK_ORDER" = "true" ]; then
+            FILES="sql/neon_fixes/107_resume_forge_fallback_order.sql"
           else
             FILES="sql/neon_fixes/*.sql"
           fi
@@ -166,6 +177,7 @@ jobs:
           DATABASE_URL: ${{ secrets.TALENTOS_DATABASE_URL }}
           APPLY_RESUME_FORGE_QWEN37_PLUS: ${{ inputs.apply_resume_forge_qwen37_plus }}
           APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES: ${{ inputs.apply_resume_pipeline_opencode_model_routes }}
+          APPLY_RESUME_FORGE_FALLBACK_ORDER: ${{ inputs.apply_resume_forge_fallback_order }}
 
       - name: Deploy Worker with secrets atomically
         # Wrangler 4 uploads the Worker code, Wrangler bindings, and this
