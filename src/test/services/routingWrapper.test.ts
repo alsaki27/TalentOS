@@ -373,6 +373,58 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
     expect(result.routeRank).toBe(3);
   });
 
+  it("advances to the next configured OpenCode model after a timeout on a pooled key", async () => {
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: "opencode-b", provider: null, rank: 1, is_enabled: true, model_override: "glm-5.2" },
+      { id: "r2", automation_id: "application_resume_forge", ai_key_id: "opencode-b", provider: null, rank: 2, is_enabled: true, model_override: "qwen3.7-plus" },
+      { id: "r3", automation_id: "application_resume_forge", ai_key_id: "opencode-b", provider: null, rank: 3, is_enabled: true, model_override: "gpt-5.6-luna" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const key = {
+      id: "opencode-b",
+      provider: "opencode",
+      priority: 1,
+      created_at: "2026-01-01",
+      status: "working",
+    };
+    mockListEnabledAiKeys.mockResolvedValue([key]);
+    mockGetAiKeyWithDecryptedKey.mockResolvedValue({
+      ...key,
+      decrypted_key: "test-only",
+      is_enabled: true,
+      model: null,
+      base_url: "https://example.test",
+      chat_endpoint: null,
+      custom_headers: null,
+      provider_config: {},
+    } as any);
+
+    const calls: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, _secret: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        calls.push(model);
+        if (model === "glm-5.2") {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          throw error;
+        }
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const result = await callWithUsageTracking(
+      "application_resume_forge",
+      undefined,
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(calls).toEqual(["glm-5.2", "qwen3.7-plus"]);
+    expect(result.model).toBe("qwen3.7-plus");
+    expect(result.routeRank).toBe(2);
+  });
+
   it("promotes an OpenCode fallback account to primary after a primary account is rate-limited", async () => {
     const roles = new Map<string, "primary" | "fallback">([
       ["opencode-primary", "primary"],

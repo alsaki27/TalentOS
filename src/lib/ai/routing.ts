@@ -827,17 +827,17 @@ export async function callWithUsageTracking<T>(
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
         } else if (
-          errorCode === "rate_limit" &&
+          (errorCode === "rate_limit" || errorCode === "timeout") &&
           resolved.aiKeyId &&
           ROUND_ROBIN_POOL_PROVIDERS.has(resolved.name)
         ) {
-          // Quotas are per model (Vertex: per model per project). Excluding
-          // the whole key here meant a later route using the same key with a
-          // different model was silently skipped - confirmed live: every
-          // Resume Forge run hit the flash-lite quota on Vertex A at rank 2,
-          // and rank 3 (gemini-3.1-pro-preview on that same key) was never
-          // attempted, so all routes looked exhausted. Exclude only this
-          // key+model; sibling keys and other models stay available.
+          // A throttle or model-call timeout must not suppress a later
+          // configured model route that reuses the same pooled credential.
+          // Excluding the whole key on timeout made GLM's slow/hung response
+          // prevent Qwen/Luna on that same OpenCode account from ever being
+          // attempted (the exact failure seen in production). Keep the
+          // exclusion scoped to key+model; authentication failures still
+          // exclude the credential itself above.
           excludedKeyModels.add(keyModelId(resolved.aiKeyId, resolved.model));
         } else if (resolved.aiKeyId) {
           // Keep the route rank alive and rotate to a sibling key for pooled

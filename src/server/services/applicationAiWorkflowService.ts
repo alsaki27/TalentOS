@@ -1328,29 +1328,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   // all claim+dispatch (and fire an AI provider call) at the same instant.
   // Over the cap, the workflow just stays 'queued' - the periodic dispatcher
   // picks it up in its turn once capacity frees up.
-  const claimed = await queryOne<{ id: string; lock_version: number }>(
-    `WITH config AS MATERIALIZED (
-       SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
-       FROM ai_runtime_config WHERE singleton = true FOR UPDATE
-     ), active_count AS (
-       SELECT COUNT(*)::int AS n FROM application_ai_workflows
-       WHERE status = 'running'
-         AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
-     )
-     UPDATE application_ai_workflows w
-     SET status = 'running', claimed_at = NOW(),
-         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
-         claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
-     FROM config c, active_count ac
-     WHERE w.id = $1
-       AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
-       AND (
-         status != 'queued'
-         OR ac.n < c.workflow_max_concurrency
-       )
-    RETURNING w.id, w.lock_version`,
-    [workflowId]
-  );
+  const claimed = await claimWorkflowById(workflowId);
   if (!claimed) {
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher, or at concurrency capacity" };
   }
