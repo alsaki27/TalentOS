@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
-import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage, dispatchWorkflowById } from "@/server/services/applicationAiWorkflowService";
+import { cancelWorkflow, retryWorkflow, restartWorkflow, rerunFromStage } from "@/server/services/applicationAiWorkflowService";
 import { findWorkflowById, listStageRuns, listArtifacts, updateWorkflowStatus } from "@/server/repositories/applicationAiWorkflowRepository";
 import { advanceAeStageAfterAiCompletion } from "@/server/repositories/applicationsRepository";
-import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 import { APPLICATION_AGENT_IDS } from "@/lib/ai/application-agents/types";
 import { queryOne } from "@/server/db/neon";
 
@@ -66,19 +64,6 @@ export async function POST(
         return NextResponse.json({ error: `Can only retry failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await retryWorkflow(workflowId);
-      // Registered with ctx.waitUntil via backgroundDispatch so it survives
-      // past this response instead of racing it (see waitUntil.ts) - a plain
-      // un-awaited call here was confirmed to get killed before the stage
-      // dispatcher ever ran.
-      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-      await backgroundDispatch(
-        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST',
-          headers: getWorkflowDispatchHeaders()
-        }).catch((err) => {
-          console.error(`[Workflow ${workflowId}] Retry dispatch fetch failed:`, err);
-        })
-      );
       return NextResponse.json({ workflowId, status: "queued" });
     }
 
@@ -87,15 +72,6 @@ export async function POST(
         return NextResponse.json({ error: `Can only restart failed or cancelled workflows, current: ${wf.status}` }, { status: 400 });
       }
       await restartWorkflow(workflowId);
-      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-      await backgroundDispatch(
-        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST',
-          headers: getWorkflowDispatchHeaders()
-        }).catch((err) => {
-          console.error(`[Workflow ${workflowId}] Restart dispatch fetch failed:`, err);
-        })
-      );
       return NextResponse.json({ workflowId, status: "queued", fromStage: 0 });
     }
 
@@ -106,15 +82,6 @@ export async function POST(
         return NextResponse.json({ error: "Invalid stage parameter" }, { status: 400 });
       }
       await rerunFromStage(workflowId, stage);
-      const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-      await backgroundDispatch(
-        fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-          method: 'POST',
-          headers: getWorkflowDispatchHeaders()
-        }).catch((err) => {
-          console.error(`[Workflow ${workflowId}] Rerun dispatch fetch failed:`, err);
-        })
-      );
       return NextResponse.json({ workflowId, status: "queued", fromStage: stage });
     }
 

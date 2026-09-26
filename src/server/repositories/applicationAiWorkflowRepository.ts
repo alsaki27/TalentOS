@@ -208,9 +208,8 @@ export async function updateWorkflowStatus(
 // to claim+dispatch simultaneously and fire its own AI provider call at the
 // same instant. With the cap, only MAX_CONCURRENT_AI_WORKFLOWS run at a
 // time - the rest sit 'queued' and get pulled in as capacity frees up
-// (checked here and in dispatchWorkflowById's claim), i.e. processed in
-// buckets rather than all at once. Reclaiming an expired/stale 'running'
-// workflow is exempt - that's recovering dead work, not adding new load.
+// (checked here and in the explicit claim path), i.e. processed in buckets
+// rather than all at once. Stale-running recovery uses the same cap.
 
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.

@@ -16,8 +16,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { query } from "@/server/db/neon";
 import { retryWorkflow } from "@/server/services/applicationAiWorkflowService";
-import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -91,16 +89,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // One dispatch call kicks the workflow queue - the existing 5-minute
-  // dispatch-workflows cron will pick up the rest, this just doesn't make
-  // the caller wait for it.
-  if (workflowsRetried > 0) {
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, { method: "POST", headers: getWorkflowDispatchHeaders() }).catch((err) => {
-        console.error("[retry-failed-since] Dispatch kick failed:", err);
-      })
-    );
-  }
+  // Requeued workflows are picked up by the awaited one-minute Cloudflare
+  // pipeline Cron. Do not start a multi-minute AI stage through HTTP waitUntil.
 
   return NextResponse.json({
     since,

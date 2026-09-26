@@ -5,8 +5,6 @@ import {
   refreshWorkflowRoutingSnapshot,
   retryWorkflow,
 } from "@/server/services/applicationAiWorkflowService";
-import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -65,18 +63,6 @@ async function repairQueue(req: NextRequest) {
     }
   }
 
-  if (retried > 0) {
-    const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-        method: "POST",
-        headers: getWorkflowDispatchHeaders(),
-      }).catch((error) => {
-        console.error("[repair-ai-queue] Dispatcher kick failed:", error);
-      }),
-    );
-  }
-
   return NextResponse.json({
     since,
     found: workflows.length,
@@ -85,7 +71,7 @@ async function repairQueue(req: NextRequest) {
     errors,
     note: refreshQueued
       ? "Queued workflows were re-pinned to the active routing state; running workflows were left untouched for lease-safe completion."
-      : "Queued and running workflows were left for the normal lease-aware dispatcher.",
+      : "Queued and running workflows were left for the lease-aware one-minute Cloudflare dispatcher.",
   });
 }
 

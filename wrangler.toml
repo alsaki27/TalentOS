@@ -158,6 +158,7 @@ service = "skarion-crm-platform"
 # leaving [triggers] enabled causes every Cloudflare cron invocation to fail
 # with "Handler does not export a scheduled() function".
 
-# Explicitly replace any previously attached Cloudflare schedules with none.
+# Run the application AI dispatcher on an awaited Cron invocation. HTTP
+# waitUntil tasks only get 30 seconds after response; a model stage is longer.
 [triggers]
-crons = []
+crons = ["* * * * *"]

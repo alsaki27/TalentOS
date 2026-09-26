@@ -23,17 +23,23 @@ function applyHyperdrive(env) {
   process.env.DATABASE_URL = connectionString;
 }
 
-export default {
-  async fetch(request, env, ctx) {
-    const runtimeJwtSecret =
-      env?.JWT_SECRET ??
-      env?.AI_KEYS_ENCRYPTION_SECRET ??
-      process.env.JWT_SECRET ??
-      process.env.AI_KEYS_ENCRYPTION_SECRET;
-    if (typeof runtimeJwtSecret === "string" && runtimeJwtSecret.length > 0) {
-      globalThis.__TALENTOS_JWT_SECRET = runtimeJwtSecret;
-    }
-    applyHyperdrive(env);
+function applyRuntimeSecrets(env) {
+  const runtimeJwtSecret =
+    env?.JWT_SECRET ??
+    env?.AI_KEYS_ENCRYPTION_SECRET ??
+    process.env.JWT_SECRET ??
+    process.env.AI_KEYS_ENCRYPTION_SECRET;
+  if (typeof runtimeJwtSecret === "string" && runtimeJwtSecret.length > 0) {
+    globalThis.__TALENTOS_JWT_SECRET = runtimeJwtSecret;
+  }
+  if (typeof env?.CRON_SECRET === "string" && env.CRON_SECRET.length > 0) {
+    process.env.CRON_SECRET = env.CRON_SECRET;
+  }
+  applyHyperdrive(env);
+}
+
+async function handleFetch(request, env, ctx) {
+    applyRuntimeSecrets(env);
     const response = await worker.fetch(request, env, ctx);
     // Cloudflare Web Analytics injects a RUM beacon into HTML responses. The
     // beacon is routinely blocked by Brave/ad blockers as ERR_BLOCKED_BY_CLIENT
@@ -48,9 +54,31 @@ export default {
       headers.set("cache-control", `${cacheControl}, no-transform`);
     }
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    return handleFetch(request, env, ctx);
+  },
+  // One stage per minute, awaited inside the Cron event. Cloudflare waits for
+  // scheduled() (up to 15 minutes), unlike HTTP waitUntil which is cut off 30s
+  // after the response. Claim locking makes UI/GitHub/Cron overlap safe.
+  async scheduled(controller, env) {
+    if (controller.cron !== "* * * * *") return;
+    const secret = env?.CRON_SECRET;
+    if (typeof secret !== "string" || secret.length === 0) {
+      throw new Error("CRON_SECRET is required for the AI pipeline scheduled dispatcher");
+    }
+
+    const baseUrl = env?.TALENTOS_BASE_URL || "https://talent.skarion.com";
+    const response = await fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${secret}` },
+    });
+    const body = await response.text();
+    if (!response.ok) {
+      throw new Error(`AI pipeline scheduled dispatch failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
+    }
+    console.log(`[scheduled pipeline dispatch] ${body.slice(0, 500)}`);
   },
 };
-
-// GitHub Actions owns TalentOS scheduled jobs. Keep a no-op handler so a stale
-// Cloudflare Cron Trigger cannot fail the Worker or duplicate those jobs.
-export async function scheduled() {}
