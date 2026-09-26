@@ -38,8 +38,6 @@ import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigReposit
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { selectBestBaseResume } from "@/lib/ai/selectBestBaseResume";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { backgroundDispatch } from "@/server/lib/waitUntil";
-import { getWorkflowDispatchHeaders } from "@/server/lib/dispatchAuth";
 
 function sha256(input: string): string {
   let hash = 0;
@@ -448,34 +446,7 @@ export async function triggerAiWorkflowForApplication(
     matchReason: matchReason ?? undefined,
   });
 
-  await dispatchWorkflowStart(workflowId);
   return { started: true, workflowId };
-}
-
-/**
- * Kicks the freshly-created 'queued' workflow immediately via a self-fetch to
- * the dispatch endpoint, instead of leaving it for the periodic cron
- * dispatcher to eventually pick up. Also guarantees a fresh Cloudflare
- * invocation with a reset 50-subrequest limit. Shared by every code path that
- * creates a new workflow (trigger and regenerate).
- */
-async function dispatchWorkflowStart(workflowId: string): Promise<void> {
-  const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-  console.log(`[Dispatch Chain] Workflow ${workflowId} created with status ${'queued'}, stage 0. Triggering background dispatch to ${baseUrl}/api/application-ai-workflows/dispatch`);
-  await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-      method: 'POST',
-      headers: getWorkflowDispatchHeaders(),
-    }).then((res) => {
-      console.log(`[Dispatch Chain] Workflow ${workflowId} dispatch self-fetch returned status ${res.status}`);
-      return res.text().then((body) => {
-        console.log(`[Dispatch Chain] Workflow ${workflowId} dispatch self-fetch body: ${body.slice(0, 500)}`);
-      });
-    }).catch((err) => {
-      console.error(`[Workflow ${workflowId}] Initial dispatch fetch failed:`, err);
-    })
-  );
-  console.log(`[Dispatch Chain] Workflow ${workflowId} backgroundDispatch registration complete. Returning from trigger.`);
 }
 
 /**
@@ -597,7 +568,6 @@ export async function regenerateAiWorkflowForApplication(
     [applicationId]
   );
 
-  await dispatchWorkflowStart(workflowId);
   return { started: true, workflowId };
 }
 
@@ -1163,19 +1133,9 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     await continueToNextStage(workflowId, currentIdx + 1, lockVersion);
     await syncWorkflowToApplication(workflowId, "queued");
 
-    // Immediately dispatch the next stage so the pipeline doesn't stall
-    // between stages waiting for the 5-minute cron dispatcher.
-    // Making an HTTP fetch to ourselves guarantees a fresh Cloudflare invocation
-    // with a reset 50-subrequest limit.
-    const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-    await backgroundDispatch(
-      fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-        method: 'POST',
-        headers: getWorkflowDispatchHeaders(),
-      }).catch((err) => {
-        console.error(`[Workflow ${workflowId}] Continue to stage ${currentIdx + 1} fetch failed:`, err);
-      })
-    );
+    // The awaited one-minute Cloudflare Cron picks up the next queued stage.
+    // Do not launch it through HTTP waitUntil: a full stage exceeds its
+    // 30-second post-response execution window and would be orphaned.
   } catch (err: any) {
     if (!(await assertWorkflowClaim(workflowId, lockVersion))) {
       console.warn(`[Workflow ${workflowId}] ignoring failure from a superseded claim.`);
@@ -1210,15 +1170,7 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       if (!isProviderCooldown) {
         // Ordinary failures retry immediately; capacity failures wait for the
         // persisted next_retry_at window instead of hammering the same key.
-        const baseUrl = process.env.TALENTOS_BASE_URL || 'https://talent.skarion.com';
-        await backgroundDispatch(
-          fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-            method: 'POST',
-            headers: getWorkflowDispatchHeaders(),
-          }).catch((retryErr) => {
-            console.error(`[Workflow ${workflowId}] Retry dispatch fetch failed:`, retryErr);
-          })
-        );
+        // The queued retry is picked up by the awaited one-minute Cron.
       }
     } else {
       await updateWorkflowStatus(workflowId, "failed", { last_error: err.message }, lockVersion);
@@ -1328,29 +1280,7 @@ export async function dispatchWorkflowById(workflowId: string): Promise<Dispatch
   // all claim+dispatch (and fire an AI provider call) at the same instant.
   // Over the cap, the workflow just stays 'queued' - the periodic dispatcher
   // picks it up in its turn once capacity frees up.
-  const claimed = await queryOne<{ id: string; lock_version: number }>(
-    `WITH config AS MATERIALIZED (
-       SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
-       FROM ai_runtime_config WHERE singleton = true FOR UPDATE
-     ), active_count AS (
-       SELECT COUNT(*)::int AS n FROM application_ai_workflows
-       WHERE status = 'running'
-         AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
-     )
-     UPDATE application_ai_workflows w
-     SET status = 'running', claimed_at = NOW(),
-         claim_expires_at = NOW() + make_interval(secs => c.workflow_claim_ttl_seconds),
-         claimed_by = 'dispatcher', heartbeat_at = NOW(), updated_at = NOW(), lock_version = lock_version + 1
-     FROM config c, active_count ac
-     WHERE w.id = $1
-       AND (status = 'queued' OR (status = 'running' AND claim_expires_at < NOW()))
-       AND (
-         status != 'queued'
-         OR ac.n < c.workflow_max_concurrency
-       )
-    RETURNING w.id, w.lock_version`,
-    [workflowId]
-  );
+  const claimed = await claimWorkflowById(workflowId);
   if (!claimed) {
     return { dispatched: false, workflowId, stage: wf.current_stage, count: 0, message: "Workflow already claimed by another dispatcher, or at concurrency capacity" };
   }

@@ -1,12 +1,16 @@
 // Data-access abstraction for application_ai_workflows.
 
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne, execute, sql } from "@/server/db/neon";
 import type { WorkflowStatus, StageRunStatus, ApplicationAgentId, ProviderSnapshot } from "@/lib/ai/application-agents/types";
 
 // Provider calls can legitimately take a few minutes across fallback routes.
 // Keep stale recovery conservative enough to avoid reclaiming a live call,
 // while still recovering a genuinely abandoned Worker invocation.
 const STALE_HEARTBEAT_SECONDS = 300;
+// Serialize claimers in a separate statement inside the transaction so the
+// subsequent capacity check gets a fresh READ COMMITTED snapshot after any
+// competing claimer commits.
+const WORKFLOW_CLAIM_LOCK_ID = 734942901231;
 
 export interface WorkflowRow {
   id: string;
@@ -204,14 +208,15 @@ export async function updateWorkflowStatus(
 // to claim+dispatch simultaneously and fire its own AI provider call at the
 // same instant. With the cap, only MAX_CONCURRENT_AI_WORKFLOWS run at a
 // time - the rest sit 'queued' and get pulled in as capacity frees up
-// (checked here and in dispatchWorkflowById's claim), i.e. processed in
-// buckets rather than all at once. Reclaiming an expired/stale 'running'
-// workflow is exempt - that's recovering dead work, not adding new load.
+// (checked here and in the explicit claim path), i.e. processed in buckets
+// rather than all at once. Stale-running recovery uses the same cap.
 
 // ── Claim pending workflow (for async dispatcher) ──
 // Uses FOR UPDATE SKIP LOCKED for atomic claim across concurrent dispatchers.
-// RECOVERY: also reclaims running workflows whose claim lease has expired or
-// whose heartbeat has been stale for STALE_HEARTBEAT_INTERVAL. These are
+// RECOVERY: reclaims running workflows only when both the claim lease has
+// expired and its heartbeat has been stale for STALE_HEARTBEAT_INTERVAL. A
+// slow provider call must not be stolen merely because the heartbeat timer was
+// delayed or suspended while the HTTP request is in flight. These are
 // workflows abandoned by a crashed or dead dispatcher.
 //
 // Retuned 2026-09 against real ai_usage_events latency data (not a guess):
@@ -235,93 +240,98 @@ export async function updateWorkflowStatus(
 // dispatcher blip), so it should surface as a failure immediately rather
 // than silently eating up to an hour of retries before anyone notices.
 export async function claimNextPendingWorkflow(): Promise<WorkflowRow | null> {
-  const rows = await query<WorkflowRow>(
-    `WITH config AS MATERIALIZED (
-      -- Serialize concurrent dispatchers on the singleton config row. A
-      -- plain active_count snapshot lets parallel runners all pass the cap.
+  const [, rows] = await sql().transaction((tx) => [
+    tx.query("SELECT pg_advisory_xact_lock($1::bigint)", [WORKFLOW_CLAIM_LOCK_ID]),
+    tx.query<WorkflowRow>(
+      `WITH config AS MATERIALIZED (
       SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
-      FROM ai_runtime_config WHERE singleton = true FOR UPDATE
-    ), active_count AS (
-      SELECT COUNT(*)::int AS n FROM application_ai_workflows
-      WHERE status = 'running'
-        AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+      FROM ai_runtime_config WHERE singleton = true
+      ), active_count AS (
+        SELECT COUNT(*)::int AS n FROM application_ai_workflows
+        WHERE status = 'running'
+          AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+      ),
+      next_workflow AS (
+        SELECT id FROM application_ai_workflows
+        WHERE (status = 'running'
+               AND (claim_expires_at IS NULL OR claim_expires_at < NOW())
+               AND (heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')
+               AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
+           OR (status = 'queued'
+               AND (next_retry_at IS NULL OR next_retry_at <= NOW())
+               AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
+        ORDER BY
+          CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
+          created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE application_ai_workflows w
+      SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
+                        THEN 'failed'
+                        ELSE 'running'
+                   END,
+          claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+          claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
+                                  THEN NULL
+                                  ELSE NOW() + make_interval(secs => (SELECT workflow_claim_ttl_seconds FROM config))
+                             END,
+          claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
+          heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+          updated_at = NOW(),
+          lock_version = lock_version + 1,
+          recovery_count = CASE WHEN w.status = 'running'
+                                THEN recovery_count + 1
+                                ELSE recovery_count
+                           END
+      FROM next_workflow n
+      WHERE w.id = n.id
+      RETURNING w.*`,
+      []
     ),
-    next_workflow AS (
-      SELECT id FROM application_ai_workflows
-      WHERE (status = 'running' AND (
-               claim_expires_at IS NULL OR claim_expires_at < NOW()
-               OR heartbeat_at IS NULL OR heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds'
-             ))
-         OR (status = 'queued'
-             AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-             AND (SELECT n FROM active_count) < (SELECT workflow_max_concurrency FROM config))
-      ORDER BY
-        CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
-        created_at ASC
-      LIMIT 1
-      FOR UPDATE SKIP LOCKED
-    )
-    UPDATE application_ai_workflows w
-    SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
-                      THEN 'failed'
-                      ELSE 'running'
-                 END,
-        claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
-        claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running'
-                                THEN NULL
-                                ELSE NOW() + make_interval(secs => (SELECT workflow_claim_ttl_seconds FROM config))
-                           END,
-        claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
-        heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
-        updated_at = NOW(),
-        lock_version = lock_version + 1,
-        recovery_count = CASE WHEN w.status = 'running'
-                              THEN recovery_count + 1
-                              ELSE recovery_count
-                         END
-    FROM next_workflow n
-    WHERE w.id = n.id
-    RETURNING w.*`,
-    []
-  );
-  return rows[0] ?? null;
+  ]);
+  return (rows[0] as WorkflowRow | undefined) ?? null;
 }
 
 /** Claim one explicitly requested workflow through the same atomic path as
  * the scheduled dispatcher. Manual retries must not bypass backoff or the
  * concurrency cap. */
 export async function claimWorkflowById(workflowId: string): Promise<WorkflowRow | null> {
-  const rows = await query<WorkflowRow>(
-    `WITH config AS MATERIALIZED (
+  const [, rows] = await sql().transaction((tx) => [
+    tx.query("SELECT pg_advisory_xact_lock($1::bigint)", [WORKFLOW_CLAIM_LOCK_ID]),
+    tx.query<WorkflowRow>(
+      `WITH config AS MATERIALIZED (
        SELECT workflow_max_concurrency, workflow_claim_ttl_seconds
-       FROM ai_runtime_config WHERE singleton = true FOR UPDATE
-     ), active_count AS (
-       SELECT COUNT(*)::int AS n FROM application_ai_workflows
-       WHERE status = 'running'
-         AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
-     )
-     UPDATE application_ai_workflows w
-        SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN 'failed' ELSE 'running' END,
-            claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
-            claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL
-                                    ELSE NOW() + make_interval(secs => c.workflow_claim_ttl_seconds) END,
-            claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
-            heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
-            updated_at = NOW(),
-            lock_version = lock_version + 1,
-            recovery_count = CASE WHEN w.status = 'running' THEN recovery_count + 1 ELSE recovery_count END
-       FROM config c, active_count ac
-      WHERE w.id = $1
-        AND ((w.status = 'queued'
-              AND (w.next_retry_at IS NULL OR w.next_retry_at <= NOW())
-              AND (SELECT n FROM active_count) < c.workflow_max_concurrency)
-          OR (w.status = 'running'
-              AND (w.claim_expires_at IS NULL OR w.claim_expires_at < NOW())
-              AND (w.heartbeat_at IS NULL OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')))
-      RETURNING w.*`,
-    [workflowId],
-  );
-  return rows[0] ?? null;
+       FROM ai_runtime_config WHERE singleton = true
+       ), active_count AS (
+         SELECT COUNT(*)::int AS n FROM application_ai_workflows
+         WHERE status = 'running'
+           AND claim_expires_at IS NOT NULL AND claim_expires_at >= NOW()
+       )
+       UPDATE application_ai_workflows w
+          SET status = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN 'failed' ELSE 'running' END,
+              claimed_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+              claim_expires_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL
+                                      ELSE NOW() + make_interval(secs => c.workflow_claim_ttl_seconds) END,
+              claimed_by = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE 'dispatcher' END,
+              heartbeat_at = CASE WHEN w.recovery_count >= 1 AND w.status = 'running' THEN NULL ELSE NOW() END,
+              updated_at = NOW(),
+              lock_version = lock_version + 1,
+              recovery_count = CASE WHEN w.status = 'running' THEN recovery_count + 1 ELSE recovery_count END
+         FROM config c, active_count ac
+        WHERE w.id = $1
+          AND ((w.status = 'queued'
+                AND (w.next_retry_at IS NULL OR w.next_retry_at <= NOW())
+                AND (SELECT n FROM active_count) < c.workflow_max_concurrency)
+            OR (w.status = 'running'
+                AND (w.claim_expires_at IS NULL OR w.claim_expires_at < NOW())
+                AND (w.heartbeat_at IS NULL OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')
+                AND ac.n < c.workflow_max_concurrency))
+        RETURNING w.*`,
+      [workflowId],
+    ),
+  ]);
+  return (rows[0] as WorkflowRow | undefined) ?? null;
 }
 
 export async function assertWorkflowClaim(workflowId: string, lockVersion: number): Promise<boolean> {
@@ -460,8 +470,10 @@ export async function closeOrphanedStageRuns(workflowId?: string): Promise<numbe
        AND ($1::uuid IS NULL OR sr.workflow_id = $1::uuid)
        AND (
          w.status <> 'running'
-         OR w.heartbeat_at IS NULL
-         OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds'
+         OR (
+           (w.claim_expires_at IS NULL OR w.claim_expires_at < NOW())
+           AND (w.heartbeat_at IS NULL OR w.heartbeat_at < NOW() - INTERVAL '${STALE_HEARTBEAT_SECONDS} seconds')
+         )
          OR (w.claimed_at IS NOT NULL AND sr.started_at < w.claimed_at)
        )`,
     [workflowId ?? null]
