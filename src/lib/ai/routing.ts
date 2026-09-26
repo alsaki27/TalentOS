@@ -90,7 +90,7 @@ async function checkRouteHealth(
     const health = await queryOne<RouteHealthRow>(
       `SELECT
          COUNT(*) FILTER (WHERE outcome IN ('failure', 'timeout'))::int AS recent_failures,
-         COUNT(*) FILTER (WHERE error_code = 'not_found')::int AS recent_not_found,
+         COUNT(*) FILTER (WHERE error_code IN ('not_found', 'model_unavailable'))::int AS recent_not_found,
          COUNT(*) FILTER (WHERE error_code = 'auth_error')::int AS recent_auth_errors,
          COUNT(*) FILTER (WHERE error_code = 'timeout')::int AS recent_timeouts,
          COUNT(*) FILTER (WHERE error_code = 'invalid_output')::int AS recent_invalid_outputs,
@@ -797,7 +797,12 @@ export async function callWithUsageTracking<T>(
         attemptNumber: ctx?.attemptNumber ?? null,
         routeRank: resolved.routeRank,
       });
-      if (resolved.aiKeyId) await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
+      // A provider can reject one model while the credential remains valid for
+      // sibling model routes (e.g. OpenCode 403 "Model access is disabled").
+      // Do not poison the shared key's health for a model-entitlement issue.
+      if (resolved.aiKeyId && errorCode !== "model_unavailable") {
+        await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
+      }
 
       if (resolved.name === "opencode" && resolved.aiKeyId && errorCode === "rate_limit") {
         const promotion = await promoteOpenCodeFallbackOnRateLimit(resolved.aiKeyId, automationId);
@@ -815,6 +820,7 @@ export async function callWithUsageTracking<T>(
       const isRetriable = [
         "rate_limit",
         "auth_error",
+        "model_unavailable",
         "timeout",
         "server_error",
         "not_found",
@@ -823,7 +829,11 @@ export async function callWithUsageTracking<T>(
       ].includes(errorCode ?? "");
 
       if (isRetriable && attempt < MAX_RETRIES) {
-        if (errorCode === "auth_error") {
+        if (errorCode === "model_unavailable" && resolved.aiKeyId && resolved.model) {
+          // 403 model-entitlement failures are specific to the model, not the
+          // pooled credential. Keep other configured models on this key usable.
+          excludedKeyModels.add(keyModelId(resolved.aiKeyId, resolved.model));
+        } else if (errorCode === "auth_error") {
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
         } else if (
@@ -905,7 +915,11 @@ export function classifyAiErrorCode(err: any): string | null {
   const httpStatusMatch = err?.message?.match(/\((\d{3})\)/);
   if (httpStatusMatch) {
     const status = Number(httpStatusMatch[1]);
-    if (status === 401 || status === 403) return "auth_error";
+    if (status === 401) return "auth_error";
+    if (status === 403) {
+      if (isModelAccessUnavailable(msg)) return "model_unavailable";
+      return "auth_error";
+    }
     if (status === 429) return "rate_limit";
     if (status === 404) return "not_found";
     if (status === 400 || status === 422) return "configuration_error";
@@ -914,6 +928,7 @@ export function classifyAiErrorCode(err: any): string | null {
   }
 
   // ── 4. Keyword fallback for non-standard error shapes ───────────────────────
+  if (isModelAccessUnavailable(msg)) return "model_unavailable";
   if (msg.includes("aborted") || msg.includes("timed out") || msg.includes("timeout")) return "timeout";
   if (msg.includes("unauthorized") || msg.includes("invalid api key")) return "auth_error";
   if (msg.includes("rate limit") || msg.includes("quota")) return "rate_limit";
@@ -937,6 +952,16 @@ export function classifyAiErrorCode(err: any): string | null {
     msg.includes("schema validation")
   ) return "invalid_output";
   return null;
+}
+
+function isModelAccessUnavailable(message: string): boolean {
+  return (
+    message.includes("model access is disabled") ||
+    message.includes("model access disabled") ||
+    message.includes("model is not enabled") ||
+    message.includes("model is disabled for") ||
+    message.includes("account does not have access to model")
+  );
 }
 
 // Keep the internal call sites concise while exposing the classifier for a
