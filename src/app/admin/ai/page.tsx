@@ -1443,7 +1443,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                     {primary?.key_label ? (
                       <div>
                         <div>{primary.key_label}</div>
-                        <div className="text-muted">{primary.key_provider} {primary.key_model && `· ${primary.key_model}`}</div>
+                        <div className="text-muted">{primary.key_provider} {(primary.model_override || primary.key_model) && `· ${primary.model_override || primary.key_model}`}</div>
                       </div>
                     ) : <span className="text-muted">—</span>}
                   </td>
@@ -1451,7 +1451,7 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
                     {fallback1?.key_label ? (
                       <div>
                         <div>{fallback1.key_label}</div>
-                        <div className="text-muted">{fallback1.key_provider} {fallback1.model_override && ` · ${fallback1.model_override}`}</div>
+                        <div className="text-muted">{fallback1.key_provider} {(fallback1.model_override || fallback1.key_model) && ` · ${fallback1.model_override || fallback1.key_model}`}</div>
                       </div>
                     ) : <span className="text-muted">—</span>}
                   </td>
