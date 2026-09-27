@@ -149,91 +149,6 @@ function isKeyHealthBlocked(
   return Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000;
 }
 
-type OpenCodePromotionResult = { promoted_key_id: string; failed_key_id: string };
-
-/**
- * Swap a rate-limited OpenCode primary with the next eligible fallback. Pool
- * roles are credential-level metadata, so this intentionally applies to the
- * shared OpenCode pool across routing states. Changes and audit are atomic.
- */
-async function promoteOpenCodeFallbackOnRateLimit(
-  failedKeyId: string,
-  automationId: string,
-): Promise<OpenCodePromotionResult | null> {
-  try {
-    return await queryOne<OpenCodePromotionResult>(
-      `WITH pool_lock AS MATERIALIZED (
-         SELECT pg_advisory_xact_lock(hashtext('opencode-primary-pool-promotion')) AS locked
-       ), failed AS MATERIALIZED (
-         SELECT k.id, k.label, k.status
-         FROM ai_api_keys k CROSS JOIN pool_lock
-         WHERE k.id = $1
-           AND k.provider = 'opencode'
-           AND k.is_enabled = true
-           AND k.status IN ('rate_limited', 'quota_exhausted')
-           AND COALESCE(k.provider_config->>'opencode_pool_role', 'primary') = 'primary'
-         FOR UPDATE OF k
-       ), candidate AS MATERIALIZED (
-         SELECT k.id, k.label
-         FROM ai_api_keys k CROSS JOIN failed f
-         WHERE k.provider = 'opencode'
-           AND k.is_enabled = true
-           AND k.provider_config->>'opencode_pool_role' = 'fallback'
-           AND k.status NOT IN ('disabled', 'invalid', 'invalid_credential', 'admin_limit_reached')
-           AND (
-             k.status NOT IN ('rate_limited', 'quota_exhausted')
-             OR k.last_failure_at IS NULL
-             OR k.last_failure_at <= now() - interval '15 minutes'
-           )
-         ORDER BY k.priority ASC, k.created_at ASC, k.id ASC
-         LIMIT 1
-         FOR UPDATE OF k SKIP LOCKED
-       ), demoted AS (
-         UPDATE ai_api_keys k
-         SET provider_config = jsonb_set(
-               COALESCE(k.provider_config, '{}'::jsonb),
-               '{opencode_pool_role}', to_jsonb('fallback'::text), true
-             ),
-             updated_at = now()
-         FROM failed f CROSS JOIN candidate c
-         WHERE k.id = f.id
-         RETURNING k.id
-       ), promoted AS (
-         UPDATE ai_api_keys k
-         SET provider_config = jsonb_set(
-               COALESCE(k.provider_config, '{}'::jsonb),
-               '{opencode_pool_role}', to_jsonb('primary'::text), true
-             ),
-             updated_at = now()
-         FROM candidate c CROSS JOIN demoted d
-         WHERE k.id = c.id
-         RETURNING k.id, k.label
-       ), audited AS (
-         INSERT INTO ai_admin_audit_log (action, ai_key_id, automation_id, metadata)
-         SELECT 'opencode_primary_promoted_on_rate_limit', p.id, $2,
-                jsonb_build_object(
-                  'failed_key_id', f.id,
-                  'failed_key_label', f.label,
-                  'failed_key_status', f.status,
-                  'promoted_key_label', p.label,
-                  'error_code', 'rate_limit',
-                  'pool_scope', 'global_opencode_pool'
-                )
-         FROM promoted p CROSS JOIN failed f
-         RETURNING id
-       )
-       SELECT p.id::text AS promoted_key_id, f.id::text AS failed_key_id
-       FROM promoted p CROSS JOIN failed f CROSS JOIN audited`,
-      [failedKeyId, automationId],
-    );
-  } catch (error) {
-    // The normal retry/fallback remains available if operational role
-    // promotion cannot be written; leave a server-side diagnostic.
-    console.error("[routing] OpenCode primary promotion failed after rate limit:", error);
-    return null;
-  }
-}
-
 async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?: string }> {
   if (keyRow.daily_request_limit) {
     const todayCalls = await queryOne<{ count: number }>(
@@ -650,6 +565,20 @@ export async function callWithUsageTracking<T>(
 ): Promise<CallWithUsageTrackingResult<T>> {
 
   const MAX_RETRIES = Math.max(0, (ctx?.maxProviderAttempts ?? 4) - 1);
+  const runtime = await getAiRuntimeConfig();
+  // When true, an attempt only counts against MAX_RETRIES when it advances to
+  // a different route rank (a genuine model/provider chain advance). A retry
+  // that lands on the same rank (a sibling account in a pooled provider's
+  // pool, e.g. a different OpenCode credential for the same model) is
+  // instead bounded by MAX_SAME_RANK_ITERATIONS below, so a 5+ account pool
+  // can be fully tried for one model before the state's next model is ever
+  // attempted. Off by default: every retry counts against MAX_RETRIES,
+  // identical to the pre-existing behavior.
+  const boundRetriesByRouteRank = runtime.pooled_retry_bounded_by_route_rank;
+  // Runaway-loop safety valve for same-rank retries, not a tunable - today's
+  // largest configured pool is a handful of accounts.
+  const MAX_SAME_RANK_ITERATIONS = 50;
+
   const excludedKeyIds = new Set<string>(excludeKeyIds ?? []);
   const excludedProviders = new Set<string>();
   const excludedRouteIds = new Set<string>();
@@ -657,14 +586,18 @@ export async function callWithUsageTracking<T>(
 
   let lastError: Error | null = null;
   let lastResolved: AutomationRouteResult | null = null;
+  let routeAdvances = 0;
+  let sameRankRetries = 0;
+  let previousRouteRank: number | null = null;
+  let iteration = 0;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  while (true) {
     let resolved: AutomationRouteResult | null;
     try {
       resolved = await getProviderForAutomation(
         automationId,
         excludedKeyIds,
-        attempt > 0 ? excludedProviders : undefined,
+        iteration > 0 ? excludedProviders : undefined,
         excludedRouteIds,
         ctx?.routingStateId,
         excludedKeyModels,
@@ -705,6 +638,25 @@ export async function callWithUsageTracking<T>(
       }
       throw new Error(`No AI provider available for automation: ${automationId}`);
     }
+
+    // Retry-budget accounting for every resolution after the first. A
+    // same-rank resolution (a pooled provider's sibling account for the same
+    // model) is only recognized as such when the flag is on; otherwise every
+    // retry is treated as a chain advance, reproducing the pre-existing
+    // MAX_RETRIES-counts-everything behavior exactly.
+    if (iteration > 0) {
+      const isSameRank = boundRetriesByRouteRank && resolved.routeRank === previousRouteRank;
+      if (isSameRank) {
+        sameRankRetries += 1;
+        if (sameRankRetries > MAX_SAME_RANK_ITERATIONS) break;
+      } else {
+        routeAdvances += 1;
+        sameRankRetries = 0;
+        if (routeAdvances > MAX_RETRIES) break;
+      }
+    }
+    previousRouteRank = resolved.routeRank;
+    iteration += 1;
 
     lastResolved = resolved;
     const start = Date.now();
@@ -804,16 +756,6 @@ export async function callWithUsageTracking<T>(
         await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
       }
 
-      if (resolved.name === "opencode" && resolved.aiKeyId && errorCode === "rate_limit") {
-        const promotion = await promoteOpenCodeFallbackOnRateLimit(resolved.aiKeyId, automationId);
-        if (promotion) {
-          console.warn(
-            `[routing] OpenCode key ${promotion.failed_key_id} hit a rate limit; ` +
-              `promoted ${promotion.promoted_key_id} into the primary pool.`,
-          );
-        }
-      }
-
       // Provider transport failures and invalid model output are retryable.
       // Invalid output must advance the route: a model can be reachable and
       // still fail to produce the structured payload the pipeline requires.
@@ -828,7 +770,7 @@ export async function callWithUsageTracking<T>(
         "invalid_output",
       ].includes(errorCode ?? "");
 
-      if (isRetriable && attempt < MAX_RETRIES) {
+      if (isRetriable) {
         if (errorCode === "model_unavailable" && resolved.aiKeyId && resolved.model) {
           // 403 model-entitlement failures are specific to the model, not the
           // pooled credential. Keep other configured models on this key usable.
@@ -863,12 +805,13 @@ export async function callWithUsageTracking<T>(
         }
         console.warn(
           `[routing] ${automationId}: ${resolved.name}/${resolved.model ?? "default"} ` +
-            `failed with ${errorCode}, retrying (attempt ${attempt + 1}/${MAX_RETRIES})`
+            `failed with ${errorCode}, retrying (route advances ${routeAdvances}/${MAX_RETRIES}` +
+            (boundRetriesByRouteRank ? `, same-rank retries ${sameRankRetries}/${MAX_SAME_RANK_ITERATIONS})` : `)`)
         );
         continue;
       }
 
-      break; // non-retriable or out of retries
+      break; // non-retriable
     }
   }
 

@@ -256,9 +256,9 @@ describe("callWithUsageTracking error paths", () => {
     expect(resolved?.routeRank).toBe(1);
   });
 
-  it("tries the OpenCode fallback pool after the primary pool", async () => {
-    const primaryProvider = { send: vi.fn() };
-    const fallbackProvider = { send: vi.fn() };
+  it("tries the next-priority OpenCode key once the higher-priority one is excluded", async () => {
+    const higherPriorityProvider = { send: vi.fn() };
+    const lowerPriorityProvider = { send: vi.fn() };
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes("ai_automation_routes")) {
         return [{
@@ -278,8 +278,8 @@ describe("callWithUsageTracking error paths", () => {
       return null;
     });
     mockListEnabledAiKeys.mockResolvedValue([
-      { id: "opencode-primary", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working", provider_config: {} },
-      { id: "opencode-fallback", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working", provider_config: { opencode_pool_role: "fallback" } },
+      { id: "opencode-primary", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-fallback", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
     ]);
     mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
       id,
@@ -291,10 +291,10 @@ describe("callWithUsageTracking error paths", () => {
       base_url: "https://opencode.example.com/v1",
       chat_endpoint: "/chat/completions",
       custom_headers: null,
-      provider_config: id === "opencode-fallback" ? { opencode_pool_role: "fallback" } : {},
+      provider_config: {},
     }));
     mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) =>
-      key === "opencode-primary" ? primaryProvider : fallbackProvider
+      key === "opencode-primary" ? higherPriorityProvider : lowerPriorityProvider
     );
 
     const { getProviderForAutomation } = await import("@/lib/ai/routing");
@@ -307,6 +307,87 @@ describe("callWithUsageTracking error paths", () => {
     expect(first?.aiKeyId).toBe("opencode-primary");
     expect(second?.aiKeyId).toBe("opencode-fallback");
     expect(second?.routeRank).toBe(1);
+  });
+
+  it("keeps a rate-limited OpenCode account out of the pool while its cooldown is active", async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes("ai_automation_routes")
+        ? [{
+            id: "route-1",
+            automation_id: "application_resume_forge",
+            ai_key_id: "opencode-a",
+            provider: null,
+            rank: 1,
+            is_enabled: true,
+            model_override: "gpt-5.6-luna",
+          }]
+        : []
+    );
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    mockListEnabledAiKeys.mockResolvedValue([
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: new Date().toISOString() },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+      { id: "opencode-c", provider: "opencode", priority: 30, created_at: "2026-01-03", status: "working" },
+    ]);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
+      id,
+      provider: "opencode",
+      decrypted_key: id,
+      is_enabled: true,
+      status: "working",
+      model: "gpt-5.6-luna",
+      base_url: "https://opencode.example.com/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: {},
+    }));
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) => ({ send: vi.fn(), _key: key } as any));
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("application_resume_forge");
+
+    expect(resolved?.aiKeyId).not.toBe("opencode-a");
+    expect(resolved?.aiKeyId).toBe("opencode-b");
+  });
+
+  it("lets a rate-limited OpenCode account rejoin the pool once its cooldown has elapsed", async () => {
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes("ai_automation_routes")
+        ? [{
+            id: "route-1",
+            automation_id: "application_resume_forge",
+            ai_key_id: "opencode-a",
+            provider: null,
+            rank: 1,
+            is_enabled: true,
+            model_override: "gpt-5.6-luna",
+          }]
+        : []
+    );
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const sixteenMinutesAgo = new Date(Date.now() - 16 * 60_000).toISOString();
+    mockListEnabledAiKeys.mockResolvedValue([
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: sixteenMinutesAgo },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ]);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
+      id,
+      provider: "opencode",
+      decrypted_key: id,
+      is_enabled: true,
+      status: "working",
+      model: "gpt-5.6-luna",
+      base_url: "https://opencode.example.com/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: {},
+    }));
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) => ({ send: vi.fn(), _key: key } as any));
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("application_resume_forge");
+
+    expect(resolved?.aiKeyId).toBe("opencode-a");
   });
 });
 
@@ -478,67 +559,80 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
     expect(mockRecordAiKeyFailure).not.toHaveBeenCalled();
   });
 
-  it("promotes an OpenCode fallback account to primary after a primary account is rate-limited", async () => {
-    const roles = new Map<string, "primary" | "fallback">([
-      ["opencode-primary", "primary"],
-      ["opencode-fallback", "fallback"],
-    ]);
-    const primaryProvider = {
-      send: vi.fn().mockRejectedValue(new Error("OpenCode API error (429): rate limit exceeded")),
-    };
-    const fallbackProvider = {
-      send: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "valid output" }], stopReason: "end_turn" }),
-    };
+  it("tries every account in a 5-account pool for one model before advancing to the next model", async () => {
+    mockGetAiRuntimeConfig.mockResolvedValue({
+      active_routing_state_id: null,
+      allow_unrouted_fallback: false,
+      pooled_retry_bounded_by_route_rank: true,
+    });
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+      { id: "r2", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 2, is_enabled: true, model_override: "qwen3.7-plus" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keyIds = ["opencode-a", "opencode-b", "opencode-c", "opencode-d", "opencode-e"];
+    const keys = keyIds.map((id, i) => ({ id, provider: "opencode", priority: (i + 1) * 10, created_at: `2026-01-0${i + 1}`, status: "working" }));
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const k = keys.find((key) => key.id === id)!;
+      return { ...k, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    const calls: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        calls.push(`${key}:${model}`);
+        // Every account fails for the first model; only the second model succeeds.
+        if (model === "glm-5.3") throw new Error("OpenCode API error (429): rate limit exceeded");
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
 
-    mockQuery.mockImplementation(async (sql: string) => {
-      if (sql.includes("ai_automation_routes")) {
-        return [{
-          id: "route-1",
-          automation_id: "application_resume_forge",
-          ai_key_id: "opencode-primary",
-          provider: null,
-          rank: 1,
-          is_enabled: true,
-          model_override: "qwen3.7-plus",
-        }];
-      }
-      return [];
-    });
-    mockQueryOne.mockImplementation(async (sql: string) => {
-      if (sql.includes("ai_key_pool_cursors")) return { start_index: "0" };
-      if (sql.includes("opencode_primary_promoted_on_rate_limit")) {
-        roles.set("opencode-primary", "fallback");
-        roles.set("opencode-fallback", "primary");
-        return { promoted_key_id: "opencode-fallback", failed_key_id: "opencode-primary" };
-      }
-      return null;
-    });
-    mockListEnabledAiKeys.mockImplementation(async () =>
-      ["opencode-primary", "opencode-fallback"].map((id, index) => ({
-        id,
-        provider: "opencode",
-        priority: index + 1,
-        created_at: `2026-01-0${index + 1}`,
-        status: id === "opencode-primary" && roles.get(id) === "fallback" ? "rate_limited" : "working",
-        provider_config: roles.get(id) === "fallback" ? { opencode_pool_role: "fallback" } : {},
-      })) as any,
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    // maxProviderAttempts: 2 would, before this fix, cut retries off after
+    // the 2nd account - proving the 5-account pool for rank 1 is now bounded
+    // separately from the single genuine chain advance to rank 2.
+    const result = await callWithUsageTracking(
+      "application_resume_forge",
+      { maxProviderAttempts: 2 },
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
     );
-    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
-      id,
-      provider: "opencode",
-      decrypted_key: id,
-      is_enabled: true,
-      status: id === "opencode-primary" && roles.get(id) === "fallback" ? "rate_limited" : "working",
-      model: "qwen3.7-plus",
-      base_url: "https://opencode.ai/zen/go/v1",
-      chat_endpoint: "/chat/completions",
-      custom_headers: null,
-      provider_config: roles.get(id) === "fallback" ? { opencode_pool_role: "fallback" } : {},
-    }) as any);
-    mockRecordAiKeyFailure.mockResolvedValue(undefined);
-    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) =>
-      key === "opencode-primary" ? primaryProvider : fallbackProvider,
-    );
+
+    expect(calls).toEqual([
+      "opencode-a:glm-5.3", "opencode-b:glm-5.3", "opencode-c:glm-5.3",
+      "opencode-d:glm-5.3", "opencode-e:glm-5.3", "opencode-a:qwen3.7-plus",
+    ]);
+    expect(result.model).toBe("qwen3.7-plus");
+    expect(result.routeRank).toBe(2);
+  });
+
+  it("only advances routeRank once, after every pooled account for the current model has failed", async () => {
+    mockGetAiRuntimeConfig.mockResolvedValue({
+      active_routing_state_id: null,
+      allow_unrouted_fallback: false,
+      pooled_retry_bounded_by_route_rank: true,
+    });
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+      { id: "r2", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 2, is_enabled: true, model_override: "qwen3.7-plus" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keys = [
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ];
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const k = keys.find((key) => key.id === id)!;
+      return { ...k, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, _key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        if (model === "glm-5.3") throw new Error("OpenCode API error (429): rate limit exceeded");
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
 
     const { callWithUsageTracking } = await import("@/lib/ai/routing");
     const result = await callWithUsageTracking(
@@ -547,16 +641,94 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
       (provider) => provider.send({ system: "s", messages: [], tools: [] }),
     );
 
-    expect(primaryProvider.send).toHaveBeenCalledTimes(1);
-    expect(fallbackProvider.send).toHaveBeenCalledTimes(1);
-    expect(result.aiKeyId).toBe("opencode-fallback");
     expect(result.model).toBe("qwen3.7-plus");
-    expect(roles.get("opencode-fallback")).toBe("primary");
-    expect(roles.get("opencode-primary")).toBe("fallback");
-    expect(mockQueryOne).toHaveBeenCalledWith(
-      expect.stringContaining("opencode_primary_promoted_on_rate_limit"),
-      ["opencode-primary", "application_resume_forge"],
+    expect(result.routeRank).toBe(2);
+  });
+
+  it("retries the same model on a sibling OpenCode account after a 429, without advancing the chain", async () => {
+    mockGetAiRuntimeConfig.mockResolvedValue({
+      active_routing_state_id: null,
+      allow_unrouted_fallback: false,
+      pooled_retry_bounded_by_route_rank: true,
+    });
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keys = [
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ];
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const k = keys.find((key) => key.id === id)!;
+      return { ...k, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    const calls: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        calls.push(`${key}:${model}`);
+        if (key === "opencode-a") throw new Error("OpenCode API error (429): rate limit exceeded");
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    // maxProviderAttempts: 1 (zero configured retries) would, before this
+    // fix, give up immediately after account A's 429 - proving the same-rank
+    // pool retry to account B is bounded independently of the chain budget.
+    const result = await callWithUsageTracking(
+      "application_resume_forge",
+      { maxProviderAttempts: 1 },
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
     );
+
+    expect(calls).toEqual(["opencode-a:glm-5.3", "opencode-b:glm-5.3"]);
+    expect(result.aiKeyId).toBe("opencode-b");
+    expect(result.routeRank).toBe(1);
+  });
+
+  it("keeps retry state isolated between concurrent calls", async () => {
+    mockGetAiRuntimeConfig.mockResolvedValue({
+      active_routing_state_id: null,
+      allow_unrouted_fallback: false,
+      pooled_retry_bounded_by_route_rank: true,
+    });
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keys = [
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ];
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const k = keys.find((key) => key.id === id)!;
+      return { ...k, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        if (key === "opencode-a") throw new Error("OpenCode API error (429): rate limit exceeded");
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    // Real Postgres-level atomicity of the round-robin cursor's single
+    // INSERT...ON CONFLICT...RETURNING statement is a DB-engine guarantee,
+    // out of scope for this mocked unit test. What this proves: the
+    // per-call exclusion sets (plain local consts) never leak across
+    // concurrent calls to the same automation.
+    const [resultOne, resultTwo] = await Promise.all([
+      callWithUsageTracking("application_resume_forge", undefined, (provider) => provider.send({ system: "s", messages: [], tools: [] })),
+      callWithUsageTracking("application_resume_forge", undefined, (provider) => provider.send({ system: "s", messages: [], tools: [] })),
+    ]);
+
+    expect(resultOne.aiKeyId).toBe("opencode-b");
+    expect(resultTwo.aiKeyId).toBe("opencode-b");
   });
 });
 

@@ -6,6 +6,14 @@ export interface AiRuntimeConfig {
   allow_unrouted_fallback: boolean;
   workflow_max_concurrency: number;
   workflow_claim_ttl_seconds: number;
+  // When true, callWithUsageTracking only counts an attempt against
+  // maxProviderAttempts when it advances to a different route rank (a real
+  // model/provider chain advance). Same-rank retries (a sibling account in a
+  // pooled provider like OpenCode) are instead bounded by the exclusion sets
+  // emptying out, so a 5+ account pool can be fully tried for one model
+  // before the state's next model is ever attempted. Defaults false so a
+  // rollout is opt-in and instantly revertible without a deploy.
+  pooled_retry_bounded_by_route_rank: boolean;
   updated_by: string | null;
   updated_at: string | null;
 }
@@ -22,6 +30,7 @@ const DEFAULTS: AiRuntimeConfig = {
   allow_unrouted_fallback: false,
   workflow_max_concurrency: 5,
   workflow_claim_ttl_seconds: 720,
+  pooled_retry_bounded_by_route_rank: false,
   updated_by: null,
   updated_at: null,
 };
@@ -30,7 +39,8 @@ export async function getAiRuntimeConfig(): Promise<AiRuntimeConfig> {
   const row = await queryOne<AiRuntimeConfig>(
     `SELECT c.active_routing_state_id, s.name AS active_routing_state_name,
             c.allow_unrouted_fallback, c.workflow_max_concurrency,
-            c.workflow_claim_ttl_seconds, c.updated_by, c.updated_at
+            c.workflow_claim_ttl_seconds, c.pooled_retry_bounded_by_route_rank,
+            c.updated_by, c.updated_at
      FROM ai_runtime_config c
      LEFT JOIN ai_routing_states s ON s.id = c.active_routing_state_id
      WHERE c.singleton = true`
