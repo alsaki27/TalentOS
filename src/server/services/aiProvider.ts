@@ -36,6 +36,8 @@ const TEST_PROMPT = "Say 'TalentOS test OK' and nothing else.";
 const FALLBACK_MAX_TOKENS = 8192;
 
 const DEFAULT_OPENCODE_SESSION_ID = "talentos-opencode-default";
+const OPENCODE_GO_CHAT_COMPLETIONS_URL = "https://opencode.ai/zen/go/v1/chat/completions";
+const OPENCODE_LEGACY_CHAT_COMPLETIONS_URL = "https://api.opencode.ai/v1/chat/completions";
 
 function buildOpenCodeHeaders(
   customHeaders?: Record<string, string> | null,
@@ -478,6 +480,21 @@ export function buildProviderFromDbKey(
         });
       }
       const isGlm53 = /^glm-5\.3$/i.test(selectedModel);
+      const isDeepSeekV4 = /(?:^|\/)deepseek-v4-(?:flash|pro)$/i.test(selectedModel);
+      const configuredApiUrl = baseUrl ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl) : null;
+      // DeepSeek V4 Flash/Pro are OpenCode Go models. Older TalentOS key rows
+      // may still point at api.opencode.ai, which rejects these Go requests
+      // with a fast HTTP 400. Preserve intentionally configured non-OpenCode
+      // endpoints, but migrate the legacy OpenCode host and the no-URL default
+      // to the documented Go endpoint.
+      const configuredHost = (() => {
+        if (!configuredApiUrl) return null;
+        try { return new URL(configuredApiUrl).hostname.toLowerCase(); }
+        catch { return null; }
+      })();
+      const useOpenCodeGoEndpoint = isDeepSeekV4 && (
+        !configuredApiUrl || configuredHost === "api.opencode.ai"
+      );
       const normalizedReasoning = reasoningEffort && reasoningEffort !== "off" ? reasoningEffort : null;
       const deepSeekV4ProBody = /(?:^|\/)deepseek-v4-pro$/i.test(selectedModel)
         ? { thinking: { type: "enabled" }, reasoning_effort: normalizedReasoning || "high" }
@@ -492,11 +509,13 @@ export function buildProviderFromDbKey(
         ? { temperature: 1 }
         : undefined;
       return createOpenAiCompatibleProvider({
-        apiUrl: baseUrl
-          ? resolveApiUrl(baseUrl, chatEndpoint, baseUrl)
-          : isGlm53
-            ? "https://opencode.ai/zen/go/v1/chat/completions"
-            : "https://api.opencode.ai/v1/chat/completions",
+        apiUrl: configuredApiUrl
+          ? useOpenCodeGoEndpoint
+            ? OPENCODE_GO_CHAT_COMPLETIONS_URL
+            : configuredApiUrl
+          : isGlm53 || isDeepSeekV4
+            ? OPENCODE_GO_CHAT_COMPLETIONS_URL
+            : OPENCODE_LEGACY_CHAT_COMPLETIONS_URL,
         apiKey,
         model: selectedModel,
         errorLabel: "OpenCode API",

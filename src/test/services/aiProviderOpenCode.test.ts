@@ -46,6 +46,43 @@ describe("database-managed OpenCode provider", () => {
     expect(headers.get("x-opencode-session")).toBe("talentos-opencode-default");
   });
 
+  it.each(["deepseek-v4-flash", "deepseek-v4-pro"])(
+    "uses OpenCode Go's chat-completions endpoint for %s",
+    async (model) => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+      const provider = buildProviderFromDbKey("opencode", "test-key", model);
+
+      await provider!.send(request);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://opencode.ai/zen/go/v1/chat/completions",
+        expect.objectContaining({ method: "POST" }),
+      );
+      const init = fetchMock.mock.calls[0][1];
+      const body = JSON.parse(String(init?.body));
+      expect(body.model).toBe(model);
+      expect(new Headers(init?.headers).get("x-opencode-session")).toBe("talentos-opencode-default");
+    },
+  );
+
+  it("corrects a legacy OpenCode API base URL for DeepSeek V4", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+    const provider = buildProviderFromDbKey(
+      "opencode",
+      "test-key",
+      "deepseek-v4-flash",
+      "https://api.opencode.ai/v1",
+      "/chat/completions",
+    );
+
+    await provider!.send(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://opencode.ai/zen/go/v1/chat/completions",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("sends the same session header on the OpenCode Responses path", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] }), {
