@@ -391,6 +391,7 @@ export async function getProviderForAutomation(
         if (isKeyHealthBlocked(key as any)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
         if (!keyRow) continue;
+        if (excludeKeyModels?.has(keyModelId(keyRow.id, route.model_override ?? keyRow.model))) continue;
 
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
