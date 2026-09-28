@@ -28,7 +28,6 @@ import { extractInterviewDetails } from "@/lib/ai/emailInterviewExtraction";
 import { classifyGmailMessage } from "@/lib/integrations/gmailSuppression";
 import { changeApplicationStatus, emailStageTarget } from "@/server/services/applicationStatusService";
 import { loadEmailTriagePolicy, decideStatusWrite, type EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
-import { drainRecruitingContactSync, queueRecruitingContact, syncQueuedRecruitingContact } from "@/server/services/skarionCrmContactSyncService";
 
 const UNREPLIED_FOLLOWUP_HOURS = 72;
 const BACKFILL_PAGES_PER_RUN = Math.max(1, Number(process.env.GMAIL_BACKFILL_PAGES_PER_RUN || 8));
@@ -365,29 +364,6 @@ export async function triageStoredMessage(id: string, accessToken: string, polic
        WHERE id = $7::uuid`,
     [triage.relevant, triage.category, triage.confidence, triage.summary, triage.matchedApplicationId, needsReply, id]
   );
-
-  if (row.from_email && verdict.senderClass === "human") {
-    const contactType = senderRule?.sender_class === "hiring_manager"
-      ? "hiring_manager"
-      : senderRule?.sender_class === "human_recruiter"
-        ? "recruiter"
-        : ["interview_invite", "scheduling", "recruiter_reply", "application_invite"].includes(triage.category)
-          ? "recruiter"
-          : triage.category === "offer" ? "hiring_manager" : "unknown";
-    const contactEmail = row.from_email.match(/<([^>]+)>/)?.[1]?.trim().toLowerCase() || row.from_email.trim().toLowerCase();
-    await execute(
-      `UPDATE gmail_contact_profiles SET contact_type = CASE WHEN contact_type = 'unknown' OR $1::text = 'hiring_manager' THEN $1::text ELSE contact_type END WHERE candidate_id = $2::uuid AND email = $3::text`,
-      [contactType, row.candidate_id, contactEmail]
-    );
-    if (contactType !== "unknown") {
-      const matchedJob = triage.matchedApplicationId
-        ? await queryOne<{ company: string | null }>("SELECT j.company FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.id=$1", [triage.matchedApplicationId])
-        : null;
-      await queueRecruitingContact({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, email: contactEmail, displayName: row.from_email.match(/^\s*(.*?)\s*<[^>]+>/)?.[1]?.trim() || null, contactType, company: matchedJob?.company || null, subject: row.subject });
-      const queued = await queryOne<{ id: string }>("SELECT id FROM crm_contact_sync_queue WHERE candidate_id=$1 AND contact_email=$2", [row.candidate_id, contactEmail]);
-      if (queued) await syncQueuedRecruitingContact(queued.id);
-    }
-  }
 
   if (!triage.relevant) return;
   await logWorkflowEvent({ candidateId: row.candidate_id, applicationId: triage.matchedApplicationId, emailCommunicationId: id, eventType: "email_triaged_relevant", payload: { category: triage.category, confidence: triage.confidence, needsReply: triage.needsReply } });
@@ -926,7 +902,6 @@ export async function runGmailSync(options: { retryErrored?: boolean } = {}): Pr
   try { await escalateOverdueActionItems(); } catch (err: any) { console.warn(`[Gmail sync] escalateOverdueActionItems failed (non-fatal): ${err?.message || err}`); }
   try { await cleanKnownNonActionableTasks(); } catch (err: any) { console.warn(`[Gmail sync] cleanKnownNonActionableTasks failed (non-fatal): ${err?.message || err}`); }
   try { await enforceEmailRetention(); } catch (err: any) { console.warn(`[Gmail sync] enforceEmailRetention failed (non-fatal): ${err?.message || err}`); }
-  try { await drainRecruitingContactSync(25); } catch (err: any) { console.warn(`[Gmail sync] drainRecruitingContactSync failed (non-fatal): ${err?.message || err}`); }
   try { followUpsEnqueued = await enqueueOverdueFollowUps(); } catch (err: any) { console.warn(`[Gmail sync] enqueueOverdueFollowUps failed (non-fatal): ${err?.message || err}`); }
   return { accounts: outcomes, followUpsEnqueued };
 }
