@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       owner,
       priority,
       review,
-      view: view as "all" | "mine" | "ae_review" | "ae_application",
+      view: view as "all" | "mine" | "ae_review" | "ae_application" | "failed",
       workMode,
       userId: context!.profile.user_id,
       userEmail: context!.profile.email ?? null,

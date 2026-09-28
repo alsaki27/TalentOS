@@ -75,9 +75,10 @@ interface QueueStats {
   pendingAeReview: number;
   pendingAeApplication: number;
   aiPipeline: number;
+  failed: number;
 }
 
-type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow";
+type TabView = "all" | "mine" | "ae_review" | "ae_application" | "workflow" | "failed";
 
 const STATUS_ICONS: Record<string, string> = {
   assigned: "📋",
@@ -115,6 +116,17 @@ const STAGE_FILTER_LABELS: Record<string, string> = {
   offer: "🎉 Offer",
   rejected: "❌ Rejected",
   withdrawn: "🚫 Withdrawn",
+};
+
+// Mirrors the Activity <select>'s own option labels below, so the caption
+// above the stat tiles always describes the same range in the same words
+// the filter itself uses.
+const TIME_WINDOW_LABELS: Record<string, string> = {
+  "": "any time",
+  "12h": "past 12 hours",
+  "24h": "past 24 hours",
+  "3d": "past 3 days",
+  "7d": "past 7 days",
 };
 
 const AE_STAGE_STYLES: Record<string, { background: string; border: string; color: string }> = {
@@ -246,7 +258,7 @@ export default function ApplicationQueuePage() {
   const [page, setPage] = useState(1);
   const [pageSize] = useState(50);
   const [total, setTotal] = useState(0);
-  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+  const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
   const [stageFilter, setStageFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
@@ -347,7 +359,7 @@ export default function ApplicationQueuePage() {
       if (pn > tp && pn > 1) { setLoading(false); return load(tp); }
       setItems(data.items ?? []);
       setTotal(newTotal);
-      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
       if (usersRes.ok) setUsers(await usersRes.json());
       if (meRes.ok) setMe(await meRes.json());
       if (!isBackgroundPoll) {
@@ -392,12 +404,13 @@ export default function ApplicationQueuePage() {
       const res = await fetch(`/api/application-queue?${buildParams(page)}`, { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
-      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0 });
+      setStats(data.stats ?? { all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
       setTotal(data.total ?? 0);
     } catch {}
   }
 
-  var hasActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter || timeWindow);
+  var hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
+  var hasActiveFilters = hasOtherActiveFilters || Boolean(timeWindow);
 
   function clearFilters() {
     setSearchInput("");
@@ -829,6 +842,45 @@ export default function ApplicationQueuePage() {
     setFeedback({ kind: data.failed ? "error" : "success", text: data.failed ? `${data.updated} deleted; ${data.failed} failed.` : `${data.updated} applications deleted.` });
   }
 
+  // Gates the "Retry selected" button: only enabled when every currently
+  // checked row has a failed workflow, so a mixed or all-healthy selection
+  // can never trigger a bulk retry by mistake.
+  const allSelectedAreFailed = selected.size > 0 && selectedItems.every(i => i.workflow_status === "failed");
+
+  // Retries every selected ticket's failed workflow via the same
+  // retryWorkflow() the single-ticket "Retry" action and the admin
+  // retry-failed-since job use - resumes from the current stage, keeps
+  // existing progress/artifacts, no full restart (that's what "Regenerate"
+  // is for). Gated by allSelectedAreFailed above, but re-filtered here too
+  // in case the selection changed between render and click.
+  async function bulkRetrySelected() {
+    const targets = selectedItems.filter(i => i.workflow_status === "failed" && i.workflow_id);
+    if (targets.length === 0) return;
+    if (!confirm(`Retry ${targets.length} failed workflow${targets.length > 1 ? "s" : ""}? Each resumes from where it stopped - existing progress and artifacts are kept.`)) return;
+    setActionLoading("bulk:retry");
+    setFeedback(null);
+    try {
+      const res = await fetch("/api/application-queue/bulk-retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workflowIds: targets.map(i => i.workflow_id) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setFeedback({ kind: "error", text: data.error || "Bulk retry failed." }); return; }
+      for (const item of targets) {
+        patchItemLocally(item.id, { workflow_status: "queued" });
+      }
+      setSelected(new Set());
+      refreshStatsOnly();
+      const retried = typeof data.retried === "number" ? data.retried : targets.length;
+      setFeedback({ kind: "success", text: `${retried} workflow${retried === 1 ? "" : "s"} requeued for retry.` });
+    } catch (err: any) {
+      setFeedback({ kind: "error", text: err.message || "Bulk retry failed." });
+    } finally {
+      setActionLoading(null);
+    }
+  }
+
   // "Transfer to candidate" - moves every selected ticket to a different
   // candidate. Sequential (not Promise.all) so the per-ticket success/failure
   // feedback stays trustworthy under partial failure - the explicit "without
@@ -975,6 +1027,7 @@ export default function ApplicationQueuePage() {
     { key: "ae_review", label: "AE Review pending", count: stats.pendingAeReview },
     { key: "ae_application", label: "AE Application pending", count: stats.pendingAeApplication },
     { key: "workflow", label: "AI Pipeline", count: stats.aiPipeline },
+    { key: "failed", label: "Failed", count: stats.failed },
   ];
 
   return (
@@ -997,6 +1050,10 @@ export default function ApplicationQueuePage() {
           <button className="alert-close" onClick={() => setFeedback(null)}>×</button>
         </div>
       )}
+
+      <div className="page-kicker" style={{ marginBottom: 8 }}>
+        Counts below reflect every active filter (search, owner, priority, review, stage, work mode, and Activity) — currently: {TIME_WINDOW_LABELS[timeWindow]}{hasOtherActiveFilters ? ", plus other active filters" : ""}.
+      </div>
 
       <div className="stats-strip">
         {statTabs.map(t => (
@@ -1164,6 +1221,14 @@ export default function ApplicationQueuePage() {
             </div>
             <button className="btn-compact" onClick={bulkTransferCandidate} disabled={!transferTarget || transferBusy}>
               {transferBusy ? "Transferring…" : "Transfer"}
+            </button>
+            <button
+              className="btn-compact"
+              onClick={bulkRetrySelected}
+              disabled={!allSelectedAreFailed || actionLoading === "bulk:retry"}
+              title={allSelectedAreFailed ? "Retry the selected failed workflows" : "Select only failed rows to enable retry"}
+            >
+              {actionLoading === "bulk:retry" ? "⟳ Retrying..." : "↻ Retry selected"}
             </button>
             {isManager && <button className="btn-compact" onClick={bulkDelete} style={{ borderColor: "#ef4444", color: "#fca5a5" }}>Delete selected</button>}
           </div>

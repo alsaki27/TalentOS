@@ -144,7 +144,7 @@ export interface ListApplicationsQuery {
   owner?: string;
   priority?: string;
   review?: string;
-  view?: "all" | "mine" | "ae_review" | "ae_application";
+  view?: "all" | "mine" | "ae_review" | "ae_application" | "failed";
   userId?: string;
   userEmail?: string | null;
   userDisplayName?: string | null;
@@ -175,6 +175,7 @@ export interface ApplicationQueueStats {
   pendingAeReview: number;
   pendingAeApplication: number;
   aiPipeline: number;
+  failed: number;
 }
 
 export interface ApplicationQueueResult extends PaginatedApplicationsResult {
@@ -561,7 +562,7 @@ export async function listApplicationQueue(
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
     LEFT JOIN LATERAL (
-      SELECT id, status, current_stage FROM application_ai_workflows
+      SELECT id, status, current_stage, updated_at FROM application_ai_workflows
       WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
       ORDER BY created_at DESC LIMIT 1
     ) w ON true
@@ -612,10 +613,16 @@ export async function listApplicationQueue(
       AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
       AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
       AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
+      AND ($7 <> 'failed' OR w.status = 'failed')
       AND ($12 = '' OR a.candidate_id::text = $12)
       AND ($13 = '' OR a.ae_stage = $13)
       AND ($17 = '' OR a.status = $17)
-      AND ($14::int IS NULL OR a.created_at >= NOW() - ($14::int * INTERVAL '1 hour'))
+      -- The Activity window normally scopes by ticket creation time. Viewing
+      -- the Failed tab specifically means "failed within this window", not
+      -- "created within this window" (a ticket created weeks ago can fail
+      -- today on a retry) - see buildQueueStats' failed bucket below for
+      -- the matching logic in the stat-tile count.
+      AND ($14::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($14::int * INTERVAL '1 hour'))
       AND ($18 = '' OR j.work_mode = $18)
     ORDER BY ${orderBy}
     OFFSET $10 LIMIT $11
@@ -646,6 +653,11 @@ export async function listApplicationQueue(
     FROM applications a
     LEFT JOIN candidates c ON a.candidate_id = c.id
     LEFT JOIN jobs j ON a.job_id = j.id
+    LEFT JOIN LATERAL (
+      SELECT id, status, current_stage, updated_at FROM application_ai_workflows
+      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
+      ORDER BY created_at DESC LIMIT 1
+    ) w ON true
     WHERE NOT (a.status = ANY($1))
       AND (($2 = '' AND $13::int IS NULL)
         OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
@@ -664,10 +676,11 @@ export async function listApplicationQueue(
       AND ($7 <> 'ae_review' OR a.ae_stage = 'ready_for_review')
       AND ($7 <> 'ae_application' OR a.ae_stage = 'ready_for_application')
       AND ($7 <> 'workflow' OR a.ae_stage = 'in_ai_pipeline')
+      AND ($7 <> 'failed' OR w.status = 'failed')
       AND ($10 = '' OR a.candidate_id::text = $10)
       AND ($11 = '' OR a.ae_stage = $11)
       AND ($15 = '' OR a.status = $15)
-      AND ($12::int IS NULL OR a.created_at >= NOW() - ($12::int * INTERVAL '1 hour'))
+      AND ($12::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($12::int * INTERVAL '1 hour'))
       AND ($16 = '' OR j.work_mode = $16)
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
@@ -689,7 +702,22 @@ export async function listApplicationQueue(
     workMode,
   ]);
 
-  const stats = await buildQueueStats(queryParams);
+  const stats = await buildQueueStats({
+    excludeStatuses,
+    search,
+    searchParam,
+    idSearchNumber,
+    idSearchKind,
+    owner,
+    priority,
+    review,
+    candidateId: queryParams.candidateId ?? "",
+    aeStageFilter,
+    statusStageFilter,
+    workMode,
+    timeWindowHours,
+    userId: queryParams.userId ?? "",
+  });
 
   return {
     items,
@@ -700,36 +728,149 @@ export async function listApplicationQueue(
   };
 }
 
-async function buildQueueStats(params: ListApplicationsQuery): Promise<ApplicationQueueStats> {
-  const excludeStatuses = params.excludeStatuses ?? DEFAULT_EXCLUDED_STATUSES;
-  // Stats mirror listApplicationQueue's visibility: every role sees the whole
-  // queue, "mine" below stays a voluntary breakdown, not an access boundary.
-  const baseWhere = `
-    NOT (status = ANY($1))
+interface QueueStatsFilters {
+  excludeStatuses: string[];
+  search: string;
+  searchParam: string;
+  idSearchNumber: number | null;
+  idSearchKind: string;
+  owner: string;
+  priority: string;
+  review: string;
+  candidateId: string;
+  aeStageFilter: string;
+  statusStageFilter: string;
+  workMode: string;
+  timeWindowHours: number | null;
+  userId: string;
+}
+
+/**
+ * Computes the 6 top-of-queue tile counts (All / Mine / AE Review pending /
+ * AE Application pending / AI Pipeline / Failed).
+ *
+ * Every filter the caller currently has active (search incl. ID search,
+ * owner, priority, review status, stage, work mode, and the Activity
+ * time-window picker) is applied here too, via predicates that mirror
+ * listApplicationQueue's own dataSql/countSql above - so these numbers
+ * always describe exactly what's currently filtered, never a fixed
+ * all-time snapshot. Confirmed live: before this fix, picking "Past 7
+ * days" (or any other filter) correctly narrowed the table underneath but
+ * left every one of these numbers frozen at their all-time value
+ * regardless of any active filter.
+ *
+ * Deliberately kept as its own WHERE fragment rather than extracted into a
+ * shared builder with dataSql/countSql above: those are proven, currently
+ * working queries, and rewriting them to share code is a larger, riskier
+ * change than this fix calls for. If a new filter is ever added to this
+ * queue, add it in all four places (dataSql, countSql, commonWhere, and
+ * commonWhereFailed below) or this exact class of bug (a filter that
+ * narrows the list but not the tile counts) will resurface.
+ */
+async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueStats> {
+  // Every filter shared across all 5 buckets. Deliberately excludes the
+  // `view` tab itself (all/mine/ae_review/ae_application/workflow) - each
+  // bucket below defines its own membership condition instead, since that
+  // IS the distinction between the 5 tiles.
+  const commonWhere = `
+    NOT (a.status = ANY($1))
+    AND (($2 = '' AND $9::int IS NULL)
+      OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
+      OR ($9::int IS NOT NULL AND (
+        ($10 = 'any' AND (a.app_number = $9 OR c.candidate_number = $9 OR j.job_number = $9))
+        OR ($10 = 'app' AND a.app_number = $9)
+        OR ($10 = 'candidate' AND c.candidate_number = $9)
+        OR ($10 = 'job' AND j.job_number = $9)
+      )))
+    AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
+    AND ($5 = '' OR a.priority = $5)
+    AND ($6 = '' OR a.review_status = $6)
+    AND ($7 = '' OR a.candidate_id::text = $7)
+    AND ($8 = '' OR a.ae_stage = $8)
+    AND ($11::int IS NULL OR a.created_at >= NOW() - ($11::int * INTERVAL '1 hour'))
+    AND ($12 = '' OR a.status = $12)
+    AND ($13 = '' OR j.work_mode = $13)
+  `;
+  const commonParams: unknown[] = [
+    f.excludeStatuses,
+    f.search,
+    f.searchParam,
+    f.owner,
+    f.priority,
+    f.review,
+    f.candidateId,
+    f.aeStageFilter,
+    f.idSearchNumber,
+    f.idSearchKind,
+    f.timeWindowHours,
+    f.statusStageFilter,
+    f.workMode,
+  ];
+  // c/j/w are only referenced by the predicates above (w only by the
+  // failed-bucket variant below), but every bucket query needs the joins
+  // present regardless of whether that particular query uses them, since
+  // they're baked into commonWhere/commonWhereFailed.
+  const fromJoins = `
+    FROM applications a
+    LEFT JOIN candidates c ON a.candidate_id = c.id
+    LEFT JOIN jobs j ON a.job_id = j.id
+    LEFT JOIN LATERAL (
+      SELECT id, status, updated_at FROM application_ai_workflows
+      WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
+      ORDER BY created_at DESC LIMIT 1
+    ) w ON true
   `;
 
-  const baseParams = [excludeStatuses];
+  // Same as commonWhere, except the Activity time-window applies to the
+  // workflow's own failure timestamp (w.updated_at) rather than the
+  // ticket's creation time (a.created_at) - matches dataSql/countSql's
+  // `failed` view branch above. "Failed in the last 7 days" means the
+  // failure happened in that window, not that the ticket itself is that
+  // recent - a ticket created weeks ago can still fail today on a retry.
+  const commonWhereFailed = `
+    NOT (a.status = ANY($1))
+    AND (($2 = '' AND $9::int IS NULL)
+      OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
+      OR ($9::int IS NOT NULL AND (
+        ($10 = 'any' AND (a.app_number = $9 OR c.candidate_number = $9 OR j.job_number = $9))
+        OR ($10 = 'app' AND a.app_number = $9)
+        OR ($10 = 'candidate' AND c.candidate_number = $9)
+        OR ($10 = 'job' AND j.job_number = $9)
+      )))
+    AND ($4 = '' OR a.assigned_to_user_id::text = $4 OR a.assigned_to = $4)
+    AND ($5 = '' OR a.priority = $5)
+    AND ($6 = '' OR a.review_status = $6)
+    AND ($7 = '' OR a.candidate_id::text = $7)
+    AND ($8 = '' OR a.ae_stage = $8)
+    AND ($11::int IS NULL OR w.updated_at >= NOW() - ($11::int * INTERVAL '1 hour'))
+    AND ($12 = '' OR a.status = $12)
+    AND ($13 = '' OR j.work_mode = $13)
+  `;
 
-  const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow] = await Promise.all([
+  const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow, failedRow] = await Promise.all([
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere}`,
-      baseParams
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere}`,
+      commonParams
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND assigned_to_user_id::text = $2::text`,
-      [...baseParams, params.userId ?? ""]
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.assigned_to_user_id::text = $14::text`,
+      [...commonParams, f.userId]
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'ready_for_review'`,
-      baseParams
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'ready_for_review'`,
+      commonParams
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'ready_for_application'`,
-      baseParams
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'ready_for_application'`,
+      commonParams
     ),
     queryOne<{ total: number }>(
-      `SELECT COUNT(*)::int as total FROM applications WHERE ${baseWhere} AND ae_stage = 'in_ai_pipeline'`,
-      baseParams
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhere} AND a.ae_stage = 'in_ai_pipeline'`,
+      commonParams
+    ),
+    queryOne<{ total: number }>(
+      `SELECT COUNT(*)::int as total ${fromJoins} WHERE ${commonWhereFailed} AND w.status = 'failed'`,
+      commonParams
     ),
   ]);
 
@@ -739,6 +880,7 @@ async function buildQueueStats(params: ListApplicationsQuery): Promise<Applicati
     pendingAeReview: reviewRow?.total ?? 0,
     pendingAeApplication: applicationRow?.total ?? 0,
     aiPipeline: aiPipelineRow?.total ?? 0,
+    failed: failedRow?.total ?? 0,
   };
 }
 
