@@ -34,6 +34,7 @@ import {
   type ArtifactRow,
   type WorkflowRow,
 } from "@/server/repositories/applicationAiWorkflowRepository";
+import { revertAeStageForPipelineRestart } from "@/server/repositories/applicationsRepository";
 import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 import { upsertTargetJobByCandidateAndJob } from "@/server/repositories/targetJobsRepository";
 import { selectBestBaseResume } from "@/lib/ai/selectBestBaseResume";
@@ -183,6 +184,11 @@ export async function startWorkflow(input: {
     routingStateId,
     routeSnapshot,
   });
+  // No-op for a brand-new ticket (ae_stage is already 'in_ai_pipeline' at
+  // creation - see createApplications). Only actually fires for Regenerate
+  // on a ticket that had already reached 'ready_for_review' - see
+  // revertAeStageForPipelineRestart's own doc comment for why this matters.
+  await revertAeStageForPipelineRestart(input.applicationId);
   return { workflowId: wf.id };
 }
 
@@ -1451,6 +1457,7 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
     stage_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
+  await revertAeStageForPipelineRestart(wf.application_id);
 }
 
 /** Restart a failed/cancelled workflow from stage 0 (discards all progress). */
@@ -1474,6 +1481,7 @@ export async function restartWorkflow(workflowId: string): Promise<void> {
     stage_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
+  await revertAeStageForPipelineRestart(wf.application_id);
 }
 
 export async function rerunFromStage(workflowId: string, stage: number): Promise<void> {
@@ -1489,4 +1497,5 @@ export async function rerunFromStage(workflowId: string, stage: number): Promise
     stage_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
+  await revertAeStageForPipelineRestart(wf.application_id);
 }

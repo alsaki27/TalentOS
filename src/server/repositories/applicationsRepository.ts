@@ -325,6 +325,52 @@ export async function advanceAeStageAfterAiCompletion(
 }
 
 /**
+ * Mirror image of advanceAeStageAfterAiCompletion, for the opposite
+ * direction: reverts an application's AE hand-off stage back to
+ * "in_ai_pipeline" when its AI workflow is deliberately restarted (retry,
+ * restart, rerun, or regenerate) after already having reached
+ * "ready_for_review".
+ *
+ * Without this, retrying/regenerating a workflow whose ticket had already
+ * progressed left ae_stage stuck at "ready_for_review" while the workflow
+ * itself was actively queued/running again - confirmed live as the exact
+ * cause of the Application Queue's "AI Pipeline" tile and Stage filter
+ * showing 0/none even while /resume-parsing-status correctly showed 13
+ * workflows actively queued or running: all 13 were stuck at
+ * ae_stage='ready_for_review' from before their retry.
+ *
+ * Guarded to only fire from "ready_for_review" - never touches a ticket an
+ * AE has already moved further forward ("ready_for_application"/"applied"),
+ * since that represents a deliberate human decision a background pipeline
+ * restart should not undo. A no-op (nothing updated, no history row) for
+ * any other current stage, including "in_ai_pipeline" itself.
+ */
+export async function revertAeStageForPipelineRestart(applicationId: string): Promise<void> {
+  const actorName = "AI Pipeline Restart";
+  const { rowCount } = await execute(
+    `UPDATE applications
+     SET ae_stage = 'in_ai_pipeline',
+         application_stage = 'in_ai_pipeline',
+         ae_stage_updated_at = NOW(),
+         ae_stage_updated_by_user_id = NULL,
+         ae_stage_updated_by_name = $2,
+         application_stage_changed_at = NOW(),
+         application_stage_changed_by_user_id = NULL,
+         application_stage_changed_by_name = $2
+     WHERE id = $1 AND ae_stage = 'ready_for_review'`,
+    [applicationId, actorName]
+  );
+  if (rowCount > 0) {
+    await execute(
+      `INSERT INTO application_stage_history (application_id, from_stage, to_stage, changed_by_name, reason, source)
+       VALUES ($1, 'ready_for_review', 'in_ai_pipeline', $2, 'AI workflow restarted', 'ai_pipeline')
+       ON CONFLICT DO NOTHING`,
+      [applicationId, actorName]
+    );
+  }
+}
+
+/**
  * Delete an application by ID, including the candidate+job resume state that
  * outlives the row itself.
  *
