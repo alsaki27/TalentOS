@@ -197,7 +197,11 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     expect(failedCall).toBeFalsy();
   });
 
-  it("persists Hiring Panel's attached .qa onto the stage run as qa_facts (Phase 2 consumption point c)", async () => {
+  it("persists Hiring Panel's attached .qa onto the stage run as qa_facts, in a SEPARATE update from the success write (Phase 2 consumption point c)", async () => {
+    // Deliberately a separate call from the success write: a schema drift on
+    // this purely-observational column must never take the whole stage
+    // completion down with it - confirmed live (2026-09-29), see this
+    // service's own comment at the qa_facts write site.
     const qa = { ok: true, hardFailures: [], warnings: [], facts: { pageFit: null, bulletCounts: [], duplicateSkills: [], skillsOutsidePool: [], identityDrift: [], coverage: [], wordCount: 120 } };
     (callWithUsageTracking as any).mockResolvedValue(
       mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass", qa })
@@ -207,19 +211,46 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
 
     const successCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.status === "success");
     expect(successCall).toBeTruthy();
-    expect(successCall[1].qa_facts).toBe(JSON.stringify(qa));
+    expect(successCall[1].qa_facts).toBeUndefined();
+
+    const qaFactsCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.qa_facts !== undefined);
+    expect(qaFactsCall).toBeTruthy();
+    expect(qaFactsCall[1].qa_facts).toBe(JSON.stringify(qa));
   });
 
-  it("writes qa_facts as null when the stage output carries no .qa (e.g. Resume Forge)", async () => {
+  it("never even attempts a qa_facts write when the stage output carries no .qa (e.g. Resume Forge)", async () => {
     (callWithUsageTracking as any).mockResolvedValue(
       mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass" })
     );
 
     await processWorkflowStage("wf-1");
 
-    const successCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.status === "success");
-    expect(successCall).toBeTruthy();
-    expect(successCall[1].qa_facts).toBeNull();
+    const qaFactsCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.qa_facts !== undefined);
+    expect(qaFactsCall).toBeFalsy();
+  });
+
+  it("does not fail the stage when persisting qa_facts throws (e.g. the column doesn't exist yet on production)", async () => {
+    const qa = { ok: true, hardFailures: [], warnings: [], facts: { pageFit: null, bulletCounts: [], duplicateSkills: [], skillsOutsidePool: [], identityDrift: [], coverage: [], wordCount: 50 } };
+    (callWithUsageTracking as any).mockResolvedValue(
+      mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass", qa })
+    );
+    (updateStageRun as any).mockImplementation(async (_id: string, updates: any) => {
+      if (updates?.qa_facts !== undefined) {
+        throw new Error('column "qa_facts" of relation "application_ai_stage_runs" does not exist');
+      }
+      return true;
+    });
+
+    await processWorkflowStage("wf-1");
+
+    // The stage must still be marked failed here (updateStageRun's mock
+    // always resolves true for the success write in this test), and the
+    // workflow must still advance - the missing column must not surface as a
+    // stage failure at all.
+    const failedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "failed");
+    expect(failedCall).toBeFalsy();
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "queued");
+    expect(queuedCall).toBeTruthy();
   });
 
   it("allocates a new stage-run identity after a stale attempt already exists", async () => {

@@ -1145,12 +1145,6 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       });
     }
 
-    // Phase 2 consumption point (c): Hiring Panel/Final Polish attach their
-    // computed DeterministicQaResult as `.qa` on their own output (see
-    // ReviewScoreV1.qa / FinalResumeV1.qa's doc comments); Resume Forge's
-    // output ({ jobAnalysis, draft }) has no such field, so this is null for
-    // that stage - nothing to QA before a draft exists.
-    const qaFacts = (agentOutput as any)?.qa ?? null;
     await ownedStageUpdate({
       status: "success",
       provider: resolvedProviderName,
@@ -1162,9 +1156,31 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       output_tokens: resolvedOutputTokens,
       estimated_cost_usd: resolvedCostUsd,
       prompt_version: agentConfig?.prompt_version ?? null,
-      qa_facts: qaFacts ? JSON.stringify(qaFacts) : null,
       completed_at: new Date().toISOString(),
     });
+
+    // Phase 2 consumption point (c): Hiring Panel/Final Polish attach their
+    // computed DeterministicQaResult as `.qa` on their own output (see
+    // ReviewScoreV1.qa / FinalResumeV1.qa's doc comments); Resume Forge's
+    // output ({ jobAnalysis, draft }) has no such field, so this is null for
+    // that stage - nothing to QA before a draft exists.
+    //
+    // Deliberately a SEPARATE, best-effort update from the one above: this is
+    // purely observational measurement data, and bundling it into the same
+    // UPDATE meant a schema drift on this one optional column (confirmed
+    // live: qa_facts shipped in code before its migration had actually run
+    // against production) failed the ENTIRE stage completion - discarding an
+    // already-generated, already-artifact-saved resume/review over a column
+    // that exists only for reporting. Same "must never fail the pipeline
+    // stage" convention as the jobs.job_analysis cache write-back above.
+    const qaFacts = (agentOutput as any)?.qa ?? null;
+    if (qaFacts) {
+      try {
+        await updateStageRun(stageRun.id, { qa_facts: JSON.stringify(qaFacts) });
+      } catch (err: any) {
+        console.warn(`[Workflow ${workflowId}] failed to persist qa_facts for stage ${agentId} (non-fatal): ${err?.message ?? err}`);
+      }
+    }
 
     // Hiring Panel = AI quality review, not a pipeline gate. Whatever it
     // finds — including a hard-fail-grade truthfulness risk or missing
