@@ -197,6 +197,31 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     expect(failedCall).toBeFalsy();
   });
 
+  it("persists Hiring Panel's attached .qa onto the stage run as qa_facts (Phase 2 consumption point c)", async () => {
+    const qa = { ok: true, hardFailures: [], warnings: [], facts: { pageFit: null, bulletCounts: [], duplicateSkills: [], skillsOutsidePool: [], identityDrift: [], coverage: [], wordCount: 120 } };
+    (callWithUsageTracking as any).mockResolvedValue(
+      mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass", qa })
+    );
+
+    await processWorkflowStage("wf-1");
+
+    const successCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.status === "success");
+    expect(successCall).toBeTruthy();
+    expect(successCall[1].qa_facts).toBe(JSON.stringify(qa));
+  });
+
+  it("writes qa_facts as null when the stage output carries no .qa (e.g. Resume Forge)", async () => {
+    (callWithUsageTracking as any).mockResolvedValue(
+      mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass" })
+    );
+
+    await processWorkflowStage("wf-1");
+
+    const successCall = (updateStageRun as any).mock.calls.find((c: any[]) => c[1]?.status === "success");
+    expect(successCall).toBeTruthy();
+    expect(successCall[1].qa_facts).toBeNull();
+  });
+
   it("allocates a new stage-run identity after a stale attempt already exists", async () => {
     (listStageRuns as any).mockResolvedValue([{
       automation_id: "application_hiring_panel",
@@ -308,5 +333,80 @@ describe("processWorkflowStage — Hiring Panel gate", () => {
     expect(rewind?.[2]?.last_error).toContain("application_hiring_panel");
     const { finalizeWorkflow } = await import("@/lib/ai/application-agents/finalizationService");
     expect(finalizeWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+// Phase 5 (2026-09-28): a provider-capacity cooldown (rate_limit /
+// quota_exhausted) used to requeue every 15 minutes forever - it never
+// incremented stage_retry_count (provider capacity isn't a content/agent
+// attempt), so it could never reach max_attempts on its own. These tests
+// pin the new cooldown_retry_count bound.
+describe("processWorkflowStage — provider-capacity cooldown bound", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (listStageRuns as any).mockResolvedValue([]);
+    // These tests pass an explicit expectedLockVersion (to bypass the
+    // claimWorkflowById re-fetch that would overwrite the cooldown_retry_count
+    // set on findWorkflowById's mock below), which makes processWorkflowStage
+    // check `if (expectedLockVersion !== undefined && !updated) return;` after
+    // its own "running" transition - the default mock resolves to undefined
+    // (falsy), which would return before ever reaching the agent call.
+    (updateWorkflowStatus as any).mockResolvedValue(true);
+  });
+
+  function rateLimitError() {
+    return new AiRouteCallError("Provider rate limited", {
+      aiKeyId: "key-1",
+      provider: "opencode",
+      model: "glm-5.3",
+      routeRank: 1,
+      errorCode: "rate_limit",
+    });
+  }
+
+  it("requeues (not fails) and increments cooldown_retry_count while under the bound", async () => {
+    // processWorkflowStage re-claims via claimWorkflowById (overwriting `wf`)
+    // whenever status==="queued" AND no explicit lock version is passed -
+    // pass one here so findWorkflowById's mock shape (with cooldown_retry_count
+    // set) is what the function actually uses, matching the pattern the other
+    // stage-boundary tests in this file already use (processWorkflowStage("wf-1", 7)).
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 3 });
+    (callWithUsageTracking as any).mockRejectedValue(rateLimitError());
+
+    await processWorkflowStage("wf-1", 1);
+
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "queued");
+    expect(queuedCall).toBeDefined();
+    expect(queuedCall?.[2]?.cooldown_retry_count).toBe(4);
+    expect(queuedCall?.[2]?.next_retry_at).toBeTruthy();
+    const failedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "failed");
+    expect(failedCall).toBeUndefined();
+  });
+
+  it("converts to a real failure once the cooldown budget (8 cycles) is exhausted", async () => {
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 8 });
+    (callWithUsageTracking as any).mockRejectedValue(rateLimitError());
+
+    await processWorkflowStage("wf-1", 1);
+
+    const failedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "failed");
+    expect(failedCall).toBeDefined();
+    expect(failedCall?.[2]?.last_error).toContain("gave up after 8 provider-capacity cooldown cycles");
+    const queuedCall = (updateWorkflowStatus as any).mock.calls.find((c: any[]) => c[1] === "queued");
+    expect(queuedCall).toBeUndefined();
+  });
+
+  it("resets cooldown_retry_count to 0 once a stage succeeds", async () => {
+    (findWorkflowById as any).mockResolvedValue({ ...hiringPanelWorkflow(), lock_version: 1, cooldown_retry_count: 5 });
+    (callWithUsageTracking as any).mockResolvedValue(
+      mockCallResult({ atsScore: 9, recruiterScore: 9, roleFitScore: 9, truthfulnessRisk: 1, passFail: "pass" }),
+    );
+
+    await processWorkflowStage("wf-1", 1);
+
+    const advanceCall = (updateWorkflowStatus as any).mock.calls.find(
+      (c: any[]) => c[1] === "queued" && c[2]?.current_stage === 2,
+    );
+    expect(advanceCall?.[2]?.cooldown_retry_count).toBe(0);
   });
 });

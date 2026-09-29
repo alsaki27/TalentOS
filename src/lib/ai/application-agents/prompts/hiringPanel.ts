@@ -1,7 +1,13 @@
 import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
 import { readBaseSummary } from "../resumeIntegrity";
+import { projectJobAnalysisForReview, projectDraftForReview } from "../promptProjections";
 
+// `evidence` is accepted but intentionally not rendered into the prompt (B5,
+// 2026-09-28) - candidate_evidence has 0 rows in production. See
+// buildResumeForgePrompt's doc comment for the full rationale; kept here so
+// this can be re-enabled with zero plumbing changes if the table is ever
+// populated.
 export function buildHiringPanelPrompt(
   job: any,
   baseResume: any,
@@ -9,7 +15,8 @@ export function buildHiringPanelPrompt(
   jobAnalysis: any,
   sourceOfTruth: { confirmedSkills: string[] } | null = null,
   evidence: any[] = [],
-  pageMetrics: ResumePageMetrics | null = null
+  pageMetrics: ResumePageMetrics | null = null,
+  qaFactsBlock: string | null = null
 ): string {
   const pageMetricsBlock = pageMetrics
     ? `PAGE QA METRICS (measured from an actual rendered PDF of this draft — trust these over any word-count guess):
@@ -45,48 +52,35 @@ SCORING GUIDELINES (be fair and constructive — reserve low scores for genuinel
 - roleFitScore (0-10): how well does the candidate's experience align with what the role is
   actually asking for? Give credit for adjacent/transferable experience, not just exact matches.
 - truthfulnessRisk (0-10): flag ONLY genuine credential fabrication — a specific license, certification,
-  degree, or permit that appears in the draft with ZERO support in the base resume, the EVIDENCE BANK
-  below, or Source of Truth is the ONLY thing to catch (call it out as a "critical" requiredEdit).
-  The EVIDENCE BANK is pre-verified, recruiter-accepted fact about this candidate — treat every item in
-  it with the same authority as the base resume itself. A draft claim, bullet, or quantified detail that
-  is supported by an evidence bank entry is NOT a fabrication, even if it is more specific, more
-  quantified, or uses different wording than the base resume (e.g. if the evidence bank says the
-  candidate led design of "15,000 fiber miles" and the base resume only says "200+ fiber miles" for a
-  related bullet, citing the evidence bank's figure is legitimate tailoring, not a risk).
+  degree, or permit that appears in the draft with ZERO support in the base resume or Source of Truth
+  is the ONLY thing to catch (call it out as a "critical" requiredEdit).
   CRITICAL EXCLUSIONS — these are NEVER truthfulnessRisk:
     • Employment dates, start dates, or end dates copied from the base resume (even if they appear to be
       future dates or unconventional) — these come directly from the candidate's real data.
     • Reordering or rephrasing existing experience bullets.
     • Skills from Source of Truth (they are recruiter-confirmed).
-    • Any claim, number, or credential that traces to an entry in the EVIDENCE BANK below.
     • Omitting a requirement the candidate doesn't have (that is a missingRequirements item, not a risk).
     • Any formatting, date presentation, or style issue — those are formattingIssues, not truthfulnessRisk.
   Default truthfulnessRisk to 0 unless you have concrete evidence of an invented credential — meaning it
-  appears in NONE of: base resume, evidence bank, Source of Truth. A score of 5+ requires a "critical"
+  appears in NEITHER the base resume NOR Source of Truth. A score of 5+ requires a "critical"
   requiredEdit with a specific, named unsupported claim, and you must state in that requiredEdit's
-  description that you checked the evidence bank and found no support for it.
+  description that you checked the base resume and Source of Truth and found no support for it.
 - Formatting & Structure: use the PAGE QA METRICS below (measured from the actual rendered PDF) to judge page fit — not a word-count guess.
 ${pageMetricsBlock}
-  Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Verify that every experience role has between 3 and 7 bullets (max 7 bullets per role, min 3 bullets per role so no experience role vanishes or is left empty). Flag if any job title or company appears 2 times (no duplicates allowed). Flag if dates/titles were altered from base resume. Flag if skills section contains duplicate skills across categories or contains full JD sentence fragments (note: rich categories of 8-15 distinct skills are encouraged and valid). Professional summary: ${baseHasSummary
-    ? "flag it ONLY if it is missing when expected (base resume has one), or if it contains facts with no support in the base resume/evidence bank - never flag a truthful, JD-aligned summary for existing."
+  Overflow or content utilization above 97% means the draft needs trimming; utilization below 82% (with no overflow) means it's too sparse. Bullet counts, duplicate skills, duplicate roles, and any drift in titles/companies/dates against the base resume are ALREADY measured for you in DETERMINISTIC QA FACTS below — do not re-derive them from the raw JSON; just raise a requiredEdit for anything that block reports as out of range or drifted. What still needs your judgment: whether the skills section contains full JD sentence fragments rather than real skill keywords (note: rich categories of 8-15 distinct skills are encouraged and valid). Professional summary: ${baseHasSummary
+    ? "flag it ONLY if it is missing when expected (base resume has one), or if it contains facts with no support in the base resume - never flag a truthful, JD-aligned summary for existing."
     : "flag it ONLY if one is present - a summary must not be invented when the base resume has none."}
 
 Keep requiredEdits short and only for things that meaningfully matter — this list drives trimming
 in the next stage, so don't pad it with nitpicks that could cause good content to get cut.
 
-DISPOSITION RULES (CRITICAL — separate role fit from ATS keyword coverage):
-* disposition is your bottom-line call on this application: "pursue" | "review" | "deprioritize" | "reject".
-* A high atsScore must NEVER rescue an application whose roleFitScore is genuinely weak — keyword
-  coverage is not qualification. If the candidate has a major experience, credential, location,
-  security-clearance, or domain mismatch, the disposition reflects that mismatch, not the keywords.
-* Reject when: any requirementAnalysis item has status "hard_blocker" (required license/cert/clearance
-  the candidate has zero evidence for), or passFail is "fail".
-* Deprioritize when: a REQUIRED certification/credential/clearance is classified "unsupported"
-  (no evidence anywhere) even if the rest of the resume reads well.
-* Pursue when passFail is "pass" and no hard blockers exist. Review otherwise.
-* dispositionReasons: 1-4 short, fully specific phrases (max ~12 words each), e.g.
-  "No PE license evidence", "Missing OSP design years", "Strong keywords but 2 years vs 5+ required".
-  Never leave dispositionReasons empty when disposition is deprioritize or reject.
+DISPOSITION:
+* The system re-derives "disposition" itself from requirementAnalysis and passFail after you
+  respond (hard blockers and unsupported required credentials decide it, never keyword coverage),
+  so just emit your honest best guess for the field and spend no reasoning on the decision rules.
+* dispositionReasons IS yours and is kept: 1-4 short, fully specific phrases (max ~12 words each),
+  e.g. "No PE license evidence", "Missing OSP design years", "Strong keywords but 2 years vs 5+
+  required". Give reasons whenever anything counts against this application.
 
 Return a JSON object with:
 - atsScore: number 0-10
@@ -101,26 +95,27 @@ Return a JSON object with:
 - dispositionReasons: array of short, specific reason strings (required, non-empty for deprioritize/reject)
 - overallComment: brief, constructive comment
 
+DETERMINISTIC QA FACTS (computed by code, not the model that wrote this draft - trust these
+over your own re-reading of the raw JSON below for bullet counts, duplicate skills, and identity
+drift specifically; still form your own judgment on everything else, e.g. writing quality,
+role fit, and keyword relevance):
+${qaFactsBlock ?? "(unavailable for this run)"}
+
 JOB ANALYSIS:
-${JSON.stringify(jobAnalysis)}
+${JSON.stringify(projectJobAnalysisForReview(jobAnalysis))}
 
 BASE RESUME:
 ${JSON.stringify(baseResume?.content ?? {}).slice(0, 6000)}
-
-EVIDENCE BANK (pre-verified, recruiter-accepted facts about this candidate — NOT rumors or
-unverified claims; anything the draft states that traces back to an entry here is truthful):
-${JSON.stringify(evidence ?? []).slice(0, 8000)}
 
 SOURCE OF TRUTH CONTEXT (recruiter-confirmed eligible skills for this candidate):
 ${JSON.stringify((sourceOfTruth?.confirmedSkills ?? []).slice(0, 30))}
 
 IMPORTANT: Do NOT penalize the draft for skills that appear in Source of Truth above —
 those are recruiter-confirmed. Only flag fabrication risk for claims with NO basis in
-the base resume, the EVIDENCE BANK above, OR Source of Truth. Check the evidence bank
-before flagging anything as unsupported.
+the base resume OR Source of Truth.
 
 TAILORED DRAFT:
-${JSON.stringify(draft).slice(0, 12000)}
+${JSON.stringify(projectDraftForReview(draft))}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }

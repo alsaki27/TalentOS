@@ -148,6 +148,28 @@ export interface AgentContext {
   // instead of being recomputed from scratch each time.
   jobAnalysisMemo?: unknown;
   onJobAnalysis?: (analysis: unknown) => Promise<void>;
+  // Resume Forge only (set by processWorkflowStage). Phase 5 (2026-09-29):
+  // checked immediately before the OPTIONAL coverage-retry provider call (the
+  // one call in this stage whose loss is fully recoverable - skipping it just
+  // means a requirement stays reported as missing, the same outcome as a
+  // failed retry today) so a lost workflow claim stops paying for a second AI
+  // call whose output is already guaranteed to be discarded. Not applied to
+  // the stage's primary calls, which are the stage's unavoidable core work.
+  isClaimStillValid?: () => Promise<boolean>;
+  // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
+  // harness). Suppresses every write an agent would otherwise make against
+  // live data - today just Resume Forge's jobs.job_analysis cache write-back
+  // - so replaying a historical workflow can never mutate the row it read.
+  // Never set by any real pipeline run.
+  benchmarkMode?: boolean;
+  // Phase 0 A/B seam: this workflow's config_snapshot.pipelineVariant, pinned
+  // at startWorkflow() time. null for the overwhelming majority of workflows.
+  // See startWorkflow's own doc comment for how/why this gets set.
+  pipelineVariant?: string | null;
+  // Phase 5 Regenerate reuse: a prior run's requirementAnalysis, reused by
+  // resumeForge.ts's analyzeJob() when present - see startWorkflow's doc
+  // comment for how this gets populated.
+  cachedRequirementAnalysis?: unknown[] | null;
 }
 
 export interface AgentJobData {

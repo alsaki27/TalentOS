@@ -3,7 +3,7 @@
 // Uses ai_agent_configs for runtime parameters.
 
 import type { AiProvider } from "@/lib/ai/provider";
-import { callWithUsageTracking, AiRouteCallError, classifyAiErrorCode, type CallContext } from "@/lib/ai/routing";
+import { callWithUsageTracking, recordUsageEvent, AiRouteCallError, classifyAiErrorCode, type CallContext } from "@/lib/ai/routing";
 import { APPLICATION_AGENT_IDS, type ApplicationAgentId, type AgentContext, type ArtifactRecord } from "@/lib/ai/application-agents/types";
 import { SCHEMA_VERSIONS, AGENT_CONFIG_DEFAULTS } from "@/lib/ai/application-agents/constants";
 import { getSourceOfTruth } from "@/server/services/sourceOfTruthService";
@@ -149,6 +149,20 @@ export async function startWorkflow(input: {
   startedBy?: string;
   matchScore?: number;
   matchReason?: string;
+  // Phase 0 A/B seam (2026-09-28): pins this workflow to a named pipeline
+  // behavior variant for the life of the run, the same way routingStateId
+  // pins a model config. No caller sets this today - it exists so a handful
+  // of real workflows can be tagged for a canary (e.g. "final_polish_skip")
+  // via a direct UPDATE of config_snapshot, without flipping the matching
+  // global ai_runtime_config flag for all traffic. See finalPolish.ts's own
+  // check of ctx.pipelineVariant for the one consumer that exists today.
+  pipelineVariant?: string | null;
+  // Phase 5 Regenerate reuse (2026-09-29): a prior run's per-candidate
+  // requirementAnalysis, reused when regenerateAiWorkflowForApplication finds
+  // an unchanged base-resume content hash for this same application - see
+  // its own doc comment for the lookup. Skips a full AI call in
+  // resumeForge.ts's analyzeJob() when present.
+  cachedRequirementAnalysis?: unknown[] | null;
 }): Promise<{ workflowId: string }> {
   const runtime = await getAiRuntimeConfig();
   const routingStateId = runtime.active_routing_state_id ?? null;
@@ -171,6 +185,8 @@ export async function startWorkflow(input: {
     sourceOfTruth: input.sourceOfTruth ?? null,
     routingStateId,
     routeSnapshot,
+    pipelineVariant: input.pipelineVariant ?? null,
+    cachedRequirementAnalysis: input.cachedRequirementAnalysis ?? null,
   };
 
   const wf = await createWorkflow({
@@ -554,6 +570,38 @@ export async function regenerateAiWorkflowForApplication(
     }
     : null;
 
+  // Phase 5 Regenerate reuse (2026-09-29): Regenerate re-runs the whole
+  // pipeline for the SAME application, so (job, candidate) are pinned by
+  // applicationId itself - only the base resume can have changed since the
+  // last run. When its content is byte-identical to what the previous run
+  // actually analyzed (config_snapshot.baseResume is an immutable snapshot,
+  // so this compares against what was really seen, not today's row), that
+  // run's per-candidate requirementAnalysis is still exactly what this run
+  // would recompute - reuse it and skip a full AI call. Staleness tolerance
+  // deliberately matches the existing jobs.job_analysis cache: a job
+  // description edited since the prior run does not invalidate either one.
+  const priorRun = await queryOne<{ config_snapshot: any; job_lens_data: any }>(
+    `SELECT w.config_snapshot, aa.data AS job_lens_data
+       FROM application_ai_workflows w
+       JOIN application_ai_artifacts aa
+         ON aa.workflow_id = w.id AND aa.automation_id = 'application_job_lens'
+      WHERE w.application_id = $1
+      ORDER BY w.created_at DESC
+      LIMIT 1`,
+    [applicationId]
+  );
+  let cachedRequirementAnalysis: unknown[] | null = null;
+  const priorBaseContent = priorRun?.config_snapshot?.baseResume?.content;
+  const currentBaseContent = (resumeRow as any)?.content;
+  if (priorBaseContent && currentBaseContent &&
+      sha256(JSON.stringify(priorBaseContent)) === sha256(JSON.stringify(currentBaseContent))) {
+    const priorAnalysis = priorRun?.job_lens_data?.requirementAnalysis;
+    if (Array.isArray(priorAnalysis) && priorAnalysis.length > 0) {
+      cachedRequirementAnalysis = priorAnalysis;
+      console.log(`[Regenerate ${applicationId}] reusing prior requirementAnalysis (${priorAnalysis.length} requirement(s)) - base resume content unchanged`);
+    }
+  }
+
   const { workflowId } = await startWorkflow({
     applicationId,
     candidateId: appRow.candidate_id,
@@ -563,6 +611,7 @@ export async function regenerateAiWorkflowForApplication(
     verifiedSkills: candidateRow?.verified_skills ?? [],
     sourceOfTruth,
     startedBy,
+    cachedRequirementAnalysis,
   });
 
   // Mirrors the "reject and restart" review action's own convention: reset
@@ -627,6 +676,8 @@ async function buildAgentContext(wf: WorkflowRow, previousArtifacts: ArtifactRow
     verifiedSkills: snapshot.verifiedSkills ?? [],
     sourceOfTruth: snapshot.sourceOfTruth ?? null,
     previousOutputs: outputsMap,
+    pipelineVariant: typeof snapshot.pipelineVariant === "string" ? snapshot.pipelineVariant : null,
+    cachedRequirementAnalysis: Array.isArray(snapshot.cachedRequirementAnalysis) ? snapshot.cachedRequirementAnalysis : null,
   };
 }
 
@@ -639,6 +690,10 @@ async function continueToNextStage(workflowId: string, nextStage: number, lockVe
   const updated = await updateWorkflowStatus(workflowId, "queued", {
     current_stage: nextStage,
     stage_retry_count: 0,
+    // A successful stage means whatever provider-capacity issue the PREVIOUS
+    // stage may have been cooling down for has cleared - don't carry a stale
+    // cooldown count into the next stage's own budget.
+    cooldown_retry_count: 0,
   }, lockVersion);
   if (lockVersion !== undefined && !updated) {
     throw new Error("Workflow claim lost before advancing to the next stage");
@@ -933,6 +988,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
           data,
         });
       };
+      // Phase 5 claim-check-before-call: see AgentContext.isClaimStillValid's
+      // doc comment. Reuses the same heartbeat/ownership check the outer
+      // dispatch loop already relies on, so "still valid" here means exactly
+      // what it means everywhere else in this file.
+      ctx.isClaimStillValid = () => updateWorkflowHeartbeat(workflowId, lockVersion);
     }
 
     // callWithUsageTracking owns the provider fallback chain. Keep the stage
@@ -944,6 +1004,9 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
     let resolvedProviderName = "";
     let resolvedKeyId: string | null = null;
     let resolvedModel: string | null = null;
+    let resolvedInputTokens: number | null = null;
+    let resolvedOutputTokens: number | null = null;
+    let resolvedCostUsd: number | null = null;
     try {
       const callCtx: CallContext = {
         userId: wf.started_by ?? undefined,
@@ -994,6 +1057,9 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       resolvedProviderName = callResult.providerName;
       resolvedKeyId = callResult.aiKeyId;
       resolvedModel = callResult.model;
+      resolvedInputTokens = callResult.inputTokens;
+      resolvedOutputTokens = callResult.outputTokens;
+      resolvedCostUsd = callResult.estimatedCostUsd;
     } catch (err: any) {
       lastError = err;
       resolvedKeyId = null;
@@ -1005,17 +1071,42 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
 
     if (!(await assertWorkflowClaim(workflowId, lockVersion))) {
       console.warn(`[Workflow ${workflowId}] provider returned after its claim was superseded; discarding stale output.`);
+      // The provider call already succeeded and was billed - record that
+      // explicitly instead of letting the spend vanish with no trace. This
+      // is the leading hypothesis for Resume Forge/Hiring Panel/Final Polish
+      // success-count asymmetry in ai_usage_events.
+      await recordUsageEvent({
+        automationId: agentId,
+        aiKeyId: resolvedKeyId,
+        provider: resolvedProviderName || "unknown",
+        model: resolvedModel,
+        outcome: "discarded",
+        latencyMs: Date.now() - startMs,
+        inputTokens: resolvedInputTokens,
+        outputTokens: resolvedOutputTokens,
+        errorMessage: "Workflow claim superseded before output could be saved",
+        errorCode: "claim_lost",
+        userId: wf.started_by ?? null,
+        workflowId,
+        applicationId: wf.application_id,
+        attemptNumber: stageAttemptNumber,
+        routeRank: null,
+      }).catch(() => {});
       return;
     }
 
     const latencyMs = Date.now() - startMs;
 
-    if (agentConfig?.minimum_score != null && agentOutput != null && typeof agentOutput === "object" && "score" in agentOutput) {
-      const outputScore = (agentOutput as Record<string, unknown>).score;
-      if (typeof outputScore === "number" && outputScore < agentConfig.minimum_score) {
-        throw new Error(`Output score ${outputScore} below minimum threshold ${agentConfig.minimum_score}`);
-      }
-    }
+    // B8 (2026-09-28): removed a dead minimum_score gate that checked for a
+    // literal `score` key on agentOutput. None of the three real agent
+    // outputs (ResumeDraftV1, ReviewScoreV1, FinalResumeV1) has a field named
+    // exactly "score" - Hiring Panel's are atsScore/recruiterScore/
+    // roleFitScore - so this never fired in production; ai_agent_configs's
+    // minimum_score=6.0 seed for Hiring Panel was inert. Deleting rather than
+    // wiring it to a real field: the nearby design (see the Hiring Panel
+    // comment just below) is explicitly "never stop the pipeline here" -
+    // activating a hard gate would contradict that and could fail workflows
+    // that succeed today, for a config value nothing has ever enforced.
 
     // Resume Forge now also does the job-analysis work that used to be its
     // own "Job Lens" stage (see resumeForge.ts's analyzeJob()). It returns
@@ -1054,6 +1145,12 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       });
     }
 
+    // Phase 2 consumption point (c): Hiring Panel/Final Polish attach their
+    // computed DeterministicQaResult as `.qa` on their own output (see
+    // ReviewScoreV1.qa / FinalResumeV1.qa's doc comments); Resume Forge's
+    // output ({ jobAnalysis, draft }) has no such field, so this is null for
+    // that stage - nothing to QA before a draft exists.
+    const qaFacts = (agentOutput as any)?.qa ?? null;
     await ownedStageUpdate({
       status: "success",
       provider: resolvedProviderName,
@@ -1061,6 +1158,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       ai_key_id: resolvedKeyId,
       output_artifact_id: artifact.id,
       latency_ms: latencyMs,
+      input_tokens: resolvedInputTokens,
+      output_tokens: resolvedOutputTokens,
+      estimated_cost_usd: resolvedCostUsd,
+      prompt_version: agentConfig?.prompt_version ?? null,
+      qa_facts: qaFacts ? JSON.stringify(qaFacts) : null,
       completed_at: new Date().toISOString(),
     });
 
@@ -1158,15 +1260,28 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
 
     const isProviderCooldown = err instanceof AiRouteCallError &&
       ["rate_limit", "quota_exhausted"].includes(err.errorCode ?? "");
+    // Phase 5 (2026-09-28): a cooldown requeue deliberately never increments
+    // stage_retry_count (provider capacity is not a content/agent attempt),
+    // so without a separate bound it could requeue every 15 minutes forever
+    // if the provider's capacity issue never clears (a genuinely exhausted
+    // weekly quota, not a transient blip). 8 cycles = ~2 hours of patience
+    // before converting it to a real, visible failure instead of a workflow
+    // that silently never completes.
+    const MAX_COOLDOWN_RETRIES = 8;
+    const cooldownRetryCount = wf.cooldown_retry_count ?? 0;
+    const cooldownExhausted = isProviderCooldown && cooldownRetryCount >= MAX_COOLDOWN_RETRIES;
+    const shouldRequeue = isProviderCooldown ? !cooldownExhausted : retryAttemptNumber < maxAttempts;
+
     // Provider capacity is not a content/agent attempt. Even if the normal
     // max_attempts budget was already consumed, leave the stage queued behind
     // a cooldown instead of converting a temporary 429 into a terminal
-    // workflow failure.
-    if (isProviderCooldown || retryAttemptNumber < maxAttempts) {
+    // workflow failure - up to the cooldown budget above.
+    if (shouldRequeue) {
       await updateWorkflowStatus(workflowId, "queued", {
         current_stage: currentIdx,
         last_error: err.message,
         stage_retry_count: isProviderCooldown ? (wf.stage_retry_count ?? 0) : retryAttemptNumber,
+        cooldown_retry_count: isProviderCooldown ? cooldownRetryCount + 1 : cooldownRetryCount,
         next_retry_at: isProviderCooldown
           ? new Date(Date.now() + 15 * 60_000).toISOString()
           : null,
@@ -1179,8 +1294,11 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         // The queued retry is picked up by the awaited one-minute Cron.
       }
     } else {
-      await updateWorkflowStatus(workflowId, "failed", { last_error: err.message }, lockVersion);
-      await syncWorkflowToApplication(workflowId, "failed", undefined, err.message);
+      const finalMessage = cooldownExhausted
+        ? `${err.message} (gave up after ${MAX_COOLDOWN_RETRIES} provider-capacity cooldown cycles)`
+        : err.message;
+      await updateWorkflowStatus(workflowId, "failed", { last_error: finalMessage }, lockVersion);
+      await syncWorkflowToApplication(workflowId, "failed", undefined, finalMessage);
     }
   }
 }
@@ -1391,6 +1509,20 @@ export async function cancelWorkflow(workflowId: string): Promise<void> {
 }
 
 /**
+ * Terminal-fails a workflow outright, independent of its current stage or
+ * lock version - for a deliberate one-time cutover (e.g. stopping every
+ * workflow still running the old pipeline right before deploying a new one),
+ * not a normal per-stage failure path. Unlike cancelWorkflow, this leaves an
+ * explicit error message so the Application Queue UI shows why, and unlike
+ * retryWorkflow's target statuses, this can be called on a workflow that is
+ * still 'queued' or 'running' right now. See scripts/stop-inflight-workflows.ts.
+ */
+export async function failWorkflowForCutover(workflowId: string, reason: string): Promise<void> {
+  await updateWorkflowStatus(workflowId, "failed", { last_error: reason });
+  await syncWorkflowToApplication(workflowId, "failed", undefined, reason);
+}
+
+/**
  * Re-pin a workflow to the currently active routing state without touching its
  * immutable job/resume/evidence inputs or its completed stage artifacts.
  *
@@ -1455,6 +1587,7 @@ export async function retryWorkflow(workflowId: string): Promise<void> {
     last_error: null,
     next_retry_at: null,
     stage_retry_count: 0,
+    cooldown_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
   await revertAeStageForPipelineRestart(wf.application_id);
@@ -1479,6 +1612,7 @@ export async function restartWorkflow(workflowId: string): Promise<void> {
     last_error: null,
     next_retry_at: null,
     stage_retry_count: 0,
+    cooldown_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
   await revertAeStageForPipelineRestart(wf.application_id);
@@ -1495,6 +1629,7 @@ export async function rerunFromStage(workflowId: string, stage: number): Promise
     last_error: null,
     next_retry_at: null,
     stage_retry_count: 0,
+    cooldown_retry_count: 0,
   });
   await syncWorkflowToApplication(workflowId, "queued");
   await revertAeStageForPipelineRestart(wf.application_id);

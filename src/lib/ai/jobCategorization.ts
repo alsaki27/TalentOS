@@ -190,9 +190,50 @@ export async function categorizeOneJob(job: PendingJob): Promise<{ ok: boolean; 
   }
 }
 
+// Phase 6 quota-aware batching (2026-09-29). job_categorization and the
+// resume pipeline share one OpenCode weekly quota, and categorization is by
+// far the louder of the two - measured at ~17,300 attempts/week for ~3,400
+// results, against which Resume Forge's 4,752 weekly rate-limit rejections
+// were the collateral damage. Categorization is deferrable (a job sitting
+// uncategorized for one more cron cycle costs nothing); a rate-limited resume
+// stage is a customer-visible failure. So whenever the resume pipeline has
+// recently been throttled, categorization yields the shared quota back to it
+// and leaves its jobs pending for the next run.
+const RESUME_PIPELINE_AUTOMATIONS = [
+  "application_resume_forge",
+  "application_hiring_panel",
+  "application_final_polish",
+];
+const QUOTA_PRESSURE_WINDOW_MINUTES = 15;
+// One throttled resume stage can be a single unlucky call; a cluster means
+// the pool is genuinely saturated and categorization must get out of the way.
+const QUOTA_PRESSURE_FAILURE_THRESHOLD = 3;
+// Re-checked this often mid-batch so a batch already in flight yields too,
+// rather than running to completion against a pool that just saturated.
+const QUOTA_PRESSURE_RECHECK_EVERY = 10;
+
+async function resumePipelineUnderQuotaPressure(): Promise<boolean> {
+  try {
+    const row = await queryOne<{ count: number | string | null }>(
+      `SELECT COUNT(*)::int AS count
+         FROM ai_usage_events
+        WHERE automation_id = ANY($1)
+          AND error_code IN ('rate_limit', 'quota_exhausted')
+          AND created_at >= NOW() - make_interval(mins => $2)`,
+      [RESUME_PIPELINE_AUTOMATIONS, QUOTA_PRESSURE_WINDOW_MINUTES]
+    );
+    return Number(row?.count ?? 0) >= QUOTA_PRESSURE_FAILURE_THRESHOLD;
+  } catch (err: any) {
+    // Advisory telemetry only - never let a failed check stop categorization
+    // entirely, same fail-open convention as routing.ts's checkRouteHealth.
+    console.warn(`[jobCategorization] quota-pressure check unavailable; proceeding: ${err?.message ?? err}`);
+    return false;
+  }
+}
+
 export async function processPendingCategorization(
   opts: { limit?: number; triggeredBy?: string } = {}
-): Promise<{ processed: number; failed: number; remainingPending: number; updatedJobs?: any[] }> {
+): Promise<{ processed: number; failed: number; remainingPending: number; updatedJobs?: any[]; yieldedToResumePipeline?: boolean }> {
   const limit = Math.min(opts.limit ?? 200, 200);
 
   let runRow: { id: string } | null = null;
@@ -216,12 +257,28 @@ export async function processPendingCategorization(
   let failed = 0;
   let runError: string | null = null;
   let updatedJobs: any[] = [];
+  let yieldedToResumePipeline = false;
 
   if (pendingError) {
     runError = pendingError.message;
+  } else if (await resumePipelineUnderQuotaPressure()) {
+    // See RESUME_PIPELINE_AUTOMATIONS above. Jobs stay pending; the next cron
+    // run picks them up once the resume pipeline stops being throttled.
+    yieldedToResumePipeline = true;
+    runError = "skipped: yielded shared provider quota to the resume pipeline";
+    console.warn(
+      `[jobCategorization] yielding to the resume pipeline - ${QUOTA_PRESSURE_FAILURE_THRESHOLD}+ rate-limited resume stages in the last ${QUOTA_PRESSURE_WINDOW_MINUTES}m. ${(pending ?? []).length} job(s) left pending for the next run.`
+    );
   } else {
     const jobs = pending ?? [];
     for (let i = 0; i < jobs.length; i++) {
+      if (i > 0 && i % QUOTA_PRESSURE_RECHECK_EVERY === 0 && (await resumePipelineUnderQuotaPressure())) {
+        yieldedToResumePipeline = true;
+        console.warn(
+          `[jobCategorization] yielding mid-batch after ${i} job(s) - resume pipeline is being throttled. ${jobs.length - i} job(s) left pending for the next run.`
+        );
+        break;
+      }
       const { ok, result, status } = await categorizeOneJob(jobs[i] as PendingJob);
       if (ok) {
         processed++;
@@ -261,5 +318,5 @@ export async function processPendingCategorization(
   );
   remainingCount = row?.count ?? 0;
 
-  return { processed, failed, remainingPending: remainingCount, updatedJobs };
+  return { processed, failed, remainingPending: remainingCount, updatedJobs, yieldedToResumePipeline };
 }

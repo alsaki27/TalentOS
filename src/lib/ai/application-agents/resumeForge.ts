@@ -37,6 +37,7 @@ import {
 import { validateEvidenceCitations } from "./evidenceAudit";
 import { SCHEMA_VERSIONS } from "./constants";
 import { execute } from "@/server/db/neon";
+import { assertNotTruncated } from "@/lib/ai/routing";
 
 export interface ResumeForgeResult {
   jobAnalysis: JobAnalysisV1;
@@ -96,6 +97,7 @@ async function extractJobOnlyAnalysis(provider: AiProvider, options: AgentOption
     maxTokens: options.max_output_tokens,
     timeoutMs: options.timeout_ms,
   });
+  assertNotTruncated(response, "Resume Forge (job-only extraction)");
   const parsed = withCanonicalJobIdentity(extractJsonObjectForJobAnalysis(textOf(response.content)), job);
   const validated = JobAnalysisSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Job analysis validation failed: ${validated.error}`);
@@ -143,8 +145,10 @@ async function analyzeJob(options: AgentOptions, provider: AiProvider, ctx: Agen
     // Best-effort cache write-back: awaited so it reliably happens before
     // this stage returns (a Cloudflare Workers request can be torn down
     // once its response is sent), but a failure here only logs - it must
-    // never fail the pipeline stage.
-    if (jobRow?.id) {
+    // never fail the pipeline stage. Skipped entirely in benchmark/replay
+    // mode (see AgentContext.benchmarkMode) - the offline A/B harness must
+    // never mutate the live jobs row it read its input from.
+    if (jobRow?.id && !ctx.benchmarkMode) {
       try {
         await execute(
           `UPDATE jobs SET job_analysis = $1::jsonb, job_analysis_schema_version = $2, job_analysis_completed_at = NOW() WHERE id = $3`,
@@ -158,32 +162,77 @@ async function analyzeJob(options: AgentOptions, provider: AiProvider, ctx: Agen
   }
 
   // Per-candidate requirement classification - always runs fresh.
-  const reqResponse = await provider.send({
-    system: "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: buildRequirementAnalysisPrompt(jobOnly, {
-              baseResume: ctx.baseResume,
-              evidence: ctx.evidence,
-              sourceOfTruth: ctx.sourceOfTruth,
-              verifiedSkills: ctx.verifiedSkills,
-            }),
-          },
-        ],
-      },
-    ],
-    tools: [],
-    temperature: options.temperature,
-    maxTokens: options.max_output_tokens,
-    timeoutMs: options.timeout_ms,
-  });
-  const reqParsed = extractJsonObjectForJobAnalysis(textOf(reqResponse.content)) as { requirementAnalysis?: unknown };
+  //
+  // BUG FIX (B1, 2026-09-28): ctx.baseResume is the raw application_resume_versions/
+  // base_resumes row - its real skills/experience/education/certifications live
+  // under .content, not at the top level. Passing ctx.baseResume straight through
+  // made every classification prompt read "(none)" for all four fields in
+  // production (masked by a test fixture that puts them top-level). The model was
+  // then forced to guess "unsupported" for requirements the candidate actually
+  // has evidence for, which both suppresses truthful keyword coverage and can
+  // produce wrong hard_blocker labels. Same content-then-fallback pattern already
+  // used a few lines below in runResumeForge() for baseExperience/baseEducation.
+  const rawBaseContentForClassification = (ctx.baseResume as any)?.content;
+  const baseContentForClassification =
+    rawBaseContentForClassification && typeof rawBaseContentForClassification === "object" && !Array.isArray(rawBaseContentForClassification)
+      ? rawBaseContentForClassification
+      : {};
+  const classificationBaseResume = {
+    skills: Array.isArray((baseContentForClassification as any).skills) && (baseContentForClassification as any).skills.length > 0
+      ? (baseContentForClassification as any).skills
+      : Array.isArray((ctx.baseResume as any)?.skills) ? (ctx.baseResume as any).skills : [],
+    experience: Array.isArray((baseContentForClassification as any).experience) && (baseContentForClassification as any).experience.length > 0
+      ? (baseContentForClassification as any).experience
+      : Array.isArray((ctx.baseResume as any)?.experience) ? (ctx.baseResume as any).experience : [],
+    education: Array.isArray((baseContentForClassification as any).education) && (baseContentForClassification as any).education.length > 0
+      ? (baseContentForClassification as any).education
+      : Array.isArray((ctx.baseResume as any)?.education) ? (ctx.baseResume as any).education : [],
+    certifications: Array.isArray((baseContentForClassification as any).certifications) && (baseContentForClassification as any).certifications.length > 0
+      ? (baseContentForClassification as any).certifications
+      : Array.isArray((ctx.baseResume as any)?.certifications) ? (ctx.baseResume as any).certifications : [],
+  };
+  // Phase 5 Regenerate reuse (2026-09-29): regenerateAiWorkflowForApplication
+  // finds this application's most recent prior run and, when its base-resume
+  // content hash is unchanged, seeds ctx.cachedRequirementAnalysis with that
+  // run's classification - skipping a full AI call for a Regenerate click
+  // that changed nothing about (job, candidate, base resume). See
+  // startWorkflow's doc comment for how this gets populated; unset (the
+  // overwhelming majority of runs, including every non-Regenerate trigger)
+  // always falls through to the real call below, identical to today.
+  let requirementAnalysis: unknown;
+  if (Array.isArray(ctx.cachedRequirementAnalysis) && ctx.cachedRequirementAnalysis.length > 0) {
+    console.log(`[Agent:ResumeForge] requirementAnalysis cache HIT (Regenerate, unchanged base resume) - skipping requirement classification call`);
+    requirementAnalysis = ctx.cachedRequirementAnalysis;
+  } else {
+    const reqResponse = await provider.send({
+      system: "You are Job Lens, an AI that analyzes job descriptions. Return only valid JSON.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildRequirementAnalysisPrompt(jobOnly, {
+                baseResume: classificationBaseResume,
+                evidence: ctx.evidence,
+                sourceOfTruth: ctx.sourceOfTruth,
+                verifiedSkills: ctx.verifiedSkills,
+              }),
+            },
+          ],
+        },
+      ],
+      tools: [],
+      temperature: options.temperature,
+      maxTokens: options.max_output_tokens,
+      timeoutMs: options.timeout_ms,
+    });
+    assertNotTruncated(reqResponse, "Resume Forge (requirement classification)");
+    const reqParsed = extractJsonObjectForJobAnalysis(textOf(reqResponse.content)) as { requirementAnalysis?: unknown };
+    requirementAnalysis = reqParsed?.requirementAnalysis;
+  }
 
-  const merged = JobAnalysisSchema.parse({ ...jobOnly, requirementAnalysis: reqParsed?.requirementAnalysis });
+  const merged = JobAnalysisSchema.parse({ ...jobOnly, requirementAnalysis });
   if ("error" in merged) throw new Error(`Job analysis output validation failed: ${merged.error}`);
   return merged;
 }
@@ -393,6 +442,7 @@ export async function runResumeForge(
     responseMimeType: "application/json",
   });
 
+  assertNotTruncated(response, "Resume Forge (draft)");
   const parsed = parseRawJson(textOf(response.content));
   const validated = ResumeDraftSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Resume Forge output validation failed: ${validated.error}`);
@@ -418,43 +468,64 @@ export async function runResumeForge(
 
   if (missed.length > 0) {
     const missedNames = missed.map((row) => row.requirement);
+    // Phase 5: carry each missed requirement's own sourceEvidence into the
+    // retry prompt (see buildResumeForgeMissedRetryPrompt's doc comment) -
+    // requirementAnalysis is the only place this evidence exists; the
+    // coverage row itself only has the requirement name and gap reason.
+    const analysisEntries = Array.isArray(jobAnalysis.requirementAnalysis) ? jobAnalysis.requirementAnalysis : [];
+    const missedWithEvidence = missed.map((row) => ({
+      requirement: row.requirement,
+      sourceEvidence: analysisEntries.find((e) => e.requirement === row.requirement)?.sourceEvidence ?? [],
+    }));
     console.warn(
       `[Agent:ResumeForge] COVERAGE RETRY: supported requirements missed in first draft: ${missedNames.join(", ")}`
     );
-    try {
-      const retryResponse = await provider.send({
-        system: options.system_prompt ?? "You are Resume Forge, an AI that tailors resumes using only supported evidence. Return only valid JSON.",
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: buildResumeForgeMissedRetryPrompt(missedNames, validated),
-              },
-            ],
-          },
-        ],
-        tools: [],
-        temperature: options.temperature,
-        maxTokens: options.max_output_tokens,
-        timeoutMs: options.timeout_ms,
-        responseSchema: RESUME_DRAFT_JSON_SCHEMA,
-        responseMimeType: "application/json",
-      });
-      const retryParsed = parseRawJson(textOf(retryResponse.content));
-      const retryValidated = ResumeDraftSchema.parse(retryParsed);
-      if ("error" in retryValidated) {
-        console.warn(
-          `[Agent:ResumeForge] COVERAGE RETRY rejected (validation failed: ${retryValidated.error}); keeping first draft`
-        );
-      } else {
-        applyForgeGuards(retryValidated, baseContent, baseExperience, baseEducation);
-        Object.assign(validated, retryValidated);
-        console.warn("[Agent:ResumeForge] COVERAGE RETRY applied - re-checking coverage");
+    // Phase 5 claim-check-before-call: this retry is the one fully-optional
+    // provider call in this stage - skip it if the workflow's claim was
+    // already lost, rather than paying for output that's guaranteed to be
+    // discarded. A missing isClaimStillValid (e.g. the offline replay
+    // harness, which never sets it) degrades to "always fire", matching
+    // today's behavior exactly.
+    const claimStillValid = ctx.isClaimStillValid ? await ctx.isClaimStillValid() : true;
+    if (!claimStillValid) {
+      console.warn("[Agent:ResumeForge] COVERAGE RETRY skipped - workflow claim was lost, retry output would be discarded");
+    } else {
+      try {
+        const retryResponse = await provider.send({
+          system: options.system_prompt ?? "You are Resume Forge, an AI that tailors resumes using only supported evidence. Return only valid JSON.",
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: buildResumeForgeMissedRetryPrompt(missedWithEvidence, validated),
+                },
+              ],
+            },
+          ],
+          tools: [],
+          temperature: options.temperature,
+          maxTokens: options.max_output_tokens,
+          timeoutMs: options.timeout_ms,
+          responseSchema: RESUME_DRAFT_JSON_SCHEMA,
+          responseMimeType: "application/json",
+        });
+        assertNotTruncated(retryResponse, "Resume Forge (coverage retry)");
+        const retryParsed = parseRawJson(textOf(retryResponse.content));
+        const retryValidated = ResumeDraftSchema.parse(retryParsed);
+        if ("error" in retryValidated) {
+          console.warn(
+            `[Agent:ResumeForge] COVERAGE RETRY rejected (validation failed: ${retryValidated.error}); keeping first draft`
+          );
+        } else {
+          applyForgeGuards(retryValidated, baseContent, baseExperience, baseEducation);
+          Object.assign(validated, retryValidated);
+          console.warn("[Agent:ResumeForge] COVERAGE RETRY applied - re-checking coverage");
+        }
+      } catch (err: any) {
+        console.warn(`[Agent:ResumeForge] COVERAGE RETRY failed (${err?.message ?? err}); keeping first draft`);
       }
-    } catch (err: any) {
-      console.warn(`[Agent:ResumeForge] COVERAGE RETRY failed (${err?.message ?? err}); keeping first draft`);
     }
 
     coverage = buildRequirementCoverage(jobAnalysis, validated);

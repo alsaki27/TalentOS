@@ -131,6 +131,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // ── 1b. Cache check (Phase 6, 2026-09-28) ──
+    // This endpoint used to fire N uncached AI calls (one per base resume)
+    // every time the Jobs page Log modal opened for a candidate with 2+ base
+    // resumes - measured live at 272 calls/week just for this one flow, on
+    // top of contributing to the shared OpenCode quota that also starves the
+    // resume pipeline. Mirrors the exact cache contract the sibling
+    // /api/jobs/match-score route already uses: a valid (score >= 0, not an
+    // error sentinel) row in job_match_scores for this (job, candidate) pair
+    // is trusted unless force_rescore is set.
+    if (!body.force_rescore) {
+      const cached = await queryOne<{ base_resume_id: string | null; score: number; breakdown: unknown }>(
+        "SELECT base_resume_id, score, breakdown FROM job_match_scores WHERE job_id = $1 AND candidate_id = $2",
+        [job_id, candidate_id]
+      );
+      if (cached && cached.score >= 0 && cached.base_resume_id) {
+        const cachedResume = baseResumes.find((r) => r.id === cached.base_resume_id);
+        if (cachedResume) {
+          const parsedBreakdown = typeof cached.breakdown === "string" ? JSON.parse(cached.breakdown) : cached.breakdown;
+          return NextResponse.json({
+            best_resume_id: cachedResume.id,
+            best_resume_name: cachedResume.name,
+            score: cached.score,
+            breakdown: parsedBreakdown,
+            all_scores: [],
+            cache_hit: true,
+          });
+        }
+        // The cached winning resume no longer exists (deleted/renamed) -
+        // fall through and re-score for real.
+      }
+    }
+
     // ── 2. Load job description ──
     const job = await queryOne<{
       title: string;

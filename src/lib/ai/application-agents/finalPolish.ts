@@ -23,6 +23,9 @@ import {
   listEvidenceGaps,
   listMissedSupported,
 } from "./requirementCoverage";
+import { runDeterministicQa, formatDeterministicQaFacts } from "./deterministicQa";
+import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
+import { assertNotTruncated } from "@/lib/ai/routing";
 
 /**
  * Per-role minimum bullet count.
@@ -115,6 +118,7 @@ export async function runFinalPolish(
     ? rawBaseContentForPrompt
     : {};
   const draftPageMetrics = renderPolishMetrics(draft as RenderableResumeContent, baseContent);
+  const draftPageFit = mapMetricsToPageFit(draftPageMetrics);
 
   // ── DEBUG: Final Polish ─────────────────────────────────────────
   console.log("[Agent:FinalPolish] ── INPUT ────────────────────────────────────");
@@ -125,47 +129,120 @@ export async function runFinalPolish(
   console.log("[Agent:FinalPolish] ───────────────────────────────────────────────────────────");
   // ────────────────────────────────────────────────────────────────
 
-  const response = await provider.send({
-    system:
-      options.system_prompt ??
-      "You are Final Polish, an AI that applies reviewer feedback and produces a final resume. Return only valid JSON.",
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: buildFinalPolishPrompt(
-              ctx.job,
-              ctx.baseResume,
-              draft,
-              review,
-              jobAnalysis,
-              ctx.sourceOfTruth,
-              draftPageMetrics
-            ),
-          },
-        ],
-      },
-    ],
-    tools: [],
-    temperature: options.temperature,
-    maxTokens: options.max_output_tokens,
-    timeoutMs: options.timeout_ms,
-    responseSchema: FINAL_RESUME_JSON_SCHEMA,
-    responseMimeType: "application/json",
-  });
+  // Phase 4 (2026-09-28): skip the AI call entirely for a draft that's
+  // already clean. Everything below this block (identity guards, bullet
+  // padding, render+trim, export gates) still runs unchanged on whatever
+  // `parsed` turns out to be - the skip only replaces where `parsed` comes
+  // from, never the verification that follows it.
+  // A transient failure to read this optional flag must never break Final
+  // Polish itself - degrade to "skip disabled" (today's behavior) rather
+  // than propagating the error. A workflow tagged with the "final_polish_skip"
+  // pipelineVariant (see startWorkflow's doc comment) opts into the skip path
+  // on its own, regardless of the global flag - the mechanism for canarying
+  // this on a handful of real workflows before flipping the flag for everyone.
+  const skipEnabled = ctx.pipelineVariant === "final_polish_skip"
+    ? true
+    : await getAiRuntimeConfig()
+        .then((c) => c.final_polish_skip_when_clean)
+        .catch(() => false);
 
-  const raw = textOf(response.content);
-  const stripped = raw
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/i, "")
-    .trim();
-  const parsed = JSON.parse(stripped);
+  // Phase 2 consumption point (a): computed unconditionally (cheap, no AI
+  // calls) so it's available both as the Phase 4 skip gate below AND, when
+  // an AI call does happen, as a stated-facts block in that prompt - see
+  // qaFactsBlock further down.
+  const qa = runDeterministicQa({
+    draft: draft as any,
+    baseResumeContent: baseContent,
+    jobAnalysis: jobAnalysis as any,
+    evidence: ctx.evidence as any,
+    sourceOfTruth: ctx.sourceOfTruth,
+    verifiedSkills: ctx.verifiedSkills,
+    pageFit: draftPageFit,
+    job: ctx.job,
+  });
+  const qaFactsBlock = formatDeterministicQaFacts(qa);
+
+  let parsed: unknown = null;
+  let skippedAiCall = false;
+  if (skipEnabled) {
+    const requiredEdits = Array.isArray((review as any)?.requiredEdits) ? (review as any).requiredEdits : null;
+    const pageFitPasses = draftPageFit?.recommendation === "pass";
+    if (requiredEdits && requiredEdits.length === 0 && pageFitPasses) {
+      if (qa.ok) {
+        skippedAiCall = true;
+        parsed = {
+          summary: (draft as any)?.summary ?? null,
+          skills: (draft as any)?.skills ?? [],
+          experience: (draft as any)?.experience ?? [],
+          education: (draft as any)?.education ?? [],
+          certifications: (draft as any)?.certifications ?? [],
+          projects: (draft as any)?.projects ?? [],
+          appliedIssueIds: [],
+          rejectedIssueIds: [],
+          unresolvedWarnings: [],
+          // Hiring Panel already judged this draft with zero required edits;
+          // reuse its own average score rather than inventing a new number.
+          finalQaScore: (() => {
+            const scores = [(review as any)?.atsScore, (review as any)?.recruiterScore, (review as any)?.roleFitScore]
+              .filter((s) => typeof s === "number" && Number.isFinite(s));
+            return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 9;
+          })(),
+          exportReady: true,
+        };
+        console.log(
+          "[Agent:FinalPolish] SKIPPED AI CALL (final_polish_skip_when_clean): zero requiredEdits, page fit passes, deterministic QA ok:true"
+        );
+      }
+    }
+  }
+
+  if (!skippedAiCall) {
+    const response = await provider.send({
+      system:
+        options.system_prompt ??
+        "You are Final Polish, an AI that applies reviewer feedback and produces a final resume. Return only valid JSON.",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: buildFinalPolishPrompt(
+                ctx.job,
+                ctx.baseResume,
+                draft,
+                review,
+                jobAnalysis,
+                ctx.sourceOfTruth,
+                draftPageMetrics,
+                qaFactsBlock
+              ),
+            },
+          ],
+        },
+      ],
+      tools: [],
+      temperature: options.temperature,
+      maxTokens: options.max_output_tokens,
+      timeoutMs: options.timeout_ms,
+      responseSchema: FINAL_RESUME_JSON_SCHEMA,
+      responseMimeType: "application/json",
+    });
+
+    assertNotTruncated(response, "Final Polish");
+    const raw = textOf(response.content);
+    const stripped = raw
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    parsed = JSON.parse(stripped);
+  }
+
   const validated = FinalResumeSchema.parse(parsed);
   if ("error" in validated)
     throw new Error(`Final Polish output validation failed: ${validated.error}`);
+  validated.qa = qa;
 
   // ── DEBUG: Final Polish ─────────────────────────────────────────
   console.log("[Agent:FinalPolish] ── OUTPUT ───────────────────────────────────");

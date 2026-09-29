@@ -231,6 +231,7 @@ async function nextPoolIndex(provider: string, size: number): Promise<number> {
 async function getPoolKeyMetadata(
   provider: string,
   excludeKeyIds?: Set<string>,
+  benchmarkMode?: boolean,
 ): Promise<any[]> {
   const keys = (await listEnabledAiKeys())
     .filter((key) => key.provider === provider && !excludeKeyIds?.has(key.id))
@@ -242,6 +243,9 @@ async function getPoolKeyMetadata(
     });
 
   if (keys.length <= 1 || !ROUND_ROBIN_POOL_PROVIDERS.has(provider)) return keys;
+  // Benchmark/replay must never advance the live round-robin cursor - return
+  // the stable priority order instead of rotating.
+  if (benchmarkMode) return keys;
   const start = await nextPoolIndex(provider, keys.length);
   return keys.slice(start).concat(keys.slice(0, start));
 }
@@ -260,6 +264,9 @@ export async function getProviderForAutomation(
   // later route reuse the same key with a DIFFERENT model - provider quotas
   // are per model, so one exhausted model must not hide the others.
   excludeKeyModels?: Set<string>,
+  // See CallContext.benchmarkMode - suppresses every write this resolution
+  // would otherwise make (skipped/fallback usage events, pool cursor advance).
+  benchmarkMode?: boolean,
 ): Promise<AutomationRouteResult | null> {
   // 0. Mock provider takes priority when explicitly configured
   if (process.env.AI_PROVIDER === "mock") {
@@ -309,7 +316,7 @@ export async function getProviderForAutomation(
       if (!anchorProvider) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
       const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider)
-        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds)
+        ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds, benchmarkMode)
         : (anchor && !excludeKeyIds?.has(route.ai_key_id) ? [anchor] : []);
 
       for (const candidate of candidates) {
@@ -322,23 +329,25 @@ export async function getProviderForAutomation(
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
           limitSkipped = true;
-          await recordUsageEvent({
-            automationId,
-            aiKeyId: keyRow.id,
-            provider: keyRow.provider,
-            model: route.model_override ?? keyRow.model ?? null,
-            outcome: "skipped",
-            latencyMs: 0,
-            inputTokens: null,
-            outputTokens: null,
-            errorMessage: null,
-            errorCode: limitCheck.reason ?? null,
-            userId: null,
-            workflowId: null,
-            applicationId: null,
-            attemptNumber: null,
-            routeRank: route.rank,
-          });
+          if (!benchmarkMode) {
+            await recordUsageEvent({
+              automationId,
+              aiKeyId: keyRow.id,
+              provider: keyRow.provider,
+              model: route.model_override ?? keyRow.model ?? null,
+              outcome: "skipped",
+              latencyMs: 0,
+              inputTokens: null,
+              outputTokens: null,
+              errorMessage: null,
+              errorCode: limitCheck.reason ?? null,
+              userId: null,
+              workflowId: null,
+              applicationId: null,
+              attemptNumber: null,
+              routeRank: route.rank,
+            });
+          }
           continue;
         }
 
@@ -346,23 +355,25 @@ export async function getProviderForAutomation(
         const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
-          await recordUsageEvent({
-            automationId,
-            aiKeyId: keyRow.id,
-            provider: keyRow.provider,
-            model: effectiveModel ?? null,
-            outcome: "skipped",
-            latencyMs: 0,
-            inputTokens: null,
-            outputTokens: null,
-            errorMessage: null,
-            errorCode: routeHealth.reason ?? "route_health_cooldown",
-            userId: null,
-            workflowId: null,
-            applicationId: null,
-            attemptNumber: null,
-            routeRank: route.rank,
-          });
+          if (!benchmarkMode) {
+            await recordUsageEvent({
+              automationId,
+              aiKeyId: keyRow.id,
+              provider: keyRow.provider,
+              model: effectiveModel ?? null,
+              outcome: "skipped",
+              latencyMs: 0,
+              inputTokens: null,
+              outputTokens: null,
+              errorMessage: null,
+              errorCode: routeHealth.reason ?? "route_health_cooldown",
+              userId: null,
+              workflowId: null,
+              applicationId: null,
+              attemptNumber: null,
+              routeRank: route.rank,
+            });
+          }
           continue;
         }
         const provider = route.reasoning_effort
@@ -386,7 +397,7 @@ export async function getProviderForAutomation(
       // Skip this named provider if it already returned a rate-limit error.
       if (excludeProviderNames?.has(route.provider)) continue;
       // Provider-only routes resolve from Neon and never from deployment env.
-      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds);
+      const dbKeys = await getPoolKeyMetadata(route.provider, excludeKeyIds, benchmarkMode);
       for (const key of dbKeys) {
         if (isKeyHealthBlocked(key as any)) continue;
         const keyRow = await getAiKeyWithDecryptedKey(key.id);
@@ -396,23 +407,25 @@ export async function getProviderForAutomation(
         const limitCheck = await checkKeyLimits(keyRow);
         if (!limitCheck.allowed) {
           limitSkipped = true;
-          await recordUsageEvent({
-            automationId,
-            aiKeyId: keyRow.id,
-            provider: keyRow.provider,
-            model: route.model_override ?? keyRow.model ?? null,
-            outcome: "skipped",
-            latencyMs: 0,
-            inputTokens: null,
-            outputTokens: null,
-            errorMessage: null,
-            errorCode: limitCheck.reason ?? null,
-            userId: null,
-            workflowId: null,
-            applicationId: null,
-            attemptNumber: null,
-            routeRank: route.rank,
-          });
+          if (!benchmarkMode) {
+            await recordUsageEvent({
+              automationId,
+              aiKeyId: keyRow.id,
+              provider: keyRow.provider,
+              model: route.model_override ?? keyRow.model ?? null,
+              outcome: "skipped",
+              latencyMs: 0,
+              inputTokens: null,
+              outputTokens: null,
+              errorMessage: null,
+              errorCode: limitCheck.reason ?? null,
+              userId: null,
+              workflowId: null,
+              applicationId: null,
+              attemptNumber: null,
+              routeRank: route.rank,
+            });
+          }
           continue;
         }
 
@@ -420,23 +433,25 @@ export async function getProviderForAutomation(
         const routeHealth = await checkRouteHealth(automationId, keyRow.provider, effectiveModel, route.rank);
         if (routeHealth.blocked) {
           limitSkipped = true;
-          await recordUsageEvent({
-            automationId,
-            aiKeyId: keyRow.id,
-            provider: keyRow.provider,
-            model: effectiveModel ?? null,
-            outcome: "skipped",
-            latencyMs: 0,
-            inputTokens: null,
-            outputTokens: null,
-            errorMessage: null,
-            errorCode: routeHealth.reason ?? "route_health_cooldown",
-            userId: null,
-            workflowId: null,
-            applicationId: null,
-            attemptNumber: null,
-            routeRank: route.rank,
-          });
+          if (!benchmarkMode) {
+            await recordUsageEvent({
+              automationId,
+              aiKeyId: keyRow.id,
+              provider: keyRow.provider,
+              model: effectiveModel ?? null,
+              outcome: "skipped",
+              latencyMs: 0,
+              inputTokens: null,
+              outputTokens: null,
+              errorMessage: null,
+              errorCode: routeHealth.reason ?? "route_health_cooldown",
+              userId: null,
+              workflowId: null,
+              applicationId: null,
+              attemptNumber: null,
+              routeRank: route.rank,
+            });
+          }
           continue;
         }
         const dbProvider = route.reasoning_effort
@@ -470,23 +485,25 @@ export async function getProviderForAutomation(
   // Last resort: the remaining enabled Neon key pool.
   const dbFallback = await getActiveProviderWithFallback(excludeKeyIds);
   if (dbFallback && !excludeProviderNames?.has(dbFallback.name)) {
-    await recordUsageEvent({
-      automationId,
-      aiKeyId: null,
-      provider: dbFallback.name,
-      model: null,
-      outcome: "success",
-      latencyMs: 0,
-      inputTokens: null,
-      outputTokens: null,
-      errorMessage: null,
-      errorCode: "global_emergency_fallback",
-      userId: null,
-      workflowId: null,
-      applicationId: null,
-      attemptNumber: null,
-      routeRank: null,
-    });
+    if (!benchmarkMode) {
+      await recordUsageEvent({
+        automationId,
+        aiKeyId: null,
+        provider: dbFallback.name,
+        model: null,
+        outcome: "success",
+        latencyMs: 0,
+        inputTokens: null,
+        outputTokens: null,
+        errorMessage: null,
+        errorCode: "global_emergency_fallback",
+        userId: null,
+        workflowId: null,
+        applicationId: null,
+        attemptNumber: null,
+        routeRank: null,
+      });
+    }
     return {
       provider: dbFallback.provider,
       name: dbFallback.name,
@@ -512,6 +529,10 @@ export interface CallWithUsageTrackingResult<T> {
   model: string | null;
   routeRank: number | null;
   limitSkipped?: boolean;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  estimatedCostUsd: number | null;
+  latencyMs: number;
 }
 
 export class AiRouteCallError extends Error {
@@ -545,6 +566,13 @@ export interface CallContext {
   attemptNumber?: number;
   routingStateId?: string;
   maxProviderAttempts?: number;
+  // Set only by scripts/replay-pipeline-sample.ts (the offline A/B replay
+  // harness). Suppresses every write this call would otherwise make against
+  // live routing state - ai_usage_events rows, ai_api_keys health mutations,
+  // and the round-robin pool cursor - so replaying a historical stage can
+  // never perturb real routing decisions or reporting. Never set by any real
+  // pipeline run.
+  benchmarkMode?: boolean;
 }
 
 /**
@@ -602,6 +630,7 @@ export async function callWithUsageTracking<T>(
         excludedRouteIds,
         ctx?.routingStateId,
         excludedKeyModels,
+        ctx?.benchmarkMode,
       );
     } catch (routeError) {
       // Preserve provider/route metadata when the next fallback cannot resolve.
@@ -672,7 +701,14 @@ export async function callWithUsageTracking<T>(
       send: async (opts) => {
         const response = await resolved.provider.send(opts);
         if (response.usage) {
-          capturedUsage = response.usage;
+          // fn() may call send() more than once per agent run (e.g. Resume
+          // Forge's job-only extraction + requirement analysis + draft).
+          // Accumulate across every sub-call instead of overwriting, or the
+          // recorded usage event only reflects the last send.
+          capturedUsage = {
+            input_tokens: (capturedUsage?.input_tokens ?? 0) + response.usage.input_tokens,
+            output_tokens: (capturedUsage?.output_tokens ?? 0) + response.usage.output_tokens,
+          };
         }
         return response;
       },
@@ -690,24 +726,26 @@ export async function callWithUsageTracking<T>(
       const latencyMs = Date.now() - start;
       outcome = "success";
 
-      await recordUsageEvent({
-        automationId,
-        aiKeyId: resolved.aiKeyId,
-        provider: resolved.name,
-        model: resolved.model ?? null,
-        outcome,
-        latencyMs,
-        inputTokens,
-        outputTokens,
-        errorMessage,
-        errorCode,
-        userId: ctx?.userId ?? null,
-        workflowId: ctx?.workflowId ?? null,
-        applicationId: ctx?.applicationId ?? null,
-        attemptNumber: ctx?.attemptNumber ?? null,
-        routeRank: resolved.routeRank,
-      });
-      if (resolved.aiKeyId) await recordAiKeySuccess(resolved.aiKeyId).catch(() => {});
+      if (!ctx?.benchmarkMode) {
+        await recordUsageEvent({
+          automationId,
+          aiKeyId: resolved.aiKeyId,
+          provider: resolved.name,
+          model: resolved.model ?? null,
+          outcome,
+          latencyMs,
+          inputTokens,
+          outputTokens,
+          errorMessage,
+          errorCode,
+          userId: ctx?.userId ?? null,
+          workflowId: ctx?.workflowId ?? null,
+          applicationId: ctx?.applicationId ?? null,
+          attemptNumber: ctx?.attemptNumber ?? null,
+          routeRank: resolved.routeRank,
+        });
+        if (resolved.aiKeyId) await recordAiKeySuccess(resolved.aiKeyId).catch(() => {});
+      }
 
       return {
         result,
@@ -716,6 +754,10 @@ export async function callWithUsageTracking<T>(
         model: resolved.model ?? null,
         routeRank: resolved.routeRank,
         limitSkipped: resolved.limitSkipped,
+        inputTokens,
+        outputTokens,
+        estimatedCostUsd: estimateCost(resolved.name, resolved.model, inputTokens, outputTokens),
+        latencyMs,
       };
     } catch (err: any) {
       lastError = err;
@@ -733,28 +775,30 @@ export async function callWithUsageTracking<T>(
         outputTokens = u.output_tokens;
       }
 
-      await recordUsageEvent({
-        automationId,
-        aiKeyId: resolved.aiKeyId,
-        provider: resolved.name,
-        model: resolved.model ?? null,
-        outcome,
-        latencyMs,
-        inputTokens,
-        outputTokens,
-        errorMessage,
-        errorCode,
-        userId: ctx?.userId ?? null,
-        workflowId: ctx?.workflowId ?? null,
-        applicationId: ctx?.applicationId ?? null,
-        attemptNumber: ctx?.attemptNumber ?? null,
-        routeRank: resolved.routeRank,
-      });
-      // A provider can reject one model while the credential remains valid for
-      // sibling model routes (e.g. OpenCode 403 "Model access is disabled").
-      // Do not poison the shared key's health for a model-entitlement issue.
-      if (resolved.aiKeyId && errorCode !== "model_unavailable") {
-        await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
+      if (!ctx?.benchmarkMode) {
+        await recordUsageEvent({
+          automationId,
+          aiKeyId: resolved.aiKeyId,
+          provider: resolved.name,
+          model: resolved.model ?? null,
+          outcome,
+          latencyMs,
+          inputTokens,
+          outputTokens,
+          errorMessage,
+          errorCode,
+          userId: ctx?.userId ?? null,
+          workflowId: ctx?.workflowId ?? null,
+          applicationId: ctx?.applicationId ?? null,
+          attemptNumber: ctx?.attemptNumber ?? null,
+          routeRank: resolved.routeRank,
+        });
+        // A provider can reject one model while the credential remains valid for
+        // sibling model routes (e.g. OpenCode 403 "Model access is disabled").
+        // Do not poison the shared key's health for a model-entitlement issue.
+        if (resolved.aiKeyId && errorCode !== "model_unavailable") {
+          await recordAiKeyFailure(resolved.aiKeyId, errorMessage ?? "Unknown provider error").catch(() => {});
+        }
       }
 
       // Provider transport failures and invalid model output are retryable.
@@ -893,9 +937,30 @@ export function classifyAiErrorCode(err: any): string | null {
     msg.includes("invalid json") ||
     msg.includes("invalid model output") ||
     msg.includes("output validation") ||
-    msg.includes("schema validation")
+    msg.includes("schema validation") ||
+    msg.includes("stopreason: max_tokens") // assertNotTruncated() - see its own comment
   ) return "invalid_output";
   return null;
+}
+
+/**
+ * Phase 5 (2026-09-28): stopReason==="max_tokens" was never checked anywhere
+ * in the pipeline - a truncated response's cut-off JSON just threw a plain
+ * SyntaxError inside JSON.parse, classified as the generic "invalid_output"
+ * and retried on the next route with the SAME token limit, with no signal in
+ * the error message that the real cause was truncation rather than a
+ * malformed/hallucinated response. Call this before JSON.parse in every
+ * agent so the ai_usage_events row (and any human reading the log) can tell
+ * the two apart. Deliberately classifies the same as "invalid_output" today
+ * (still retryable, no behavior change) - the point of this pass is
+ * detection/diagnosis, not a token-limit escalation policy.
+ */
+export function assertNotTruncated(response: { stopReason: string }, agentLabel: string): void {
+  if (response.stopReason === "max_tokens") {
+    throw new Error(
+      `${agentLabel} output was truncated (stopReason: max_tokens) before it could be parsed as JSON - the response hit its token limit, this is not malformed output.`
+    );
+  }
 }
 
 function isModelAccessUnavailable(message: string): boolean {
@@ -912,12 +977,12 @@ function isModelAccessUnavailable(message: string): boolean {
 // small regression test without exposing routing internals.
 const classifyErrorCode = classifyAiErrorCode;
 
-interface UsageEventInput {
+export interface UsageEventInput {
   automationId: string;
   aiKeyId: string | null;
   provider: string;
   model: string | null;
-  outcome: "success" | "failure" | "timeout" | "skipped";
+  outcome: "success" | "failure" | "timeout" | "skipped" | "discarded";
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -930,7 +995,7 @@ interface UsageEventInput {
   routeRank: number | null;
 }
 
-async function recordUsageEvent(input: UsageEventInput): Promise<void> {
+export async function recordUsageEvent(input: UsageEventInput): Promise<void> {
   const cost = estimateCost(input.provider, input.model, input.inputTokens, input.outputTokens);
 
   // This is analytics/usage tracking, not business-critical data - it must

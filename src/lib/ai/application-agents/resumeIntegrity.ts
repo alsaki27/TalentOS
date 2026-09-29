@@ -78,6 +78,27 @@ function readBullets(entry: unknown): string[] {
   return raw.map(normalizeResumeBullet).filter((bullet): bullet is string => bullet !== null);
 }
 
+// B4 (2026-09-28): the Resumify studio editor (src/components/falood/resumify/
+// types/resume.ts) saves experience/education under jobTitle/institution/
+// graduationYear instead of title/school/graduationDate. Before this fix,
+// enforceExperienceIntegrity/enforceEducationIntegrity only recognized the
+// canonical field names, so for the 9 of 81 base_resumes using this shape
+// `validBase` came back empty and both functions fell through to their
+// "no valid base entries" branch - returning the AI's entries completely
+// unchanged, with zero identity protection (companies/titles/locations/
+// dates/education could be whatever the model invented).
+function readTitle(entry: UnknownRecord): string {
+  return readResumeText(entry.title) || readResumeText(entry.jobTitle);
+}
+
+function readSchool(entry: UnknownRecord): string {
+  return readResumeText(entry.school) || readResumeText(entry.institution);
+}
+
+function readGraduationDate(entry: UnknownRecord): string {
+  return readResumeText(entry.graduationDate) || readResumeText(entry.graduationYear);
+}
+
 function readEvidenceIds(entry: unknown): string[] {
   if (!isRecord(entry) || !Array.isArray(entry.evidenceIds)) return [];
   return entry.evidenceIds.filter((id): id is string => typeof id === "string");
@@ -101,8 +122,8 @@ function experienceMatchScore(base: UnknownRecord, candidate: UnknownRecord, sam
   let identityMatched = false;
   if (sameText(base.company, candidate.company)) { score += 10; identityMatched = true; }
   else if (similarText(base.company, candidate.company)) { score += 5; identityMatched = true; }
-  if (sameText(base.title, candidate.title)) { score += 10; identityMatched = true; }
-  else if (similarText(base.title, candidate.title)) { score += 5; identityMatched = true; }
+  if (sameText(readTitle(base), readTitle(candidate))) { score += 10; identityMatched = true; }
+  else if (similarText(readTitle(base), readTitle(candidate))) { score += 5; identityMatched = true; }
   if (!identityMatched) return 0;
   if (sameText(base.startDate, candidate.startDate)) score += 3;
   if (sameText(base.endDate, candidate.endDate)) score += 3;
@@ -173,7 +194,7 @@ export function enforceExperienceIntegrity(
   baseEntries: unknown[]
 ): ExperienceEntry[] {
   const validBase = baseEntries.filter(
-    (entry): entry is UnknownRecord => isRecord(entry) && Boolean(readResumeText(entry.title))
+    (entry): entry is UnknownRecord => isRecord(entry) && Boolean(readTitle(entry))
   );
   if (validBase.length === 0) {
     return generatedEntries.filter(isRecord).map((entry, index) => {
@@ -205,11 +226,11 @@ export function enforceExperienceIntegrity(
     const startDate = readResumeText(base.startDate) || null;
     const rawEndDate = readResumeText(base.endDate) || null;
     return {
-      title: readResumeText(base.title),
+      title: readTitle(base),
       company: readResumeText(base.company),
       location: readResumeText(base.location) || null,
       startDate,
-      endDate: sanitizeEndDate(startDate, rawEndDate, readResumeText(base.title), index === 0),
+      endDate: sanitizeEndDate(startDate, rawEndDate, readTitle(base), index === 0),
       bullets: tailoredBullets.length > 0 ? tailoredBullets : readBullets(base),
       evidenceIds: generated ? readEvidenceIds(generated) : [],
     };
@@ -223,7 +244,7 @@ export function enforceEducationIntegrity(
 ): EducationEntry[] {
   const validBase = baseEntries.filter(
     (entry): entry is UnknownRecord =>
-      isRecord(entry) && Boolean(readResumeText(entry.degree)) && Boolean(readResumeText(entry.school))
+      isRecord(entry) && Boolean(readResumeText(entry.degree)) && Boolean(readSchool(entry))
   );
   if (validBase.length === 0) {
     return generatedEntries.filter(isRecord).map((entry) => ({
@@ -236,9 +257,9 @@ export function enforceEducationIntegrity(
 
   return validBase.map((base) => ({
     degree: readResumeText(base.degree),
-    school: readResumeText(base.school),
+    school: readSchool(base),
     field: readResumeText(base.field) || null,
-    graduationDate: readResumeText(base.graduationDate) || null,
+    graduationDate: readGraduationDate(base),
   }));
 }
 

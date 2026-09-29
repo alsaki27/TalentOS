@@ -1,6 +1,7 @@
 import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
 import { readBaseSummary } from "../resumeIntegrity";
+import { projectJobAnalysisForReview, projectDraftForReview } from "../promptProjections";
 
 export function buildFinalPolishPrompt(
   job: any,
@@ -9,7 +10,8 @@ export function buildFinalPolishPrompt(
   review: any,
   jobAnalysis: any,
   sourceOfTruth: { confirmedSkills: string[] } | null = null,
-  pageMetrics: ResumePageMetrics | null = null
+  pageMetrics: ResumePageMetrics | null = null,
+  qaFactsBlock: string | null = null
 ): string {
   const pageMetricsBlock = pageMetrics
     ? `PAGE QA METRICS (measured from an actual rendered PDF of the draft you are polishing — trust these over any word-count guess):
@@ -66,22 +68,23 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
      duplicate or low-value skills FIRST, before touching quantified achievements or JD keywords.
      Never remove an entire role and never drop a role below its per-role bullet minimum (rule 6 below).
    - If content utilization is below 82% (and overflow is false): expand ONLY with evidence-backed
-     detail already present in the base resume, evidence bank, or Source of Truth — never invent facts
+     detail already present in the base resume or Source of Truth — never invent facts
      merely to fill whitespace. If there is no more truthful detail to add, leave the whitespace and
      note it in unresolvedWarnings rather than padding.
    - Preserve every quantified achievement and every job-specific keyword already present.
 6. PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL - DO NOT LEAVE EMPTY WHITESPACE BELOW):
    * Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling out the single page from top to bottom without leaving large empty whitespace at the bottom (which happens when roles are condensed too much).
-   * NEVER drop or vanish an entire experience role from the base resume, and NEVER remove all bullet points from any role! Every role from the draft must be preserved.
-   * To prevent empty whitespace below, generate rich, substantive, multi-line bullet points (2 to 3 lines per bullet where appropriate) for every role:
-     - For the primary / most recent role: Use 6 to 7 detailed, high-impact bullets.
-     - For secondary / earlier roles: Use 4 to 6 detailed bullets.
-     - For older roles: Use 3 to 4 detailed bullets.
-   * ABSOLUTE MINIMUM: 3 bullets per role, no exceptions. Never collapse a role down to zero, 1, or 2 bullets.
+   * NEVER drop or vanish an entire experience role, and NEVER remove all bullet points from any role.
+   * Per-role bullet targets (most recent 6-7, second 4-6, older 3-4) are measured for you in
+     DETERMINISTIC QA FACTS below, per role, with any out-of-range role called out — write rich,
+     substantive, multi-line bullets (2-3 lines where appropriate) to land inside those ranges
+     rather than counting them yourself.
    * IF YOU ARE TRIMMING FOR ONE-PAGE FIT: trim bullets from WITHIN roles (shorten text), NOT by removing entire bullets. A page with fewer but longer bullets is better than a page with many roles having only 1-2 bullets and huge blank space at the bottom.
    * An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
-   * NEVER duplicate a job role, job title, company name, or date range! Each employment position from the base resume must appear EXACTLY ONCE in the experience array. No same job title or company should appear 2 times strictly.
+   * Each employment position from the base resume must appear EXACTLY ONCE. Any duplicate role or
+     drift in titles/companies/locations against the base resume is reported in DETERMINISTIC QA
+     FACTS below — trust that over re-checking the raw JSON yourself.
    * DO NOT OUTPUT employment dates (startDate or endDate) in the JSON! The system will automatically lock and inject the correct dates from the base resume. Omit startDate and endDate completely from your JSON output.
    * DO NOT touch, alter, or invent job titles, company names, or locations! They must remain 100% identical to the base resume.
 8. Protect the draft's strengths while editing and trimming:
@@ -94,7 +97,7 @@ Given the job analysis, base resume, tailored draft, and reviewer scores:
    * The skills
      output MUST stay in the same categorized-group structure the draft used — an array of
      { name: string, skills: string[] } groups, never flattened into one list or one generic "Skills" bucket.
-   * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills. NEVER include "Microsoft Office", "MS Office", "Office 365", or bare "Word"/"PowerPoint" — if the draft you're expanding from already has one (carried over from the base resume), remove it rather than expand around it. Excel is the exception: keep it as its own entry if it's genuinely supported, just never folded into a generic "Microsoft Office" bucket.
+   * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills. Drop "Microsoft Office", "MS Office", "Office 365", and bare "Word"/"PowerPoint" to save space — EXCEPT when this job's JD explicitly names or requires one of them, in which case the JD demand makes it a real differentiator and it stays. (This matches the rule the drafting stage was given, so a JD-required office skill it deliberately included is not stripped back out here.) Excel is always kept as its own entry when genuinely supported, just never folded into a generic "Microsoft Office" bucket.
 9. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
@@ -128,8 +131,13 @@ Return a JSON object with:
   NEVER return a percentage-style number such as 93 and never return a value above 10.
 - exportReady: boolean — true if ready for export
 
+DETERMINISTIC QA FACTS (computed by code from the draft you're polishing - trust these over your
+own re-reading of the raw JSON below for bullet counts, duplicate skills, and identity drift
+specifically; still apply your own judgment for everything the reviewer flagged qualitatively):
+${qaFactsBlock ?? "(unavailable for this run)"}
+
 JOB ANALYSIS:
-${JSON.stringify(jobAnalysis).slice(0, 4000)}
+${JSON.stringify(projectJobAnalysisForReview(jobAnalysis))}
 
 BASE RESUME:
 ${JSON.stringify(baseResume?.content ?? {}).slice(0, 4000)}
@@ -139,7 +147,7 @@ do NOT suggest removing or flagging them as unsupported):
 ${JSON.stringify((sourceOfTruth?.confirmedSkills ?? []).slice(0, 30))}
 
 TAILORED DRAFT:
-${JSON.stringify(draft).slice(0, 8000)}
+${JSON.stringify(projectDraftForReview(draft))}
 
 REVIEWER SCORES:
 ${JSON.stringify(review)}

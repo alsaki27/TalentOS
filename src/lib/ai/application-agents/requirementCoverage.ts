@@ -73,17 +73,44 @@ export function significantTokens(value: string): string[] {
   return tokens;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Same fix class already applied to short-acronym matching elsewhere in this
+// codebase (job-keyword matching): bare substring matching on a short token
+// pulls in unrelated longer words containing the same letters as a fragment
+// ("osp"/"cad"/"gis"-style acronyms matching inside "h-OSP-ital,"
+// "a-CAD-emic," "re-GIS-tered"). Word-boundary matching fixes that, but
+// applying it to EVERY token also breaks intentional compound-term matches
+// this coverage engine already relies on ("Node.js" -> token "node" must
+// still match "nodejs", with no boundary between "node" and the glued-on
+// "js"). Splitting by length keeps both: short acronym-length tokens (<=3,
+// covers PE/GIS/CAD/OSP/AWS-style tokens - the exact class that collides
+// with common English words) get a strict word boundary; longer tokens keep
+// substring semantics, where an accidental unrelated collision is rare and
+// compound-term tolerance matters more.
+const ACRONYM_LENGTH_THRESHOLD = 3;
+
 /**
  * True when any significant token of the requirement appears in the text.
- * Intentional substring semantics ("AutoCAD" matches "AutoCAD Civil 3D"),
- * case-insensitive, tolerance for punctuation differences.
+ * See ACRONYM_LENGTH_THRESHOLD above for why short and long tokens use
+ * different matching rules. Case-insensitive, tolerant of punctuation.
+ *
+ * B6 (2026-09-28): this used to be a plain `text.includes(token)` for every
+ * token regardless of length - confirmed live: the 2-letter acronym "PE"
+ * (Professional Engineer) matched "experience" (ex-PE-rience).
  */
 export function requirementMatchesText(requirement: string, text: string): boolean {
   if (!requirement || !text) return false;
   const tokens = significantTokens(requirement);
   if (tokens.length === 0) return false;
   const normalized = text.toLocaleLowerCase("en-US");
-  return tokens.some((token) => normalized.includes(token));
+  return tokens.some((token) =>
+    token.length <= ACRONYM_LENGTH_THRESHOLD
+      ? new RegExp(`\\b${escapeRegExp(token)}\\b`, "i").test(text)
+      : normalized.includes(token)
+  );
 }
 
 /** Every searchable chunk of the draft, keyed by where a keyword lives. */
@@ -126,11 +153,27 @@ export function buildRequirementCoverage(
       entry.status === "supported_by_resume" || entry.status === "supported_but_not_surfaced";
     const addable = supported && entry.safeToAdd === true && (entry.sourceEvidence?.length ?? 0) > 0;
 
+    // B6: a requirement whose text reduces to zero significant tokens (e.g.
+    // "5+ years experience" - every word is a qualifier stripped by
+    // significantTokens) can never be verified as surfaced by text matching,
+    // no matter what the draft contains. Without this guard it would always
+    // report surfaced=false and, whenever addable, permanently classify as
+    // missed_tailoring - triggering Resume Forge's coverage retry every
+    // time, guaranteed to fail again the same way, burning a full extra
+    // draft-sized AI call for a requirement that was never checkable.
+    const unmatchable = significantTokens(entry.requirement).length === 0;
+
     let gapReason: RequirementCoverageRow["gapReason"] = null;
     if (!surfaced) {
+      // candidate_evidence_gap comes from the AI's own status judgment, not
+      // from text matching, so it's reported regardless of unmatchable.
+      // missed_tailoring specifically claims "the draft could have surfaced
+      // this via matching and didn't" - that claim is meaningless (and
+      // permanently unfixable by retrying) when the requirement itself has
+      // no significant tokens to match against.
       if (entry.status === "unsupported" || entry.status === "hard_blocker") {
         gapReason = "candidate_evidence_gap";
-      } else if (addable) {
+      } else if (addable && !unmatchable) {
         gapReason = "missed_tailoring";
       }
     }

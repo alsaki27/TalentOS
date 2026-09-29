@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { enforceExperienceIntegrity, flagDuplicateRoleIdentity } from "@/lib/ai/application-agents/resumeIntegrity";
+import { enforceExperienceIntegrity, enforceEducationIntegrity, flagDuplicateRoleIdentity } from "@/lib/ai/application-agents/resumeIntegrity";
 
 function exp(overrides: Partial<{ title: string; company: string; location: string | null; startDate: string | null; endDate: string | null; bullets: string[]; evidenceIds: string[] }> = {}) {
   return {
@@ -118,5 +118,55 @@ describe("flagDuplicateRoleIdentity", () => {
   it("returns no warnings for a single-role or empty experience list", () => {
     expect(flagDuplicateRoleIdentity([])).toEqual([]);
     expect(flagDuplicateRoleIdentity([exp()])).toEqual([]);
+  });
+});
+
+// B4 (2026-09-28): the Resumify studio editor (src/components/falood/resumify/
+// types/resume.ts) saves experience under jobTitle (not title) and education
+// under institution/graduationYear (not school/graduationDate). Before this
+// fix, enforceExperienceIntegrity/enforceEducationIntegrity's "does this base
+// entry have valid identity fields" filter only recognized the canonical
+// names, so for a base resume using this shape `validBase` came back empty
+// and both functions fell through to their "no valid base - trust the AI's
+// entries unchanged" branch, providing zero identity protection. Measured
+// live: 9 of 81 base_resumes use this shape.
+describe("enforceExperienceIntegrity — legacy Resumify shape (jobTitle instead of title)", () => {
+  it("still locks identity from the base resume when the base uses jobTitle", () => {
+    const base = [
+      { jobTitle: "AutoCAD Drafter", company: "Real Company", location: "Charlotte, NC", startDate: "May 2024", endDate: "Dec 2025" },
+    ];
+    const generated = [
+      { title: "Senior Designer", company: "Fabricated Employer", bullets: ["Fabricated bullet"] },
+    ];
+    const result = enforceExperienceIntegrity(generated, base);
+    expect(result).toHaveLength(1);
+    // Identity comes from the base (jobTitle/company/dates), not the AI's
+    // invented title/company - proving validBase was non-empty this time
+    // (the pre-fix bug would have returned the AI's entry completely
+    // unchanged: "Senior Designer" @ "Fabricated Employer").
+    expect(result[0].title).toBe("AutoCAD Drafter");
+    expect(result[0].company).toBe("Real Company");
+    expect(result[0].startDate).toBe("May 2024");
+  });
+
+  it("matches a legacy-shaped base role against a canonical-shaped generated role for bullet tailoring", () => {
+    const base = [{ jobTitle: "GIS Analyst", company: "Acme Corp", startDate: "2020", endDate: "2022" }];
+    const generated = [{ title: "GIS Analyst", company: "Acme Corp", bullets: ["Matched and tailored"] }];
+    const result = enforceExperienceIntegrity(generated, base);
+    expect(result[0].bullets).toEqual(["Matched and tailored"]);
+  });
+});
+
+describe("enforceEducationIntegrity — legacy Resumify shape (institution/graduationYear instead of school/graduationDate)", () => {
+  it("still locks identity from the base resume when the base uses institution/graduationYear", () => {
+    const base = [
+      { degree: "B.S. Computer Science", institution: "Real University", graduationYear: "2019" },
+    ];
+    const generated = [{ degree: "Fabricated Degree", school: "Fabricated University", graduationDate: "2099" }];
+    const result = enforceEducationIntegrity(generated, base);
+    expect(result).toHaveLength(1);
+    expect(result[0].school).toBe("Real University");
+    expect(result[0].graduationDate).toBe("2019");
+    expect(result[0].degree).toBe("B.S. Computer Science");
   });
 });

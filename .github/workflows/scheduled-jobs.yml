@@ -35,7 +35,7 @@ on:
     - cron: '0 8 * * *'    # AI digest – daily at 08:00 UTC
     - cron: '0 6 * * *'    # Import sources – daily at 06:00 UTC
     - cron: '0 4 * * *'    # Backup – daily at 04:00 UTC
-    - cron: '0 7 * * *'    # Job categorization – daily at 07:00 UTC
+    - cron: '0 */3 * * *'  # Job categorization – every 3 hours (see Phase 6 note below)
     - cron: '0 3 * * *'    # AI usage rollup – daily at 03:00 UTC
     - cron: '*/10 * * * *' # JOB CEO dispatch – every 10 minutes
     - cron: '*/15 * * * *' # Job description enrichment – every 15 minutes
@@ -225,10 +225,24 @@ jobs:
             exit 1
           fi
 
+  # Phase 6 (2026-09-28, AI Resume Pipeline Waste Removal plan): this used
+  # to run daily, capped at 200 jobs/run (MAX_BATCHES=10 * limit=20), while
+  # real ingestion measured ~487 categorizations/day - a growing backlog
+  # this cron alone could never clear. The Jobs page's own client-driven
+  # drain loop (src/app/jobs/page.tsx) was propping that gap up by firing on
+  # every page view from every user, which is exactly the measured waste
+  # (17,320 attempts/13,912 rate-limited in 7 days) - it competed for the
+  # same shared OpenCode quota the resume pipeline depends on. That
+  # page-load trigger is now removed; the three explicit
+  # import/create-triggered calls (Add Job, Import File, Import ATS) remain
+  # as the real ingestion-time mechanism, and this cron is now the backfill
+  # safety net for everything else (the Job Agent/OpenJobData scraper
+  # pipeline, and anything the explicit triggers miss) - bumped to every 3
+  # hours (up to 1,600/day capacity) so it can actually keep up.
   job-categorization:
     if: >
       (github.event_name == 'schedule' &&
-       github.event.schedule == '0 7 * * *') ||
+       github.event.schedule == '0 */3 * * *') ||
       github.event.inputs.job == 'job-categorization' ||
       github.event.inputs.job == 'run-all'
     runs-on: ubuntu-latest

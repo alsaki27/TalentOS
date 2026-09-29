@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
   let totalProcessed = 0;
   let totalFailed = 0;
   let remainingPending = 0;
+  let yieldedToResumePipeline = false;
 
   try {
     for (let i = 0; i < MAX_BATCHES; i++) {
@@ -37,13 +38,21 @@ export async function GET(req: NextRequest) {
       totalProcessed += result.processed;
       totalFailed += result.failed;
       remainingPending = result.remainingPending;
+      // Phase 6 quota-aware batching: the batch stood down so the resume
+      // pipeline can use the shared OpenCode quota. Looping again would just
+      // re-check and re-yield MAX_BATCHES times - stop and let the next
+      // scheduled run pick the backlog up.
+      if (result.yieldedToResumePipeline) {
+        yieldedToResumePipeline = true;
+        break;
+      }
       if (remainingPending === 0 || (result.processed === 0 && result.failed === 0)) break;
     }
 
     const durationMs = Date.now() - startedMs;
-    const summary = JSON.stringify({ totalProcessed, totalFailed, remainingPending });
+    const summary = JSON.stringify({ totalProcessed, totalFailed, remainingPending, yieldedToResumePipeline });
     await recordJobSuccess("categorize-jobs", durationMs, summary);
-    return NextResponse.json({ processed: totalProcessed, failed: totalFailed, remainingPending });
+    return NextResponse.json({ processed: totalProcessed, failed: totalFailed, remainingPending, yieldedToResumePipeline });
   } catch (err: any) {
     const durationMs = Date.now() - startedMs;
     await recordJobFailure("categorize-jobs", err.message ?? "categorization failed", durationMs);

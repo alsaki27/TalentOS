@@ -36,6 +36,7 @@ export interface WorkflowRow {
   recovery_count: number;
   routing_state_id: string | null;
   route_snapshot: unknown;
+  cooldown_retry_count: number;
 }
 
 export interface StageRunRow {
@@ -59,6 +60,10 @@ export interface StageRunRow {
   error_message: string | null;
   started_at: string | null;
   completed_at: string | null;
+  // Phase 2 consumption point (c): JSON-stringified DeterministicQaResult for
+  // this stage's output (Hiring Panel/Final Polish only - see 112_stage_run_
+  // qa_facts.sql). null for Resume Forge and for any run predating this column.
+  qa_facts: string | null;
 }
 
 export interface ArtifactRow {

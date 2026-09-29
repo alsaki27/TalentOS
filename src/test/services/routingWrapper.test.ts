@@ -212,6 +212,123 @@ describe("callWithUsageTracking error paths", () => {
     expect(second?.routeRank).toBe(1);
   });
 
+  it("benchmarkMode never advances the round-robin pool cursor", async () => {
+    // Section 5 fix (2026-09-29): scripts/replay-pipeline-sample.ts must be
+    // able to resolve a route repeatedly without perturbing the live cursor
+    // that real traffic depends on for fair rotation.
+    const providerOne = { send: vi.fn() };
+    const providerTwo = { send: vi.fn() };
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_automation_routes")) {
+        return [{
+          id: "route-1",
+          automation_id: "application_resume_forge",
+          ai_key_id: "opencode-key-1",
+          provider: null,
+          rank: 1,
+          is_enabled: true,
+          model_override: "gpt-5.6-luna",
+        }];
+      }
+      return [];
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_key_pool_cursors")) return { start_index: "0" };
+      return null;
+    });
+    mockListEnabledAiKeys.mockResolvedValue([
+      { id: "opencode-key-1", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-key-2", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ]);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
+      id,
+      provider: "opencode",
+      decrypted_key: id,
+      is_enabled: true,
+      status: "working",
+      model: "deepseek-v4-flash",
+      base_url: "https://opencode.example.com/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: {},
+    }));
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string) =>
+      key === "opencode-key-1" ? providerOne : providerTwo
+    );
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const first = await getProviderForAutomation(
+      "application_resume_forge", undefined, undefined, undefined, undefined, undefined, true,
+    );
+    const second = await getProviderForAutomation(
+      "application_resume_forge", undefined, undefined, undefined, undefined, undefined, true,
+    );
+
+    // Live (non-benchmark) rotation would hand "opencode-key-2" to a second
+    // resolution once the cursor advances - see the test above this one.
+    // benchmarkMode must return the same, stable priority-ordered key both
+    // times, and must never query the cursor table at all.
+    expect(first?.aiKeyId).toBe("opencode-key-1");
+    expect(second?.aiKeyId).toBe("opencode-key-1");
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("ai_key_pool_cursors"))).toBe(false);
+  });
+
+  it("benchmarkMode records no usage event and no key health mutation on success or failure", async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_automation_routes")) {
+        return [{
+          id: "route-1",
+          automation_id: "application_resume_forge",
+          ai_key_id: "opencode-key-1",
+          provider: null,
+          rank: 1,
+          is_enabled: true,
+          model_override: "gpt-5.6-luna",
+        }];
+      }
+      return [];
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    mockListEnabledAiKeys.mockResolvedValue([
+      { id: "opencode-key-1", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+    ]);
+    mockGetAiKeyWithDecryptedKey.mockResolvedValue({
+      id: "opencode-key-1",
+      provider: "opencode",
+      decrypted_key: "opencode-key-1",
+      is_enabled: true,
+      status: "working",
+      model: "deepseek-v4-flash",
+      base_url: "https://opencode.example.com/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: {},
+    });
+    mockBuildProviderFromDbKey.mockReturnValue({ send: vi.fn().mockResolvedValue({ content: [], stopReason: "end_turn" }) });
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    await callWithUsageTracking(
+      "application_resume_forge",
+      { benchmarkMode: true },
+      async (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(mockExecute.mock.calls.some(([sql]) => String(sql).includes("ai_usage_events"))).toBe(false);
+    expect(mockRecordAiKeySuccess).not.toHaveBeenCalled();
+
+    mockBuildProviderFromDbKey.mockReturnValue({ send: vi.fn().mockRejectedValue(new Error("boom (500): server error")) });
+    await expect(
+      callWithUsageTracking(
+        "application_resume_forge",
+        { benchmarkMode: true },
+        async (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+      )
+    ).rejects.toThrow();
+
+    expect(mockExecute.mock.calls.some(([sql]) => String(sql).includes("ai_usage_events"))).toBe(false);
+    expect(mockRecordAiKeyFailure).not.toHaveBeenCalled();
+  });
+
   it("keeps a pooled route alive when its anchor key is corrupt", async () => {
     mockQuery.mockImplementation(async (sql: string) => {
       if (sql.includes("ai_automation_routes")) {

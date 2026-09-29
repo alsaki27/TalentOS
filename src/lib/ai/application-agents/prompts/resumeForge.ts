@@ -65,7 +65,7 @@ function buildExperienceSnapshot(experiences: any[]): string {
     const bullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
     const bulletLines = bullets.length > 0
       ? bullets.map((b: string, i: number) => `   ${i + 1}. ${b}`).join("\n")
-      : "   (no bullets stored — you MUST write them from scratch using the evidence bank and job analysis)";
+      : "   (no bullets stored — you MUST write them from scratch using the job analysis and base resume)";
     return `${header}\n${bulletLines}`;
   }).join("\n\n");
 }
@@ -109,7 +109,17 @@ function stripRedundantRawJsonFields(baseContent: any): any {
   return stripped;
 }
 
-/** Build the prompt for the Resume Forge agent. */
+/**
+ * Build the prompt for the Resume Forge agent.
+ *
+ * `evidence` is accepted but intentionally not rendered into the prompt (B5,
+ * 2026-09-28): candidate_evidence has 0 rows in production, so the prompt
+ * previously shipped an always-empty "EVIDENCE BANK" block plus a full
+ * evidence-id citation-rules section that asked the model to reason about
+ * data that never exists. The parameter is kept (not removed from the
+ * function signature or AgentContext) so this can be re-enabled with zero
+ * plumbing changes if candidate_evidence is ever actually populated.
+ */
 export function buildResumeForgePrompt(
   job: any,
   baseResume: any,
@@ -149,7 +159,9 @@ Rules:
 * Mention missing requirements only when supported by the base resume or verified skills.
 * Keep technical skills concise and grouped by relevance (an array of { name: string, skills: string[] } groups, never a flat list).
 * Keep everything readable and within one page strictly at any cost.
-* Verify date consistency, degree accuracy, experience duration, location, and formatting before finalizing.
+* Do not spend effort verifying dates, degrees, employment duration, or locations: the system
+  re-imposes all of them from the base resume after you respond, so your output cannot change
+  them. Spend that effort on bullet quality and requirement coverage instead.
 
 PROFESSIONAL SUMMARY RULES (CRITICAL):
 ${baseSummary
@@ -177,9 +189,9 @@ PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY W
 * YOU MUST WRITE BULLETS FOR EVERY EXPERIENCE ROLE. An experience entry without bullets is a broken resume. Never output a role with an empty bullets array.
 * EXACT REQUIRED BULLET COUNTS PER ROLE (non-negotiable):
 ${bulletRequirements || "  - Most recent role: minimum 6 bullets, maximum 7 bullets\n  - Second role: minimum 4 bullets, maximum 6 bullets\n  - Older roles: minimum 3 bullets, maximum 4 bullets"}
-* Strategy: Take each EXISTING BULLET from the EXPERIENCE SNAPSHOT below, keep its facts intact, then EXPAND the sentence to be longer (2-3 lines) by adding more detail about tools used, project scale, impact metrics, or methodology. Do NOT invent new facts — expand the existing sentences using information that is already in the base resume, evidence bank, and job analysis.
+* Strategy: Take each EXISTING BULLET from the EXPERIENCE SNAPSHOT below, keep its facts intact, then EXPAND the sentence to be longer (2-3 lines) by adding more detail about tools used, project scale, impact metrics, or methodology. Do NOT invent new facts — expand the existing sentences using information that is already in the base resume and job analysis.
 * When a supported_but_not_surfaced requirement (per requirementAnalysis) needs surfacing, weave its tool/skill name into the bullet of the role where the candidate actually used it — never attach it to a role that has no basis for it.
-* If a role has fewer existing bullets than the required minimum: write additional bullets from the evidence bank and job analysis.
+* If a role has fewer existing bullets than the required minimum: write additional bullets grounded in the job analysis and this role's existing base-resume content.
 * NEVER return a role with fewer bullets than its required minimum above.
 * When trimming for page length: shorten individual bullet sentences. NEVER delete entire bullets.
 
@@ -195,7 +207,7 @@ REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS abo
   - unsupported → the candidate has no evidence for this. NEVER add it to skills, bullets, or anywhere else. NEVER imply it.
   - hard_blocker (required license/cert/clearance/citizenship with no evidence) → NEVER add, NEVER imply, NEVER soften the gap.
   - nice_to_have → may include only when the candidate material supports it.
-* For every supported_but_not_surfaced requirement with safeToAdd=true: you MUST surface it BOTH in the skills section AND woven naturally into an existing experience bullet of the most relevant role. Rewrite that bullet to mention the tool/skill WITHOUT inventing outcomes, metrics, employers, or dates — only extend facts already present in the base resume, evidence bank, or Source of Truth.
+* For every supported_but_not_surfaced requirement with safeToAdd=true: you MUST surface it BOTH in the skills section AND woven naturally into an existing experience bullet of the most relevant role. Rewrite that bullet to mention the tool/skill WITHOUT inventing outcomes, metrics, employers, or dates — only extend facts already present in the base resume or Source of Truth.
 * Do NOT copy unsupported JD phrases into bullets just to please an ATS. A keyword the candidate cannot back is worse than a missing one.
 
 BASE RESUME — RAW JSON (authoritative source for titles, companies, education, skills structure — contact info and employment dates are fixed automatically after you respond, using the real base resume, so they are omitted here to save space; each experience entry's existing bullets are omitted here too, only because the EXPERIENCE SNAPSHOT below is the complete, reliable copy of them - use that section for bullet content and timeframes, this one for everything else):
@@ -203,9 +215,6 @@ ${JSON.stringify(stripRedundantRawJsonFields(baseContent)).slice(0, 12000)}
 
 EXPERIENCE SNAPSHOT — EXISTING BULLETS (use these as the starting point for each role's bullet points; rewrite and expand them to match the job, do NOT ignore or discard them):
 ${experienceSnapshot}
-
-EVIDENCE BANK:
-${JSON.stringify(evidence).slice(0, 8000)}
 
 CONFIRMED/VERIFIED SKILLS (recruiter-confirmed real candidate skills, same authority as skills already in the base resume; each is tagged with which source(s) named it - "(verified)", "(confirmed)", or both when both agree - purely informational, both sources are equally trustworthy):
 ${mergedSkills.length > 0 ? JSON.stringify(mergedSkills) : "(none)"}
@@ -219,30 +228,14 @@ RULES FOR USING CONFIRMED/VERIFIED SKILLS & NOTES:
 3. Do NOT invent new employers, job titles, or dates based on the notes. Notes inform emphasis and tone only.
 4. Do NOT copy the notes text into any resume output field.
 
-EVIDENCE-ID CITATION RULES (CRITICAL):
-* Every entry in the EVIDENCE BANK above has a real "id" field. Whenever a bullet, change, or
-  claim in your output is grounded in a specific evidence-bank entry, cite that entry's exact
-  "id" string — never invent one, never paraphrase it, never cite a base-resume fact that has
-  no evidence-bank entry.
-* For each experience entry's "evidenceIds": list the id(s) of every evidence-bank entry that
-  materially supports that role's bullets (metrics, tools, scope). Leave it as an empty array
-  when no evidence-bank entry applies to that role — an empty array is correct and expected far
-  more often than a populated one; never cite an id just to fill the field.
-* For each "changeLog" entry: set "evidenceId" to the id of the evidence-bank entry that
-  justifies that specific change, or null when the change is a rewrite/reprioritization of
-  existing base-resume content with no separate evidence-bank backing.
-* A dangling or fabricated id (one that does not exactly match an "id" in the EVIDENCE BANK
-  above) is worse than no citation — the system checks every id you cite and strips ones that
-  don't match, so a wrong id provides no benefit and only wastes your output.
-
 Return a JSON object with:
 - summary: final professional summary per the summary rule above, or null
 - skills: array of { title: string, skills: string[] } category groups (see SKILLS SECTION RULES) — NOT a flat array of strings
-- experience: final experience entries, each with title, company, location, startDate, endDate, bullets, and evidenceIds (see EVIDENCE-ID CITATION RULES above)
+- experience: final experience entries, each with title, company, location, startDate, endDate, bullets, and evidenceIds (always an empty array — no evidence bank is available; never invent ids)
 - education: final education entries (degree, school, field, graduationDate)
 - certifications: final certifications list
 - projects: final projects list
-- changeLog: array of { change: string, reason: string, evidenceId: string | null } describing every meaningful edit you made and why (see EVIDENCE-ID CITATION RULES above)
+- changeLog: array of { change: string, reason: string, evidenceId: null } describing every meaningful edit you made and why — evidenceId is always null (no evidence bank is available)
 - missingRequirements: JD requirements the candidate has no support for, left out of the resume
 - excludedKeywords: JD keywords deliberately not used because the candidate cannot truthfully claim them
 - truthRisks: array of { risk: string, severity: "low" | "medium" | "high" } for anything that could read as unsupported, even if you judged it safe to include
@@ -253,21 +246,31 @@ Return ONLY valid JSON. No markdown fences, no explanation.`;
 /**
  * Bounded "supported but missed" retry prompt. Fires at most once per
  * workflow, and only when the coverage matrix proves a supported requirement
- * is absent from the draft. The agent must return the SAME full draft JSON
- * shape (the previous draft is embedded so this is a minimal edit, not a
- * regeneration), weaving only the named requirements into existing bullets
- * and the skills section.
+ * is genuinely addressable (real sourceEvidence, matchable tokens - see
+ * buildRequirementCoverage's addable/unmatchable guards) yet absent from the
+ * draft. The agent must return the SAME full draft JSON shape (the previous
+ * draft is embedded so this is a minimal edit, not a regeneration), weaving
+ * only the named requirements into existing bullets and the skills section.
+ *
+ * Phase 5 (2026-09-29): previously took just the requirement's bare name,
+ * with no job analysis, base resume, or evidence - the model was told WHAT
+ * was missing but given nothing to truthfully draw from beyond whatever
+ * already happened to be in the previous draft. Each entry's own
+ * `sourceEvidence` (the exact quotes the classification pass already cited
+ * as grounding for "this candidate can truthfully claim this") is now
+ * included directly, so the retry has real material instead of guessing.
  */
 export function buildResumeForgeMissedRetryPrompt(
-  missedRequirements: string[],
+  missed: { requirement: string; sourceEvidence: string[] }[],
   previousDraft: unknown
 ): string {
   return `You are Resume Forge. Your previous draft passed validation, but the deterministic
 requirement-coverage check found supported requirements that are NOT surfaced anywhere in the
 resume. Supported material exists for these — they were simply missed. Fix exactly this, nothing else.
 
-MISSED SUPPORTED REQUIREMENTS (weave each one into the resume):
-${missedRequirements.map((name) => `- ${name}`).join("\n")}
+MISSED SUPPORTED REQUIREMENTS (weave each one into the resume, grounded in its own evidence below —
+never invent detail beyond what the evidence states):
+${missed.map((m) => `- ${m.requirement}\n  Evidence: ${m.sourceEvidence.length > 0 ? m.sourceEvidence.map((e) => `"${e}"`).join("; ") : "(none cited — infer only from the PREVIOUS DRAFT below, never invent)"}`).join("\n")}
 
 HARD RULES FOR THIS CORRECTION PASS:
 * Return the COMPLETE resume JSON again, with the same overall shape as the previous draft.

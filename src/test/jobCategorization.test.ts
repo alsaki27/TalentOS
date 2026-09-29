@@ -15,9 +15,9 @@ vi.mock("@/server/repositories/jobsRepository", () => ({
 }));
 
 import { callWithUsageTracking } from "@/lib/ai/routing";
-import { execute } from "@/server/db/neon";
+import { execute, query, queryOne } from "@/server/db/neon";
 import { updateJob } from "@/server/repositories/jobsRepository";
-import { categorizeOneJob, type PendingJob } from "@/lib/ai/jobCategorization";
+import { categorizeOneJob, processPendingCategorization, type PendingJob } from "@/lib/ai/jobCategorization";
 
 function pendingJob(overrides: Partial<PendingJob> = {}): PendingJob {
   return {
@@ -157,5 +157,83 @@ describe("categorizeOneJob", () => {
     }));
 
     expect(ai.promptText()).toMatch(/UNIQUE-PAYLOAD-MARKER/);
+  });
+});
+
+// Phase 6 quota-aware batching (2026-09-29): job_categorization and the
+// resume pipeline share one OpenCode quota, and categorization's volume
+// (~17,300 attempts/week) was the most likely cause of Resume Forge's 4,752
+// weekly rate-limit rejections. Categorization is deferrable; a throttled
+// resume stage is customer-visible, so categorization now yields.
+describe("processPendingCategorization — quota-aware batching", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** @param recentResumeRateLimits how many rate-limited resume-pipeline calls the quota-pressure probe should see. */
+  function mockDb(recentResumeRateLimits: number, pendingJobCount: number) {
+    (queryOne as any).mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO categorization_runs")) return { id: "run-1" };
+      if (sql.includes("FROM ai_usage_events")) return { count: recentResumeRateLimits };
+      if (sql.includes("COUNT(*)::int as count FROM jobs")) return { count: pendingJobCount };
+      return null;
+    });
+    (query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes("FROM jobs WHERE category_status")) {
+        return Array.from({ length: pendingJobCount }, (_, i) => pendingJob({ id: `job-${i}` }));
+      }
+      return [];
+    });
+    (execute as any).mockResolvedValue({ rowCount: 1 });
+  }
+
+  it("stands the whole batch down when the resume pipeline is being rate-limited", async () => {
+    mockDb(5, 3); // 5 recent throttles, over the threshold of 3
+    mockAiReturns(JSON.stringify({ ...combinedJobOnlyFields, ...combinedCategorizationFields }));
+
+    const result = await processPendingCategorization({ limit: 5, triggeredBy: "cron" });
+
+    expect(result.yieldedToResumePipeline).toBe(true);
+    expect(result.processed).toBe(0);
+    // The jobs are untouched and still pending for the next run.
+    expect(callWithUsageTracking).not.toHaveBeenCalled();
+    expect(result.remainingPending).toBe(3);
+  });
+
+  it("processes normally when the resume pipeline is healthy", async () => {
+    mockDb(0, 2);
+    mockAiReturns(JSON.stringify({ ...combinedJobOnlyFields, ...combinedCategorizationFields }));
+
+    const result = await processPendingCategorization({ limit: 5, triggeredBy: "cron" });
+
+    expect(result.yieldedToResumePipeline).toBe(false);
+    expect(result.processed).toBe(2);
+    expect(callWithUsageTracking).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays below the threshold on a single unlucky throttle rather than over-reacting", async () => {
+    mockDb(1, 1); // 1 recent throttle - under the threshold of 3
+    mockAiReturns(JSON.stringify({ ...combinedJobOnlyFields, ...combinedCategorizationFields }));
+
+    const result = await processPendingCategorization({ limit: 5, triggeredBy: "cron" });
+
+    expect(result.yieldedToResumePipeline).toBe(false);
+    expect(result.processed).toBe(1);
+  });
+
+  it("proceeds (fails open) when the quota-pressure probe itself errors", async () => {
+    mockDb(0, 1);
+    (queryOne as any).mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO categorization_runs")) return { id: "run-1" };
+      if (sql.includes("FROM ai_usage_events")) throw new Error("telemetry table unavailable");
+      if (sql.includes("COUNT(*)::int as count FROM jobs")) return { count: 1 };
+      return null;
+    });
+    mockAiReturns(JSON.stringify({ ...combinedJobOnlyFields, ...combinedCategorizationFields }));
+
+    const result = await processPendingCategorization({ limit: 5, triggeredBy: "cron" });
+
+    expect(result.yieldedToResumePipeline).toBe(false);
+    expect(result.processed).toBe(1);
   });
 });

@@ -116,6 +116,54 @@ describe("runResumeForge - job analysis (formerly the standalone Job Lens stage)
     await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
   });
 
+  // Regression test for B1 (2026-09-28): the per-candidate requirement
+  // classification prompt used to read ctx.baseResume.skills/experience/
+  // education/certifications directly, but the real application_resume_versions/
+  // base_resumes row only ever has these under ctx.baseResume.content - so in
+  // production the prompt always printed "(none)" for all four fields,
+  // forcing the model to guess "unsupported" for requirements the candidate
+  // actually has evidence for.
+  it("sends the candidate's real base-resume content (not \"(none)\") to the requirement classification prompt", async () => {
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
+    const ctx = makeContext({
+      baseResume: {
+        id: "res-1", title: "Base",
+        // Top level intentionally empty/undefined - the real row shape only
+        // ever populates .content. If the classification prompt still reads
+        // the top level, this test fails by asserting "(none)" is absent.
+        content: {
+          skills: ["Kubernetes", "Go"],
+          experience: [{ title: "Platform Engineer", company: "Acme", bullets: [{ text: "Ran production Kubernetes clusters" }] }],
+          education: [{ degree: "B.S. Computer Science", school: "State University" }],
+          certifications: ["Certified Kubernetes Administrator"],
+        },
+      } as any,
+    });
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, ctx);
+
+    // Call index 1 = the always-fresh per-candidate requirement analysis
+    // call (0 = job-only extraction on a cache miss, 2 = the draft prompt).
+    const requirementPromptText = (provider.send as any).mock.calls[1][0].messages[0].content[0].text as string;
+    expect(requirementPromptText).toMatch(/Kubernetes/);
+    expect(requirementPromptText).toMatch(/Platform Engineer/);
+    expect(requirementPromptText).toMatch(/State University/);
+    expect(requirementPromptText).toMatch(/Certified Kubernetes Administrator/);
+    // Only the base-resume lines are asserted here - CONFIRMED/VERIFIED
+    // SKILLS and EVIDENCE BANK are legitimately "(none)" in this fixture
+    // (no sourceOfTruth/verifiedSkills/evidence were provided) and are
+    // unrelated to B1.
+    expect(requirementPromptText).toMatch(/BASE RESUME SKILLS: (?!\(none\))/);
+    expect(requirementPromptText).toMatch(/BASE RESUME EDUCATION: (?!\(none\))/);
+    expect(requirementPromptText).toMatch(/BASE RESUME CERTIFICATIONS: (?!\(none\))/);
+    expect(requirementPromptText).not.toMatch(/BASE RESUME EXPERIENCE:\n\(none\)/);
+  });
+
   it("falls back to the canonical job title when AI omits it", async () => {
     const provider = mockProviderSequence(
       JSON.stringify({ company: "Acme" }),
@@ -252,19 +300,117 @@ describe("runResumeForge", () => {
     expect(result.draft.changeLog).toHaveLength(1);
   });
 
-  it("rejects truth risks with invalid severity instead of filtering", async () => {
+  it("Phase 5: coverage retry includes the missed requirement's own sourceEvidence, not just its name", async () => {
+    const requirementAnalysisWithEvidence = {
+      requirementAnalysis: [
+        {
+          requirement: "Kubernetes", category: "tool",
+          sourceEvidence: ["Base resume bullet: operated Kubernetes clusters for the payments team"],
+          status: "supported_but_not_surfaced", safeToAdd: true,
+        },
+      ],
+    };
+    const retryDraft = {
+      ...MINIMAL_VALID_DRAFT,
+      skills: [{ title: "Infrastructure", skills: ["Kubernetes"] }],
+    };
+    // MINIMAL_VALID_DRAFT has no skills/experience, so "Kubernetes" is never
+    // surfaced in the first draft - guaranteed to trigger the bounded retry.
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(requirementAnalysisWithEvidence),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+      JSON.stringify(retryDraft),
+    );
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, makeContext());
+
+    expect(provider.send).toHaveBeenCalledTimes(4);
+    const retryPromptText = (provider.send as any).mock.calls[3][0].messages[0].content[0].text as string;
+    expect(retryPromptText).toContain("Kubernetes");
+    expect(retryPromptText).toContain("operated Kubernetes clusters for the payments team");
+    expect(result.draft.skills[0]?.skills).toContain("Kubernetes");
+  });
+
+  it("Phase 5: reuses a seeded cachedRequirementAnalysis instead of paying for the classification call", async () => {
+    const cached = [
+      { requirement: "AutoCAD", category: "tool", sourceEvidence: ["base.skills[0]"], status: "supported_by_resume", safeToAdd: true },
+    ];
+    // Only 2 responses queued: job-only extraction, then the draft. The
+    // requirement-classification call (normally the 2nd of 3) must not fire.
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify({ ...MINIMAL_VALID_DRAFT, skills: [{ title: "Tools", skills: ["AutoCAD"] }] }),
+    );
+    const ctx = makeContext({ cachedRequirementAnalysis: cached });
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, ctx);
+
+    expect(provider.send).toHaveBeenCalledTimes(2);
+    expect(result.jobAnalysis.requirementAnalysis).toHaveLength(1);
+    expect(result.jobAnalysis.requirementAnalysis[0].requirement).toBe("AutoCAD");
+  });
+
+  it("Phase 5: still runs the classification call when no cachedRequirementAnalysis is seeded", async () => {
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    await runResumeForge({}, provider, makeContext());
+    expect(provider.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("Phase 5: skips the coverage retry entirely when the workflow claim was already lost", async () => {
+    const requirementAnalysisWithEvidence = {
+      requirementAnalysis: [
+        {
+          requirement: "Kubernetes", category: "tool",
+          sourceEvidence: ["Base resume bullet: operated Kubernetes clusters"],
+          status: "supported_but_not_surfaced", safeToAdd: true,
+        },
+      ],
+    };
+    // Only 3 responses queued (job-only, requirement-analysis, first draft) -
+    // if the retry fired anyway, mockProviderSequence would just replay the
+    // last one, so the real proof is the call COUNT assertion below, not a
+    // missing 4th fixture.
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(requirementAnalysisWithEvidence),
+      JSON.stringify(MINIMAL_VALID_DRAFT),
+    );
+    const isClaimStillValid = vi.fn().mockResolvedValue(false);
+    const ctx = makeContext({ isClaimStillValid });
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, ctx);
+
+    expect(isClaimStillValid).toHaveBeenCalled();
+    // Exactly 3 calls: the retry (a would-be 4th) never fired.
+    expect(provider.send).toHaveBeenCalledTimes(3);
+    // The requirement is still reported missing, same as a failed retry today.
+    expect(result.draft.missingRequirements).toContain("Kubernetes");
+  });
+
+  it("salvages the draft by dropping a truthRisk with an invalid severity, instead of rejecting the whole draft (Phase 5 JSON salvage)", async () => {
     const provider = mockProviderSequence(
       JSON.stringify(DEFAULT_JOB_ONLY),
       JSON.stringify(DEFAULT_REQUIREMENT_ANALYSIS),
       JSON.stringify({
-        summary: null, skills: [], experience: [], education: [],
+        summary: null, skills: [{ title: "Languages", skills: ["Go"] }], experience: [], education: [],
         certifications: [], projects: [], changeLog: [],
         missingRequirements: [], excludedKeywords: [],
-        truthRisks: [{ risk: "Bad", severity: "extreme" }],
+        truthRisks: [{ risk: "Good one", severity: "low" }, { risk: "Bad", severity: "extreme" }],
       }),
     );
     const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
-    await expect(runResumeForge({}, provider, makeContext())).rejects.toThrow();
+    const result = await runResumeForge({}, provider, makeContext());
+    expect(result.draft.truthRisks).toEqual([{ risk: "Good one", severity: "low" }]);
+    expect(result.draft.skills[0]?.skills).toContain("Go");
   });
 
   it("removes fabricated replacement roles and preserves legacy base identity and education month", async () => {
@@ -525,6 +671,22 @@ describe("runHiringPanel", () => {
     expect(sentText).toMatch(/PAGE QA METRICS/);
     expect(sentText).not.toMatch(/SKILL_CATEGORY_MAP/);
   });
+
+  it("sends the deterministic QA facts block and attaches the result as .qa (Phase 2)", async () => {
+    const provider = mockProvider(JSON.stringify({
+      atsScore: 8, recruiterScore: 7, roleFitScore: 6, truthfulnessRisk: 2,
+      formattingIssues: [], requiredEdits: [], optionalEdits: [],
+      passFail: "pass", overallComment: "Good",
+    }));
+    const { runHiringPanel } = await import("@/lib/ai/application-agents/hiringPanel");
+    const result = await runHiringPanel({}, provider, makeContext());
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    expect(sentText).toMatch(/DETERMINISTIC QA FACTS/);
+    expect(sentText).toMatch(/Bullet counts:/);
+    expect(result.qa).not.toBeNull();
+    expect(result.qa?.facts).toBeDefined();
+  });
 });
 
 describe("runFinalPolish", () => {
@@ -546,6 +708,29 @@ describe("runFinalPolish", () => {
     const result = await runFinalPolish({}, provider, ctx);
     expect(result.exportReady).toBe(true);
     expect(result.finalQaScore).toBe(9);
+  });
+
+  it("sends the deterministic QA facts block and attaches the result as .qa (Phase 2)", async () => {
+    const provider = mockProvider(JSON.stringify({
+      summary: "Final", skills: [{ title: "Languages", skills: ["Go"] }], experience: [], education: [],
+      certifications: [], projects: [], appliedIssueIds: ["r1"],
+      rejectedIssueIds: [], unresolvedWarnings: [],
+      finalQaScore: 9, exportReady: true,
+    }));
+    const ctx = makeContext({
+      previousOutputs: {
+        application_job_lens: { id: "a1", automationId: "application_job_lens", sequenceNumber: 1, schemaVersion: "JobAnalysisV1", contentHash: "abc", data: {}, createdAt: "" },
+        application_resume_forge: { id: "a2", automationId: "application_resume_forge", sequenceNumber: 1, schemaVersion: "ResumeDraftV1", contentHash: "def", data: {}, createdAt: "" },
+        application_hiring_panel: { id: "a3", automationId: "application_hiring_panel", sequenceNumber: 2, schemaVersion: "ReviewScoreV1", contentHash: "ghi", data: {}, createdAt: "" },
+      },
+    });
+    const { runFinalPolish } = await import("@/lib/ai/application-agents/finalPolish");
+    const result = await runFinalPolish({}, provider, ctx);
+
+    const sentText = (provider.send as any).mock.calls[0][0].messages[0].content[0].text as string;
+    expect(sentText).toMatch(/DETERMINISTIC QA FACTS/);
+    expect(result.qa).not.toBeNull();
+    expect(result.qa?.facts).toBeDefined();
   });
 
   it("restores the draft's professional summary when the AI returns null and the base has one", async () => {

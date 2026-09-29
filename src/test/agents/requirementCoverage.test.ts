@@ -37,6 +37,24 @@ describe("requirementMatchesText", () => {
     expect(requirementMatchesText("", "anything")).toBe(false);
     expect(requirementMatchesText("React", "")).toBe(false);
   });
+
+  // B6 regression (2026-09-28): the 2-letter acronym "PE" used to match as a
+  // bare substring of "experience" (ex-PE-rience), falsely marking a
+  // "PE License" requirement as surfaced just because the draft happened to
+  // use the word "experience" anywhere.
+  it("does not match a short acronym as a fragment of an unrelated longer word", () => {
+    expect(requirementMatchesText("PE License", "5 years of professional experience in civil design")).toBe(false);
+  });
+
+  it("still matches a short acronym when it genuinely appears as its own word", () => {
+    expect(requirementMatchesText("PE License", "Licensed PE in the state of Texas")).toBe(true);
+  });
+
+  // Longer tokens intentionally keep substring semantics for compound-term
+  // tolerance (Node.js -> "node" matching "nodejs" above relies on this too).
+  it("still matches longer tokens as a substring of a compound word", () => {
+    expect(requirementMatchesText("AutoCAD", "Experienced with autocadlt")).toBe(true);
+  });
 });
 
 describe("buildRequirementCoverage", () => {
@@ -101,6 +119,31 @@ describe("buildRequirementCoverage", () => {
   it("handles missing requirementAnalysis gracefully", () => {
     expect(buildRequirementCoverage(null, draft as any)).toEqual([]);
     expect(buildRequirementCoverage({}, draft as any)).toEqual([]);
+  });
+
+  // B6 regression (2026-09-28): a requirement that reduces to zero
+  // significant tokens (every word is a stripped qualifier) can never be
+  // proven surfaced by text matching. Before this fix, such a row - if
+  // otherwise addable - was classified missed_tailoring and handed to
+  // Resume Forge's coverage retry, which would resend the entire draft,
+  // fail to change the outcome (the requirement is still unmatchable), and
+  // burn a full extra AI call for nothing, every single run.
+  it("does not classify an unmatchable requirement as missed_tailoring, even when otherwise addable", () => {
+    const unmatchableAnalysis = {
+      requirementAnalysis: [
+        {
+          requirement: "5+ years experience",
+          category: "skill",
+          sourceEvidence: ["base.experience[0].bullets[0]"],
+          status: "supported_but_not_surfaced",
+          safeToAdd: true,
+        },
+      ],
+    };
+    const rows = buildRequirementCoverage(unmatchableAnalysis as any, draft as any);
+    expect(rows[0].surfaced).toBe(false);
+    expect(rows[0].gapReason).toBeNull();
+    expect(listMissedSupported(rows)).toEqual([]);
   });
 });
 

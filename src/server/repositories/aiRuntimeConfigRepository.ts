@@ -14,6 +14,17 @@ export interface AiRuntimeConfig {
   // before the state's next model is ever attempted. Defaults false so a
   // rollout is opt-in and instantly revertible without a deploy.
   pooled_retry_bounded_by_route_rank: boolean;
+  // Phase 4 of the AI Resume Pipeline Waste Removal & Quality Hardening plan
+  // (2026-09-28). When true, Final Polish's AI call is skipped for a draft
+  // that's already clean: Hiring Panel returned zero requiredEdits, the
+  // measured page fit already recommends "pass", and the deterministic QA
+  // module (deterministicQa.ts) reports ok:true with zero hard failures. All
+  // of Final Polish's existing deterministic post-processing (identity
+  // guards, bullet padding, render+trim, export gates) still runs unchanged
+  // on the draft in that case - only the AI call itself is skipped. Defaults
+  // false: needs the plan's own A/B + blind-review exit gate before
+  // enabling, same instant-revert pattern as pooled_retry_bounded_by_route_rank.
+  final_polish_skip_when_clean: boolean;
   updated_by: string | null;
   updated_at: string | null;
 }
@@ -31,6 +42,7 @@ const DEFAULTS: AiRuntimeConfig = {
   workflow_max_concurrency: 5,
   workflow_claim_ttl_seconds: 720,
   pooled_retry_bounded_by_route_rank: false,
+  final_polish_skip_when_clean: false,
   updated_by: null,
   updated_at: null,
 };
@@ -40,6 +52,7 @@ export async function getAiRuntimeConfig(): Promise<AiRuntimeConfig> {
     `SELECT c.active_routing_state_id, s.name AS active_routing_state_name,
             c.allow_unrouted_fallback, c.workflow_max_concurrency,
             c.workflow_claim_ttl_seconds, c.pooled_retry_bounded_by_route_rank,
+            c.final_polish_skip_when_clean,
             c.updated_by, c.updated_at
      FROM ai_runtime_config c
      LEFT JOIN ai_routing_states s ON s.id = c.active_routing_state_id

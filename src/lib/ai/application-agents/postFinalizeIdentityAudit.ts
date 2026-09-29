@@ -124,7 +124,11 @@ export async function auditAndRepairResumeVersionIdentity(
         const bi: Rec = isRec(b) ? b : {};
         const gi: Rec = isRec(docExperience[i]) ? (docExperience[i] as Rec) : {};
         const checks: [string, string][] = [
-          ["title", readText(bi.title)],
+          // B4: the Resumify studio shape stores this as jobTitle, not title -
+          // without this fallback, readText(bi.title) returns "" for those base
+          // resumes and the `if (want && ...)` guard below silently skips the
+          // title check entirely for every one of them.
+          ["title", readText(bi.title) || readText(bi.jobTitle)],
           ["company", readText(bi.company)],
           ["location", readText(bi.location)],
           ["startDate", readText(bi.startDate)],
@@ -179,7 +183,14 @@ export async function auditAndRepairResumeVersionIdentity(
   }
 
   if (!changed) {
-    return { checked: true, changed: false, mismatches: [] };
+    // B7: a count mismatch (experience/education length differs from base)
+    // is pushed into `mismatches` above but deliberately never sets `changed`
+    // (it's "reported but never auto-repaired" - needs a human). Returning
+    // mismatches: [] here silently swallowed that report on every workflow
+    // where nothing was auto-repairable, which is exactly the case a count
+    // mismatch produces - finalizationService.ts's "unrepairable" log could
+    // never fire for it. Report whatever was actually found.
+    return { checked: true, changed: false, mismatches };
   }
   if (dryRun) {
     return { checked: true, changed: true, mismatches };

@@ -387,10 +387,23 @@ export default function JobsPage() {
   useEffect(() => { load(1); }, [search, sourceFilter, tierFilter, activeFilter, employmentTypeFilter, categoryFilter, workAuthFilter, workModeFilter, postedSort, dateStart, dateEnd, candidateFilter, assignedByFilter, ownerFilter, scoreFilter]);
 
   // Drains the pending-categorization queue in small sequential batches, called right
-  // after any import/create action and once on page load (in case a backlog already
-  // exists — e.g. right after this feature's migration ran). Import itself never waits
-  // on this — it's always a separate call made after the import's own response lands.
-  // Guarded against overlapping loops (e.g. two imports in quick succession).
+  // after any import/create action (Add Job, Import File, Import ATS below). Import
+  // itself never waits on this — it's always a separate call made after the import's
+  // own response lands. Guarded against overlapping loops (e.g. two imports in quick
+  // succession).
+  //
+  // Phase 6 (2026-09-28): this used to ALSO fire once on every page mount
+  // ("in case a backlog already exists"), which meant every user who opened
+  // the Jobs page ran the full drain loop, repeatedly, all competing for the
+  // same shared OpenCode quota the resume pipeline depends on - measured at
+  // 17,320 attempts (13,912 rate-limited) in 7 days for a workload of only
+  // ~3,408 real categorizations. The three explicit calls below already
+  // cover every real ingestion path through this page; the daily historical
+  // justification (a one-time post-migration backlog) doesn't need an
+  // ongoing page-load side effect. .github/workflows/scheduled-jobs.yml's
+  // job-categorization cron (now every 3 hours) is the backfill safety net
+  // for anything else, same as it already was for jobs ingested outside
+  // this page (the Job Agent/OpenJobData scraper pipeline).
   async function kickCategorization() {
     if (categorizingRef.current) return;
     categorizingRef.current = true;
@@ -402,6 +415,11 @@ export default function JobsPage() {
         const data = await res.json();
         remaining = data.remainingPending ?? 0;
         setPendingCategorization(remaining);
+        // Phase 6 quota-aware batching: the server stood this batch down so
+        // the resume pipeline can use the shared provider quota. Stop
+        // draining here - the 3-hourly cron picks the backlog up once the
+        // pipeline is no longer throttled. Looping would just re-yield.
+        if (data.yieldedToResumePipeline) break;
         if (data.updatedJobs && data.updatedJobs.length > 0) {
           setJobs((prev) => {
             const jobsCopy = [...prev];
@@ -420,8 +438,6 @@ export default function JobsPage() {
       categorizingRef.current = false;
     }
   }
-
-  useEffect(() => { kickCategorization(); }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 

@@ -3,6 +3,7 @@
 //   parse(input: unknown): T | { error: string }
 
 import { normalizeScoreOutOfTen } from "@/lib/scoreScale";
+import type { DeterministicQaResult } from "./deterministicQa";
 
 export interface Schema<T> {
   parse(input: unknown): T | { error: string };
@@ -255,11 +256,20 @@ export const ResumeDraftSchema: Schema<ResumeDraftV1> = {
     if (!isRecord(input)) return { error: "ResumeDraftV1 must be an object" };
     const skills = parseSkillGroups(input.skills);
     const experience = Array.isArray(input.experience) ? input.experience.map(parseExperienceEntry).filter((e): e is ExperienceEntry => e !== null) : [];
+    // Phase 5 JSON salvage (2026-09-29): one malformed truthRisk item used to
+    // reject the ENTIRE draft - every valid skill, experience entry, and
+    // changeLog entry thrown away and a full extra pipeline run paid for -
+    // over a single bad enum value in an array that isn't even authoritative
+    // (Hiring Panel re-derives truthfulness independently). Every sibling
+    // array below (education, projects, changeLog) already salvages by
+    // filtering out the one bad entry instead of failing the whole parse;
+    // this brings truthRisks in line with that established pattern.
     const truthRisks: { risk: string; severity: "low" | "medium" | "high" }[] = [];
     if (Array.isArray(input.truthRisks)) {
       for (const r of input.truthRisks) {
         if (!isRecord(r) || typeof r.risk !== "string" || !["low", "medium", "high"].includes(r.severity as string)) {
-          return { error: `Invalid truthRisk severity: ${JSON.stringify(r)}` };
+          console.warn(`[ResumeDraftSchema] Dropping malformed truthRisk entry (salvaging the rest of the draft): ${JSON.stringify(r)}`);
+          continue;
         }
         truthRisks.push(r as any);
       }
@@ -345,6 +355,11 @@ export interface ReviewScoreV1 {
   overallComment: string;
   pageFit: PageFitV1 | null;
   evidenceAudit: EvidenceAuditV1 | null;
+  // Phase 2 consumption point (c): the deterministic-QA facts computed against
+  // this same draft, for processWorkflowStage to persist onto the stage_run
+  // row (application_ai_stage_runs.qa_facts) for measurement. Never
+  // authored by the LLM - same pattern as pageFit/evidenceAudit above.
+  qa: DeterministicQaResult | null;
 }
 
 export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
@@ -362,11 +377,16 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
     if (recruiterScore < 0 || recruiterScore > 10) return { error: `recruiterScore must be 0-10, got ${recruiterScore}` };
     if (roleFitScore < 0 || roleFitScore > 10) return { error: `roleFitScore must be 0-10, got ${roleFitScore}` };
     if (truthfulnessRisk !== null && (truthfulnessRisk < 0 || truthfulnessRisk > 10)) return { error: `truthfulnessRisk must be 0-10, got ${truthfulnessRisk}` };
+    // Phase 5 JSON salvage: one malformed requiredEdit used to reject the
+    // ENTIRE review - all real scores, formattingIssues, and optionalEdits
+    // discarded over a single bad entry, forcing a full re-run. Salvage the
+    // valid edits instead, same as optionalEdits just below already does.
     const requiredEdits: { issueId: string; description: string; severity: "minor" | "major" | "critical" }[] = [];
     if (Array.isArray(input.requiredEdits)) {
       for (const e of input.requiredEdits) {
         if (!isRecord(e) || typeof e.issueId !== "string" || typeof e.description !== "string" || !["minor", "major", "critical"].includes(e.severity as string)) {
-          return { error: `Invalid requiredEdit: ${JSON.stringify(e)}` };
+          console.warn(`[ReviewScoreSchema] Dropping malformed requiredEdit entry (salvaging the rest of the review): ${JSON.stringify(e)}`);
+          continue;
         }
         requiredEdits.push(e as any);
       }
@@ -398,6 +418,7 @@ export const ReviewScoreSchema: Schema<ReviewScoreV1> = {
       overallComment: expectString(input.overallComment, "overallComment") ?? "",
       pageFit: null,
       evidenceAudit: null,
+      qa: null,
     };
   },
 };
@@ -417,6 +438,10 @@ export interface FinalResumeV1 {
   finalQaScore: number;
   exportReady: boolean;
   pageFit: PageFitV1 | null;
+  // Phase 2 consumption point (c) - see ReviewScoreV1.qa's doc comment. Note
+  // this reflects the QA computed against Resume Forge's INPUT draft, not
+  // Final Polish's own edited output (which may fix issues this captured).
+  qa: DeterministicQaResult | null;
 }
 
 export const FinalResumeSchema: Schema<FinalResumeV1> = {
@@ -448,6 +473,7 @@ export const FinalResumeSchema: Schema<FinalResumeV1> = {
       finalQaScore,
       exportReady: input.exportReady === true,
       pageFit: null,
+      qa: null,
     };
   },
 };

@@ -12,6 +12,8 @@ import { normalizeResumeContentForExport } from "@/lib/falood/resumeDocumentAdap
 import { mapMetricsToPageFit } from "@/lib/falood/pageFitThresholds";
 import { applyDispositionRules } from "./disposition";
 import { validateEvidenceCitations } from "./evidenceAudit";
+import { assertNotTruncated } from "@/lib/ai/routing";
+import { runDeterministicQa, formatDeterministicQaFacts } from "./deterministicQa";
 
 // Renders Resume Forge's draft through the same PDF renderer the actual
 // export/Final-Polish path uses, so Hiring Panel's page-fit numbers are real,
@@ -37,6 +39,24 @@ export async function runHiringPanel(
   const draft = ctx.previousOutputs["application_resume_forge"]?.data ?? {};
 
   const pageMetrics = renderDraftMetrics(draft as RenderableResumeContent, (ctx.baseResume as any)?.content);
+  const pageFit = mapMetricsToPageFit(pageMetrics);
+
+  // Phase 2 consumption point (a): precompute every deterministic check this
+  // pipeline already owns (bullet counts, duplicate skills, identity drift,
+  // skills-pool membership) and hand it to the model as stated fact, on top
+  // of - not instead of - the existing raw BASE RESUME/TAILORED DRAFT blocks
+  // and instructions. Purely additive.
+  const qa = runDeterministicQa({
+    draft: draft as any,
+    baseResumeContent: (ctx.baseResume as any)?.content,
+    jobAnalysis: jobAnalysis as any,
+    evidence: ctx.evidence as any,
+    sourceOfTruth: ctx.sourceOfTruth,
+    verifiedSkills: ctx.verifiedSkills,
+    pageFit,
+    job: ctx.job,
+  });
+  const qaFactsBlock = formatDeterministicQaFacts(qa);
 
   // ── DEBUG: Hiring Panel ──────────────────────────────────────────
   console.log("[Agent:HiringPanel] ── INPUT ────────────────────────────────────");
@@ -54,7 +74,7 @@ export async function runHiringPanel(
         content: [
           {
             type: "text",
-            text: buildHiringPanelPrompt(ctx.job, ctx.baseResume, draft, jobAnalysis, ctx.sourceOfTruth, ctx.evidence, pageMetrics),
+            text: buildHiringPanelPrompt(ctx.job, ctx.baseResume, draft, jobAnalysis, ctx.sourceOfTruth, ctx.evidence, pageMetrics, qaFactsBlock),
           },
         ],
       },
@@ -67,12 +87,14 @@ export async function runHiringPanel(
     responseMimeType: "application/json",
   });
 
+  assertNotTruncated(response, "Hiring Panel");
   const raw = textOf(response.content);
   const stripped = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
   const parsed = JSON.parse(stripped);
   const validated = ReviewScoreSchema.parse(parsed);
   if ("error" in validated) throw new Error(`Hiring Panel output validation failed: ${validated.error}`);
-  validated.pageFit = mapMetricsToPageFit(pageMetrics);
+  validated.pageFit = pageFit;
+  validated.qa = qa;
   // Re-audits the same draft Resume Forge already cleaned (dangling ids
   // stripped there) so the review record itself carries the citation count
   // as a visible quality signal, the same "trust but verify, computed

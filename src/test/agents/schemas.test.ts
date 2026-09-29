@@ -198,14 +198,18 @@ describe("ReviewScoreSchema", () => {
     }
   });
 
-  it("rejects invalid severity values in requiredEdits", () => {
+  it("salvages the rest of the review by dropping a requiredEdit with an invalid severity, instead of rejecting everything (Phase 5 JSON salvage)", () => {
     const result = ReviewScoreSchema.parse({
       atsScore: 5, recruiterScore: 5, roleFitScore: 5, passFail: "pass",
       requiredEdits: [
+        { issueId: "r1", description: "Valid edit", severity: "minor" },
         { issueId: "r2", description: "Invalid severity", severity: "extreme" },
       ],
     });
-    expect("error" in result).toBe(true);
+    expect("error" in result).toBe(false);
+    if (!("error" in result)) {
+      expect(result.requiredEdits).toEqual([{ issueId: "r1", description: "Valid edit", severity: "minor" }]);
+    }
   });
 });
 

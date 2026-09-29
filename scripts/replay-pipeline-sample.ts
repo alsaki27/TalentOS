@@ -9,10 +9,16 @@
 // time. This is how every later phase in the plan proves "quality-neutral-
 // or-better" before/after a prompt change, instead of trusting it by eye.
 //
-// NEVER writes to the database - only query()/queryOne() reads, plus the
-// pure agent run functions (runResumeForge/runHiringPanel/runFinalPolish),
-// none of which persist anything themselves. Re-running a stage DOES make a
-// real AI provider call (real cost) for each sampled application, exactly
+// NEVER writes to the database (Section 5 fix, 2026-09-29): every agent/
+// routing write site is now suppressed via benchmarkMode - ai_usage_events
+// rows, ai_api_keys health mutations, the round-robin pool cursor, and Resume
+// Forge's jobs.job_analysis cache write-back all no-op during a replay. Also
+// pins each replay to the routing state the workflow actually ran under
+// (config_snapshot.routingStateId) and the live ai_agent_configs row for the
+// automation, instead of whatever is currently active/default - otherwise a
+// routing or prompt-config change made since the historical run would
+// silently compare against the wrong settings. Re-running a stage DOES make
+// a real AI provider call (real cost) for each sampled application, exactly
 // like a live run would.
 //
 // "job_lens" is no longer its own replayable stage: that work now runs
@@ -33,6 +39,7 @@
 import { query, queryOne } from "../src/server/db/neon";
 import { callWithUsageTracking } from "../src/lib/ai/routing";
 import { AGENT_CONFIG_DEFAULTS } from "../src/lib/ai/application-agents/constants";
+import { findAgentConfigByAutomationId } from "../src/server/repositories/aiAgentConfigRepository";
 import { runResumeForge } from "../src/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "../src/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "../src/lib/ai/application-agents/finalPolish";
@@ -111,27 +118,54 @@ async function buildAgentContext(wf: WorkflowRow, artifacts: ArtifactRow[]): Pro
     verifiedSkills: snapshot.verifiedSkills ?? [],
     sourceOfTruth: snapshot.sourceOfTruth ?? null,
     previousOutputs: outputsMap,
+    // Suppresses every live write an agent would otherwise make (today: Resume
+    // Forge's jobs.job_analysis cache write-back). See AgentContext.benchmarkMode.
+    benchmarkMode: true,
+    pipelineVariant: typeof snapshot.pipelineVariant === "string" ? snapshot.pipelineVariant : null,
   };
 }
 
-function agentOptionsFor(agentId: ApplicationAgentId): AgentOptions {
+/**
+ * Mirrors applicationAiWorkflowService.ts's own agentOptions construction
+ * (processWorkflowStage, ~line 811-829) exactly: the live ai_agent_configs
+ * row for this automation, falling back to AGENT_CONFIG_DEFAULTS field by
+ * field. Previously this used AGENT_CONFIG_DEFAULTS only, so replaying
+ * against a live temperature/prompt override configured in /admin/ai →
+ * Agents & Routing silently compared against the WRONG settings.
+ */
+async function agentOptionsFor(agentId: ApplicationAgentId): Promise<AgentOptions> {
+  const agentConfig = await findAgentConfigByAutomationId(agentId);
   const d = (AGENT_CONFIG_DEFAULTS as any)[agentId];
+  const rawTemperature = (agentConfig as any)?.temperature;
+  const parsedTemperature = rawTemperature == null ? undefined : Number(rawTemperature);
   return {
-    temperature: d?.temperature,
-    max_output_tokens: d?.maxOutputTokens,
-    timeout_ms: d?.timeoutMs,
+    system_prompt: (agentConfig as any)?.system_prompt ?? undefined,
+    temperature: Number.isFinite(parsedTemperature) ? parsedTemperature : d?.temperature,
+    max_output_tokens: (agentConfig as any)?.max_output_tokens ?? d?.maxOutputTokens,
+    timeout_ms: (agentConfig as any)?.timeout_ms ?? d?.timeoutMs,
   };
 }
 
-async function runStage(stage: StageKey, options: AgentOptions, ctx: AgentContext): Promise<any> {
+async function runStage(stage: StageKey, options: AgentOptions, ctx: AgentContext, routingStateId: string | null): Promise<any> {
   const agentId = STAGE_TO_AGENT_ID[stage];
-  const { result } = await callWithUsageTracking(agentId, { applicationId: ctx.applicationId }, async (provider: AiProvider) => {
-    switch (stage) {
-      case "resume_forge": return runResumeForge(options, provider, ctx);
-      case "hiring_panel": return runHiringPanel(options, provider, ctx);
-      case "final_polish": return runFinalPolish(options, provider, ctx);
-    }
-  });
+  // routingStateId pins this replay to the routing state the workflow
+  // actually ran under (config_snapshot.routingStateId), not whatever is
+  // currently active - otherwise a routing change made since the historical
+  // run silently changes which model/provider the replay compares against.
+  // benchmarkMode: true suppresses ai_usage_events writes, ai_api_keys health
+  // mutations, and the round-robin pool cursor advance - see
+  // CallContext.benchmarkMode.
+  const { result } = await callWithUsageTracking(
+    agentId,
+    { applicationId: ctx.applicationId, routingStateId: routingStateId ?? undefined, benchmarkMode: true },
+    async (provider: AiProvider) => {
+      switch (stage) {
+        case "resume_forge": return runResumeForge(options, provider, ctx);
+        case "hiring_panel": return runHiringPanel(options, provider, ctx);
+        case "final_polish": return runFinalPolish(options, provider, ctx);
+      }
+    },
+  );
   return result;
 }
 
@@ -259,7 +293,8 @@ async function main() {
       const before = summarize(stage, storedByAgent[agentId]);
       try {
         const ctx = await buildAgentContext(wf, artifacts);
-        const fresh = await runStage(stage, agentOptionsFor(agentId), ctx);
+        const routingStateId = typeof wf.config_snapshot?.routingStateId === "string" ? wf.config_snapshot.routingStateId : null;
+        const fresh = await runStage(stage, await agentOptionsFor(agentId), ctx, routingStateId);
         const after = summarize(stage, fresh);
         printDiff(stage, before, after);
       } catch (err: any) {
