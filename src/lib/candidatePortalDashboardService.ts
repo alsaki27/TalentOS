@@ -97,7 +97,7 @@ export interface CandidatePortalApplicationDetail {
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
   timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null }[];
-  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; duration_minutes: number | null; status: string; location: string | null; meeting_link: string | null; panel: string[] }[];
+  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; panel: string[] }[];
 }
 
 export interface CandidatePortalTrendPoint {
@@ -117,15 +117,19 @@ export interface CandidatePortalActionItem {
 export interface CandidatePortalInterview {
   id: string | null;
   application_id: string;
+  job_id: string | null;
   job_title: string;
   company_name: string | null;
   location: string | null;
+  job_location: string | null;
+  job_posting_url: string | null;
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
   duration_minutes: number | null;
   status: "upcoming" | "completed" | "cancelled" | "not_scheduled";
   interview_status: string | null;
+  interview_format: "online" | "onsite" | null;
   meeting_link: string | null;
   panel: string[];
   visible_updates: { id: string; body: string; author: string; created_at: string | null }[];
@@ -136,14 +140,18 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
     `SELECT
        s.id,
        a.id AS application_id,
+       j.id AS job_id,
        COALESCE(j.title, 'Application interview') AS job_title,
        j.company AS company_name,
-       j.location,
+       j.location AS job_location,
+       COALESCE(j.apply_url, j.source_url) AS job_posting_url,
+       s.location,
        COALESCE(s.round_name, 'Interview') AS round_name,
        COALESCE(s.round_number, 1) AS round_number,
        s.scheduled_at,
        s.duration_minutes,
        s.status AS interview_status,
+       s.interview_format,
        s.meeting_link,
        COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel,
        COALESCE((
@@ -174,8 +182,19 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
        -- AI pipeline moved the application's real status to 'interview'.
        AND (s.id IS NOT NULL OR (CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END) = 'interview')
      GROUP BY s.id, a.id, j.title, j.company, j.location, s.round_name, s.round_number,
-              s.scheduled_at, s.duration_minutes, s.status, s.meeting_link
-     ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC, a.updated_at DESC
+              j.id, j.apply_url, j.source_url, s.location, s.scheduled_at, s.duration_minutes,
+              s.status, s.interview_format, s.meeting_link
+     ORDER BY
+       CASE
+         WHEN LOWER(COALESCE(s.status, 'scheduled')) = 'cancelled' THEN 2
+         WHEN s.scheduled_at IS NULL THEN 1
+         WHEN LOWER(COALESCE(s.status, 'scheduled')) = 'completed' OR s.scheduled_at <= NOW() THEN 2
+         ELSE 0
+       END ASC,
+       CASE WHEN s.scheduled_at > NOW() THEN s.scheduled_at END ASC NULLS LAST,
+       CASE WHEN s.scheduled_at <= NOW() THEN s.scheduled_at END DESC NULLS LAST,
+       s.round_number ASC,
+       a.updated_at DESC
      LIMIT 100`,
     [candidateId],
   );
@@ -186,21 +205,29 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
       ? "not_scheduled"
       : rawStatus === "cancelled"
         ? "cancelled"
-        : rawStatus === "completed" || (row.scheduled_at && new Date(row.scheduled_at).getTime() < Date.now())
+        : rawStatus === "completed"
           ? "completed"
-          : "upcoming";
+          : !row.scheduled_at || Number.isNaN(new Date(row.scheduled_at).getTime())
+            ? "not_scheduled"
+            : new Date(row.scheduled_at).getTime() <= Date.now()
+              ? "completed"
+              : "upcoming";
     return {
       id: row.id ?? null,
       application_id: row.application_id,
+      job_id: row.job_id ?? null,
       job_title: row.job_title,
       company_name: row.company_name,
       location: row.location,
+      job_location: row.job_location,
+      job_posting_url: row.job_posting_url,
       round_name: row.round_name,
       round_number: Number(row.round_number ?? 1),
       scheduled_at: row.scheduled_at,
       duration_minutes: row.duration_minutes == null ? null : Number(row.duration_minutes),
       status,
       interview_status: row.interview_status,
+      interview_format: row.interview_format === "online" || row.interview_format === "onsite" ? row.interview_format : null,
       meeting_link: row.meeting_link,
       panel: Array.isArray(row.panel) ? row.panel : [],
       visible_updates: Array.isArray(row.visible_updates) ? row.visible_updates : [],
@@ -276,7 +303,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       [applicationId],
     ),
     query<any>(
-      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.duration_minutes, s.status, s.location, s.meeting_link,
+      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link,
               COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel
        FROM interview_schedules s
        LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
@@ -354,6 +381,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       scheduled_at: interview.scheduled_at,
       duration_minutes: interview.duration_minutes == null ? null : Number(interview.duration_minutes),
       status: interview.status || "scheduled",
+      interview_format: interview.interview_format === "online" || interview.interview_format === "onsite" ? interview.interview_format : null,
       location: interview.location,
       meeting_link: interview.meeting_link,
       panel: Array.isArray(interview.panel) ? interview.panel : [],

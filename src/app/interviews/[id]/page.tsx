@@ -40,6 +40,7 @@ interface InterviewDetail {
   scheduled_at: string | null;
   duration_minutes: number;
   status: string;
+  interview_format: "online" | "onsite" | null;
   location: string | null;
   meeting_link: string | null;
   applications: {
@@ -325,6 +326,7 @@ export default function InterviewDetailPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, fontSize: 13 }}>
               <div><span className="muted">Date:</span> {interview.scheduled_at ? new Date(interview.scheduled_at).toLocaleString() : "—"}</div>
               <div><span className="muted">Duration:</span> {interview.duration_minutes} min</div>
+              <div><span className="muted">Format:</span> {interview.interview_format === "online" ? "Online" : interview.interview_format === "onsite" ? "Onsite" : "Not provided"}</div>
               <div><span className="muted">Location:</span> {interview.location || "—"}</div>
               <div><span className="muted">Status:</span> <span className={`badge ${statusBadgeClass(interview.status)}`}>{interview.status}</span></div>
               {interview.meeting_link && (

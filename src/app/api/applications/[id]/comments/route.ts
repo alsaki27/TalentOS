@@ -7,10 +7,12 @@
 // unless they're updated to render a thread.
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentUserContext } from "@/lib/auth";
+import { requireCurrentUser } from "@/lib/auth";
 import { query, queryOne } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
+  const { response } = await requireCurrentUser();
+  if (response) return response;
   const data = await query<Record<string, any>>(
     'SELECT * FROM application_comments WHERE application_id = $1 ORDER BY created_at DESC LIMIT 50',
     [params.id]
@@ -19,11 +21,12 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+  const { context, response } = await requireCurrentUser();
+  if (response) return response;
   const body = await req.json();
-  const currentUser = await getCurrentUserContext();
   const commenterName = body.commenter_name?.trim()
-    || currentUser?.profile.display_name
-    || currentUser?.profile.email;
+    || context.profile.display_name
+    || context.profile.email;
   const commentBody = body.body?.trim();
 
   if (!commenterName) {
@@ -49,7 +52,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   data = await queryOne<Record<string, any>>(
     `INSERT INTO application_comments (application_id, commenter_name, commenter_user_id, body, visible_to_candidate, parent_comment_id)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [params.id, commenterName, currentUser?.profile.user_id ?? null, commentBody, Boolean(body.visible_to_candidate), parentCommentId]
+    [params.id, commenterName, context.profile.user_id, commentBody, Boolean(body.visible_to_candidate), parentCommentId]
   );
 
   return NextResponse.json(data, { status: 201 });

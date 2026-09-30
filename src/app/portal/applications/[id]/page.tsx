@@ -19,6 +19,24 @@ export default function CandidatePortalApplicationPage() {
     const id = applicationId;
     if (!id) return;
     const controller = new AbortController();
+    let disposed = false;
+    let refreshing = false;
+    async function refreshApplication() {
+      if (disposed || refreshing || document.visibilityState === "hidden") return;
+      refreshing = true;
+      try {
+        const response = await fetch(`/api/portal/me/applications/${id}`, { signal: controller.signal, cache: "no-store" });
+        if (response.status === 401) { router.push("/portal/login"); return; }
+        if (response.ok) {
+          const applicationData = await response.json();
+          if (!disposed) setApplication(applicationData);
+        }
+      } catch (requestError: any) {
+        if (!disposed && requestError?.name !== "AbortError") console.error("Application refresh failed", requestError);
+      } finally {
+        refreshing = false;
+      }
+    }
     Promise.all([
       fetch(`/api/portal/me/applications/${id}`, { signal: controller.signal, cache: "no-store" }),
       fetch(`/api/portal/me/applications/${id}/resume`, { signal: controller.signal, cache: "no-store" }),
@@ -30,17 +48,27 @@ export default function CandidatePortalApplicationPage() {
         const applicationData = await applicationResponse.json();
         const resumeData = resumeResponse.ok ? await resumeResponse.json() : null;
         const meData = meResponse.ok ? await meResponse.json() : null;
-        if (!controller.signal.aborted) {
+        if (!disposed && !controller.signal.aborted) {
           setApplication(applicationData);
           setResume(resumeData);
           setCandidateName(meData?.name || "");
         }
       })
       .catch((requestError) => {
-        if (!controller.signal.aborted && requestError?.name !== "AbortError") setError("Could not load this application.");
+        if (!disposed && !controller.signal.aborted && requestError?.name !== "AbortError") setError("Could not load this application.");
       })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+      .finally(() => { if (!disposed && !controller.signal.aborted) setLoading(false); });
+    const onVisibility = () => { if (document.visibilityState === "visible") void refreshApplication(); };
+    const timer = window.setInterval(() => { void refreshApplication(); }, 15000);
+    window.addEventListener("focus", refreshApplication);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      disposed = true;
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshApplication);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [applicationId, router]);
 
   async function logout() {

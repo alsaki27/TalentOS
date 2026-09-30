@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { easternDateTimeToUtcIso } from "@/lib/easternTime";
 
 interface ApplicationOption {
   id: string;
@@ -50,9 +51,11 @@ export default function ScheduleInterviewPage() {
   // Round info
   const [roundName, setRoundName] = useState("");
   const [roundNumber, setRoundNumber] = useState(1);
-  const [scheduledAt, setScheduledAt] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [scheduledTime, setScheduledTime] = useState("");
   const [duration, setDuration] = useState(60);
   const [location, setLocation] = useState("Zoom");
+  const [interviewFormat, setInterviewFormat] = useState<"online" | "onsite" | "">("");
   const [meetingLink, setMeetingLink] = useState("");
 
   // Panel builder
@@ -139,7 +142,10 @@ export default function ScheduleInterviewPage() {
   async function submit() {
     if (!selectedApp) { setError("Select a candidate application."); return; }
     if (!roundName) { setError("Enter a round name."); return; }
-    if (!scheduledAt) { setError("Select a date and time."); return; }
+    if (!scheduledDate || !scheduledTime) { setError("Select a date and time."); return; }
+    if (!interviewFormat) { setError("Select whether the interview is online or onsite."); return; }
+    const scheduledAt = easternDateTimeToUtcIso(scheduledDate, scheduledTime);
+    if (!scheduledAt) { setError("Enter a valid Eastern date and time."); return; }
     setLoading(true);
     setError("");
 
@@ -153,6 +159,7 @@ export default function ScheduleInterviewPage() {
         roundNumber,
         scheduledAt,
         durationMinutes: duration,
+        interviewFormat,
         location,
         meetingLink: meetingLink || null,
         panel: panel.map((p) => ({ interviewerId: p.userId, role: p.role })),
@@ -249,8 +256,12 @@ export default function ScheduleInterviewPage() {
             <input type="number" min={1} value={roundNumber} onChange={(e) => setRoundNumber(parseInt(e.target.value) || 1)} />
           </div>
           <div className="field-group">
-            <label>Date & Time</label>
-            <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+            <label>Date</label>
+            <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
+          </div>
+          <div className="field-group">
+            <label>Time (Eastern Time)</label>
+            <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} />
           </div>
           <div className="field-group">
             <label>Duration</label>
@@ -262,6 +273,14 @@ export default function ScheduleInterviewPage() {
             <label>Location</label>
             <select value={location} onChange={(e) => setLocation(e.target.value)}>
               {LOCATIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </div>
+          <div className="field-group">
+            <label>Format</label>
+            <select value={interviewFormat} onChange={(e) => setInterviewFormat(e.target.value as "online" | "onsite" | "")}>
+              <option value="">Select format</option>
+              <option value="online">Online</option>
+              <option value="onsite">Onsite</option>
             </select>
           </div>
           <div className="field-group">

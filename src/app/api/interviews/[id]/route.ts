@@ -80,6 +80,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "round_number",
     "scheduled_at",
     "duration_minutes",
+    "interview_format",
     "location",
     "meeting_link",
     "status",
@@ -87,6 +88,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
+  }
+
+  if ("interview_format" in updates && updates.interview_format !== null && updates.interview_format !== "online" && updates.interview_format !== "onsite") {
+    return NextResponse.json({ error: "interview_format must be 'online', 'onsite', or null." }, { status: 400 });
   }
 
   const keys = Object.keys(updates);

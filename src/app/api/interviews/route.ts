@@ -158,16 +158,22 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  if (!body.applicationId || !body.roundName || !body.scheduledAt) {
+  const scheduledAt = typeof body.scheduledAt === "string" ? body.scheduledAt : "";
+  if (!body.applicationId || !body.roundName || !scheduledAt || Number.isNaN(new Date(scheduledAt).getTime())) {
     return NextResponse.json(
       { error: "applicationId, roundName, and scheduledAt are required" },
       { status: 400 }
     );
   }
 
+  const interviewFormat = body.interviewFormat ?? body.interview_format ?? null;
+  if (interviewFormat !== null && interviewFormat !== "online" && interviewFormat !== "onsite") {
+    return NextResponse.json({ error: "interviewFormat must be 'online' or 'onsite'." }, { status: 400 });
+  }
+
   const schedule = await queryOne(
-    `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [body.applicationId, body.roundNumber ?? 1, body.roundName, body.scheduledAt, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, "scheduled", context.profile.user_id]
+    `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, interview_format, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [body.applicationId, body.roundNumber ?? 1, body.roundName, scheduledAt, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, interviewFormat, "scheduled", context.profile.user_id]
   );
   if (!schedule) {
     return NextResponse.json({ error: "Insert failed" }, { status: 500 });

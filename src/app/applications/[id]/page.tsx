@@ -11,6 +11,9 @@ export default function ApplicationDetailPage({ params }: { params: { id: string
   const [exports, setExports] = useState<any[]>([]);
   const [emails, setEmails] = useState<any[]>([]);
   const [note, setNote] = useState("");
+  const [shareWithCandidate, setShareWithCandidate] = useState(false);
+  const [savingActivity, setSavingActivity] = useState(false);
+  const [activityError, setActivityError] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
@@ -30,9 +33,23 @@ export default function ApplicationDetailPage({ params }: { params: { id: string
   useEffect(() => { void load(); }, [params.id]);
   async function addNote() {
     if (!note.trim()) return;
-    const res = await fetch(`/api/applications/${params.id}/comments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: note.trim(), visibleToCandidate: false }) });
-    if (!res.ok) { setError("Could not save note"); return; }
-    setNote(""); await load();
+    setSavingActivity(true);
+    setActivityError("");
+    try {
+      const res = await fetch(`/api/applications/${params.id}/comments`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: note.trim(), visible_to_candidate: shareWithCandidate }) });
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({}));
+        setActivityError(result.error || "Could not save the activity update.");
+        return;
+      }
+      setNote("");
+      setShareWithCandidate(false);
+      await load();
+    } catch {
+      setActivityError("Could not save the activity update.");
+    } finally {
+      setSavingActivity(false);
+    }
   }
   if (!app) return <main className="page-shell"><p className={error ? "error" : "muted"}>{error || "Loading application…"}</p></main>;
   const job = app.job || {}; const candidate = app.candidate || {}; const stage = app.application_stage || app.ae_stage || app.status || "unknown";
@@ -47,7 +64,24 @@ export default function ApplicationDetailPage({ params }: { params: { id: string
         </div>;
       })()}
     </section>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 20, marginTop: 20 }}><section className="card"><h2>Interview & AE notes</h2><textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Recruiter call, interview date, interviewer, outcome, next action…" rows={4} style={{ width: "100%", boxSizing: "border-box" }} /><button className="btn-primary btn-sm" onClick={addNote} disabled={!note.trim()}>Add private note</button>{comments.length ? comments.map(c => <article key={c.id} style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}><strong>{c.commenter_name || "Team member"}</strong><p style={{ whiteSpace: "pre-wrap" }}>{c.body}</p><small className="muted">{c.created_at ? new Date(c.created_at).toLocaleString() : ""}</small></article>) : <p className="muted">No notes yet.</p>}</section><section className="card"><h2>Resume archive</h2>{exports.length ? exports.map(x => <div key={x.id} style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}><strong>{x.file_name}</strong><p className="muted">{x.status} · {x.created_at ? new Date(x.created_at).toLocaleString() : ""}</p>{x.storage_url && <a className="btn-sm" href={x.storage_url} target="_blank" rel="noreferrer">Open SharePoint</a>} </div>) : <p className="muted">No archived export for this application.</p>}</section></div>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(320px,1fr))", gap: 20, marginTop: 20 }}>
+      <section className="card">
+        <h2>Application activity</h2>
+        <p className="muted">Add an internal note, or share an update with the candidate on this application.</p>
+        <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="Write an interview update, next step, or private note…" rows={4} style={{ width: "100%", boxSizing: "border-box" }} />
+        <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0", fontWeight: 500 }}>
+          <input type="checkbox" checked={shareWithCandidate} onChange={e => setShareWithCandidate(e.target.checked)} />
+          Share with candidate
+        </label>
+        {activityError && <p className="error">{activityError}</p>}
+        <button className="btn-primary btn-sm" onClick={addNote} disabled={!note.trim() || savingActivity}>{savingActivity ? "Saving…" : shareWithCandidate ? "Share update" : "Add private note"}</button>
+        {comments.length ? comments.map(c => <article key={c.id} style={{ borderTop: "1px solid var(--border)", marginTop: 12, paddingTop: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}><strong>{c.commenter_name || "Team member"}</strong><span className="badge">{c.visible_to_candidate ? "Shared with candidate" : "Internal only"}</span></div>
+          <p style={{ whiteSpace: "pre-wrap" }}>{c.body}</p><small className="muted">{c.created_at ? new Date(c.created_at).toLocaleString() : ""}</small>
+        </article>) : <p className="muted">No activity yet.</p>}
+      </section>
+      <section className="card"><h2>Resume archive</h2>{exports.length ? exports.map(x => <div key={x.id} style={{ borderTop: "1px solid var(--border)", padding: "12px 0" }}><strong>{x.file_name}</strong><p className="muted">{x.status} · {x.created_at ? new Date(x.created_at).toLocaleString() : ""}</p>{x.storage_url && <a className="btn-sm" href={x.storage_url} target="_blank" rel="noreferrer">Open SharePoint</a>} </div>) : <p className="muted">No archived export for this application.</p>}</section>
+    </div>
     <section className="card" style={{ marginTop: 20 }}><h2>Email log ({emails.length})</h2>{emails.length ? emails.map(mail => <article key={mail.id} style={{ borderTop: "1px solid var(--border)", padding: "14px 0" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}><strong>{mail.subject || "(no subject)"}</strong><small className="muted">{mail.sent_at ? new Date(mail.sent_at).toLocaleString() : ""}</small></div><p className="muted" style={{ margin: "6px 0" }}>{mail.direction === "outbound" ? "Sent" : "Received"} · {mail.from_email || "Unknown sender"} · {mail.match_method} match</p><p style={{ whiteSpace: "pre-wrap", maxHeight: 180, overflow: "auto", marginBottom: 0 }}>{mail.body_text || mail.snippet || "No body available."}</p></article>) : <p className="muted">No linked emails yet. Matching will appear here as Gmail messages are triaged.</p>}</section>
     <section className="card" style={{ marginTop: 20 }}><h2>Stage history</h2>{events.length ? events.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border)", padding: "10px 0" }}><span>{e.from_stage || e.from_status || "Created"} → {e.to_stage || e.to_status}</span><small className="muted">{e.created_at ? new Date(e.created_at).toLocaleString() : ""}</small></div>) : <p className="muted">No stage events recorded.</p>}</section>
   </main>;

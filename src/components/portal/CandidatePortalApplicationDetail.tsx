@@ -151,6 +151,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                       <strong>{interview.round_name}</strong>
                       <span>{formatTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
                       <span>Status: {interview.status}</span>
+                      {interview.interview_format && <span>Format: {interview.interview_format === "online" ? "Online" : "Onsite"}</span>}
                       {interview.location && <span>Location: {interview.location}</span>}
                       {interview.panel?.length > 0 && <span>Interviewers: {interview.panel.join(", ")}</span>}
                     </div>
