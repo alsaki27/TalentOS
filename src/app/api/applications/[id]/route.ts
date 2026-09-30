@@ -203,8 +203,46 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     }
   }
 
+  // Optional: bundled with status -> "interview" from the candidate dashboard
+  // and candidate profile Applications tab quick-status flow (the
+  // ScheduleInterviewModal), so the date/time/format save atomically with the
+  // status change instead of racing a second request. Deliberately NOT
+  // required here - other status='interview' writers (e.g. email-detected
+  // interview approvals) must keep working without ever sending this field;
+  // the UI enforces "required" by gating the status write behind the modal.
+  let interviewToCreate: { scheduledAt: string; format: "online" | "onsite" } | null = null;
+  if (updates.status === "interview" && body.interview) {
+    const scheduledAt = body.interview.scheduledAt;
+    const format = body.interview.format;
+    const validDate = typeof scheduledAt === "string" && !Number.isNaN(new Date(scheduledAt).getTime());
+    const validFormat = format === "online" || format === "onsite";
+    if (!validDate || !validFormat) {
+      return NextResponse.json(
+        { error: "interview.scheduledAt must be a valid date and interview.format must be 'online' or 'onsite'." },
+        { status: 400 }
+      );
+    }
+    interviewToCreate = { scheduledAt, format };
+  }
+
   try {
     const data = await updateApplication(params.id, updates);
+
+    let createdInterview: unknown = null;
+    if (interviewToCreate) {
+      createdInterview = await queryOne(
+        `INSERT INTO interview_schedules
+           (application_id, round_number, round_name, scheduled_at, interview_format, created_by)
+         VALUES (
+           $1,
+           COALESCE((SELECT MAX(round_number) + 1 FROM interview_schedules WHERE application_id = $1), 1),
+           'Interview', $2, $3, $4
+         )
+         RETURNING id, application_id, round_number, round_name, scheduled_at, interview_format`,
+        [params.id, interviewToCreate.scheduledAt, interviewToCreate.format, currentUser.profile.display_name || currentUser.profile.email]
+      );
+    }
+
     const backgroundTasks: Promise<unknown>[] = [];
 
     if ("ae_stage" in updates && updates.ae_stage !== previousAeStage) {
@@ -243,6 +281,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         entityId: params.id,
         metadata: { fields: Object.keys(updates) },
       }));
+      if (createdInterview) {
+        backgroundTasks.push(execute(
+          'INSERT INTO audit_logs (actor_user_id, actor_email, action, entity_type, entity_id, metadata) VALUES ($1, $2, $3, $4, $5, $6)',
+          [
+            currentUser.profile.user_id,
+            currentUser.profile.email,
+            'application.interview_scheduled',
+            'application',
+            params.id,
+            JSON.stringify(createdInterview),
+          ]
+        ));
+      }
       backgroundDispatch(Promise.all(backgroundTasks));
       void triggerWebhooks("application.updated", {
         application_id: params.id,
@@ -253,7 +304,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       backgroundDispatch(Promise.all(backgroundTasks));
     }
 
-    return NextResponse.json(data);
+    return NextResponse.json(createdInterview ? { ...data, interview: createdInterview } : data);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

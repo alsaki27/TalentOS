@@ -43,6 +43,8 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  interview_scheduled_at: string | null;
+  interview_format: "online" | "onsite" | null;
 }
 
 interface CandidateOption {
@@ -187,6 +189,8 @@ export async function GET(req: NextRequest) {
         j.salary_min, j.salary_max, j.salary_currency,
         tj.fit_score, tj.recommendation,
         sp.storage_url AS sharepoint_resume_url,
+        iv.scheduled_at AS interview_scheduled_at,
+        iv.interview_format,
         COUNT(*) OVER()::int AS total_count
       FROM applications a
       JOIN candidates c ON c.id = a.candidate_id
@@ -205,6 +209,18 @@ export async function GET(req: NextRequest) {
         ORDER BY COALESCE(e.updated_at, e.created_at) DESC
         LIMIT 1
       ) sp ON true
+      -- Most recently created, non-cancelled interview round for this
+      -- application - the quick "mark Interview" flow (ScheduleInterviewModal)
+      -- creates exactly one row per interview; the full /interviews/schedule
+      -- page can add more, so "most recent" also reflects a later reschedule.
+      LEFT JOIN LATERAL (
+        SELECT s.scheduled_at, s.interview_format
+        FROM interview_schedules s
+        WHERE s.application_id = a.id
+          AND COALESCE(s.status, 'scheduled') <> 'cancelled'
+        ORDER BY s.created_at DESC
+        LIMIT 1
+      ) iv ON true
       ${whereClause}
       ORDER BY ${orderSql}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

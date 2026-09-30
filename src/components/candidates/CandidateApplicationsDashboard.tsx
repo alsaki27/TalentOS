@@ -7,6 +7,7 @@ import ApplicationStatusChart from "./shared/ApplicationStatusChart";
 import ApplicationSourceChart from "./shared/ApplicationSourceChart";
 import ApplicationsDataTable from "./shared/ApplicationsDataTable";
 import ApplicationNotesModal from "./shared/ApplicationNotesModal";
+import type { InterviewDetails } from "./shared/ScheduleInterviewModal";
 import { DISPLAY_GROUPS } from "@/lib/applicationDisplayStatus";
 
 interface DashboardRow {
@@ -30,6 +31,8 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  interview_scheduled_at: string | null;
+  interview_format: "online" | "onsite" | null;
 }
 
 interface DashboardData {
@@ -93,7 +96,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
     router.push("?" + next.toString());
   }
 
-  function handleStatusChange(applicationId: string, newStatus: string) {
+  function handleStatusChange(applicationId: string, newStatus: string, interview?: InterviewDetails) {
     var previousStatus = data?.applications.find(function (application) {
       return application.application_id === applicationId;
     })?.status;
@@ -113,7 +116,10 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
         statusCounts,
         applications: previous.applications.map(function (application) {
           return application.application_id === applicationId
-            ? { ...application, status: newStatus }
+            ? {
+                ...application, status: newStatus,
+                ...(interview ? { interview_scheduled_at: interview.scheduledAt, interview_format: interview.format } : {}),
+              }
             : application;
         }),
       };
@@ -122,7 +128,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
     void fetch("/api/applications/" + applicationId, {
         method: "PATCH", cache: "no-store", keepalive: true,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(interview ? { status: newStatus, interview: interview } : { status: newStatus }),
       }).then(function (res) {
         if (!res.ok) throw new Error("Failed");
         return res.json();

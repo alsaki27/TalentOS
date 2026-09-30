@@ -3,6 +3,8 @@
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
+import ScheduleInterviewModal, { InterviewDetails } from "./ScheduleInterviewModal";
+import { formatEasternDateTime } from "@/lib/easternTime";
 
 interface DashboardApplication {
   application_id: string;
@@ -22,11 +24,13 @@ interface DashboardApplication {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  interview_scheduled_at?: string | null;
+  interview_format?: "online" | "onsite" | null;
 }
 
 interface ApplicationsDataTableProps {
   applications: DashboardApplication[];
-  onStatusChange?: (applicationId: string, newStatus: string) => void | Promise<void>;
+  onStatusChange?: (applicationId: string, newStatus: string, interview?: InterviewDetails) => void | Promise<void>;
   onNotesOpen?: (applicationId: string) => void;
   readOnly?: boolean;
   totalCount?: number;
@@ -94,6 +98,7 @@ export default function ApplicationsDataTable({
   var [localStatusLoading, setLocalStatusLoading] = useState<Record<string, boolean>>({});
   var [copiedId, setCopiedId] = useState<string | null>(null);
   var [sharepointNoticeId, setSharepointNoticeId] = useState<string | null>(null);
+  var [interviewModalApp, setInterviewModalApp] = useState<DashboardApplication | null>(null);
 
   var totalPages = totalCount !== undefined ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
   var showCandidateColumn = applications.some(function (a) { return !!a.candidate_name; });
@@ -107,17 +112,35 @@ export default function ApplicationsDataTable({
     );
   }
 
-  function handleStatusChange(applicationId: string, newStatus: string) {
+  function handleStatusChange(applicationId: string, newStatus: string, interview?: InterviewDetails) {
     if (!onStatusChange) return;
     setLocalStatusLoading(function (prev) { var next: Record<string, boolean> = {}; for (var k in prev) next[k] = prev[k]; next[applicationId] = true; return next; });
-    void Promise.resolve(onStatusChange(applicationId, newStatus)).finally(function () {
+    void Promise.resolve(onStatusChange(applicationId, newStatus, interview)).finally(function () {
       setLocalStatusLoading(function (prev) { var next: Record<string, boolean> = {}; for (var k in prev) next[k] = prev[k]; delete next[applicationId]; return next; });
     });
   }
 
-  function handleToggle(applicationId: string, currentStatus: string, targetStatus: string) {
+  // Moving TO Interview (not already there) needs date/time/format first -
+  // the modal gates the actual status write until those are confirmed, so a
+  // half-filled interview never silently saves.
+  function requestStatusChange(app: DashboardApplication, newStatus: string) {
+    if (newStatus === "interview" && app.status !== "interview") {
+      setInterviewModalApp(app);
+      return;
+    }
+    handleStatusChange(app.application_id, newStatus);
+  }
+
+  function handleToggle(app: DashboardApplication, targetStatus: string) {
     if (!onStatusChange) return;
-    handleStatusChange(applicationId, currentStatus === targetStatus ? "applied" : targetStatus);
+    requestStatusChange(app, app.status === targetStatus ? "applied" : targetStatus);
+  }
+
+  function handleInterviewConfirm(details: InterviewDetails) {
+    if (!interviewModalApp) return Promise.resolve();
+    var applicationId = interviewModalApp.application_id;
+    setInterviewModalApp(null);
+    return Promise.resolve(handleStatusChange(applicationId, "interview", details));
   }
 
   function renderSortIndicator(column: string) {
@@ -141,13 +164,14 @@ export default function ApplicationsDataTable({
               {showCandidateColumn && <th onClick={function () { onSort("candidate_name"); }} style={{ ...TH_STYLE, width: "10%" }}>Candidate {renderSortIndicator("candidate_name")}</th>}
               <th onClick={function () { onSort("company_name"); }} style={{ ...TH_STYLE, width: "10%" }}>Company {renderSortIndicator("company_name")}</th>
               <th onClick={function () { onSort("job_title"); }} style={{ ...TH_STYLE }}>Job Role {renderSortIndicator("job_title")}</th>
-              <th style={{ ...TH_STYLE, cursor: "default", width: "7%" }}>Job ID</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "6%" }}>Job ID</th>
               <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Source</th>
               <th style={{ ...TH_STYLE, cursor: "default", width: "8%" }}>Location</th>
-              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "11%" }}>Resume</th>
+              <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "10%" }}>Resume</th>
               <th onClick={function () { onSort("status"); }} style={{ ...TH_STYLE, width: "11%" }}>Status {renderSortIndicator("status")}</th>
+              <th style={{ ...TH_STYLE, cursor: "default", width: "10%" }}>Interview</th>
               <th onClick={function () { onSort("applied_at"); }} style={{ ...TH_STYLE, width: "8%" }}>Applied {renderSortIndicator("applied_at")}</th>
-              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "15%" }}>Actions</th>}
+              {!readOnly && <th style={{ ...TH_STYLE, cursor: "default", textAlign: "center", width: "13%" }}>Actions</th>}
             </tr>
           </thead>
           <tbody>
@@ -310,7 +334,7 @@ export default function ApplicationsDataTable({
                         // wait out the full PATCH round trip before the next edit.
                         aria-busy={isLoading}
                         className={`badge badge-${app.status}`}
-                        onChange={function (e) { handleStatusChange(app.application_id, e.target.value); }}
+                        onChange={function (e) { requestStatusChange(app, e.target.value); }}
                         style={{
                           cursor: "pointer",
                           opacity: isLoading ? 0.5 : 1, outline: "none",
@@ -334,6 +358,22 @@ export default function ApplicationsDataTable({
                       </select>
                     )}
                   </td>
+                  <td style={{ padding: "10px 12px", fontSize: 12 }}>
+                    {app.interview_scheduled_at ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <span style={{ color: "var(--ink)", fontWeight: 600 }}>{formatEasternDateTime(app.interview_scheduled_at)}</span>
+                        {app.interview_format && (
+                          <span style={{
+                            display: "inline-flex", alignItems: "center", width: "fit-content",
+                            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.3px",
+                            padding: "1px 6px", borderRadius: 4,
+                            background: app.interview_format === "online" ? "rgba(59,130,246,0.12)" : "rgba(168,85,247,0.12)",
+                            color: app.interview_format === "online" ? "#3b82f6" : "#a855f7",
+                          }}>{app.interview_format === "online" ? "Online" : "Onsite"}</span>
+                        )}
+                      </div>
+                    ) : <span style={{ color: "var(--ink-soft)", opacity: 0.5 }}>—</span>}
+                  </td>
                   <td style={{ padding: "10px 12px", fontSize: 12, color: "var(--ink-soft)" }}>{formatDate(app.applied_at)}</td>
                   {!readOnly && (
                     <td style={{ padding: "10px 12px", textAlign: "center" }}>
@@ -351,7 +391,7 @@ export default function ApplicationsDataTable({
                           >Copilot</button>
                         )}
                         <button
-                          onClick={function () { handleToggle(app.application_id, app.status, "replied"); }}
+                          onClick={function () { handleToggle(app, "replied"); }}
                           disabled={isLoading}
                           title={isScreening ? "Remove Screening" : "Mark Screening"}
                           style={{
@@ -364,7 +404,7 @@ export default function ApplicationsDataTable({
                           }}
                         >📞</button>
                         <button
-                          onClick={function () { handleToggle(app.application_id, app.status, "interview"); }}
+                          onClick={function () { handleToggle(app, "interview"); }}
                           disabled={isLoading}
                           title={isInterview ? "Remove Interview" : "Mark Interview"}
                           style={{
@@ -395,6 +435,14 @@ export default function ApplicationsDataTable({
           </tbody>
         </table>
       </div>
+
+      {interviewModalApp && (
+        <ScheduleInterviewModal
+          applicationLabel={interviewModalApp.company_name + " · " + interviewModalApp.job_title}
+          onCancel={function () { setInterviewModalApp(null); }}
+          onConfirm={handleInterviewConfirm}
+        />
+      )}
 
       {totalPages > 1 && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 0 0", fontSize: 12, color: "var(--ink-soft)" }}>

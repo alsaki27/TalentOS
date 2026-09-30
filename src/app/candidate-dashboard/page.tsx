@@ -8,6 +8,7 @@ import ApplicationStatusChart from "@/components/candidates/shared/ApplicationSt
 import ApplicationSourceChart from "@/components/candidates/shared/ApplicationSourceChart";
 import ApplicationsDataTable from "@/components/candidates/shared/ApplicationsDataTable";
 import ApplicationNotesModal from "@/components/candidates/shared/ApplicationNotesModal";
+import type { InterviewDetails } from "@/components/candidates/shared/ScheduleInterviewModal";
 import { DISPLAY_GROUPS } from "@/lib/applicationDisplayStatus";
 
 interface CandidateOption {
@@ -39,6 +40,8 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  interview_scheduled_at: string | null;
+  interview_format: "online" | "onsite" | null;
 }
 
 interface EmailTaskCounts {
@@ -116,7 +119,7 @@ function CandidateDashboardInner() {
     router.push("/candidate-dashboard?" + next.toString());
   }
 
-  async function handleStatusChange(applicationId: string, newStatus: string) {
+  async function handleStatusChange(applicationId: string, newStatus: string, interview?: InterviewDetails) {
     var previousStatus = data?.applications.find(function (application) {
       return application.application_id === applicationId;
     })?.status;
@@ -142,7 +145,10 @@ function CandidateDashboardInner() {
         statusCounts: shiftStatusCounts(previous.statusCounts, rollbackStatus, newStatus),
         applications: previous.applications.map(function (application) {
           return application.application_id === applicationId
-            ? { ...application, status: newStatus }
+            ? {
+                ...application, status: newStatus,
+                ...(interview ? { interview_scheduled_at: interview.scheduledAt, interview_format: interview.format } : {}),
+              }
             : application;
         }),
       };
@@ -152,7 +158,7 @@ function CandidateDashboardInner() {
       var res = await fetch("/api/applications/" + applicationId, {
         method: "PATCH", cache: "no-store", keepalive: true,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(interview ? { status: newStatus, interview: interview } : { status: newStatus }),
       });
       if (!res.ok) throw new Error("Failed");
       var updated = await res.json().catch(function () { return {}; });

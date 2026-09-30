@@ -27,6 +27,8 @@ interface DashboardRow {
   recommendation: string | null;
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
+  interview_scheduled_at: string | null;
+  interview_format: "online" | "onsite" | null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -80,7 +82,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         j.salary_currency,
         tj.fit_score,
         tj.recommendation,
-        sp.storage_url AS sharepoint_resume_url
+        sp.storage_url AS sharepoint_resume_url,
+        iv.scheduled_at AS interview_scheduled_at,
+        iv.interview_format
       FROM applications a
       JOIN jobs j ON a.job_id = j.id
       LEFT JOIN target_jobs tj ON tj.job_id = j.id AND tj.candidate_id = a.candidate_id
@@ -97,6 +101,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         ORDER BY COALESCE(e.updated_at, e.created_at) DESC
         LIMIT 1
       ) sp ON true
+      -- Most recently created, non-cancelled interview round - see
+      -- api/candidate-dashboard/route.ts for the identical join and why
+      -- "most recent" is the right choice here.
+      LEFT JOIN LATERAL (
+        SELECT s.scheduled_at, s.interview_format
+        FROM interview_schedules s
+        WHERE s.application_id = a.id
+          AND COALESCE(s.status, 'scheduled') <> 'cancelled'
+        ORDER BY s.created_at DESC
+        LIMIT 1
+      ) iv ON true
       WHERE a.candidate_id = $1`,
       [candidateId]
     );
