@@ -307,6 +307,22 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
     return { ok: true };
   }
 
+  async function uploadSessionPdf(sessionId: string, file: File) {
+    const fd = new FormData();
+    fd.append("file", file);
+    const res = await fetch(`/api/candidates/${candidateId}/student-audit/mock-sessions/${sessionId}/pdf`, { method: "POST", body: fd });
+    if (!res.ok) return { ok: false, error: (await res.json().catch(() => ({})))?.error || "Failed to upload PDF" };
+    await load();
+    return { ok: true };
+  }
+
+  async function deleteSessionPdf(sessionId: string) {
+    const res = await fetch(`/api/candidates/${candidateId}/student-audit/mock-sessions/${sessionId}/pdf`, { method: "DELETE" });
+    if (!res.ok) return { ok: false, error: (await res.json().catch(() => ({})))?.error || "Failed to remove PDF" };
+    await load();
+    return { ok: true };
+  }
+
   if (loading) return <p className="muted">Loading training audit…</p>;
 
   if (loadError || !summary?.student) {
@@ -558,6 +574,10 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
           candidateName={student.name}
           targetRole={modalSession.round_type}
           onSave={(rawText) => saveSessionAnalysis(modalSessionId, rawText)}
+          pdfUrl={modalSession.pdf_url}
+          pdfFilename={modalSession.pdf_filename}
+          onUploadPdf={(file) => uploadSessionPdf(modalSessionId, file)}
+          onDeletePdf={() => deleteSessionPdf(modalSessionId)}
           onClose={() => setModalSessionId(null)}
           onSaved={async () => {
             setModalSessionId(null);
