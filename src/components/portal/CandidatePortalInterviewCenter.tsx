@@ -49,9 +49,15 @@ function safeDate(value: string | null, withTime = false) {
   const isDateOnly = !withTime && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const date = new Date(isDateOnly ? `${value}T12:00:00` : value);
   if (Number.isNaN(date.getTime())) return withTime ? "Date and time to be confirmed" : "Date to be confirmed";
+  // dateStyle/timeStyle cannot be combined with timeZoneName (or any other
+  // component option) per the Intl.DateTimeFormat spec - the constructor
+  // throws "Invalid option : option" for every real (non-null) date the
+  // instant this runs, which is exactly what crashed this page. Spell the
+  // same "medium date, short time, short zone name" output out as explicit
+  // component options instead, which mix freely.
   return new Intl.DateTimeFormat(undefined, withTime
-    ? { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }
-    : { dateStyle: "medium" }).format(date);
+    ? { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }
+    : { year: "numeric", month: "short", day: "numeric" }).format(date);
 }
 
 function interviewBucket(interview: CandidateInterview): InterviewTab | "unscheduled" {

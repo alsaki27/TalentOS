@@ -21,7 +21,10 @@ function formatTime(value: string | null) {
   if (!value) return "Date to be confirmed";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Date to be confirmed";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short", timeZoneName: "short" }).format(date);
+  // dateStyle/timeStyle cannot be combined with timeZoneName per the
+  // Intl.DateTimeFormat spec - throws "Invalid option : option" for every
+  // real date. Explicit component options give the same output and mix freely.
+  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
 }
 
 function CollapsibleCard({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
