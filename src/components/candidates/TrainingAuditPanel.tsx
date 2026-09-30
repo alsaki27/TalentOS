@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useState } from "react";
-import { BookOpen, Award, FileText, Edit3, Send, Link2 } from "lucide-react";
-import { ExecutiveAuditReportCard } from "@/components/audit/ExecutiveAuditReportCard";
+import { BookOpen, Award, FileText, Edit3, Send, Link2, BarChart2, BookMarked, Trash2, Paperclip } from "lucide-react";
 import { ExecutiveAuditReportModal } from "@/components/audit/ExecutiveAuditReportModal";
+import { MockSessionForm, getScoreColor, type MockSessionData } from "@/components/candidates/MockSessionForm";
+import { TranscriptModal } from "@/components/candidates/TranscriptModal";
 
 interface AuditStudent {
   id: string;
@@ -28,20 +29,11 @@ interface StickyNote {
   pinned: boolean;
 }
 
-interface MockSession {
-  id: string;
-  session_date: string;
-  target_role: string | null;
-  overall_score: number | null;
-  overall_score_max: number | null;
-  raw_analysis_text: string | null;
-}
-
 interface TrainingAuditSummary {
   linked: boolean;
   student: AuditStudent | null;
   stickyNotes: StickyNote[];
-  mockSessions: MockSession[];
+  mockSessions: MockSessionData[];
   syncedAt?: string;
 }
 
@@ -101,10 +93,9 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
   const [savingNote, setSavingNote] = useState(false);
 
   const [showNewSession, setShowNewSession] = useState(false);
-  const [newSession, setNewSession] = useState({ session_date: new Date().toISOString().slice(0, 10), target_role: "", transcript_source: "teams", transcript_raw_text: "", analysis_raw_text: "" });
-  const [creatingSession, setCreatingSession] = useState(false);
-  const [openSessionId, setOpenSessionId] = useState<string | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [modalSessionId, setModalSessionId] = useState<string | null>(null);
+  const [transcriptSessionId, setTranscriptSessionId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -291,33 +282,6 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
     }
   }
 
-  async function createSession() {
-    if (!newSession.transcript_raw_text.trim() && !newSession.analysis_raw_text.trim()) {
-      setActionError("Paste a transcript and/or an audit analysis before saving.");
-      return;
-    }
-    setCreatingSession(true);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/candidates/${candidateId}/student-audit/mock-sessions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newSession),
-      });
-      if (res.ok) {
-        setShowNewSession(false);
-        setNewSession({ session_date: new Date().toISOString().slice(0, 10), target_role: "", transcript_source: "teams", transcript_raw_text: "", analysis_raw_text: "" });
-        await load();
-      } else {
-        setActionError((await res.json().catch(() => ({})))?.error || "Failed to save the mock session.");
-      }
-    } catch {
-      setActionError("Failed to save the mock session — check your connection and try again.");
-    } finally {
-      setCreatingSession(false);
-    }
-  }
-
   async function deleteSession(sessionId: string) {
     if (!confirm("Delete this mock interview session? This cannot be undone.")) return;
     if (!summary) return;
@@ -358,7 +322,9 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
   const { student, stickyNotes, mockSessions, syncedAt } = summary;
   const ratingCfg = RATING_CONFIG[student.rating] ?? { label: student.rating, color: "#64748b" };
   const pinnedFirst = [...stickyNotes].sort((a, b) => Number(b.pinned) - Number(a.pinned));
-  const openSession = mockSessions.find((s) => s.id === openSessionId) || null;
+  const modalSession = mockSessions.find((s) => s.id === modalSessionId) || null;
+  const editingSession = mockSessions.find((s) => s.id === editingSessionId) || null;
+  const transcriptSession = mockSessions.find((s) => s.id === transcriptSessionId) || null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -506,76 +472,108 @@ export function TrainingAuditPanel({ candidateId }: { candidateId: string }) {
       <div className="card">
         <div className="page-header" style={{ marginBottom: 12 }}>
           <h3 style={{ fontSize: 14, margin: 0 }}>Mock interview sessions ({mockSessions.length})</h3>
-          <button className="btn-compact btn-sm" onClick={() => setShowNewSession(!showNewSession)}>
-            {showNewSession ? "Cancel" : "+ New mock session"}
+          <button className="btn-compact btn-sm" onClick={() => { setShowNewSession(!showNewSession); setEditingSessionId(null); }}>
+            {showNewSession ? "Cancel" : "+ Log Mock Interview"}
           </button>
         </div>
 
         {showNewSession && (
-          <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input className="input" type="date" value={newSession.session_date} onChange={(e) => setNewSession({ ...newSession, session_date: e.target.value })} style={{ maxWidth: 160 }} />
-              <input className="input" placeholder="Target role" value={newSession.target_role} onChange={(e) => setNewSession({ ...newSession, target_role: e.target.value })} />
-              <select className="input" style={{ maxWidth: 140 }} value={newSession.transcript_source} onChange={(e) => setNewSession({ ...newSession, transcript_source: e.target.value })}>
-                <option value="teams">Teams</option>
-                <option value="zoom">Zoom</option>
-                <option value="meet">Meet</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 12 }}>Paste raw transcript (optional — auto-organized)</label>
-              <textarea className="input" rows={6} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} value={newSession.transcript_raw_text} onChange={(e) => setNewSession({ ...newSession, transcript_raw_text: e.target.value })} placeholder={"Mayukh   0:03\nLet's get started..."} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12 }}>Paste audit analysis text (optional — parsed automatically)</label>
-              <textarea className="input" rows={6} style={{ width: "100%", fontFamily: "monospace", fontSize: 12 }} value={newSession.analysis_raw_text} onChange={(e) => setNewSession({ ...newSession, analysis_raw_text: e.target.value })} placeholder={"Overall Assessment: 8.5 / 10 (...)\n\nPERFORMANCE METRICS:\n* Communication & Delivery: 9 / 10 (...)"} />
-            </div>
-            <button className="btn-primary" onClick={createSession} disabled={creatingSession}>
-              {creatingSession ? "Saving..." : "Save session"}
-            </button>
-          </div>
+          <MockSessionForm
+            candidateId={candidateId}
+            onCancel={() => setShowNewSession(false)}
+            onSaved={() => { setShowNewSession(false); void load(); }}
+          />
         )}
 
         {mockSessions.length === 0 ? (
           <p className="muted" style={{ fontSize: 13 }}>No mock interviews recorded yet.</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {mockSessions.map((s) => (
-              <div key={s.id} style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }} onClick={() => setOpenSessionId(openSessionId === s.id ? null : s.id)}>
-                    <strong style={{ fontSize: 13 }}>{new Date(s.session_date).toLocaleDateString()}</strong>
-                    {s.target_role && <span className="muted" style={{ fontSize: 12 }}>{s.target_role}</span>}
-                    {s.overall_score !== null && <span className="badge badge-info">{s.overall_score}/{s.overall_score_max ?? 10}</span>}
+            {mockSessions.map((s) => {
+              if (editingSessionId === s.id) {
+                return (
+                  <MockSessionForm
+                    key={s.id}
+                    candidateId={candidateId}
+                    initial={s}
+                    onCancel={() => setEditingSessionId(null)}
+                    onSaved={() => { setEditingSessionId(null); void load(); }}
+                  />
+                );
+              }
+              const hasTranscript = !!s.transcript_raw_text?.trim();
+              const wordCount = hasTranscript ? s.transcript_raw_text!.trim().split(/\s+/).filter(Boolean).length : 0;
+              const scoreColor = getScoreColor(s.overall_score);
+              const analysisLabel = s.pdf_url ? "Audit + PDF" : s.raw_analysis_text ? "Audit Report" : "+ Analysis";
+              return (
+                <div key={s.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {s.overall_score !== null && (
+                        <span style={{ background: `${scoreColor}20`, color: scoreColor, fontWeight: 800, fontSize: 13, padding: "2px 8px", borderRadius: 6, border: `1px solid ${scoreColor}40` }}>
+                          {s.overall_score} / {s.overall_score_max ?? 10}
+                        </span>
+                      )}
+                      {s.created_by && <span className="badge">{s.created_by}</span>}
+                      {s.round_type && <span className="badge">{s.round_type}</span>}
+                      <span className="muted" style={{ fontSize: 12 }}>{new Date(s.session_date).toLocaleDateString()}</span>
+                    </div>
+                    <button className="btn-compact btn-sm" onClick={() => deleteSession(s.id)}><Trash2 size={12} /></button>
                   </div>
-                  <button className="btn-compact btn-sm" onClick={() => deleteSession(s.id)}>Delete</button>
-                </div>
-                {openSessionId === s.id && (
-                  <div style={{ marginTop: 10, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                    <ExecutiveAuditReportCard rawText={s.raw_analysis_text} candidateName={student.name} targetRole={s.target_role} onOpenModal={() => setModalSessionId(s.id)} />
-                    {!s.raw_analysis_text && (
-                      <button className="btn-compact btn-sm" onClick={() => setModalSessionId(s.id)}>+ Add audit analysis</button>
+                  {s.feedback_summary && <p style={{ margin: "8px 0 0", fontSize: 13, fontStyle: "italic" }}>&quot;{s.feedback_summary}&quot;</p>}
+                  {(s.strengths_noted || s.areas_for_improvement) && (
+                    <p className="muted" style={{ fontSize: 12, margin: "4px 0 0" }}>
+                      {s.strengths_noted && <>Strengths: {s.strengths_noted}. </>}
+                      {s.areas_for_improvement && <>Improve: {s.areas_for_improvement}.</>}
+                    </p>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                    <button className="btn-compact btn-sm" onClick={() => setModalSessionId(s.id)} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <BarChart2 size={12} /> {analysisLabel}
+                    </button>
+                    <button className="btn-compact btn-sm" onClick={() => setTranscriptSessionId(s.id)} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <BookMarked size={12} /> {hasTranscript ? `Transcript (${wordCount}w)` : "+ Add Transcript"}
+                    </button>
+                    <button className="btn-compact btn-sm" onClick={() => { setEditingSessionId(s.id); setShowNewSession(false); }} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <Edit3 size={12} /> Edit
+                    </button>
+                    {s.pdf_url && (
+                      <a href={s.pdf_url} target="_blank" rel="noreferrer" className="btn-compact btn-sm" style={{ display: "flex", alignItems: "center", gap: 5, textDecoration: "none" }}>
+                        <Paperclip size={12} /> {s.pdf_filename || "View PDF"}
+                      </a>
                     )}
                   </div>
-                )}
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
 
-      {modalSessionId && (
+      {modalSessionId && modalSession && (
         <ExecutiveAuditReportModal
           candidateId={candidateId}
           sessionId={modalSessionId}
-          rawText={mockSessions.find((s) => s.id === modalSessionId)?.raw_analysis_text ?? null}
+          rawText={modalSession.raw_analysis_text}
           candidateName={student.name}
-          targetRole={openSession?.target_role}
+          targetRole={modalSession.round_type}
           onSave={(rawText) => saveSessionAnalysis(modalSessionId, rawText)}
           onClose={() => setModalSessionId(null)}
           onSaved={async () => {
             setModalSessionId(null);
+            await load();
+          }}
+        />
+      )}
+
+      {transcriptSessionId && transcriptSession && (
+        <TranscriptModal
+          candidateId={candidateId}
+          session={transcriptSession}
+          candidateName={student.name}
+          onClose={() => setTranscriptSessionId(null)}
+          onSaved={async () => {
+            setTranscriptSessionId(null);
             await load();
           }}
         />

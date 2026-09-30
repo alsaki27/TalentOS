@@ -26,6 +26,14 @@ interface MockSessionRow {
   overall_score: number | null;
   overall_score_max: number | null;
   raw_analysis_text: string | null;
+  transcript_raw_text: string | null;
+  round_type: string | null;
+  feedback_summary: string | null;
+  strengths_noted: string | null;
+  areas_for_improvement: string | null;
+  pdf_url: string | null;
+  pdf_filename: string | null;
+  created_by: string | null;
 }
 
 const EDITABLE_FIELDS = [
@@ -65,7 +73,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         [auditStudentId]
       ),
       query<MockSessionRow>(
-        `SELECT id, session_date, target_role, overall_score, overall_score_max, raw_analysis_text
+        `SELECT id, session_date, target_role, overall_score, overall_score_max, raw_analysis_text,
+                transcript_raw_text, round_type, feedback_summary, strengths_noted, areas_for_improvement,
+                pdf_url, pdf_filename, created_by
          FROM student_audit_mock_sessions WHERE student_id = $1 ORDER BY session_date DESC, id DESC`,
         [auditStudentId]
       ),
