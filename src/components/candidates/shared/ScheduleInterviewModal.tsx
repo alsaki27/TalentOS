@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { easternDateTimeToUtcIso } from "@/lib/easternTime";
+import InterviewTimeZoneField from "@/components/InterviewTimeZoneField";
+import { EASTERN_TIME_ZONE, resolveInterviewTimeZone, zonedDateTimeToUtcIso, type InterviewTimeZone } from "@/lib/easternTime";
 
 export interface InterviewDetails {
   scheduledAt: string; // UTC ISO
   format: "online" | "onsite";
+  timeZone: InterviewTimeZone;
 }
 
 interface Props {
@@ -17,6 +19,8 @@ interface Props {
 export default function ScheduleInterviewModal({ applicationLabel, onCancel, onConfirm }: Props) {
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
+  const [timeZone, setTimeZone] = useState<InterviewTimeZone>(EASTERN_TIME_ZONE);
+  const [useArizonaTime, setUseArizonaTime] = useState(false);
   const [format, setFormat] = useState<"online" | "onsite" | "">("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -26,15 +30,16 @@ export default function ScheduleInterviewModal({ applicationLabel, onCancel, onC
       setError("Date, time, and format are all required to mark this application as Interview.");
       return;
     }
-    const scheduledAt = easternDateTimeToUtcIso(date, time);
+    const selectedTimeZone = resolveInterviewTimeZone(timeZone, useArizonaTime);
+    const scheduledAt = zonedDateTimeToUtcIso(date, time, selectedTimeZone);
     if (!scheduledAt) {
-      setError("Enter a valid date and time.");
+      setError("That local time is invalid or falls within a daylight-saving transition. Choose another time.");
       return;
     }
     setError(null);
     setSaving(true);
     try {
-      await onConfirm({ scheduledAt, format });
+      await onConfirm({ scheduledAt, format, timeZone: selectedTimeZone });
     } finally {
       setSaving(false);
     }
@@ -51,9 +56,16 @@ export default function ScheduleInterviewModal({ applicationLabel, onCancel, onC
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="field-group">
-          <label>Time (Eastern Time)</label>
+          <label>Time in selected zone</label>
           <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
         </div>
+        <InterviewTimeZoneField
+          id="quick-interview-time-zone"
+          value={timeZone}
+          onChange={setTimeZone}
+          useArizonaTime={useArizonaTime}
+          onUseArizonaTimeChange={setUseArizonaTime}
+        />
         <div className="field-group">
           <label>Format</label>
           <select value={format} onChange={(e) => setFormat(e.target.value as "online" | "onsite" | "")}>

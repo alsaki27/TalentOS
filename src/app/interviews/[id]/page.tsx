@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import ScorecardForm from "@/components/ScorecardForm";
 import ConsensusPanel from "@/components/ConsensusPanel";
+import { formatZonedDateTime } from "@/lib/easternTime";
 
 interface Profile {
   user_id: string;
@@ -38,6 +39,7 @@ interface InterviewDetail {
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
+  time_zone: string;
   duration_minutes: number;
   status: string;
   interview_format: "online" | "onsite" | null;
@@ -324,7 +326,7 @@ export default function InterviewDetailPage() {
           <div className="card" style={{ marginBottom: 16 }}>
             <div className="section-title" style={{ marginTop: 0 }}>Interview Details</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, fontSize: 13 }}>
-              <div><span className="muted">Date:</span> {interview.scheduled_at ? new Date(interview.scheduled_at).toLocaleString() : "—"}</div>
+              <div><span className="muted">Date and time:</span> {formatZonedDateTime(interview.scheduled_at, interview.time_zone)}</div>
               <div><span className="muted">Duration:</span> {interview.duration_minutes} min</div>
               <div><span className="muted">Format:</span> {interview.interview_format === "online" ? "Online" : interview.interview_format === "onsite" ? "Onsite" : "Not provided"}</div>
               <div><span className="muted">Location:</span> {interview.location || "—"}</div>

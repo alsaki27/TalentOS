@@ -32,6 +32,7 @@ interface DashboardRow {
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
   interview_scheduled_at: string | null;
+  interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
 }
 
@@ -118,7 +119,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
           return application.application_id === applicationId
             ? {
                 ...application, status: newStatus,
-                ...(interview ? { interview_scheduled_at: interview.scheduledAt, interview_format: interview.format } : {}),
+                ...(interview ? { interview_scheduled_at: interview.scheduledAt, interview_time_zone: interview.timeZone, interview_format: interview.format } : {}),
               }
             : application;
         }),

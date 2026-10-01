@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { ASSIGNMENT_MANAGER_ROLES, getCurrentUserContext, hasRole } from "@/lib/auth";
 import { applicationAutomation } from "@/lib/applicationAutomation";
 import { logActivity } from "@/lib/activity";
+import { EASTERN_TIME_ZONE, isInterviewTimeZone } from "@/lib/easternTime";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
@@ -210,19 +211,20 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // required here - other status='interview' writers (e.g. email-detected
   // interview approvals) must keep working without ever sending this field;
   // the UI enforces "required" by gating the status write behind the modal.
-  let interviewToCreate: { scheduledAt: string; format: "online" | "onsite" } | null = null;
+  let interviewToCreate: { scheduledAt: string; format: "online" | "onsite"; timeZone: string } | null = null;
   if (updates.status === "interview" && body.interview) {
     const scheduledAt = body.interview.scheduledAt;
     const format = body.interview.format;
+    const timeZone = body.interview.timeZone ?? body.interview.time_zone ?? EASTERN_TIME_ZONE;
     const validDate = typeof scheduledAt === "string" && !Number.isNaN(new Date(scheduledAt).getTime());
     const validFormat = format === "online" || format === "onsite";
-    if (!validDate || !validFormat) {
+    if (!validDate || !validFormat || !isInterviewTimeZone(timeZone)) {
       return NextResponse.json(
-        { error: "interview.scheduledAt must be a valid date and interview.format must be 'online' or 'onsite'." },
+        { error: "interview.scheduledAt, interview.timeZone, and interview.format must be valid." },
         { status: 400 }
       );
     }
-    interviewToCreate = { scheduledAt, format };
+    interviewToCreate = { scheduledAt, format, timeZone };
   }
 
   try {
@@ -232,14 +234,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (interviewToCreate) {
       createdInterview = await queryOne(
         `INSERT INTO interview_schedules
-           (application_id, round_number, round_name, scheduled_at, interview_format, created_by)
+           (application_id, round_number, round_name, scheduled_at, time_zone, interview_format, created_by)
          VALUES (
            $1,
            COALESCE((SELECT MAX(round_number) + 1 FROM interview_schedules WHERE application_id = $1), 1),
-           'Interview', $2, $3, $4
+           'Interview', $2, $3, $4, $5
          )
-         RETURNING id, application_id, round_number, round_name, scheduled_at, interview_format`,
-        [params.id, interviewToCreate.scheduledAt, interviewToCreate.format, currentUser.profile.display_name || currentUser.profile.email]
+         RETURNING id, application_id, round_number, round_name, scheduled_at, time_zone, interview_format`,
+        [params.id, interviewToCreate.scheduledAt, interviewToCreate.timeZone, interviewToCreate.format, currentUser.profile.display_name || currentUser.profile.email]
       );
     }
 

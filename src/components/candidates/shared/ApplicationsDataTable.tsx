@@ -4,7 +4,7 @@ import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ScheduleInterviewModal, { InterviewDetails } from "./ScheduleInterviewModal";
-import { formatEasternDateTime } from "@/lib/easternTime";
+import { formatZonedDateTime } from "@/lib/easternTime";
 
 interface DashboardApplication {
   application_id: string;
@@ -25,6 +25,7 @@ interface DashboardApplication {
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
   interview_scheduled_at?: string | null;
+  interview_time_zone?: string | null;
   interview_format?: "online" | "onsite" | null;
 }
 
@@ -361,7 +362,7 @@ export default function ApplicationsDataTable({
                   <td style={{ padding: "10px 12px", fontSize: 12 }}>
                     {app.interview_scheduled_at ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ color: "var(--ink)", fontWeight: 600 }}>{formatEasternDateTime(app.interview_scheduled_at)}</span>
+                        <span style={{ color: "var(--ink)", fontWeight: 600 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
                         {app.interview_format && (
                           <span style={{
                             display: "inline-flex", alignItems: "center", width: "fit-content",

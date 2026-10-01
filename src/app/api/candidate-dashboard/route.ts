@@ -44,6 +44,7 @@ interface DashboardRow {
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
   interview_scheduled_at: string | null;
+  interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
 }
 
@@ -190,6 +191,7 @@ export async function GET(req: NextRequest) {
         tj.fit_score, tj.recommendation,
         sp.storage_url AS sharepoint_resume_url,
         iv.scheduled_at AS interview_scheduled_at,
+        iv.time_zone AS interview_time_zone,
         iv.interview_format,
         COUNT(*) OVER()::int AS total_count
       FROM applications a
@@ -214,11 +216,11 @@ export async function GET(req: NextRequest) {
       -- creates exactly one row per interview; the full /interviews/schedule
       -- page can add more, so "most recent" also reflects a later reschedule.
       LEFT JOIN LATERAL (
-        -- interview_format was added after interview_schedules already
+        -- interview_format and time_zone were added after interview_schedules already
         -- existed. Normal code deploys do not run SQL migrations, so read the
-        -- optional field from the row JSON: older schemas return null instead
+        -- optional fields from the row JSON: older schemas return null instead
         -- of failing the entire dashboard query with an undefined-column 500.
-        SELECT s.scheduled_at, to_jsonb(s)->>'interview_format' AS interview_format
+        SELECT s.scheduled_at, to_jsonb(s)->>'time_zone' AS time_zone, to_jsonb(s)->>'interview_format' AS interview_format
         FROM interview_schedules s
         WHERE s.application_id = a.id
           AND COALESCE(s.status, 'scheduled') <> 'cancelled'

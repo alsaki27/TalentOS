@@ -1023,6 +1023,7 @@ CREATE TABLE interview_schedules (
   round_number          integer NOT NULL DEFAULT 1,
   round_name            text NOT NULL,
   scheduled_at          timestamptz,
+  time_zone             text NOT NULL DEFAULT 'America/New_York',
   duration_minutes      integer DEFAULT 60,
   status                text DEFAULT 'scheduled',
   location              text,

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CalendarClock, ExternalLink, MapPin, Video, Users, GraduationCap, RefreshCw } from "lucide-react";
+import { formatZonedDateTime } from "@/lib/easternTime";
 
 interface CandidateInterview {
   id: string | null;
@@ -16,6 +17,7 @@ interface CandidateInterview {
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
+  time_zone: string;
   duration_minutes: number | null;
   status: "upcoming" | "completed" | "cancelled" | "not_scheduled";
   interview_status: string | null;
@@ -44,11 +46,12 @@ interface TrainingAudit {
 
 type InterviewTab = "upcoming" | "past" | "cancelled";
 
-function safeDate(value: string | null, withTime = false) {
+function safeDate(value: string | null, withTime = false, timeZone?: string) {
   if (!value) return withTime ? "Date and time to be confirmed" : "Date to be confirmed";
   const isDateOnly = !withTime && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const date = new Date(isDateOnly ? `${value}T12:00:00` : value);
   if (Number.isNaN(date.getTime())) return withTime ? "Date and time to be confirmed" : "Date to be confirmed";
+  if (withTime) return formatZonedDateTime(value, timeZone);
   // dateStyle/timeStyle cannot be combined with timeZoneName (or any other
   // component option) per the Intl.DateTimeFormat spec - the constructor
   // throws "Invalid option : option" for every real (non-null) date the
@@ -82,7 +85,7 @@ function InterviewCard({ interview, bucket }: { interview: CandidateInterview; b
         </div>
         <h3><a href={jobDetailsHref} style={{ color: "inherit", textDecoration: "none" }}>{interview.job_title}</a></h3>
         <p>{interview.company_name || "Company unavailable"}{interview.job_location ? ` · ${interview.job_location}` : ""}</p>
-        <p className="portal-interview-time"><CalendarClock size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{safeDate(interview.scheduled_at, true)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</p>
+        <p className="portal-interview-time"><CalendarClock size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{safeDate(interview.scheduled_at, true, interview.time_zone)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</p>
         <p>{interview.interview_format ? `Format: ${interview.interview_format === "online" ? "Online" : "Onsite"}` : "Format: Not provided"}</p>
         {interview.location && <p><MapPin size={12} style={{ verticalAlign: -2, marginRight: 4 }} />Interview location: {interview.location}</p>}
         {interview.panel.length > 0 && <p><Users size={12} style={{ verticalAlign: -2, marginRight: 4 }} />Interviewers: {interview.panel.join(", ")}</p>}
@@ -218,7 +221,7 @@ export default function CandidatePortalInterviewCenter() {
   return (
     <div>
       <section className="portal-section" aria-labelledby="interview-center-heading">
-        <div className="portal-section-heading"><div><div className="portal-eyebrow">Interview center</div><h2 id="interview-center-heading" className="portal-section-heading-title">Your interview schedule</h2><p className="portal-greeting-sub">Times include the timezone shown by your device. Schedule changes refresh every 15 seconds while this page is open.</p></div><div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--p-ink-soft)", fontSize: 11 }}><RefreshCw size={13} />{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : "Loading"}</div></div>
+        <div className="portal-section-heading"><div><div className="portal-eyebrow">Interview center</div><h2 id="interview-center-heading" className="portal-section-heading-title">Your interview schedule</h2><p className="portal-greeting-sub">Times are shown in the timezone selected when the interview was scheduled. Schedule changes refresh every 15 seconds while this page is open.</p></div><div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--p-ink-soft)", fontSize: 11 }}><RefreshCw size={13} />{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString()}` : "Loading"}</div></div>
         <div className="portal-tab-list" role="tablist" aria-label="Interview schedule filter">
           {(["upcoming", "past", "cancelled"] as const).map((key) => <button key={key} className={`portal-tab ${tab === key ? "portal-tab-active" : ""}`} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>{key === "upcoming" ? `Upcoming (${upcoming.length})` : key === "past" ? `Past (${past.length})` : `Cancelled (${cancelled.length})`}</button>)}
         </div>

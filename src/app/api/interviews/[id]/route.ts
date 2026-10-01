@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
+import { isInterviewTimeZone } from "@/lib/easternTime";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -79,6 +80,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "round_name",
     "round_number",
     "scheduled_at",
+    "time_zone",
     "duration_minutes",
     "interview_format",
     "location",
@@ -92,6 +94,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   if ("interview_format" in updates && updates.interview_format !== null && updates.interview_format !== "online" && updates.interview_format !== "onsite") {
     return NextResponse.json({ error: "interview_format must be 'online', 'onsite', or null." }, { status: 400 });
+  }
+  if ("time_zone" in updates && !isInterviewTimeZone(updates.time_zone)) {
+    return NextResponse.json({ error: "time_zone must be a supported interview timezone." }, { status: 400 });
   }
 
   const keys = Object.keys(updates);

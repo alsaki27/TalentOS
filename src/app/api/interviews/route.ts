@@ -10,6 +10,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
+import { EASTERN_TIME_ZONE, isInterviewTimeZone } from "@/lib/easternTime";
 import { query, queryOne, execute } from "@/server/db/neon";
 
 const TRANSCRIPT_MARKERS = ["%[Interview Transcript Logged]%", "%[Interview Recording Logged]%"];
@@ -39,6 +40,7 @@ export async function GET(req: NextRequest) {
         COALESCE(s.round_name, 'Not scheduled') AS round_name,
         COALESCE(s.round_number, 1) AS round_number,
         s.scheduled_at,
+        s.time_zone,
         s.duration_minutes,
         COALESCE(s.status, 'unscheduled') AS status,
         s.location,
@@ -135,6 +137,7 @@ export async function GET(req: NextRequest) {
     round_name: r.round_name,
     round_number: r.round_number,
     scheduled_at: r.scheduled_at,
+    time_zone: r.time_zone || EASTERN_TIME_ZONE,
     duration_minutes: r.duration_minutes,
     status: r.status,
     location: r.location,
@@ -171,9 +174,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "interviewFormat must be 'online' or 'onsite'." }, { status: 400 });
   }
 
+  const timeZone = body.timeZone ?? body.time_zone ?? EASTERN_TIME_ZONE;
+  if (!isInterviewTimeZone(timeZone)) {
+    return NextResponse.json({ error: "timeZone must be a supported interview timezone." }, { status: 400 });
+  }
+
   const schedule = await queryOne(
-    `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, duration_minutes, location, meeting_link, interview_format, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [body.applicationId, body.roundNumber ?? 1, body.roundName, scheduledAt, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, interviewFormat, "scheduled", context.profile.user_id]
+    `INSERT INTO interview_schedules (application_id, round_number, round_name, scheduled_at, time_zone, duration_minutes, location, meeting_link, interview_format, status, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [body.applicationId, body.roundNumber ?? 1, body.roundName, scheduledAt, timeZone, body.durationMinutes ?? 60, body.location ?? null, body.meetingLink ?? null, interviewFormat, "scheduled", context.profile.user_id]
   );
   if (!schedule) {
     return NextResponse.json({ error: "Insert failed" }, { status: 500 });
@@ -216,6 +224,7 @@ export async function POST(req: NextRequest) {
       application_id: body.applicationId,
       round_name: body.roundName,
       scheduled_at: body.scheduledAt,
+      time_zone: timeZone,
     },
   });
 

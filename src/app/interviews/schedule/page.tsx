@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { easternDateTimeToUtcIso } from "@/lib/easternTime";
+import InterviewTimeZoneField from "@/components/InterviewTimeZoneField";
+import { EASTERN_TIME_ZONE, resolveInterviewTimeZone, zonedDateTimeToUtcIso, type InterviewTimeZone } from "@/lib/easternTime";
 
 interface ApplicationOption {
   id: string;
@@ -53,6 +54,8 @@ export default function ScheduleInterviewPage() {
   const [roundNumber, setRoundNumber] = useState(1);
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
+  const [timeZone, setTimeZone] = useState<InterviewTimeZone>(EASTERN_TIME_ZONE);
+  const [useArizonaTime, setUseArizonaTime] = useState(false);
   const [duration, setDuration] = useState(60);
   const [location, setLocation] = useState("Zoom");
   const [interviewFormat, setInterviewFormat] = useState<"online" | "onsite" | "">("");
@@ -144,8 +147,9 @@ export default function ScheduleInterviewPage() {
     if (!roundName) { setError("Enter a round name."); return; }
     if (!scheduledDate || !scheduledTime) { setError("Select a date and time."); return; }
     if (!interviewFormat) { setError("Select whether the interview is online or onsite."); return; }
-    const scheduledAt = easternDateTimeToUtcIso(scheduledDate, scheduledTime);
-    if (!scheduledAt) { setError("Enter a valid Eastern date and time."); return; }
+    const selectedTimeZone = resolveInterviewTimeZone(timeZone, useArizonaTime);
+    const scheduledAt = zonedDateTimeToUtcIso(scheduledDate, scheduledTime, selectedTimeZone);
+    if (!scheduledAt) { setError("That local time is invalid or falls within a daylight-saving transition. Choose another time."); return; }
     setLoading(true);
     setError("");
 
@@ -158,6 +162,7 @@ export default function ScheduleInterviewPage() {
         roundName,
         roundNumber,
         scheduledAt,
+        timeZone: selectedTimeZone,
         durationMinutes: duration,
         interviewFormat,
         location,
@@ -260,9 +265,16 @@ export default function ScheduleInterviewPage() {
             <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
           </div>
           <div className="field-group">
-            <label>Time (Eastern Time)</label>
+            <label>Time in selected zone</label>
             <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} />
           </div>
+          <InterviewTimeZoneField
+            id="schedule-interview-time-zone"
+            value={timeZone}
+            onChange={setTimeZone}
+            useArizonaTime={useArizonaTime}
+            onUseArizonaTimeChange={setUseArizonaTime}
+          />
           <div className="field-group">
             <label>Duration</label>
             <select value={duration} onChange={(e) => setDuration(parseInt(e.target.value))}>

@@ -50,7 +50,7 @@ export interface CandidatePortalApplication {
   };
   next_action: string | null;
   follow_up_at: string | null;
-  interview: { status: CandidatePortalInterviewFilter; scheduled_at: string | null };
+  interview: { status: CandidatePortalInterviewFilter; scheduled_at: string | null; time_zone: string };
   needs_attention: boolean;
 }
 
@@ -97,7 +97,7 @@ export interface CandidatePortalApplicationDetail {
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
   timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null }[];
-  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; panel: string[] }[];
+  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; panel: string[] }[];
 }
 
 export interface CandidatePortalTrendPoint {
@@ -126,6 +126,7 @@ export interface CandidatePortalInterview {
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
+  time_zone: string;
   duration_minutes: number | null;
   status: "upcoming" | "completed" | "cancelled" | "not_scheduled";
   interview_status: string | null;
@@ -149,6 +150,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
        COALESCE(s.round_name, 'Interview') AS round_name,
        COALESCE(s.round_number, 1) AS round_number,
        s.scheduled_at,
+       s.time_zone,
        s.duration_minutes,
        s.status AS interview_status,
        s.interview_format,
@@ -182,7 +184,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
        -- AI pipeline moved the application's real status to 'interview'.
        AND (s.id IS NOT NULL OR (CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END) = 'interview')
      GROUP BY s.id, a.id, j.title, j.company, j.location, s.round_name, s.round_number,
-              j.id, j.apply_url, j.source_url, s.location, s.scheduled_at, s.duration_minutes,
+              j.id, j.apply_url, j.source_url, s.location, s.scheduled_at, s.time_zone, s.duration_minutes,
               s.status, s.interview_format, s.meeting_link
      ORDER BY
        CASE
@@ -224,6 +226,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
       round_name: row.round_name,
       round_number: Number(row.round_number ?? 1),
       scheduled_at: row.scheduled_at,
+      time_zone: row.time_zone || "America/New_York",
       duration_minutes: row.duration_minutes == null ? null : Number(row.duration_minutes),
       status,
       interview_status: row.interview_status,
@@ -303,7 +306,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       [applicationId],
     ),
     query<any>(
-      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link,
+      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.time_zone, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link,
               COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel
        FROM interview_schedules s
        LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
@@ -379,6 +382,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       round_name: interview.round_name,
       round_number: Number(interview.round_number ?? 1),
       scheduled_at: interview.scheduled_at,
+      time_zone: interview.time_zone || "America/New_York",
       duration_minutes: interview.duration_minutes == null ? null : Number(interview.duration_minutes),
       status: interview.status || "scheduled",
       interview_format: interview.interview_format === "online" || interview.interview_format === "onsite" ? interview.interview_format : null,
@@ -426,6 +430,7 @@ function buildBaseCte() {
         COALESCE(j.apply_url, j.source_url) AS source_url,
         interview.id AS interview_id,
         interview.scheduled_at AS interview_at,
+        interview.time_zone AS interview_time_zone,
         CASE
           WHEN interview.id IS NULL THEN 'not_scheduled'
           WHEN LOWER(COALESCE(interview.status, 'scheduled')) = 'cancelled' THEN 'cancelled'
@@ -489,7 +494,7 @@ function buildBaseCte() {
       LEFT JOIN application_resume_versions rv ON rv.id = a.tailored_resume_version_id
       LEFT JOIN application_packets packet ON packet.application_id = a.id AND packet.final_resume_version_id = rv.id
       LEFT JOIN LATERAL (
-        SELECT s.id, s.scheduled_at, s.status
+        SELECT s.id, s.scheduled_at, s.time_zone, s.status
         FROM interview_schedules s
         WHERE s.application_id = a.id
         ORDER BY s.scheduled_at ASC NULLS LAST, s.round_number ASC
@@ -702,7 +707,7 @@ export async function buildCandidatePortalDashboardPage(
     },
     next_action: row.next_action,
     follow_up_at: row.follow_up_at,
-    interview: { status: row.interview_status, scheduled_at: row.interview_at },
+    interview: { status: row.interview_status, scheduled_at: row.interview_at, time_zone: row.interview_time_zone || "America/New_York" },
     needs_attention: Boolean(row.needs_attention),
   }));
 

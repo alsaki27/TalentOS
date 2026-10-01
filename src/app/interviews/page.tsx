@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import InterviewCard from "@/components/InterviewCard";
 import Pagination from "@/components/Pagination";
+import { formatZonedDate, formatZonedTime, zonedDateKey } from "@/lib/easternTime";
 
 interface InterviewItem {
   id: string;
@@ -12,6 +13,7 @@ interface InterviewItem {
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
+  time_zone: string;
   duration_minutes: number;
   status: string;
   location: string | null;
@@ -50,18 +52,20 @@ function initials(name: string | null | undefined) {
   return name.split(" ").map((p) => p[0]).join("").slice(0, 2).toUpperCase();
 }
 
-function formatTime(dateStr: string | null) {
-  if (!dateStr) return "—";
-  return new Date(dateStr).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function formatTime(dateStr: string | null, timeZone: string) {
+  return formatZonedTime(dateStr, timeZone);
 }
 
-function formatDate(dateStr: string | null) {
-  if (!dateStr) return "—";
-  return new Date(dateStr).toLocaleDateString();
+function formatDate(dateStr: string | null, timeZone: string) {
+  return formatZonedDate(dateStr, timeZone);
 }
 
 function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function localDateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function addDays(d: Date, n: number) {
@@ -167,17 +171,14 @@ export default function InterviewsPage() {
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const interviewsByDay = new Map<number, InterviewItem[]>();
+  const weekDayIndexes = new Map(weekDays.map((day, index) => [localDateKey(day), index]));
   for (const item of items) {
     if (!item.scheduled_at) continue;
-    const d = new Date(item.scheduled_at);
-    for (let i = 0; i < 7; i++) {
-      if (isSameDay(d, weekDays[i])) {
-        const list = interviewsByDay.get(i) ?? [];
-        list.push(item);
-        interviewsByDay.set(i, list);
-        break;
-      }
-    }
+    const dayIndex = weekDayIndexes.get(zonedDateKey(item.scheduled_at, item.time_zone) || "");
+    if (dayIndex === undefined) continue;
+    const list = interviewsByDay.get(dayIndex) ?? [];
+    list.push(item);
+    interviewsByDay.set(dayIndex, list);
   }
 
   const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -307,8 +308,8 @@ export default function InterviewsPage() {
                         <div style={{ fontWeight: 600 }}>{item.round_name}</div>
                         <div className="muted" style={{ fontSize: 11 }}>Round {item.round_number}</div>
                       </td>
-                      <td>{formatDate(item.scheduled_at)}</td>
-                      <td>{formatTime(item.scheduled_at)}</td>
+                      <td>{formatDate(item.scheduled_at, item.time_zone)}</td>
+                      <td>{formatTime(item.scheduled_at, item.time_zone)}</td>
                       <td><span className={`badge ${statusBadgeClass(item.status)}`}>{item.status.replaceAll("_", " ")}</span></td>
                       <td>
                         {item.has_transcript ? (

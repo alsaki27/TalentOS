@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { formatZonedDate, formatZonedTime } from "@/lib/easternTime";
 
 interface InterviewPanelMember {
   id: string;
@@ -20,6 +21,7 @@ interface Interview {
   round_name: string;
   round_number: number;
   scheduled_at: string | null;
+  time_zone: string;
   duration_minutes: number;
   status: string;
   location: string | null;
@@ -52,12 +54,8 @@ function initials(name: string | null | undefined) {
 export default function InterviewCard({ interview }: { interview: Interview }) {
   const candidate = interview.applications?.candidates;
   const job = interview.applications?.jobs;
-  const time = interview.scheduled_at
-    ? new Date(interview.scheduled_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "—";
-  const date = interview.scheduled_at
-    ? new Date(interview.scheduled_at).toLocaleDateString()
-    : "—";
+  const time = formatZonedTime(interview.scheduled_at, interview.time_zone);
+  const date = formatZonedDate(interview.scheduled_at, interview.time_zone);
 
   return (
     <div className="card" style={{ cursor: "pointer" }}>

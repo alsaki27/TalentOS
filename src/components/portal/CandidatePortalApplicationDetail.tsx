@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
+import { formatZonedDateTime } from "@/lib/easternTime";
 import ResumePdfModal from "./ResumePdfModal";
 
 interface Props {
@@ -17,14 +18,11 @@ function formatDate(value: string | null) {
   return Number.isNaN(date.getTime()) ? "No date" : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function formatTime(value: string | null) {
+function formatTime(value: string | null, timeZone: string | null) {
   if (!value) return "Date to be confirmed";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Date to be confirmed";
-  // dateStyle/timeStyle cannot be combined with timeZoneName per the
-  // Intl.DateTimeFormat spec - throws "Invalid option : option" for every
-  // real date. Explicit component options give the same output and mix freely.
-  return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(date);
+  return formatZonedDateTime(value, timeZone);
 }
 
 function CollapsibleCard({ title, defaultOpen = true, children }: { title: string; defaultOpen?: boolean; children: ReactNode }) {
@@ -152,7 +150,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                   <article className="portal-interview-card" key={interview.id}>
                     <div>
                       <strong>{interview.round_name}</strong>
-                      <span>{formatTime(interview.scheduled_at)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
+                      <span>{formatTime(interview.scheduled_at, interview.time_zone)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
                       <span>Status: {interview.status}</span>
                       {interview.interview_format && <span>Format: {interview.interview_format === "online" ? "Online" : "Onsite"}</span>}
                       {interview.location && <span>Location: {interview.location}</span>}

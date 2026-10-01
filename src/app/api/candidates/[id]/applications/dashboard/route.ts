@@ -28,6 +28,7 @@ interface DashboardRow {
   tailored_resume_version_id: string | null;
   sharepoint_resume_url: string | null;
   interview_scheduled_at: string | null;
+  interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
 }
 
@@ -84,6 +85,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         tj.recommendation,
         sp.storage_url AS sharepoint_resume_url,
         iv.scheduled_at AS interview_scheduled_at,
+        iv.time_zone AS interview_time_zone,
         iv.interview_format
       FROM applications a
       JOIN jobs j ON a.job_id = j.id
@@ -105,7 +107,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       -- api/candidate-dashboard/route.ts for the identical join and why
       -- "most recent" is the right choice here.
       LEFT JOIN LATERAL (
-        SELECT s.scheduled_at, s.interview_format
+        SELECT s.scheduled_at, s.time_zone, s.interview_format
         FROM interview_schedules s
         WHERE s.application_id = a.id
           AND COALESCE(s.status, 'scheduled') <> 'cancelled'
