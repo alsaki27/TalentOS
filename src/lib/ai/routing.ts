@@ -44,6 +44,17 @@ const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
   "google_vertex_proxy",
 ]);
 
+// Temporary production mitigation (2026-10-04): honor the selected key on
+// rank 1 for these three pipeline agents while the OpenCode sibling accounts
+// are being repaired. Other agents and every fallback rank keep normal pool
+// rotation. Remove this override once the pool is healthy and key pinning is
+// managed explicitly in the routing state.
+const PINNED_OPENCODE_PRIMARY_AUTOMATIONS = new Set([
+  "application_resume_forge",
+  "application_hiring_panel",
+  "application_final_polish",
+]);
+
 /** Identity of one model served through one key, for per-model exclusion. */
 function keyModelId(keyId: string, model: string | null | undefined): string {
   return `${keyId}|${model ?? ""}`;
@@ -315,7 +326,11 @@ export async function getProviderForAutomation(
       const anchorProvider = anchor?.provider ?? anchorMetadata?.provider;
       if (!anchorProvider) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
-      const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider)
+      const pinConfiguredOpenCodePrimary =
+        anchorProvider === "opencode" &&
+        route.rank === 1 &&
+        PINNED_OPENCODE_PRIMARY_AUTOMATIONS.has(automationId);
+      const candidates = ROUND_ROBIN_POOL_PROVIDERS.has(anchorProvider) && !pinConfiguredOpenCodePrimary
         ? await getPoolKeyMetadata(anchorProvider, excludeKeyIds, benchmarkMode)
         : (anchor && !excludeKeyIds?.has(route.ai_key_id) ? [anchor] : []);
 
