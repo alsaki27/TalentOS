@@ -12,6 +12,7 @@ import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
 import { AuditPanel } from "@/components/candidates/AuditPanel";
 import { TrainingAuditPanel } from "@/components/candidates/TrainingAuditPanel";
+import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
 interface BaseResumeSummary {
@@ -355,7 +356,7 @@ export default function CandidateProfilePage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [passwordResetting, setPasswordResetting] = useState(false);
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -1062,7 +1063,7 @@ export default function CandidateProfilePage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {(["Applications", "Profile Overview", "Training Audit", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1291,6 +1292,10 @@ export default function CandidateProfilePage() {
 
       {activeTab === "Training Audit" && (
         <TrainingAuditPanel candidateId={candidate.id} />
+      )}
+
+      {activeTab === "OPT Status" && (
+        <CandidateOptStatusPanel candidateId={candidate.id} canEdit={isManager} />
       )}
 
       {activeTab === "Source of Truth" && (
