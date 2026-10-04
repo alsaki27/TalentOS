@@ -45,10 +45,10 @@ const ROUND_ROBIN_POOL_PROVIDERS = new Set<string>([
 ]);
 
 // Temporary production mitigation (2026-10-04): honor the selected key on
-// rank 1 for these three pipeline agents while the OpenCode sibling accounts
-// are being repaired. Other agents and every fallback rank keep normal pool
-// rotation. Remove this override once the pool is healthy and key pinning is
-// managed explicitly in the routing state.
+// rank 1 in the active routing state for these three pipeline agents while the
+// OpenCode sibling accounts are being repaired. Legacy routes, other agents,
+// and every fallback rank keep normal pool rotation. Remove this override once
+// the pool is healthy and key pinning is managed explicitly in the routing state.
 const PINNED_OPENCODE_PRIMARY_AUTOMATIONS = new Set([
   "application_resume_forge",
   "application_hiring_panel",
@@ -293,6 +293,7 @@ export async function getProviderForAutomation(
 
   const runtime = await getAiRuntimeConfig();
   const selectedRoutingStateId = routingStateId ?? runtime.active_routing_state_id;
+  let usingRoutingStateRoutes = Boolean(selectedRoutingStateId);
   let routes = selectedRoutingStateId
     ? await query<AutomationRouteRow>(
         `SELECT (state_id::text || ':' || automation_id || ':' || rank::text) AS id,
@@ -305,6 +306,7 @@ export async function getProviderForAutomation(
       )
     : [];
   if (routes.length === 0) {
+    usingRoutingStateRoutes = false;
     routes = await query<AutomationRouteRow>(
       `SELECT * FROM ai_automation_routes
        WHERE automation_id = $1 AND is_enabled = true
@@ -327,6 +329,7 @@ export async function getProviderForAutomation(
       if (!anchorProvider) continue;
       if (excludeProviderNames?.has(anchorProvider)) continue;
       const pinConfiguredOpenCodePrimary =
+        usingRoutingStateRoutes &&
         anchorProvider === "opencode" &&
         route.rank === 1 &&
         PINNED_OPENCODE_PRIMARY_AUTOMATIONS.has(automationId);
