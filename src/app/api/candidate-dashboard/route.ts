@@ -214,7 +214,11 @@ export async function GET(req: NextRequest) {
       -- creates exactly one row per interview; the full /interviews/schedule
       -- page can add more, so "most recent" also reflects a later reschedule.
       LEFT JOIN LATERAL (
-        SELECT s.scheduled_at, s.interview_format
+        -- interview_format was added after interview_schedules already
+        -- existed. Normal code deploys do not run SQL migrations, so read the
+        -- optional field from the row JSON: older schemas return null instead
+        -- of failing the entire dashboard query with an undefined-column 500.
+        SELECT s.scheduled_at, to_jsonb(s)->>'interview_format' AS interview_format
         FROM interview_schedules s
         WHERE s.application_id = a.id
           AND COALESCE(s.status, 'scheduled') <> 'cancelled'
@@ -280,7 +284,11 @@ export async function GET(req: NextRequest) {
       emailTaskCounts,
     });
   } catch (error: any) {
-    console.error("[Candidate Dashboard API] Error:", error.message);
+    console.error("[Candidate Dashboard API] Error:", {
+      message: error?.message ?? String(error),
+      code: error?.code,
+      stack: error?.stack,
+    });
     return NextResponse.json({ error: "Failed to load dashboard" }, { status: 500 });
   }
 }
