@@ -4,9 +4,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
-import { TableSkeleton } from "../Skeleton";
 import Pagination from "@/components/Pagination";
-import { CANDIDATE_PIPELINE_STAGES, CANDIDATE_STAGE_BADGE_CLASSES } from "@/lib/candidatePipeline";
+import { CANDIDATE_PIPELINE_STAGES } from "@/lib/candidatePipeline";
 import { formatOptCalendarDate, getOptApprovalCountdown, localCalendarDateIso } from "@/lib/candidateOptStatus";
 
 interface Candidate {
@@ -31,6 +30,14 @@ const AUDIT_STATUS_LABELS: Record<string, string> = {
   good: "Good",
   needs_attention: "Needs Attention",
   bad: "At Risk",
+};
+
+const AUDIT_STATUS_CLASSES: Record<string, string> = {
+  placed: "candidate-audit-placed",
+  excellent: "candidate-audit-excellent",
+  good: "candidate-audit-good",
+  needs_attention: "candidate-audit-attention",
+  bad: "candidate-audit-risk",
 };
 
 function initials(name: string): string {
@@ -63,6 +70,122 @@ function OptDaysLeftCell({ approvalDate, today }: { approvalDate: string | null;
     <div title={`Approval: ${formatOptCalendarDate(countdown.approvalDate)} · ${deadlineLabel}`} style={{ display: "grid", justifyItems: "start", gap: 4, minWidth: 125 }}>
       <span className="badge" style={{ color, background, border: `1px solid ${borderColor}`, whiteSpace: "nowrap" }}>{label}</span>
       <span className="muted" style={{ fontSize: 11, whiteSpace: "nowrap" }}>{deadlineLabel}</span>
+    </div>
+  );
+}
+
+function CandidateProfileCard({
+  candidate,
+  today,
+  selected,
+  stageUpdating,
+  onToggle,
+  onStageChange,
+  onDelete,
+}: {
+  candidate: Candidate;
+  today: string;
+  selected: boolean;
+  stageUpdating: boolean;
+  onToggle: () => void;
+  onStageChange: (stage: string) => void;
+  onDelete: () => void;
+}) {
+  const progress = candidate.audit_progress;
+  const statusLabel = candidate.status ? candidate.status.replaceAll("_", " ") : "Status unknown";
+
+  return (
+    <article className={`candidate-profile-card stage-card-${candidate.pipeline_stage}${selected ? " is-selected" : ""}`}>
+      <div className="candidate-profile-card-header">
+        <div className="candidate-profile-person">
+          <input
+            className="candidate-profile-checkbox"
+            type="checkbox"
+            aria-label={`Select ${candidate.name}`}
+            checked={selected}
+            onChange={onToggle}
+          />
+          {candidate.avatar_url ? (
+            <img className="candidate-profile-avatar" src={candidate.avatar_url} alt="" />
+          ) : (
+            <span className="candidate-profile-avatar candidate-profile-avatar-initials" aria-hidden="true">{initials(candidate.name)}</span>
+          )}
+          <div className="candidate-profile-identity">
+            <Link className="candidate-profile-name" href={`/candidates/${candidate.id}`}>{candidate.name}</Link>
+            <span className="candidate-profile-email">{candidate.email || "No email listed"}</span>
+          </div>
+        </div>
+        <span className={`candidate-record-status${candidate.status === "active" ? " is-active" : ""}`}>{statusLabel}</span>
+      </div>
+
+      <div className="candidate-profile-tags">
+        {candidate.target_tier && <span className="candidate-info-tag">{candidate.target_tier.replaceAll("_", " ").toUpperCase()}</span>}
+        {candidate.email?.includes("example.com") && <span className="badge badge-warning">Test record</span>}
+      </div>
+
+      <div className="candidate-profile-controls">
+        <div className="candidate-profile-field">
+          <span className="candidate-profile-label">Pipeline stage</span>
+          <select
+            aria-label={`${candidate.name} pipeline stage`}
+            value={candidate.pipeline_stage}
+            disabled={stageUpdating}
+            onChange={(event) => onStageChange(event.target.value)}
+            className={`candidate-profile-stage stage-select-${candidate.pipeline_stage}`}
+          >
+            {Object.entries(CANDIDATE_PIPELINE_STAGES).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="candidate-profile-field candidate-profile-opt-field">
+          <span className="candidate-profile-label">OPT days left</span>
+          <OptDaysLeftCell approvalDate={candidate.opt_approval_date ?? null} today={today} />
+        </div>
+      </div>
+
+      <section className="candidate-training-summary" aria-label="Training audit summary">
+        <div className="candidate-training-heading">
+          <span className="candidate-profile-label">Training audit</span>
+          {candidate.audit_status ? (
+            <span className={`badge candidate-audit-status ${AUDIT_STATUS_CLASSES[candidate.audit_status] ?? ""}`}>
+              {AUDIT_STATUS_LABELS[candidate.audit_status] ?? candidate.audit_status}
+            </span>
+          ) : (
+            <span className="muted candidate-training-not-recorded">Not recorded</span>
+          )}
+        </div>
+        <div className="candidate-training-metrics">
+          <div className="candidate-training-metric">
+            <span className="candidate-profile-label">Course progress</span>
+            <strong>{progress != null ? `${progress}%` : "—"}</strong>
+            <div className="candidate-progress-track" role="progressbar" aria-label="Course progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress != null ? Math.min(100, Math.max(0, progress)) : 0}>
+              <span style={{ width: `${progress != null ? Math.min(100, Math.max(0, progress)) : 0}%` }} />
+            </div>
+          </div>
+          <div className="candidate-training-metric">
+            <span className="candidate-profile-label">Mock interviews</span>
+            <strong>{candidate.audit_mock_interviews != null ? candidate.audit_mock_interviews : "—"}</strong>
+            <span className="candidate-training-unit">recorded sessions</span>
+          </div>
+        </div>
+      </section>
+
+      <footer className="candidate-profile-card-footer">
+        <Link href={`/candidates/${candidate.id}`} className="candidate-open-profile">Open candidate profile <span aria-hidden="true">→</span></Link>
+        <button className="btn-danger candidate-delete-button" onClick={onDelete}>Delete</button>
+      </footer>
+    </article>
+  );
+}
+
+function CandidateProfileCardSkeleton() {
+  return (
+    <div className="candidate-profile-card candidate-profile-card-skeleton" aria-hidden="true">
+      <div className="candidate-skeleton-heading"><span /><div><i /><i /></div></div>
+      <div className="candidate-skeleton-row"><i /><i /></div>
+      <div className="candidate-skeleton-row"><i /><i /></div>
+      <div className="candidate-skeleton-footer"><i /><i /></div>
     </div>
   );
 }
@@ -202,75 +325,51 @@ export default function CandidatesPage() {
           <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
-        <span className="muted" style={{ fontSize: 12 }}>{items.length} of {total}</span>
       </div>
 
-      {selected.size > 0 && (
-        <div className="bulk-bar">
-          <span>{selected.size} selected</span>
-          <button className="btn-danger" onClick={deleteSelected}>Delete selected</button>
-        </div>
-      )}
-
       {loading ? (
-        <TableSkeleton cols={9} />
+        <div className="candidate-profile-grid" aria-label="Loading candidates">
+          {Array.from({ length: 6 }, (_, index) => <CandidateProfileCardSkeleton key={index} />)}
+        </div>
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
-        <div className="table-shell">
-          <table className="table">
-            <thead>
-              <tr>
-                <th style={{ width: 28 }}>
-                  <input type="checkbox" style={{ width: "auto" }} checked={items.length > 0 && selected.size === items.length} onChange={toggleAll} />
-                </th>
-                <th>Name</th>
-                <th>Email</th>
-                <th>Stage</th>
-                <th>OPT Days Left</th>
-                <th>Audit Status</th>
-                <th>Course Progress</th>
-                <th>Mock Interviews</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((c) => (
-                <tr key={c.id}>
-                  <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(c.id)} onChange={() => toggleOne(c.id)} /></td>
-                  <td style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {c.avatar_url ? (
-                      <img className="avatar-circle" src={c.avatar_url} alt={c.name} />
-                    ) : (
-                      <span className="avatar-circle">{initials(c.name)}</span>
-                    )}
-                    <Link className="row-link" href={`/candidates/${c.id}`}>{c.name}</Link>
-                    {c.email?.includes("example.com") && <span className="badge badge-warning" style={{ marginLeft: 8, fontSize: 10 }}>Test Record</span>}
-                  </td>
-                  <td className="muted">{c.email || "—"}</td>
-                  <td>
-                    <select
-                      value={c.pipeline_stage}
-                      disabled={stageUpdating === c.id}
-                      onChange={(e) => changeStage(c.id, e.target.value)}
-                      className={`badge ${CANDIDATE_STAGE_BADGE_CLASSES[c.pipeline_stage as keyof typeof CANDIDATE_STAGE_BADGE_CLASSES] ?? ""}`}
-                      style={{ cursor: "pointer", border: "none" }}
-                    >
-                      {Object.entries(CANDIDATE_PIPELINE_STAGES).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td><OptDaysLeftCell approvalDate={c.opt_approval_date ?? null} today={today} /></td>
-                  <td>{c.audit_status ? <span className="badge">{AUDIT_STATUS_LABELS[c.audit_status] ?? c.audit_status}</span> : <span className="muted">—</span>}</td>
-                  <td className="muted">{c.audit_progress != null ? `${c.audit_progress}%` : "—"}</td>
-                  <td className="muted">{c.audit_mock_interviews != null ? c.audit_mock_interviews : "—"}</td>
-                  <td><button onClick={() => deleteOne(c.id)}>Delete</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div className="candidate-selection-toolbar">
+            <label className="candidate-selection-control">
+              <input
+                type="checkbox"
+                checked={items.length > 0 && selected.size === items.length}
+                onChange={toggleAll}
+                aria-label="Select all candidates on this page"
+              />
+              <span>Select all on this page</span>
+            </label>
+            <div className="candidate-selection-actions">
+              <span className="muted">Showing {items.length} of {total}</span>
+              {selected.size > 0 && (
+                <>
+                  <span className="candidate-selected-count">{selected.size} selected</span>
+                  <button className="btn-danger" onClick={deleteSelected}>Delete selected</button>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="candidate-profile-grid">
+            {items.map((candidate) => (
+              <CandidateProfileCard
+                key={candidate.id}
+                candidate={candidate}
+                today={today}
+                selected={selected.has(candidate.id)}
+                stageUpdating={stageUpdating === candidate.id}
+                onToggle={() => toggleOne(candidate.id)}
+                onStageChange={(stage) => changeStage(candidate.id, stage)}
+                onDelete={() => deleteOne(candidate.id)}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {total > 0 && (

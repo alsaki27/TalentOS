@@ -2763,3 +2763,379 @@ label {
     overflow-x: hidden;
   }
 }
+
+/* ============================================================
+   CANDIDATE DIRECTORY CARDS
+   ============================================================ */
+.candidate-selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-sunken, var(--surface));
+}
+
+.candidate-selection-control,
+.candidate-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.candidate-selection-control {
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.candidate-selection-control input,
+.candidate-profile-checkbox {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.candidate-selection-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.candidate-selected-count {
+  color: var(--accent-hover);
+  font-weight: 700;
+}
+
+.candidate-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 18px;
+  min-width: 0;
+}
+
+.candidate-profile-card {
+  --candidate-stage-rgb: var(--accent-rgb);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 17px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background:
+    radial-gradient(ellipse at 100% 0%, rgba(var(--candidate-stage-rgb), 0.13), transparent 52%),
+    linear-gradient(145deg, rgba(var(--candidate-stage-rgb), 0.035), transparent 60%),
+    var(--surface);
+  box-shadow: 0 6px 18px rgba(var(--shadow-color), 0.1);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.candidate-profile-card::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: linear-gradient(90deg, rgb(var(--candidate-stage-rgb)), rgba(var(--candidate-stage-rgb), 0.18) 78%, transparent);
+  content: "";
+}
+
+.candidate-profile-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(var(--candidate-stage-rgb), 0.48);
+  box-shadow: 0 10px 24px rgba(var(--shadow-color), 0.16);
+}
+
+.candidate-profile-card.is-selected {
+  border-color: rgb(var(--candidate-stage-rgb));
+  box-shadow: 0 0 0 2px rgba(var(--candidate-stage-rgb), 0.16), 0 8px 20px rgba(var(--shadow-color), 0.14);
+}
+
+.candidate-profile-card.stage-card-not_started { --candidate-stage-rgb: 129, 140, 248; }
+.candidate-profile-card.stage-card-applying { --candidate-stage-rgb: 56, 189, 248; }
+.candidate-profile-card.stage-card-paused { --candidate-stage-rgb: 251, 191, 36; }
+.candidate-profile-card.stage-card-placed { --candidate-stage-rgb: 52, 211, 153; }
+.candidate-profile-card.stage-card-dropped { --candidate-stage-rgb: 251, 113, 133; }
+
+.candidate-profile-card-header,
+.candidate-profile-person,
+.candidate-profile-identity,
+.candidate-training-heading,
+.candidate-profile-card-footer {
+  display: flex;
+  min-width: 0;
+}
+
+.candidate-profile-card-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.candidate-profile-person {
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+}
+
+.candidate-profile-checkbox { flex: 0 0 auto; }
+
+.candidate-profile-avatar {
+  display: grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(var(--accent-rgb), 0.32);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(var(--accent-rgb), 0.22), rgba(var(--accent-rgb), 0.08));
+  color: var(--accent-hover);
+  font-size: 13px;
+  font-weight: 800;
+  object-fit: cover;
+}
+
+.candidate-profile-identity {
+  flex-direction: column;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.candidate-profile-name {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 750;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-profile-name:hover,
+.candidate-open-profile:hover { color: var(--accent-hover); }
+
+.candidate-profile-email {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-record-status {
+  flex: 0 0 auto;
+  max-width: 38%;
+  padding: 5px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--neutral-rgb), 0.25);
+  border-radius: 999px;
+  background: rgba(var(--neutral-rgb), 0.09);
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.candidate-record-status.is-active {
+  border-color: rgba(var(--accent-rgb), 0.34);
+  background: rgba(var(--accent-rgb), 0.13);
+  color: var(--accent-hover);
+}
+
+.candidate-profile-tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 18px;
+}
+
+.candidate-profile-tags:empty { display: none; }
+
+.candidate-info-tag {
+  padding: 4px 8px;
+  border: 1px solid rgba(var(--info-rgb, 59, 130, 246), 0.3);
+  border-radius: 999px;
+  background: rgba(var(--info-rgb, 59, 130, 246), 0.1);
+  color: var(--info, #60a5fa);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.candidate-profile-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.candidate-profile-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+
+.candidate-profile-label {
+  display: block;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.065em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.candidate-profile-stage {
+  width: min(100%, 190px);
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--border) !important;
+  border-radius: 9px;
+  color: var(--ink) !important;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.candidate-profile-stage.stage-select-not_started { background: rgba(129, 140, 248, 0.16); color: #c7d2fe !important; border-color: rgba(129, 140, 248, 0.38) !important; }
+.candidate-profile-stage.stage-select-applying { background: rgba(56, 189, 248, 0.15); color: #bae6fd !important; border-color: rgba(56, 189, 248, 0.38) !important; }
+.candidate-profile-stage.stage-select-paused { background: rgba(251, 191, 36, 0.15); color: #fde68a !important; border-color: rgba(251, 191, 36, 0.4) !important; }
+.candidate-profile-stage.stage-select-placed { background: rgba(52, 211, 153, 0.15); color: #a7f3d0 !important; border-color: rgba(52, 211, 153, 0.38) !important; }
+.candidate-profile-stage.stage-select-dropped { background: rgba(251, 113, 133, 0.15); color: #fecdd3 !important; border-color: rgba(251, 113, 133, 0.38) !important; }
+.candidate-profile-stage:disabled { cursor: progress; opacity: 0.65; }
+.candidate-profile-opt-field { justify-content: flex-start; }
+.candidate-profile-opt-field > div { min-width: 0 !important; gap: 4px !important; }
+.candidate-profile-opt-field .badge { padding: 4px 8px; font-size: 11px; font-weight: 750; }
+.candidate-profile-opt-field .muted { font-size: 11px !important; white-space: normal !important; }
+
+.candidate-training-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 13px;
+  background: rgba(var(--accent-rgb), 0.045);
+}
+
+.candidate-training-heading {
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.candidate-training-heading .candidate-audit-status { padding: 5px 9px; font-size: 12px; font-weight: 750; }
+.candidate-audit-placed,
+.candidate-audit-excellent,
+.candidate-audit-good { color: #86efac; border: 1px solid rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.13); }
+.candidate-audit-excellent { color: #67e8f9; border-color: rgba(34, 211, 238, 0.36); background: rgba(34, 211, 238, 0.13); }
+.candidate-audit-attention { color: #fde68a; border: 1px solid rgba(251, 191, 36, 0.38); background: rgba(251, 191, 36, 0.14); }
+.candidate-audit-risk { color: #fda4af; border: 1px solid rgba(251, 113, 133, 0.38); background: rgba(251, 113, 133, 0.14); }
+.candidate-training-not-recorded { font-size: 12px; font-weight: 600; }
+
+.candidate-training-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 9px;
+}
+
+.candidate-training-metric { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.candidate-training-metric strong { color: var(--ink); font-size: 16px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.candidate-training-metric:first-child strong { color: var(--accent-hover); }
+.candidate-training-unit { color: var(--ink-soft); font-size: 10px; line-height: 1.35; }
+
+.candidate-progress-track {
+  width: 100%;
+  height: 6px;
+  margin-top: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(var(--neutral-rgb), 0.16);
+}
+
+.candidate-progress-track span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  transition: width 220ms ease;
+}
+
+.candidate-profile-card-footer { align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 1px; }
+
+.candidate-open-profile {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-hover);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candidate-delete-button { flex: 0 0 auto; padding: 6px 9px; font-size: 10px; }
+
+.candidate-profile-card-skeleton { min-height: 330px; pointer-events: none; }
+.candidate-skeleton-heading { display: flex; align-items: center; gap: 12px; }
+.candidate-skeleton-heading > span { width: 46px; height: 46px; flex: 0 0 46px; border-radius: 14px; }
+.candidate-skeleton-heading > div { display: flex; flex: 1; flex-direction: column; gap: 8px; }
+.candidate-skeleton-heading i,
+.candidate-skeleton-row i,
+.candidate-skeleton-footer i { display: block; height: 11px; border-radius: 8px; background: linear-gradient(100deg, rgba(var(--neutral-rgb), 0.08) 25%, rgba(var(--neutral-rgb), 0.19) 45%, rgba(var(--neutral-rgb), 0.08) 65%); background-size: 220% 100%; animation: candidate-card-shimmer 1.5s linear infinite; }
+.candidate-skeleton-heading i:first-child { width: 58%; height: 14px; }
+.candidate-skeleton-heading i:last-child { width: 78%; }
+.candidate-skeleton-row { display: flex; flex-direction: column; justify-content: center; gap: 9px; min-height: 65px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; }
+.candidate-skeleton-row i:first-child { width: 37%; }
+.candidate-skeleton-row i:last-child { width: 75%; }
+.candidate-skeleton-footer { display: flex; justify-content: space-between; gap: 12px; margin-top: auto; }
+.candidate-skeleton-footer i:first-child { width: 45%; }
+.candidate-skeleton-footer i:last-child { width: 22%; }
+
+@keyframes candidate-card-shimmer { to { background-position: -220% 0; } }
+
+@media (max-width: 900px) {
+  .candidate-profile-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  .candidate-profile-grid { grid-template-columns: minmax(0, 1fr); gap: 13px; }
+  .candidate-profile-card { padding: 14px; gap: 11px; }
+  .candidate-selection-toolbar { align-items: flex-start; }
+  .candidate-selection-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 420px) {
+  .candidate-profile-controls { grid-template-columns: minmax(0, 1fr); }
+  .candidate-profile-controls { gap: 10px; }
+  .candidate-profile-card-header { gap: 8px; }
+  .candidate-record-status { max-width: 32%; font-size: 9px; }
+  .candidate-profile-card-footer { align-items: stretch; }
+  .candidate-open-profile { align-self: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .candidate-profile-card,
+  .candidate-progress-track span,
+  .candidate-skeleton-heading i,
+  .candidate-skeleton-row i,
+  .candidate-skeleton-footer i { animation: none; transition: none; }
+}
