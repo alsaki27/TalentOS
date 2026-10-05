@@ -8,6 +8,7 @@ import {
   type CandidateOptStatusRecord,
 } from "@/lib/candidateOptStatus";
 import { logActivity } from "@/lib/activity";
+import { notifyTeamOfOptApproval } from "@/lib/candidateOptStatusNotifications";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { queryOne } from "@/server/db/neon";
 
@@ -80,7 +81,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
         : NextResponse.json({ error: "OPT status record not found." }, { status: 404 });
     }
     recordActivity(context!.profile.user_id, params.id, "updated");
-    return NextResponse.json(toRecord(row));
+    let notificationWarning: string | undefined;
+    const approvalDate = parsed.data.approvalDate;
+    if (approvalDate && /^\d{4}-\d{2}-\d{2}$/.test(approvalDate)) {
+      try {
+        const candidate = await queryOne<{ id: string; name: string }>(
+          "SELECT id, name FROM candidates WHERE id = $1",
+          [params.id],
+        );
+        if (candidate) await notifyTeamOfOptApproval({ candidateId: candidate.id, candidateName: candidate.name, approvalDate });
+      } catch (notificationError: any) {
+        console.error("[Candidate OPT Status API] Team notification failed:", notificationError?.message ?? notificationError);
+        notificationWarning = "OPT status was saved, but the team notification could not be delivered.";
+      }
+    }
+    return NextResponse.json({ ...toRecord(row), ...(notificationWarning ? { notificationWarning } : {}) });
   } catch (error: any) {
     console.error("[Candidate OPT Status API] Update failed:", error?.message ?? error);
     return NextResponse.json({ error: "Could not save OPT status." }, { status: 500 });

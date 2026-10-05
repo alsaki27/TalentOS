@@ -8,6 +8,7 @@ import {
   type CandidateOptStatusRecord,
 } from "@/lib/candidateOptStatus";
 import { logActivity } from "@/lib/activity";
+import { notifyTeamOfOptApproval } from "@/lib/candidateOptStatusNotifications";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { queryOne } from "@/server/db/neon";
 
@@ -37,8 +38,8 @@ function toRecord(row: DbOptStatus): CandidateOptStatusRecord {
   };
 }
 
-async function candidateExists(candidateId: string): Promise<boolean> {
-  return Boolean(await queryOne("SELECT id FROM candidates WHERE id = $1", [candidateId]));
+async function getCandidate(candidateId: string): Promise<{ id: string; name: string } | null> {
+  return queryOne<{ id: string; name: string }>("SELECT id, name FROM candidates WHERE id = $1", [candidateId]);
 }
 
 function recordActivity(userId: string, candidateId: string, action: "created" | "updated" | "deleted"): void {
@@ -57,7 +58,8 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   if (response) return response;
 
   try {
-    if (!(await candidateExists(params.id))) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
+    const candidate = await getCandidate(params.id);
+    if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
     const row = await queryOne<DbOptStatus>(
       `SELECT ${selectColumns()} FROM candidate_opt_status WHERE candidate_id = $1`,
       [params.id],
@@ -85,7 +87,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
 
   try {
-    if (!(await candidateExists(params.id))) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
+    const candidate = await getCandidate(params.id);
+    if (!candidate) return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
     const entries = candidateOptStatusDbEntries(parsed.data);
     const columns = entries.map(({ column }) => column);
     const values = entries.map(({ value }) => value);
@@ -98,7 +101,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
     if (!row) throw new Error("The status record was not created.");
     recordActivity(context!.profile.user_id, params.id, "created");
-    return NextResponse.json(toRecord(row), { status: 201 });
+    let notificationWarning: string | undefined;
+    const approvalDate = parsed.data.approvalDate;
+    if (approvalDate && /^\d{4}-\d{2}-\d{2}$/.test(approvalDate)) {
+      try {
+        await notifyTeamOfOptApproval({ candidateId: candidate.id, candidateName: candidate.name, approvalDate });
+      } catch (notificationError: any) {
+        console.error("[Candidate OPT Status API] Team notification failed:", notificationError?.message ?? notificationError);
+        notificationWarning = "OPT status was saved, but the team notification could not be delivered.";
+      }
+    }
+    return NextResponse.json({ ...toRecord(row), ...(notificationWarning ? { notificationWarning } : {}) }, { status: 201 });
   } catch (error: any) {
     if (error?.code === "23505") {
       return NextResponse.json({ error: "This candidate already has an OPT/work authorization record. Reload the tab to edit it." }, { status: 409 });

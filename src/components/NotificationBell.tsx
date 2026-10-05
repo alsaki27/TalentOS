@@ -51,8 +51,17 @@ export default function NotificationBell() {
 
   useEffect(() => {
     loadNotifications();
-    const interval = setInterval(loadNotifications, 60000);
-    return () => clearInterval(interval);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") loadNotifications();
+    };
+    const interval = setInterval(refreshWhenVisible, 10000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
   }, []);
 
   useEffect(() => {

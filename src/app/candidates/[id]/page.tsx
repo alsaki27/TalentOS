@@ -12,6 +12,7 @@ import { SourceOfTruthPanel } from "@/components/candidates/SourceOfTruthPanel";
 import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel";
 import { AuditPanel } from "@/components/candidates/AuditPanel";
 import { TrainingAuditPanel } from "@/components/candidates/TrainingAuditPanel";
+import { CandidateOptCountdownCard } from "@/components/candidates/CandidateOptCountdownCard";
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
@@ -1295,7 +1296,10 @@ export default function CandidateProfilePage() {
       )}
 
       {activeTab === "OPT Status" && (
-        <CandidateOptStatusPanel candidateId={candidate.id} canEdit={isManager} />
+        <>
+          <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} />
+          <CandidateOptStatusPanel candidateId={candidate.id} canEdit={isManager} />
+        </>
       )}
 
       {activeTab === "Source of Truth" && (
@@ -1584,9 +1588,12 @@ export default function CandidateProfilePage() {
       )}
 
       {activeTab === "Applications" && (
-        <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
-          <CandidateApplicationsDashboard candidateId={candidate.id} />
-        </Suspense>
+        <>
+          <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} marginBottom={20} />
+          <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
+            <CandidateApplicationsDashboard candidateId={candidate.id} />
+          </Suspense>
+        </>
       )}
 
       {showEdit && (

@@ -134,6 +134,8 @@ export function CandidateOptStatusPanel({ candidateId, canEdit }: { candidateId:
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload?.error || "Could not save OPT status.");
       setRecord(editableRecord(payload as CandidateOptStatusRecord));
+      setError(payload?.notificationWarning || null);
+      window.dispatchEvent(new Event("candidate-opt-status-updated"));
     } catch (err: any) {
       setError(err?.message || "Could not save OPT status. Your edits are still here; retry when ready.");
     } finally {

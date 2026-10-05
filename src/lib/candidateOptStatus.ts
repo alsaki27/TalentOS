@@ -18,6 +18,7 @@ export const CANDIDATE_OPT_STATUS_FIELDS = [
 ] as const;
 
 export const CANDIDATE_OPT_STATUS_NOT_PROVIDED = "Not Provided" as const;
+export const OPT_APPROVAL_WINDOW_DAYS = 90;
 
 export type CandidateOptStatusFieldKey = (typeof CANDIDATE_OPT_STATUS_FIELDS)[number]["key"];
 export type CandidateOptStatusData = Record<CandidateOptStatusFieldKey, string | null>;
@@ -29,6 +30,71 @@ export interface CandidateOptStatusRecord {
   createdAt: string;
   updatedAt: string;
   data: CandidateOptStatusData;
+}
+
+function isoDateUtc(value: string): Date | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const [, yearText, monthText, dayText] = match;
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(Number(yearText), Number(monthText) - 1, Number(dayText));
+  if (
+    date.getUTCFullYear() !== Number(yearText)
+    || date.getUTCMonth() !== Number(monthText) - 1
+    || date.getUTCDate() !== Number(dayText)
+  ) return null;
+  return date;
+}
+
+export function addDaysToIsoDate(value: string, days: number): string | null {
+  const date = isoDateUtc(value);
+  if (!date || !Number.isInteger(days)) return null;
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function formatOptCalendarDate(value: string, locale?: string): string {
+  const date = isoDateUtc(value);
+  if (!date) return value;
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+export function localCalendarDateIso(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function getOptApprovalCountdown(approvalDate: string, today = localCalendarDateIso()) {
+  const approval = isoDateUtc(approvalDate);
+  const endDate = addDaysToIsoDate(approvalDate, OPT_APPROVAL_WINDOW_DAYS);
+  const current = isoDateUtc(today);
+  const end = endDate ? isoDateUtc(endDate) : null;
+  if (!approval || !endDate || !current || !end) return null;
+
+  const daysUntilStart = Math.max(0, Math.round((approval.getTime() - current.getTime()) / 86_400_000));
+  const daysAfterEnd = Math.max(0, Math.round((current.getTime() - end.getTime()) / 86_400_000));
+  const daysRemaining = current.getTime() < approval.getTime()
+    ? OPT_APPROVAL_WINDOW_DAYS
+    : Math.max(0, Math.round((end.getTime() - current.getTime()) / 86_400_000));
+
+  return {
+    approvalDate,
+    endDate,
+    daysUntilStart,
+    daysRemaining,
+    daysAfterEnd,
+    hasStarted: current.getTime() >= approval.getTime(),
+    isExpired: current.getTime() > end.getTime(),
+    endsToday: current.getTime() === end.getTime(),
+  };
 }
 
 export function emptyCandidateOptStatusData(): CandidateOptStatusData {
