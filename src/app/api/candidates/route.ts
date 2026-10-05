@@ -16,6 +16,11 @@ interface StudentAuditEnrichmentRow {
   mock_interviews: number;
 }
 
+interface OptApprovalEnrichmentRow {
+  candidate_id: string;
+  approval_date: string | null;
+}
+
 /**
  * Attaches audit_status/audit_progress/audit_mock_interviews to each candidate
  * row for the /candidates list columns, from the local student_audit_students
@@ -48,9 +53,28 @@ async function enrichWithStudentAudit(rows: Record<string, any>[]): Promise<Reco
   }
 }
 
+/** Adds the approval date only for the full candidates list that requests OPT days. */
+async function enrichWithOptApproval(rows: Record<string, any>[]): Promise<Record<string, any>[]> {
+  if (rows.length === 0) return rows;
+  try {
+    const approvals = await query<OptApprovalEnrichmentRow>(
+      `SELECT candidate_id, approval_date::text AS approval_date
+         FROM candidate_opt_status
+        WHERE candidate_id = ANY($1)`,
+      [rows.map((row) => row.id)],
+    );
+    const byCandidateId = new Map(approvals.map((row) => [row.candidate_id, row.approval_date]));
+    return rows.map((row) => ({ ...row, opt_approval_date: byCandidateId.get(row.id) ?? null }));
+  } catch (err) {
+    console.error("[Candidates list] OPT approval enrichment failed:", err);
+    return rows.map((row) => ({ ...row, opt_approval_date: null }));
+  }
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const compact = url.searchParams.get("compact") === "1";
+  const includeOptDays = url.searchParams.get("includeOptDays") === "1";
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(url.searchParams.get("pageSize") || "50", 10) || 50));
   const search = (url.searchParams.get("search") || "").trim().replace(/[,()]/g, "");
@@ -96,7 +120,8 @@ export async function GET(req: NextRequest) {
       query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]),
       queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]),
     ]);
-    const items = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
+    const auditItems = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
+    const items = !compact && includeOptDays ? await enrichWithOptApproval(auditItems) : auditItems;
     return NextResponse.json({ items, total: countRow?.total ?? 0, page, pageSize });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });

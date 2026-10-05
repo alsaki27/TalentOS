@@ -7,6 +7,7 @@ import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
 import Pagination from "@/components/Pagination";
 import { CANDIDATE_PIPELINE_STAGES, CANDIDATE_STAGE_BADGE_CLASSES } from "@/lib/candidatePipeline";
+import { formatOptCalendarDate, getOptApprovalCountdown, localCalendarDateIso } from "@/lib/candidateOptStatus";
 
 interface Candidate {
   id: string;
@@ -21,6 +22,7 @@ interface Candidate {
   audit_status?: string | null;
   audit_progress?: number | null;
   audit_mock_interviews?: number | null;
+  opt_approval_date?: string | null;
 }
 
 const AUDIT_STATUS_LABELS: Record<string, string> = {
@@ -35,6 +37,36 @@ function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase()).join("");
 }
 
+function OptDaysLeftCell({ approvalDate, today }: { approvalDate: string | null; today: string }) {
+  const countdown = approvalDate ? getOptApprovalCountdown(approvalDate, today) : null;
+  if (!countdown) {
+    return <span className="muted" title="A full OPT approval date is not recorded">—</span>;
+  }
+
+  const urgent = countdown.isExpired || (countdown.hasStarted && countdown.daysRemaining <= 14);
+  const attention = countdown.hasStarted && countdown.daysRemaining > 14 && countdown.daysRemaining <= 30;
+  const color = urgent ? "var(--danger)" : attention ? "var(--warn)" : "var(--accent)";
+  const background = urgent ? "rgba(244,63,94,0.12)" : attention ? "rgba(245,158,11,0.13)" : "rgba(99,102,241,0.12)";
+  const borderColor = urgent ? "rgba(244,63,94,0.28)" : attention ? "rgba(245,158,11,0.3)" : "rgba(99,102,241,0.28)";
+  const label = countdown.isExpired
+    ? "0 days left"
+    : !countdown.hasStarted
+      ? `Starts in ${countdown.daysUntilStart} ${countdown.daysUntilStart === 1 ? "day" : "days"}`
+      : `${countdown.daysRemaining} ${countdown.daysRemaining === 1 ? "day" : "days"} left`;
+  const deadlineLabel = countdown.isExpired
+    ? `Ended ${formatOptCalendarDate(countdown.endDate)}`
+    : countdown.endsToday
+      ? `Ends today · ${formatOptCalendarDate(countdown.endDate)}`
+      : `Ends ${formatOptCalendarDate(countdown.endDate)}`;
+
+  return (
+    <div title={`Approval: ${formatOptCalendarDate(countdown.approvalDate)} · ${deadlineLabel}`} style={{ display: "grid", justifyItems: "start", gap: 4, minWidth: 125 }}>
+      <span className="badge" style={{ color, background, border: `1px solid ${borderColor}`, whiteSpace: "nowrap" }}>{label}</span>
+      <span className="muted" style={{ fontSize: 11, whiteSpace: "nowrap" }}>{deadlineLabel}</span>
+    </div>
+  );
+}
+
 export default function CandidatesPage() {
   const [items, setItems] = useState<Candidate[]>([]);
   const [total, setTotal] = useState(0);
@@ -47,11 +79,18 @@ export default function CandidatesPage() {
   const [stageFilter, setStageFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
   const [stageUpdating, setStageUpdating] = useState<string>("");
+  const [today, setToday] = useState(() => localCalendarDateIso());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setToday(localCalendarDateIso()), 60_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   function buildParams(pageNum: number, size: number) {
     const params = new URLSearchParams();
     params.set("page", String(pageNum));
     params.set("pageSize", String(size));
+    params.set("includeOptDays", "1");
     if (search) params.set("search", search);
     if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
@@ -174,7 +213,7 @@ export default function CandidatesPage() {
       )}
 
       {loading ? (
-        <TableSkeleton cols={8} />
+        <TableSkeleton cols={9} />
       ) : total === 0 ? (
         <div className="empty">{filtersActive ? "No candidates match these filters." : "No candidates yet. Add the first one to get started."}</div>
       ) : (
@@ -188,6 +227,7 @@ export default function CandidatesPage() {
                 <th>Name</th>
                 <th>Email</th>
                 <th>Stage</th>
+                <th>OPT Days Left</th>
                 <th>Audit Status</th>
                 <th>Course Progress</th>
                 <th>Mock Interviews</th>
@@ -221,6 +261,7 @@ export default function CandidatesPage() {
                       ))}
                     </select>
                   </td>
+                  <td><OptDaysLeftCell approvalDate={c.opt_approval_date ?? null} today={today} /></td>
                   <td>{c.audit_status ? <span className="badge">{AUDIT_STATUS_LABELS[c.audit_status] ?? c.audit_status}</span> : <span className="muted">—</span>}</td>
                   <td className="muted">{c.audit_progress != null ? `${c.audit_progress}%` : "—"}</td>
                   <td className="muted">{c.audit_mock_interviews != null ? c.audit_mock_interviews : "—"}</td>
