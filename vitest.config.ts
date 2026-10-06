@@ -20,6 +20,9 @@ export default defineConfig({
       include: ["src/lib/ai/routing.ts", "src/server/repositories/**/*.ts"],
     },
   },
+  // Next keeps tsconfig jsx:"preserve" for its own bundler. Tests need JSX
+  // compiled so render-level tests can import .tsx components.
+  oxc: { jsx: { runtime: "automatic" } },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

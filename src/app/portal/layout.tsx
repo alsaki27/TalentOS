@@ -1,4 +1,5 @@
 import "./portal.css";
+import "./portal-schedule.css";
 
 export const metadata = {
   title: "Skarion — Candidate Portal",

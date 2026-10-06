@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import CandidatePortalInterviewCenter from "@/components/portal/CandidatePortalInterviewCenter";
+import CandidatePortalScheduleCenter from "@/components/portal/schedule/CandidatePortalScheduleCenter";
 import { PortalShell } from "../PortalShell";
 
 export default function PortalInterviewsPage() {
@@ -27,7 +27,7 @@ export default function PortalInterviewsPage() {
 
   return (
     <PortalShell candidateName={candidateName} pageTitle="Interviews" onSignOut={logout}>
-      <CandidatePortalInterviewCenter />
+      <CandidatePortalScheduleCenter />
     </PortalShell>
   );
 }

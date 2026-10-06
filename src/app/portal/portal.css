@@ -928,24 +928,6 @@ body:has(.portal-root) {
 .portal-tab-list { display: flex; gap: 6px; margin: 14px 0 12px; border-bottom: 1px solid var(--p-border); }
 .portal-tab { border: 0; border-bottom: 2px solid transparent; color: var(--p-ink-soft); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; padding: 8px 10px; }
 .portal-tab:hover, .portal-tab-active { border-bottom-color: var(--p-coral); color: var(--p-ink); }
-.portal-interview-center-list { display: flex; flex-direction: column; gap: 10px; }
-.portal-interview-center-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border: 1px solid var(--p-border); border-radius: var(--p-radius-md); background: var(--p-surface); padding: 14px; }
-.portal-interview-center-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.portal-interview-center-title strong { color: var(--p-ink); font-size: 13px; }
-.portal-interview-center-main h3 { margin: 5px 0 2px; color: var(--p-navy); font-size: 15px; }
-.portal-interview-center-main p { margin: 3px 0 0; color: var(--p-ink-soft); font-size: 11px; }
-.portal-interview-center-main .portal-interview-time { color: var(--p-ink); font-size: 12px; font-weight: 700; }
-.portal-interview-center-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-.portal-interview-center-actions .portal-btn-small { flex: 0 0 auto; width: auto; max-width: 100%; min-height: 38px; margin-left: 0; padding: 8px 13px; font-size: 12px; }
-.portal-interview-center-actions .portal-btn-small:focus-visible { outline: 2px solid var(--p-coral); outline-offset: 2px; }
-.portal-interview-updates { margin-top: 10px; border-left: 3px solid var(--p-coral); background: var(--p-bg); padding: 8px 10px; }
-.portal-interview-updates strong, .portal-interview-updates span { display: block; color: var(--p-ink-soft); font-size: 10px; }
-.portal-interview-updates p { margin: 4px 0; color: var(--p-ink); font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
-.portal-interview-status { border-radius: 999px; font-size: 10px; font-weight: 700; padding: 4px 7px; }
-.portal-interview-status-upcoming { color: #075985; background: #e0f2fe; }
-.portal-interview-status-completed { color: #166534; background: #dcfce7; }
-.portal-interview-status-cancelled { color: #991b1b; background: #fee2e2; }
-.portal-interview-status-not_scheduled { color: #92400e; background: #fef3c7; }
 
 .portal-notes-heading {
   display: flex;
@@ -2071,9 +2053,6 @@ body:has(.portal-root) {
 
   .portal-interview-card { flex-direction: column; }
   .portal-interview-card .portal-btn-small { width: auto; }
-  .portal-interview-center-card { flex-direction: column; align-items: stretch; gap: 12px; }
-  .portal-interview-center-actions { gap: 8px; margin-top: 12px; }
-  .portal-interview-center-actions .portal-btn-small { min-height: 40px; padding: 8px 12px; }
 
   .portal-action-card { align-items: flex-start; gap: 10px; }
   .portal-action-due { text-align: right; white-space: nowrap; }

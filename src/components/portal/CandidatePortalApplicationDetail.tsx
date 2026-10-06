@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Video, Trash2, FileText } from "lucide-react";
 import { formatZonedDateTime } from "@/lib/easternTime";
 import ResumePdfModal from "./ResumePdfModal";
@@ -86,6 +86,16 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
   const [noteBody, setNoteBody] = useState("");
   const [noteError, setNoteError] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const scrolledToHash = useRef(false);
+
+  // Links from the interview schedule point at #interview-<id>. Scroll once when
+  // the page first has interviews, not on every 15-second refresh.
+  useEffect(() => {
+    if (scrolledToHash.current || !application.interviews?.length) return;
+    scrolledToHash.current = true;
+    if (!window.location.hash.startsWith("#interview-")) return;
+    document.getElementById(window.location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [application.interviews]);
 
   useEffect(() => {
     fetch(`/api/portal/me/applications/${application.id}/notes`, { cache: "no-store" })
@@ -147,7 +157,7 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
             {application.interviews?.length ? (
               <div className="portal-interview-list">
                 {application.interviews.map((interview: any) => (
-                  <article className="portal-interview-card" key={interview.id}>
+                  <article className="portal-interview-card" id={`interview-${interview.id}`} key={interview.id}>
                     <div>
                       <strong>{interview.round_name}</strong>
                       <span>{formatTime(interview.scheduled_at, interview.time_zone)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
