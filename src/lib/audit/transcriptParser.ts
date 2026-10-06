@@ -2,12 +2,12 @@
  * Universal Transcript Auto-Organizer Utility
  * Clean Chat Bubble Parser for MS Teams, Zoom, & Google Meet Transcripts
  * Ported verbatim from skarion-student-audit's src/utils/transcriptParser.js.
- * Evaluator Whitelist: Kasshaf, Faisal, Saki, Ferdous, Piyas, Mayukh, Tashfia
+ * Evaluator Whitelist: Kasshaf, Faisal, Saki, Ferdous, Piyas, Mayukh, Tashfia, Shoumik
  * Candidate Matching: ANY non-evaluator speaker name is dynamically recognized as a Candidate!
  */
 
 export const ALLOWED_EVALUATOR_NAMES = [
-  "kasshaf", "faisal", "saki", "ferdous", "piyas", "mayukh", "tashfia",
+  "kasshaf", "faisal", "saki", "ferdous", "piyas", "mayukh", "tashfia", "shoumik",
 ];
 
 export function isEvaluatorName(cleanedName: string): boolean {
@@ -27,6 +27,7 @@ export function cleanSpeakerName(name: string | null | undefined): string {
   if (lower.includes("piyas")) return "Piyas";
   if (lower.includes("saki")) return "Saki";
   if (lower.includes("tashfia")) return "Tashfia";
+  if (lower.includes("shoumik")) return "Shoumik";
 
   cleaned = cleaned.replace(/^(md|mr|ms|mrs|dr)\.?\s+/i, "");
   const parts = cleaned

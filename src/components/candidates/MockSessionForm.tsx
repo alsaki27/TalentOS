@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Send, Save, Trash2, BarChart2, FileText, Paperclip } from "lucide-react";
 
 // Ported verbatim from skarion-student-audit's src/data/initialData.js
-export const EVALUATORS = ["Mayukh", "Kasshaf", "Faisal", "Saki", "Ferdous", "Piyas"];
+export const EVALUATORS = ["Mayukh", "Kasshaf", "Faisal", "Saki", "Ferdous", "Piyas", "Shoumik Ahmed"];
 export const MOCK_ROUND_TYPES = ["Behavioral", "Practical", "Technological", "Overall", "Other"];
 
 export function getScoreColor(score: number | null | undefined): string {
