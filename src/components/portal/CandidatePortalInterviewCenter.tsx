@@ -73,7 +73,9 @@ function interviewBucket(interview: CandidateInterview): InterviewTab | "unsched
 
 function InterviewCard({ interview, bucket }: { interview: CandidateInterview; bucket: InterviewTab | "unscheduled" }) {
   const label = bucket === "upcoming" ? "Upcoming" : bucket === "past" ? "Past" : bucket === "cancelled" ? "Cancelled" : "Date to be confirmed";
-  const jobDetailsHref = interview.job_id ? `/portal/jobs/${interview.job_id}` : `/portal/applications/${interview.application_id}`;
+  // Every interview links to the application details page, which already shows
+  // the job, progress, and interviews for that application.
+  const jobDetailsHref = `/portal/applications/${interview.application_id}`;
   const visibleUpdate = interview.visible_updates[0];
 
   return (

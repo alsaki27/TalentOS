@@ -96,7 +96,7 @@ export interface CandidatePortalApplicationDetail {
   next_action: string | null;
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
-  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null }[];
+  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null }[];
   interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; panel: string[] }[];
 }
 
@@ -297,7 +297,9 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
 
   if (!application) return null;
 
-  const [comments, events, interviews] = await Promise.all([
+  // Destructure in the same order as the queries below: comments, interview
+  // schedules, then application status events.
+  const [comments, interviews, events] = await Promise.all([
     query<any>(
       `SELECT id, body, commenter_name, created_at
        FROM application_comments
@@ -333,6 +335,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     from_label: event.from_status ? publicStatus(event.from_status).label : null,
     to_label: publicStatus(event.to_status).label,
     created_at: event.created_at,
+    time_zone: null,
   }));
 
   if (application.resume_status === "ready" && application.resume_id) {
@@ -342,6 +345,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       from_label: null,
       to_label: "Resume ready",
       created_at: application.resume_generated_at,
+      time_zone: null,
     });
   }
 
@@ -354,6 +358,9 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       from_label: null,
       to_label: status,
       created_at: interview.scheduled_at,
+      // Interview entries carry their own zone so the Progress list can show the
+      // time the interview was scheduled in, not the viewer's browser zone.
+      time_zone: interview.time_zone || "America/New_York",
     });
   }
 
