@@ -232,6 +232,18 @@ export function formatClock(isoUtc: string, timeZone: string | null | undefined)
   return new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(new Date(isoUtc));
 }
 
+/**
+ * A time range in a zone, e.g. "10:00 – 10:45 AM", with the shared AM/PM marker
+ * written once. Falls back to the start time alone when there is no duration.
+ */
+export function formatClockRange(isoUtc: string, durationMinutes: number | null, timeZone: string | null | undefined): string {
+  const zone = isInterviewTimeZone(timeZone) ? timeZone : EASTERN_TIME_ZONE;
+  const start = new Date(isoUtc);
+  const formatter = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" });
+  if (!durationMinutes) return formatter.format(start);
+  return formatter.formatRange(start, new Date(start.getTime() + durationMinutes * 60_000));
+}
+
 /** The zone's abbreviation at the given moment, e.g. "EDT" or "CST". */
 export function zoneShortName(timeZone: string, at: Date): string {
   const zone = isInterviewTimeZone(timeZone) ? timeZone : EASTERN_TIME_ZONE;

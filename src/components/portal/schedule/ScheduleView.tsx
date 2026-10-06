@@ -50,18 +50,20 @@ export default function ScheduleView({
     <div>
       <div className="psc-toolbar">
         <div className="psc-toolbar-left">
-          <button type="button" className="psc-icon-btn" onClick={() => onAnchorChange(addDaysToKey(anchor, -7))} aria-label="Previous week">
-            <ChevronLeft size={15} />
-          </button>
-          <button type="button" className="psc-today-btn" onClick={() => onAnchorChange(null)}>Today</button>
-          <button type="button" className="psc-icon-btn" onClick={() => onAnchorChange(addDaysToKey(anchor, 7))} aria-label="Next week">
-            <ChevronRight size={15} />
-          </button>
+          <div className="psc-nav">
+            <button type="button" className="psc-nav-btn" onClick={() => onAnchorChange(addDaysToKey(anchor, -7))} aria-label="Previous week">
+              <ChevronLeft size={17} />
+            </button>
+            <button type="button" className="psc-today-btn" onClick={() => onAnchorChange(null)}>Today</button>
+            <button type="button" className="psc-nav-btn" onClick={() => onAnchorChange(addDaysToKey(anchor, 7))} aria-label="Next week">
+              <ChevronRight size={17} />
+            </button>
+          </div>
           <span className="psc-range">{formatWeekRange(days)}</span>
         </div>
         <div className="psc-toolbar-right">
           <label className="psc-zone-select">
-            <Globe size={13} aria-hidden="true" />
+            <Globe size={15} aria-hidden="true" />
             <select value={zone} onChange={(event) => onZoneChange(event.target.value as DisplayZone)} aria-label="Calendar time zone">
               {INTERVIEW_TIME_ZONES.map((item) => (
                 <option key={item.value} value={item.value}>{item.shortName} · {item.label}</option>
@@ -70,10 +72,10 @@ export default function ScheduleView({
           </label>
           <div className="psc-view-toggle" role="group" aria-label="View">
             <button type="button" className={mode === "week" ? "psc-view-active" : ""} aria-pressed={mode === "week"} onClick={() => onModeChange("week")}>
-              <CalendarDays size={13} /> Week
+              <CalendarDays size={16} /> Week
             </button>
             <button type="button" className={mode === "agenda" ? "psc-view-active" : ""} aria-pressed={mode === "agenda"} onClick={() => onModeChange("agenda")}>
-              <List size={13} /> Agenda
+              <List size={16} /> Agenda
             </button>
           </div>
         </div>

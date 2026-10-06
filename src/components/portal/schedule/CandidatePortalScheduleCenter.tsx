@@ -114,19 +114,19 @@ export default function CandidatePortalScheduleCenter() {
       <div className="psc-stats" role="group" aria-label="Schedule summary">
         <button type="button" className="psc-stat psc-stat-upcoming" onClick={() => openFromStat("upcoming")}>
           <span className="psc-stat-icon"><CalendarClock size={16} /></span>
-          <div><strong>{counts.upcoming}</strong><span>Upcoming</span></div>
+          <div className="psc-stat-text"><strong>{counts.upcoming}</strong><span>Upcoming</span></div>
         </button>
         <button type="button" className="psc-stat psc-stat-past" onClick={() => openFromStat("past")}>
           <span className="psc-stat-icon"><History size={16} /></span>
-          <div><strong>{counts.past}</strong><span>Past</span></div>
+          <div className="psc-stat-text"><strong>{counts.past}</strong><span>Past</span></div>
         </button>
         <button type="button" className="psc-stat psc-stat-cancelled" onClick={() => openFromStat("cancelled")}>
           <span className="psc-stat-icon"><XCircle size={16} /></span>
-          <div><strong>{counts.cancelled}</strong><span>Cancelled</span></div>
+          <div className="psc-stat-text"><strong>{counts.cancelled}</strong><span>Cancelled</span></div>
         </button>
         <button type="button" className="psc-stat psc-stat-mock" onClick={() => openFromStat("mock")}>
           <span className="psc-stat-icon"><GraduationCap size={16} /></span>
-          <div><strong>{counts.mock}</strong><span>Mock sessions</span></div>
+          <div className="psc-stat-text"><strong>{counts.mock}</strong><span>Mock sessions</span></div>
         </button>
       </div>
 

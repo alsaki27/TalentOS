@@ -32,7 +32,7 @@ export default function CandidatePortalMockInterviewDetail({ session }: { sessio
   const dateKey = session.session_date.slice(0, 10);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+    <div className="psc" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <Link className="portal-back-link" href="/portal/interviews?tab=training">
         <ArrowLeft size={14} style={{ verticalAlign: -2, marginRight: 4 }} />Back to training audit
       </Link>

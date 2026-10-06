@@ -1,12 +1,14 @@
 "use client";
 
 import Link from "next/link";
+import { GraduationCap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { zonedDateKey } from "@/lib/easternTime";
 import {
   clampEndMinute,
   dayOfMonth,
   formatClock,
+  formatClockRange,
   formatWeekday,
   gridHourRange,
   layoutDayColumns,
@@ -18,9 +20,11 @@ import {
 } from "@/lib/portalSchedule";
 
 // Must match --psc-hour in portal-schedule.css.
-const HOUR_PX = 56;
+const HOUR_PX = 64;
 const MINUTE_PX = HOUR_PX / 60;
-const MIN_BLOCK_PX = 30;
+const MIN_BLOCK_PX = 36;
+// Cards at least this tall also show the subtitle line.
+const SUBTITLE_MIN_PX = 80;
 
 const BLOCK_KIND_CLASS: Record<ScheduleEvent["kind"], string> = {
   interview: "psc-block-interview",
@@ -109,7 +113,8 @@ export default function ScheduleWeekCalendar({ events, days, zone, now }: Props)
           <div key={`allday-${key}`} className="psc-allday-cell">
             {allDay[index].map((event) => (
               <Link key={event.key} href={event.href} className="psc-chip psc-chip-mock" title={event.subtitle}>
-                {event.title}
+                <GraduationCap size={14} aria-hidden="true" />
+                <span className="psc-chip-text">{event.title}</span>
               </Link>
             ))}
           </div>
@@ -117,7 +122,7 @@ export default function ScheduleWeekCalendar({ events, days, zone, now }: Props)
 
         <div className="psc-gutter" style={{ height: bodyHeight }}>
           {Array.from({ length: endHour - startHour }, (_, offset) => (
-            <span key={offset} className="psc-hour-label" style={{ top: offset * HOUR_PX }}>
+            <span key={offset} className={offset === 0 ? "psc-hour-label psc-hour-label-first" : "psc-hour-label"} style={{ top: offset * HOUR_PX }}>
               {hourLabel(startHour + offset)}
             </span>
           ))}
@@ -154,9 +159,11 @@ export default function ScheduleWeekCalendar({ events, days, zone, now }: Props)
                     width: `calc(${100 / placement.columns}% - 6px)`,
                   }}
                 >
-                  <span className="psc-block-time">{event.startsAt ? formatClock(event.startsAt, zone) : ""}</span>
                   <span className="psc-block-title">{event.title}</span>
-                  {height >= 52 && <span className="psc-block-sub">{event.subtitle}</span>}
+                  <span className="psc-block-time">
+                    {event.startsAt ? formatClockRange(event.startsAt, event.durationMinutes, zone) : ""}
+                  </span>
+                  {height >= SUBTITLE_MIN_PX && <span className="psc-block-sub">{event.subtitle}</span>}
                 </Link>
               );
             })}

@@ -61,14 +61,17 @@ describe("schedule week grid", () => {
   it("places an interview at its time in the display zone, not in its saved zone", () => {
     const events = buildScheduleEvents([interview], [mock], NOW, "America/New_York");
     const markup = renderToStaticMarkup(createElement(ScheduleWeekCalendar, { events, days: WEEK, zone: "America/New_York", now: NOW }));
-    expect(markup).toContain("11:00 AM");
-    expect(markup).not.toContain(">10:00 AM<");
+    // The card shows the range in the display zone: 11:00 to 11:45 AM Eastern.
+    expect(markup).toContain('class="psc-block-time">11:00');
+    expect(markup).toContain("11:45 AM");
+    expect(markup).not.toContain(">10:00");
   });
 
   it("shows the same interview at the Chicago wall-clock time when Chicago is the display zone", () => {
     const events = buildScheduleEvents([interview], [mock], NOW, "America/Chicago");
     const markup = renderToStaticMarkup(createElement(ScheduleWeekCalendar, { events, days: WEEK, zone: "America/Chicago", now: NOW }));
-    expect(markup).toContain("10:00 AM");
+    expect(markup).toContain('class="psc-block-time">10:00');
+    expect(markup).toContain("10:45 AM");
   });
 
   it("puts a mock session in the all-day row of its date and links it to the detail page", () => {
