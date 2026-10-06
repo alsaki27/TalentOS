@@ -62,8 +62,9 @@ describe("schedule week grid", () => {
     const events = buildScheduleEvents([interview], [mock], NOW, "America/New_York");
     const markup = renderToStaticMarkup(createElement(ScheduleWeekCalendar, { events, days: WEEK, zone: "America/New_York", now: NOW }));
     // The card shows the range in the display zone: 11:00 to 11:45 AM Eastern.
+    // ICU versions differ in the space before AM (plain, narrow no-break), so match any whitespace.
     expect(markup).toContain('class="psc-block-time">11:00');
-    expect(markup).toContain("11:45 AM");
+    expect(markup).toMatch(/11:45\s+AM/);
     expect(markup).not.toContain(">10:00");
   });
 
@@ -71,7 +72,7 @@ describe("schedule week grid", () => {
     const events = buildScheduleEvents([interview], [mock], NOW, "America/Chicago");
     const markup = renderToStaticMarkup(createElement(ScheduleWeekCalendar, { events, days: WEEK, zone: "America/Chicago", now: NOW }));
     expect(markup).toContain('class="psc-block-time">10:00');
-    expect(markup).toContain("10:45 AM");
+    expect(markup).toMatch(/10:45\s+AM/);
   });
 
   it("puts a mock session in the all-day row of its date and links it to the detail page", () => {
@@ -88,7 +89,7 @@ describe("schedule agenda", () => {
     const markup = renderToStaticMarkup(createElement(ScheduleAgenda, {
       events, zone: "America/New_York", now: NOW, tab: "upcoming", onTabChange: () => undefined,
     }));
-    expect(markup).toContain("10:00 AM");
+    expect(markup).toMatch(/10:00\s+AM/);
     expect(markup).toContain("CDT");
     expect(markup).toContain('href="/portal/applications/application-1#interview-schedule-1"');
     expect(markup).toContain("Upcoming (1)");
