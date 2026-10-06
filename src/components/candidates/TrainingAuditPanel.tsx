@@ -45,7 +45,7 @@ const RATING_CONFIG: Record<string, { label: string; color: string }> = {
   bad: { label: "At Risk", color: "#dc2626" },
 };
 
-const EVALUATORS = ["Mayukh", "Kasshaf", "Faisal", "Saki", "Ferdous", "Piyas"];
+const EVALUATORS = ["Mayukh", "Kasshaf", "Faisal", "Saki", "Ferdous", "Piyas", "Shoumik Ahmed"];
 const CATEGORIES = [
   "General", "Mock Feedback", "Technical", "Soft Skills", "Attendance",
   "Onboarding", "Interview Experience", "Course Progression", "Behavior", "Background", "Situation",
