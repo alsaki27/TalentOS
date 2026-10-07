@@ -64,8 +64,8 @@ describe("candidate portal read model", () => {
     (query as any)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
-        { id: "interview-chicago", round_name: "Interview", round_number: 1, scheduled_at: "2099-08-12T15:00:00.000Z", time_zone: "America/Chicago", duration_minutes: 45, status: "scheduled", interview_format: "online", location: null, meeting_link: null, panel: [] },
-        { id: "interview-legacy", round_name: "Screen", round_number: 2, scheduled_at: "2099-08-13T15:00:00.000Z", time_zone: null, duration_minutes: null, status: "scheduled", interview_format: null, location: null, meeting_link: null, panel: [] },
+        { id: "interview-chicago", round_name: "Interview", round_number: 1, scheduled_at: "2099-08-12T15:00:00.000Z", time_zone: "America/Chicago", duration_minutes: 45, status: "scheduled", interview_format: "online", location: null, meeting_link: null, rescheduled_at: "2026-07-01T00:00:00.000Z", panel: [] },
+        { id: "interview-legacy", round_name: "Screen", round_number: 2, scheduled_at: "2099-08-13T15:00:00.000Z", time_zone: null, duration_minutes: null, status: "scheduled", interview_format: null, location: null, meeting_link: null, rescheduled_at: null, panel: [] },
       ])
       .mockResolvedValueOnce([]);
 
@@ -76,6 +76,14 @@ describe("candidate portal read model", () => {
     expect(chicago?.time_zone).toBe("America/Chicago");
     expect(legacy?.time_zone).toBe("America/New_York");
     expect(result!.interviews.map((interview) => interview.time_zone)).toEqual(["America/Chicago", "America/New_York"]);
+
+    // The stage number, not the always-"Interview" round_name, is what
+    // actually distinguishes two timeline entries from each other.
+    expect(chicago?.label).toBe("Interview scheduled · Stage 1");
+    expect(legacy?.label).toBe("Interview scheduled · Stage 2");
+    expect(chicago?.rescheduled).toBe(true);
+    expect(legacy?.rescheduled).toBe(false);
+    expect(result!.interviews.map((interview) => interview.rescheduled)).toEqual([true, false]);
   });
 
   it("scopes the interview center and only includes candidate-visible updates", async () => {

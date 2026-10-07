@@ -148,7 +148,20 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
           <CollapsibleCard title="Progress">
             {application.timeline?.length ? (
               <div className="portal-timeline">
-                {application.timeline.map((event: any) => <div className="portal-timeline-item" key={event.id}><span className="portal-timeline-dot" /><div><strong>{event.label}</strong><span>{event.time_zone ? formatTime(event.created_at, event.time_zone) : formatDate(event.created_at)}</span></div></div>)}
+                {application.timeline.map((event: any) => (
+                  <div className="portal-timeline-item" key={event.id}>
+                    <span className="portal-timeline-dot" />
+                    <div>
+                      <strong>{event.label}</strong>
+                      <span>{event.time_zone ? formatTime(event.created_at, event.time_zone) : formatDate(event.created_at)}</span>
+                      {event.rescheduled && (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 3, marginTop: 5, padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 700, background: "rgba(255,104,107,0.14)", color: "var(--p-coral)" }}>
+                          ↻ Rescheduled
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : <p className="portal-greeting-sub">Your application timeline will appear as the team records updates.</p>}
           </CollapsibleCard>

@@ -96,7 +96,7 @@ export interface CandidatePortalApplicationDetail {
   next_action: string | null;
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
-  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null }[];
+  timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null; rescheduled: boolean }[];
   interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; rescheduled: boolean; panel: string[] }[];
 }
 
@@ -339,6 +339,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
     to_label: publicStatus(event.to_status).label,
     created_at: event.created_at,
     time_zone: null,
+    rescheduled: false,
   }));
 
   if (application.resume_status === "ready" && application.resume_id) {
@@ -349,21 +350,26 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       to_label: "Resume ready",
       created_at: application.resume_generated_at,
       time_zone: null,
+      rescheduled: false,
     });
   }
 
   for (const interview of interviews ?? []) {
     const status = String(interview.status || "scheduled").toLowerCase();
     const label = status === "cancelled" ? "Interview cancelled" : status === "completed" ? "Interview completed" : "Interview scheduled";
+    // round_name is always the literal "Interview", so showing it after
+    // "Interview scheduled" just repeated the word - the stage number is
+    // what actually distinguishes one entry from another.
     timeline.push({
       id: `interview:${interview.id}`,
-      label: `${label}${interview.round_name ? ` · ${interview.round_name}` : ""}`,
+      label: `${label} · Stage ${interview.round_number ?? 1}`,
       from_label: null,
       to_label: status,
       created_at: interview.scheduled_at,
       // Interview entries carry their own zone so the Progress list can show the
       // time the interview was scheduled in, not the viewer's browser zone.
       time_zone: interview.time_zone || "America/New_York",
+      rescheduled: Boolean(interview.rescheduled_at),
     });
   }
 

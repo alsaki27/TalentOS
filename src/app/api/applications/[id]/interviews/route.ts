@@ -5,7 +5,10 @@ import { getCurrentUserContext } from "@/lib/auth";
 import { EASTERN_TIME_ZONE, isInterviewTimeZone } from "@/lib/easternTime";
 import { query, queryOne } from "@/server/db/neon";
 
-export const MAX_INTERVIEW_STAGES = 4;
+// Not exported: a route.ts file in the App Router may only export the HTTP
+// method handlers and a small fixed set of special names (dynamic, config,
+// ...) - any other export fails Next's generated route-shape typecheck.
+const MAX_INTERVIEW_STAGES = 4;
 
 const STAGE_COLUMNS = `id, round_number, round_name, scheduled_at, time_zone, duration_minutes, status,
        interview_format, location, meeting_link, notes, rescheduled_at, created_at`;

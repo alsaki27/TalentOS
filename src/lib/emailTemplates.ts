@@ -14,7 +14,22 @@ function shell(preheader: string, bodyHtml: string): string {
           <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;max-width:480px;width:100%;">
             <tr>
               <td style="padding:28px 32px;background-color:#111827;">
-                <span style="font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;">Skarion</span>
+                <!-- Table layout, not flex/inline-block spacing - the only reliable way to
+                     line up an image with text across email clients. The mark is the same
+                     one the candidate portal's own header uses (src/app/portal/PortalLogo.tsx),
+                     fetched by reference so this is never an attachment the inbox could show
+                     as a separate file - just an image rendered inline in the email body. -->
+                <table role="presentation" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td width="36" height="36" align="center" valign="middle" style="width:36px;height:36px;background-color:#ffffff;border-radius:8px;">
+                      <img src="https://www.skarion.com/logo.svg" width="24" height="18" alt="Skarion" style="display:block;border:0;outline:none;">
+                    </td>
+                    <td width="10" style="width:10px;font-size:0;line-height:0;">&nbsp;</td>
+                    <td valign="middle">
+                      <span style="font-size:18px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;">Skarion</span>
+                    </td>
+                  </tr>
+                </table>
               </td>
             </tr>
             <tr>

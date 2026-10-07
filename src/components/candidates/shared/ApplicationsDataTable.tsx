@@ -377,44 +377,38 @@ export default function ApplicationsDataTable({
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: 12 }}>
                     {app.interview_stages && app.interview_stages.length > 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                      // One compact row per stage - a small "S1" chip instead of a full
+                      // "Stage 1" label, an emoji instead of an Online/Onsite text pill
+                      // (matching this file's existing emoji icons: 📞🎯📝📂📄☁️🗓️, not a
+                      // new icon library), so 1-4 stages don't stack past a glance.
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         {app.interview_stages.map(function (stage) {
+                          var cancelled = stage.status === "cancelled";
                           return (
-                            <div key={stage.round_number} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                                <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-soft)" }}>Stage {stage.round_number}</span>
-                                {stage.status === "cancelled" && <span style={{ fontSize: 10, color: "var(--ink-soft)", fontStyle: "italic" }}>cancelled</span>}
-                                {stage.rescheduled_at && <span title="Rescheduled" style={{ fontSize: 11, color: "#f59e0b" }}>↻</span>}
+                            <div key={stage.round_number} title={cancelled ? "Cancelled" : stage.rescheduled_at ? "Rescheduled" : undefined} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                              <span style={{
+                                fontSize: 9, fontWeight: 800, color: "var(--ink-soft)", flexShrink: 0,
+                                background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 4px", lineHeight: "13px",
+                              }}>S{stage.round_number}</span>
+                              <span style={{
+                                color: cancelled ? "var(--ink-soft)" : "var(--ink)", fontWeight: 600, fontSize: 11,
+                                textDecoration: cancelled ? "line-through" : "none",
+                              }}>
+                                {stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "TBD"}
                               </span>
-                              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                                <span style={{ color: "var(--ink)", fontWeight: 600 }}>
-                                  {stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "Date to be confirmed"}
-                                </span>
-                                {stage.interview_format && (
-                                  <span style={{
-                                    display: "inline-flex", alignItems: "center", width: "fit-content",
-                                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.3px",
-                                    padding: "1px 6px", borderRadius: 4,
-                                    background: stage.interview_format === "online" ? "rgba(59,130,246,0.12)" : "rgba(168,85,247,0.12)",
-                                    color: stage.interview_format === "online" ? "#3b82f6" : "#a855f7",
-                                  }}>{stage.interview_format === "online" ? "Online" : "Onsite"}</span>
-                                )}
-                              </span>
+                              {stage.interview_format && (
+                                <span style={{ fontSize: 11, flexShrink: 0 }}>{stage.interview_format === "online" ? "🎥" : "🏢"}</span>
+                              )}
+                              {stage.rescheduled_at && <span style={{ fontSize: 10, color: "#f59e0b", flexShrink: 0 }}>↻</span>}
                             </div>
                           );
                         })}
                       </div>
                     ) : app.interview_scheduled_at ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ color: "var(--ink)", fontWeight: 600 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <span style={{ color: "var(--ink)", fontWeight: 600, fontSize: 11 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
                         {app.interview_format && (
-                          <span style={{
-                            display: "inline-flex", alignItems: "center", width: "fit-content",
-                            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.3px",
-                            padding: "1px 6px", borderRadius: 4,
-                            background: app.interview_format === "online" ? "rgba(59,130,246,0.12)" : "rgba(168,85,247,0.12)",
-                            color: app.interview_format === "online" ? "#3b82f6" : "#a855f7",
-                          }}>{app.interview_format === "online" ? "Online" : "Onsite"}</span>
+                          <span style={{ fontSize: 11, flexShrink: 0 }}>{app.interview_format === "online" ? "🎥" : "🏢"}</span>
                         )}
                       </div>
                     ) : <span style={{ color: "var(--ink-soft)", opacity: 0.5 }}>—</span>}
