@@ -103,6 +103,19 @@ body:has(.portal-root) {
   transform: none;
 }
 
+/* The same globals.css rule also gives every <button> that chrome in its
+   DEFAULT (non-hover) state: a drop shadow and a backdrop blur, on top of a
+   transparent fill. The :hover reset above never touched that base state, so
+   a bare button - collapsible section headers, the back link - showed a
+   shadow/blur box around its text with no visible background to explain it.
+   Same zero-specificity technique, so any button class that wants its own
+   shadow still wins. */
+.portal-root :where(button) {
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 :root.dark .portal-root .portal-skeleton {
   background: linear-gradient(90deg, #161d38 25%, #1c2444 37%, #161d38 63%);
   background-size: 400% 100%;
@@ -587,6 +600,12 @@ body:has(.portal-root) {
   min-width: 0;
   border: 0;
   outline: none;
+  /* globals.css gives every input/select its own focus ring (a differently
+     colored, differently rounded box-shadow) on top of the ring the label/
+     select already draws for :focus-within above - visible as a second,
+     mismatched border nested inside the first. The field's own ring is the
+     only one meant to show. */
+  box-shadow: none;
   color: var(--p-ink);
   background: transparent;
   font: inherit;

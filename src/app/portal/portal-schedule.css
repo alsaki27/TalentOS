@@ -339,7 +339,13 @@
   .psc-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .psc-training-grid { grid-template-columns: 1fr; }
   .psc-agenda-item { flex-direction: column; }
-  .psc-agenda-time { flex-direction: row; gap: 6px; }
+  /* Desktop's "flex: 0 0 76px" is a WIDTH basis there; once the item above
+     switches this to a column, flex-basis measures main-axis size, which is
+     now vertical - so the unreset 76px silently became a fixed HEIGHT for a
+     row that only needs about 20px, leaving visible empty space below the
+     text. Reset it to the content's own size, and make the tight packing
+     explicit rather than relying on the flex defaults. */
+  .psc-agenda-time { flex: 0 0 auto; flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 6px; }
   .psc-agenda-actions { flex-direction: row; }
   .psc-mock-hero { flex-direction: column; }
 }
