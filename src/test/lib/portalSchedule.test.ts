@@ -40,6 +40,7 @@ function interview(overrides: Partial<PortalInterview> = {}): PortalInterview {
     meeting_link: "https://meet.example/abc",
     panel: ["Recruiter"],
     visible_updates: [],
+    rescheduled: false,
     ...overrides,
   };
 }
@@ -133,6 +134,20 @@ describe("interview links", () => {
     expect(event.bucket).toBe("unscheduled");
     expect(event.startsAt).toBeNull();
     expect(event.timeZone).toBeNull();
+  });
+
+  it("always shows the stage number, including stage 1 - not just stage 2+", () => {
+    const [stage1] = buildScheduleEvents([interview({ round_number: 1 })], [], NOW);
+    const [stage3] = buildScheduleEvents([interview({ round_number: 3 })], [], NOW);
+    expect(stage1.title).toBe("Interview · Stage 1");
+    expect(stage3.title).toBe("Interview · Stage 3");
+  });
+
+  it("carries the reschedule flag through to the event", () => {
+    const [untouched] = buildScheduleEvents([interview({ rescheduled: false })], [], NOW);
+    const [moved] = buildScheduleEvents([interview({ rescheduled: true })], [], NOW);
+    expect(untouched.rescheduled).toBe(false);
+    expect(moved.rescheduled).toBe(true);
   });
 });
 

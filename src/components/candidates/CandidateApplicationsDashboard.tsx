@@ -249,6 +249,7 @@ export default function CandidateApplicationsDashboard({ candidateId }: { candid
           <ApplicationsDataTable
             applications={data.applications}
             onStatusChange={handleStatusChange}
+            onInterviewsChanged={function () { void fetchData(); }}
             onNotesOpen={function (id) { setNotesAppId(id); }}
             readOnly={false}
             totalCount={data.total} page={data.page} pageSize={data.pageSize}

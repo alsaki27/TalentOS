@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, Building2, CalendarClock, CalendarDays, Clock3, GraduationCap, History, MapPin, Users, Video, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowUpRight, Building2, CalendarClock, CalendarDays, Clock3, GraduationCap, History, MapPin, RotateCcw, Users, Video, XCircle, type LucideIcon } from "lucide-react";
 import { useMemo } from "react";
 import { EASTERN_TIME_ZONE, zonedDateKey } from "@/lib/easternTime";
 import {
@@ -59,6 +59,7 @@ function AgendaCard({ event }: { event: ScheduleEvent }) {
         <div className="psc-agenda-top">
           <span className={`psc-kind psc-kind-${event.kind}`}><KindIcon size={11} />{KIND_LABEL[event.kind]}</span>
           <span className={`psc-status psc-status-${event.bucket}`}>{STATUS_LABEL[event.bucket]}</span>
+          {event.rescheduled && <span className="psc-status psc-status-rescheduled"><RotateCcw size={10} />Rescheduled</span>}
         </div>
         <h4>{event.title}</h4>
         <p>{event.subtitle}</p>

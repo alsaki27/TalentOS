@@ -39,6 +39,8 @@ export interface ScheduleEvent {
   meetingLink: string | null;
   panel: string[];
   href: string;
+  /** True once this item's scheduled time has been changed after it was first set. */
+  rescheduled: boolean;
 }
 
 /** One row of GET /api/portal/me/interviews. */
@@ -60,6 +62,7 @@ export interface PortalInterview {
   interview_status: string | null;
   interview_format: "online" | "onsite" | null;
   meeting_link: string | null;
+  rescheduled: boolean;
   panel: string[];
   visible_updates: { id: string; body: string; author: string; created_at: string | null }[];
 }
@@ -130,7 +133,9 @@ export function interviewToScheduleEvent(interview: PortalInterview, now: Date):
     key: `interview:${interview.application_id}:${interview.id ?? "unscheduled"}`,
     kind: "interview",
     bucket,
-    title: `${interview.round_name || "Interview"}${interview.round_number > 1 ? ` · Round ${interview.round_number}` : ""}`,
+    // Every stage shows its number, not just round 2+, so the candidate can
+    // always tell which of up to 4 interview stages a card refers to.
+    title: `${interview.round_name || "Interview"} · Stage ${interview.round_number}`,
     subtitle: `${interview.job_title} · ${interview.company_name || "Company unavailable"}`,
     startsAt: hasTime ? interview.scheduled_at : null,
     dateKey: null,
@@ -142,6 +147,7 @@ export function interviewToScheduleEvent(interview: PortalInterview, now: Date):
     panel: interview.panel,
     // Opens the application details page, scrolled to this interview's card.
     href: `/portal/applications/${interview.application_id}${interview.id ? `#interview-${interview.id}` : ""}`,
+    rescheduled: interview.rescheduled,
   };
 }
 
@@ -161,6 +167,7 @@ export function mockToScheduleEvent(session: PortalMockSessionSummary, dateKey: 
     meetingLink: null,
     panel: session.evaluator ? [session.evaluator] : [],
     href: `/portal/interviews/mock/${session.id}`,
+    rescheduled: false,
   };
 }
 

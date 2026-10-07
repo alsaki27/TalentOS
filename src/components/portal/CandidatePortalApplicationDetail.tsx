@@ -159,7 +159,8 @@ export default function CandidatePortalApplicationDetail({ application, resume, 
                 {application.interviews.map((interview: any) => (
                   <article className="portal-interview-card" id={`interview-${interview.id}`} key={interview.id}>
                     <div>
-                      <strong>{interview.round_name}</strong>
+                      <strong>{interview.round_name} · Stage {interview.round_number}</strong>
+                      {interview.rescheduled && <span style={{ color: "var(--p-coral)", fontWeight: 700 }}>↻ Rescheduled</span>}
                       <span>{formatTime(interview.scheduled_at, interview.time_zone)}{interview.duration_minutes ? ` · ${interview.duration_minutes} min` : ""}</span>
                       <span>Status: {interview.status}</span>
                       {interview.interview_format && <span>Format: {interview.interview_format === "online" ? "Online" : "Onsite"}</span>}

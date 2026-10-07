@@ -97,7 +97,7 @@ export interface CandidatePortalApplicationDetail {
   follow_up_at: string | null;
   updates: { id: string; body: string; author: string; created_at: string | null }[];
   timeline: { id: string; label: string; from_label: string | null; to_label: string; created_at: string | null; time_zone: string | null }[];
-  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; panel: string[] }[];
+  interviews: { id: string; round_name: string; round_number: number; scheduled_at: string | null; time_zone: string; duration_minutes: number | null; status: string; interview_format: "online" | "onsite" | null; location: string | null; meeting_link: string | null; rescheduled: boolean; panel: string[] }[];
 }
 
 export interface CandidatePortalTrendPoint {
@@ -132,6 +132,7 @@ export interface CandidatePortalInterview {
   interview_status: string | null;
   interview_format: "online" | "onsite" | null;
   meeting_link: string | null;
+  rescheduled: boolean;
   panel: string[];
   visible_updates: { id: string; body: string; author: string; created_at: string | null }[];
 }
@@ -155,6 +156,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
        s.status AS interview_status,
        s.interview_format,
        s.meeting_link,
+       s.rescheduled_at,
        COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel,
        COALESCE((
          SELECT jsonb_agg(jsonb_build_object(
@@ -185,7 +187,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
        AND (s.id IS NOT NULL OR (CASE WHEN a.ae_stage = 'applied' AND a.status IN ('assigned', 'stacked', 'in_progress') THEN 'applied' ELSE a.status END) = 'interview')
      GROUP BY s.id, a.id, j.title, j.company, j.location, s.round_name, s.round_number,
               j.id, j.apply_url, j.source_url, s.location, s.scheduled_at, s.time_zone, s.duration_minutes,
-              s.status, s.interview_format, s.meeting_link
+              s.status, s.interview_format, s.meeting_link, s.rescheduled_at
      ORDER BY
        CASE
          WHEN LOWER(COALESCE(s.status, 'scheduled')) = 'cancelled' THEN 2
@@ -232,6 +234,7 @@ export async function getCandidatePortalInterviews(candidateId: string): Promise
       interview_status: row.interview_status,
       interview_format: row.interview_format === "online" || row.interview_format === "onsite" ? row.interview_format : null,
       meeting_link: row.meeting_link,
+      rescheduled: Boolean(row.rescheduled_at),
       panel: Array.isArray(row.panel) ? row.panel : [],
       visible_updates: Array.isArray(row.visible_updates) ? row.visible_updates : [],
     };
@@ -308,7 +311,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       [applicationId],
     ),
     query<any>(
-      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.time_zone, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link,
+      `SELECT s.id, s.round_name, s.round_number, s.scheduled_at, s.time_zone, s.duration_minutes, s.status, s.interview_format, s.location, s.meeting_link, s.rescheduled_at,
               COALESCE(array_agg(DISTINCT p.display_name) FILTER (WHERE p.display_name IS NOT NULL), '{}') AS panel
        FROM interview_schedules s
        LEFT JOIN interview_panel_members pm ON pm.schedule_id = s.id
@@ -395,6 +398,7 @@ export async function getCandidatePortalApplicationDetail(candidateId: string, a
       interview_format: interview.interview_format === "online" || interview.interview_format === "onsite" ? interview.interview_format : null,
       location: interview.location,
       meeting_link: interview.meeting_link,
+      rescheduled: Boolean(interview.rescheduled_at),
       panel: Array.isArray(interview.panel) ? interview.panel : [],
     })),
   };

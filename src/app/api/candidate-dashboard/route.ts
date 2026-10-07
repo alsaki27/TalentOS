@@ -46,6 +46,7 @@ interface DashboardRow {
   interview_scheduled_at: string | null;
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
+  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; rescheduled_at: string | null }[] | null;
 }
 
 interface CandidateOption {
@@ -193,6 +194,7 @@ export async function GET(req: NextRequest) {
         iv.scheduled_at AS interview_scheduled_at,
         iv.time_zone AS interview_time_zone,
         iv.interview_format,
+        stages.interview_stages,
         COUNT(*) OVER()::int AS total_count
       FROM applications a
       JOIN candidates c ON c.id = a.candidate_id
@@ -227,6 +229,22 @@ export async function GET(req: NextRequest) {
         ORDER BY s.created_at DESC
         LIMIT 1
       ) iv ON true
+      -- Every non-cancelled stage (round), for the Interview column's full
+      -- per-stage view. notes/rescheduled_at are read defensively the same
+      -- way - added after this table already existed.
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'round_number', s.round_number,
+          'scheduled_at', s.scheduled_at,
+          'time_zone', to_jsonb(s)->>'time_zone',
+          'interview_format', to_jsonb(s)->>'interview_format',
+          'status', COALESCE(s.status, 'scheduled'),
+          'rescheduled_at', to_jsonb(s)->>'rescheduled_at'
+        ) ORDER BY s.round_number) AS interview_stages
+        FROM interview_schedules s
+        WHERE s.application_id = a.id
+          AND COALESCE(s.status, 'scheduled') <> 'cancelled'
+      ) stages ON true
       ${whereClause}
       ORDER BY ${orderSql}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

@@ -4,7 +4,17 @@ import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ScheduleInterviewModal, { InterviewDetails } from "./ScheduleInterviewModal";
+import ManageInterviewStagesModal from "./ManageInterviewStagesModal";
 import { formatZonedDateTime } from "@/lib/easternTime";
+
+export interface InterviewStageSummary {
+  round_number: number;
+  scheduled_at: string | null;
+  time_zone: string | null;
+  interview_format: "online" | "onsite" | null;
+  status: string;
+  rescheduled_at: string | null;
+}
 
 interface DashboardApplication {
   application_id: string;
@@ -27,12 +37,17 @@ interface DashboardApplication {
   interview_scheduled_at?: string | null;
   interview_time_zone?: string | null;
   interview_format?: "online" | "onsite" | null;
+  interview_stages?: InterviewStageSummary[];
 }
 
 interface ApplicationsDataTableProps {
   applications: DashboardApplication[];
   onStatusChange?: (applicationId: string, newStatus: string, interview?: InterviewDetails) => void | Promise<void>;
   onNotesOpen?: (applicationId: string) => void;
+  // Called after an interview stage is scheduled, edited, or rescheduled via
+  // "Manage stages" - the table doesn't own the data, so it asks the parent
+  // to refetch rather than guess how to patch the new shape into local state.
+  onInterviewsChanged?: (applicationId: string) => void;
   readOnly?: boolean;
   totalCount?: number;
   page: number;
@@ -93,13 +108,14 @@ var TH_STYLE: React.CSSProperties = {
 };
 
 export default function ApplicationsDataTable({
-  applications, onStatusChange, onNotesOpen, readOnly,
+  applications, onStatusChange, onNotesOpen, onInterviewsChanged, readOnly,
   totalCount, page, pageSize, onPageChange, sort, order, onSort,
 }: ApplicationsDataTableProps) {
   var [localStatusLoading, setLocalStatusLoading] = useState<Record<string, boolean>>({});
   var [copiedId, setCopiedId] = useState<string | null>(null);
   var [sharepointNoticeId, setSharepointNoticeId] = useState<string | null>(null);
   var [interviewModalApp, setInterviewModalApp] = useState<DashboardApplication | null>(null);
+  var [manageStagesApp, setManageStagesApp] = useState<DashboardApplication | null>(null);
 
   var totalPages = totalCount !== undefined ? Math.max(1, Math.ceil(totalCount / pageSize)) : 1;
   var showCandidateColumn = applications.some(function (a) { return !!a.candidate_name; });
@@ -360,7 +376,35 @@ export default function ApplicationsDataTable({
                     )}
                   </td>
                   <td style={{ padding: "10px 12px", fontSize: 12 }}>
-                    {app.interview_scheduled_at ? (
+                    {app.interview_stages && app.interview_stages.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {app.interview_stages.map(function (stage) {
+                          return (
+                            <div key={stage.round_number} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                              <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-soft)" }}>Stage {stage.round_number}</span>
+                                {stage.status === "cancelled" && <span style={{ fontSize: 10, color: "var(--ink-soft)", fontStyle: "italic" }}>cancelled</span>}
+                                {stage.rescheduled_at && <span title="Rescheduled" style={{ fontSize: 11, color: "#f59e0b" }}>↻</span>}
+                              </span>
+                              <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                <span style={{ color: "var(--ink)", fontWeight: 600 }}>
+                                  {stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "Date to be confirmed"}
+                                </span>
+                                {stage.interview_format && (
+                                  <span style={{
+                                    display: "inline-flex", alignItems: "center", width: "fit-content",
+                                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.3px",
+                                    padding: "1px 6px", borderRadius: 4,
+                                    background: stage.interview_format === "online" ? "rgba(59,130,246,0.12)" : "rgba(168,85,247,0.12)",
+                                    color: stage.interview_format === "online" ? "#3b82f6" : "#a855f7",
+                                  }}>{stage.interview_format === "online" ? "Online" : "Onsite"}</span>
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : app.interview_scheduled_at ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                         <span style={{ color: "var(--ink)", fontWeight: 600 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
                         {app.interview_format && (
@@ -417,6 +461,18 @@ export default function ApplicationsDataTable({
                             fontSize: 14, opacity: isLoading ? 0.5 : 1, transition: "all 0.15s",
                           }}
                         >🎯</button>
+                        {isInterview && (
+                          <button
+                            onClick={function () { setManageStagesApp(app); }}
+                            title="Manage interview stages (schedule, reschedule, notes)"
+                            style={{
+                              width: 28, height: 28, borderRadius: 6, cursor: "pointer",
+                              display: "inline-flex", alignItems: "center", justifyContent: "center",
+                              border: "1px solid var(--border)", background: "var(--bg)",
+                              color: "var(--ink-soft)", fontSize: 14, transition: "all 0.15s",
+                            }}
+                          >🗓️</button>
+                        )}
                         <button
                           onClick={function () { if (onNotesOpen) onNotesOpen(app.application_id); }}
                           title="Notes"
@@ -442,6 +498,18 @@ export default function ApplicationsDataTable({
           applicationLabel={interviewModalApp.company_name + " · " + interviewModalApp.job_title}
           onCancel={function () { setInterviewModalApp(null); }}
           onConfirm={handleInterviewConfirm}
+        />
+      )}
+
+      {manageStagesApp && (
+        <ManageInterviewStagesModal
+          applicationId={manageStagesApp.application_id}
+          applicationLabel={manageStagesApp.company_name + " · " + manageStagesApp.job_title}
+          onCancel={function () { setManageStagesApp(null); }}
+          onSaved={function () {
+            if (onInterviewsChanged && manageStagesApp) onInterviewsChanged(manageStagesApp.application_id);
+            setManageStagesApp(null);
+          }}
         />
       )}
 

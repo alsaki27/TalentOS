@@ -40,6 +40,7 @@ const interview: PortalInterview = {
   meeting_link: "https://meet.example/abc",
   panel: ["Recruiter"],
   visible_updates: [],
+  rescheduled: false,
 };
 
 const mock: PortalMockSessionSummary = {
@@ -93,6 +94,15 @@ describe("schedule agenda", () => {
     expect(markup).toContain("CDT");
     expect(markup).toContain('href="/portal/applications/application-1#interview-schedule-1"');
     expect(markup).toContain("Upcoming (1)");
+    expect(markup).not.toContain("Rescheduled");
+  });
+
+  it("shows a Rescheduled badge when the interview's time has changed since it was first set", () => {
+    const events = buildScheduleEvents([{ ...interview, rescheduled: true }], [], NOW, "America/New_York");
+    const markup = renderToStaticMarkup(createElement(ScheduleAgenda, {
+      events, zone: "America/New_York", now: NOW, tab: "upcoming", onTabChange: () => undefined,
+    }));
+    expect(markup).toContain("Rescheduled");
   });
 
   it("lists cancelled and past items only under their own tab", () => {

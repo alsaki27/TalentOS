@@ -152,10 +152,15 @@ export function zonedDateKey(isoUtc: string | null | undefined, timeZone: string
 
 /** Splits a stored UTC instant back into Eastern-local date/time for old edit forms. */
 export function utcIsoToEasternParts(isoUtc: string | null | undefined): { date: string; time: string } {
+  return utcIsoToZonedParts(isoUtc, EASTERN_TIME_ZONE);
+}
+
+/** Splits a stored UTC instant back into local date/time parts in the given zone, for reschedule/edit forms. */
+export function utcIsoToZonedParts(isoUtc: string | null | undefined, timeZone: string | null | undefined): { date: string; time: string } {
   if (!isoUtc) return { date: "", time: "" };
   const date = new Date(isoUtc);
   if (Number.isNaN(date.getTime())) return { date: "", time: "" };
-  const parts = formatterFor(EASTERN_TIME_ZONE).formatToParts(date);
+  const parts = formatterFor(safeTimeZone(timeZone)).formatToParts(date);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
   return { date: `${get("year")}-${get("month")}-${get("day")}`, time: `${get("hour")}:${get("minute")}` };
 }

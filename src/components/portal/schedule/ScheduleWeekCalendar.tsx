@@ -159,7 +159,7 @@ export default function ScheduleWeekCalendar({ events, days, zone, now }: Props)
                     width: `calc(${100 / placement.columns}% - 6px)`,
                   }}
                 >
-                  <span className="psc-block-title">{event.title}</span>
+                  <span className="psc-block-title">{event.rescheduled && "↻ "}{event.title}</span>
                   <span className="psc-block-time">
                     {event.startsAt ? formatClockRange(event.startsAt, event.durationMinutes, zone) : ""}
                   </span>

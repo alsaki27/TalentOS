@@ -248,11 +248,12 @@
 .psc-kind-mock { background: var(--psc-mock-bg); color: var(--psc-mock-ink); }
 .psc-kind-meeting { background: var(--psc-meeting-bg); color: var(--psc-meeting-ink); }
 
-.psc-status { display: inline-flex; align-items: center; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.psc-status { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .psc-status-upcoming { background: var(--p-navy-soft); color: var(--p-navy); }
 .psc-status-past { background: var(--p-border); color: var(--p-ink-soft); }
 .psc-status-cancelled { background: var(--psc-danger-bg); color: var(--psc-danger-ink); }
 .psc-status-unscheduled { background: var(--psc-warn-bg); color: var(--psc-warn-ink); }
+.psc-status-rescheduled { background: var(--psc-warn-bg); color: var(--psc-warn-ink); }
 
 .psc-empty { padding: 30px 16px; text-align: center; color: var(--p-ink-soft); font-size: 14px; border: 1px dashed var(--p-border); border-radius: var(--p-radius-md); }
 

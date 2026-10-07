@@ -30,6 +30,7 @@ interface DashboardRow {
   interview_scheduled_at: string | null;
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
+  interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; rescheduled_at: string | null }[] | null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -86,7 +87,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         sp.storage_url AS sharepoint_resume_url,
         iv.scheduled_at AS interview_scheduled_at,
         iv.time_zone AS interview_time_zone,
-        iv.interview_format
+        iv.interview_format,
+        stages.interview_stages
       FROM applications a
       JOIN jobs j ON a.job_id = j.id
       LEFT JOIN target_jobs tj ON tj.job_id = j.id AND tj.candidate_id = a.candidate_id
@@ -114,6 +116,21 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         ORDER BY s.created_at DESC
         LIMIT 1
       ) iv ON true
+      -- Every non-cancelled stage (round) - see api/candidate-dashboard/route.ts
+      -- for the identical join.
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'round_number', s.round_number,
+          'scheduled_at', s.scheduled_at,
+          'time_zone', s.time_zone,
+          'interview_format', s.interview_format,
+          'status', COALESCE(s.status, 'scheduled'),
+          'rescheduled_at', s.rescheduled_at
+        ) ORDER BY s.round_number) AS interview_stages
+        FROM interview_schedules s
+        WHERE s.application_id = a.id
+          AND COALESCE(s.status, 'scheduled') <> 'cancelled'
+      ) stages ON true
       WHERE a.candidate_id = $1`,
       [candidateId]
     );

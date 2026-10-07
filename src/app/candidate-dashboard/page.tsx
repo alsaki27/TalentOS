@@ -366,6 +366,7 @@ function CandidateDashboardInner() {
           <ApplicationsDataTable
             applications={data.applications}
             onStatusChange={handleStatusChange}
+            onInterviewsChanged={function () { void fetchData(); }}
             onNotesOpen={function (id) { setNotesAppId(id); }}
             readOnly={false}
             totalCount={data.total}
