@@ -29,11 +29,13 @@ describe("PROVIDER_MODEL_PRESETS", () => {
       }
     }
   });
-  test("opencode presets include deepseek and glm entries", () => {
+  test("opencode presets offer GLM 5.3 Flash and none of the retired models", () => {
     const ids = PROVIDER_MODEL_PRESETS["opencode"]?.map(p => p.id) || [];
-    expect(ids).toContain("deepseek-v4-pro");
-    expect(ids).toContain("glm-5.2");
     expect(ids).toContain("glm-5.3");
+    expect(ids).toContain("glm-5.3-flash");
+    for (const retired of ["gpt-5.6-luna", "glm-5.2", "deepseek-v4-pro", "deepseek-v4-flash"]) {
+      expect(ids).not.toContain(retired);
+    }
   });
 });
 

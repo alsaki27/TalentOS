@@ -18,8 +18,7 @@ const STATE_NAME = "mix 9.23";
 
 const OPEN_CODE_MODELS = [
   "mimo-v2.6-flash",
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
+  "glm-5.3-flash",
   "longcat-2.0",
 ];
 
@@ -31,45 +30,45 @@ const PROTECTED_RESUME_MODELS = {
 };
 
 const MODEL_PLAN = {
-  application_job_lens: "deepseek-v4-flash",
+  application_job_lens: "glm-5.3-flash",
   job_categorization: "mimo-v2.6-flash",
   falood_ai: "mimo-v2.6-flash",
-  job_match_score: "deepseek-v4-flash",
-  email_triage: "deepseek-v4-flash",
-  email_action_enrichment: "deepseek-v4-flash",
-  email_interview_extraction: "deepseek-v4-flash",
+  job_match_score: "glm-5.3-flash",
+  email_triage: "glm-5.3-flash",
+  email_action_enrichment: "glm-5.3-flash",
+  email_interview_extraction: "glm-5.3-flash",
   email_reply_draft: "longcat-2.0",
   recruiter_message_gen: "longcat-2.0",
   cover_letter_gen: "longcat-2.0",
   copilot_cover_letter: "longcat-2.0",
   ai_digest: "longcat-2.0",
-  job_ceo_enricher: "deepseek-v4-flash",
-  job_autofill: "deepseek-v4-flash",
-  job_autofill_form: "deepseek-v4-flash",
-  job_ai_analyze: "deepseek-v4-flash",
-  job_ceo_orchestrator: "deepseek-v4-pro",
-  job_ceo_scout: "deepseek-v4-pro",
-  job_ceo_qa: "deepseek-v4-pro",
-  job_ceo_deep_fetch: "deepseek-v4-pro",
-  job_ceo_matchmaker: "deepseek-v4-pro",
-  candidate_source_of_truth: "deepseek-v4-pro",
-  jd_analysis: "deepseek-v4-pro",
-  evidence_mapping: "deepseek-v4-pro",
-  target_jobs_matching: "deepseek-v4-pro",
-  resume_suggestions: "deepseek-v4-pro",
-  BaseResume_TO_JobSearchKeyword: "deepseek-v4-pro",
-  base_resume_studio: "deepseek-v4-pro",
-  resume_parsing: "deepseek-v4-pro",
-  keyword_extraction: "deepseek-v4-pro",
-  candidate_markitdown: "deepseek-v4-pro",
-  ats_extraction: "deepseek-v4-flash",
-  ats_narrative: "deepseek-v4-flash",
-  ats_scoring: "deepseek-v4-flash",
-  copilot_ceo: "deepseek-v4-pro",
-  copilot_fill_planner: "deepseek-v4-pro",
-  copilot_form_analyst: "deepseek-v4-flash",
-  copilot_compliance: "deepseek-v4-flash",
-  copilot_correction_reviewer: "deepseek-v4-flash",
+  job_ceo_enricher: "glm-5.3-flash",
+  job_autofill: "glm-5.3-flash",
+  job_autofill_form: "glm-5.3-flash",
+  job_ai_analyze: "glm-5.3-flash",
+  job_ceo_orchestrator: "glm-5.3-flash",
+  job_ceo_scout: "glm-5.3-flash",
+  job_ceo_qa: "glm-5.3-flash",
+  job_ceo_deep_fetch: "glm-5.3-flash",
+  job_ceo_matchmaker: "glm-5.3-flash",
+  candidate_source_of_truth: "glm-5.3-flash",
+  jd_analysis: "glm-5.3-flash",
+  evidence_mapping: "glm-5.3-flash",
+  target_jobs_matching: "glm-5.3-flash",
+  resume_suggestions: "glm-5.3-flash",
+  BaseResume_TO_JobSearchKeyword: "glm-5.3-flash",
+  base_resume_studio: "glm-5.3-flash",
+  resume_parsing: "glm-5.3-flash",
+  keyword_extraction: "glm-5.3-flash",
+  candidate_markitdown: "glm-5.3-flash",
+  ats_extraction: "glm-5.3-flash",
+  ats_narrative: "glm-5.3-flash",
+  ats_scoring: "glm-5.3-flash",
+  copilot_ceo: "glm-5.3-flash",
+  copilot_fill_planner: "glm-5.3-flash",
+  copilot_form_analyst: "glm-5.3-flash",
+  copilot_compliance: "glm-5.3-flash",
+  copilot_correction_reviewer: "glm-5.3-flash",
   chat_assistant: "longcat-2.0",
 };
 
@@ -284,7 +283,7 @@ async function main() {
       OPENCODE_BASE_URL,
       JSON.stringify(OPEN_CODE_MODELS),
       JSON.stringify({ opencode_session_id: SESSION_ID }),
-      "mix 9.23 OpenCode Go allocation; Job Lens uses DeepSeek V4 Flash because of observed volume; V4 Pro is reserved for low-volume work.",
+      "mix 9.23 OpenCode Go allocation; every model route uses GLM 5.3 Flash (glm-5.3-flash).",
     ]);
     const newKeyId = newKeyResult.rows[0].id;
 
@@ -360,7 +359,7 @@ async function main() {
           last_error = null, last_error_code = null, last_error_message = null,
           notes = $2, updated_at = now()
       where id = $1
-    `, [newKeyId, "mix 9.23 OpenCode Go smoke tests passed for Mimo V2.6 Flash, DeepSeek V4 Flash, DeepSeek V4 Pro, and LongCat 2.0."]);
+    `, [newKeyId, "mix 9.23 OpenCode Go smoke tests passed for Mimo V2.6 Flash, GLM 5.3 Flash, and LongCat 2.0."]);
 
     // Historical routing states retain their shape after old credentials are
     // removed. A NULL key alone violates their route check constraint, so

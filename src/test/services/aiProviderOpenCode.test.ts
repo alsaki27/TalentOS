@@ -46,6 +46,16 @@ describe("database-managed OpenCode provider", () => {
     expect(headers.get("x-opencode-session")).toBe("talentos-opencode-default");
   });
 
+  it("uses GLM 5.3 Flash when a key has no model override", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(okResponse());
+    const provider = buildProviderFromDbKey("opencode", "test-key", null);
+
+    await provider!.send(request);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.model).toBe("glm-5.3-flash");
+  });
+
   it.each(["deepseek-v4-flash", "deepseek-v4-pro"])(
     "uses OpenCode Go's chat-completions endpoint for %s",
     async (model) => {

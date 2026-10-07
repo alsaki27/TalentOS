@@ -454,7 +454,7 @@ export function buildProviderFromDbKey(
       });
     }
     case "opencode": {
-      const selectedModel = model || "deepseek-v4-flash";
+      const selectedModel = model || "glm-5.3-flash";
       if (/^qwen3\.7-plus$/i.test(selectedModel)) {
         return createOpenCodeMessagesProvider(
           apiKey,
