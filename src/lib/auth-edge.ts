@@ -33,7 +33,15 @@ export function getDefaultRouteForRole(role: string | null | undefined) {
 
 export function canAccessPath(role: string | null | undefined, pathname: string) {
   const normalizedRole = normalizeUserRole(role);
-  const isTeamArea = pathname === "/team" || pathname.startsWith("/team/") || pathname === "/api/users" || pathname.startsWith("/api/users/");
+  // /api/users (exact path) is also the general "list active team members"
+  // endpoint used for assignment/owner pickers across the app - jobs, the
+  // application queue, inbox, interview scheduling - not just the /team
+  // management page. Its own GET handler already allows any authenticated
+  // role and only gates POST (create user) to admin; this blanket rule was
+  // overriding that and blocking the picker for every non-admin role before
+  // the route handler ever ran. /team itself and /api/users/<id> (role
+  // edits, deactivation) are the actual admin-only team-management surface.
+  const isTeamArea = pathname === "/team" || pathname.startsWith("/team/") || pathname.startsWith("/api/users/");
   const isJobsArea = pathname === "/jobs" || pathname.startsWith("/jobs/") || pathname === "/api/jobs" || pathname.startsWith("/api/jobs/");
   const isCompaniesArea =
     pathname === "/companies" ||
