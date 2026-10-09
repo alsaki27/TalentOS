@@ -201,6 +201,11 @@ export default function CandidatesPage() {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
+  // Placed and dropped candidates are hidden by default - most day-to-day
+  // work happens on the still-active roster. Each tick box opts one group
+  // back in without affecting the other.
+  const [showPlaced, setShowPlaced] = useState(false);
+  const [showDropped, setShowDropped] = useState(false);
   const [stageUpdating, setStageUpdating] = useState<string>("");
   const [today, setToday] = useState(() => localCalendarDateIso());
 
@@ -217,6 +222,8 @@ export default function CandidatesPage() {
     if (search) params.set("search", search);
     if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
+    if (showPlaced) params.set("showPlaced", "1");
+    if (showDropped) params.set("showDropped", "1");
     return params;
   }
 
@@ -238,7 +245,7 @@ export default function CandidatesPage() {
   }
 
   // Any filter/search change re-queries from page 1.
-  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, pageSize]);
+  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, showPlaced, showDropped, pageSize]);
 
   async function changeStage(id: string, stage: string) {
     setStageUpdating(id);
@@ -296,7 +303,7 @@ export default function CandidatesPage() {
     downloadCsv("candidates.csv", csv);
   }
 
-  const filtersActive = search || stageFilter || tierFilter;
+  const filtersActive = search || stageFilter || tierFilter || showPlaced || showDropped;
 
   return (
     <div className="candidates-page">
@@ -321,8 +328,16 @@ export default function CandidatesPage() {
           <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", whiteSpace: "nowrap" }}>
+          <input type="checkbox" checked={showPlaced} onChange={(e) => setShowPlaced(e.target.checked)} />
+          Show placed
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", whiteSpace: "nowrap" }}>
+          <input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} />
+          Show dropped
+        </label>
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); }}>Clear filters</button>
+          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); setShowPlaced(false); setShowDropped(false); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
       </div>

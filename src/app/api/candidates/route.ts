@@ -81,6 +81,14 @@ export async function GET(req: NextRequest) {
   const status = url.searchParams.get("status") || "";
   const tier = url.searchParams.get("tier") || "";
   const pipelineStage = url.searchParams.get("pipelineStage") || "";
+  const showPlaced = url.searchParams.get("showPlaced") === "1";
+  const showDropped = url.searchParams.get("showDropped") === "1";
+  // Placed and dropped candidates are hidden by default - most work happens
+  // on the still-active roster - unless a tick box opts one back in, or the
+  // stage dropdown explicitly asks for exactly that one stage.
+  const hiddenStages: string[] = [];
+  if (!showPlaced) hiddenStages.push("placed");
+  if (!showDropped) hiddenStages.push("dropped");
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
@@ -104,6 +112,7 @@ export async function GET(req: NextRequest) {
       AND ($3 = '' OR c.status = $3)
       AND ($4 = '' OR c.target_tier = $4)
       AND ($5 = '' OR c.pipeline_stage = $5)
+      AND ($5 <> '' OR c.pipeline_stage <> ALL($8::text[]))
     ORDER BY ${stageOrder}, c.name ASC
     OFFSET $6 LIMIT $7
   `;
@@ -113,12 +122,13 @@ export async function GET(req: NextRequest) {
       AND ($3 = '' OR status = $3)
       AND ($4 = '' OR target_tier = $4)
       AND ($5 = '' OR pipeline_stage = $5)
+      AND ($5 <> '' OR pipeline_stage <> ALL($6::text[]))
   `;
 
   try {
     const [data, countRow] = await Promise.all([
-      query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize]),
-      queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage]),
+      query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize, hiddenStages]),
+      queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage, hiddenStages]),
     ]);
     const auditItems = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
     const items = !compact && includeOptDays ? await enrichWithOptApproval(auditItems) : auditItems;
