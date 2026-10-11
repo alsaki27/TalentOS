@@ -1069,7 +1069,7 @@ button:disabled {
   background-color: rgba(248, 113, 113, 0.12);
 }
 
-input,
+input:not([type="checkbox"]):not([type="radio"]),
 select,
 textarea {
   font-family: inherit;
@@ -1083,18 +1083,27 @@ textarea {
   transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
 }
 
-input:hover,
+input:not([type="checkbox"]):not([type="radio"]):hover,
 select:hover,
 textarea:hover {
   border-color: rgba(var(--neutral-rgb), 0.45);
 }
 
-input:focus-visible,
+input:not([type="checkbox"]):not([type="radio"]):focus-visible,
 select:focus-visible,
 textarea:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 select {
@@ -1955,10 +1964,37 @@ label {
   margin-bottom: 16px;
 }
 
-.filter-bar input,
+.filter-bar input:not([type="checkbox"]):not([type="radio"]),
 .filter-bar select {
   width: auto;
   min-width: 140px;
+}
+
+.filter-bar-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease), color 140ms var(--ease);
+}
+
+.filter-bar-check:hover {
+  border-color: rgba(var(--neutral-rgb), 0.45);
+}
+
+.filter-bar-check:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Application Queue stage metadata must remain readable against the dark
@@ -2512,7 +2548,7 @@ label {
     flex-direction: column;
   }
 
-  .filter-bar input,
+  .filter-bar input:not([type="checkbox"]):not([type="radio"]),
   .filter-bar select,
   .filter-bar button {
     width: 100%;

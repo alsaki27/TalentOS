@@ -328,11 +328,11 @@ export default function CandidatesPage() {
           <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", whiteSpace: "nowrap" }}>
+        <label className="filter-bar-check">
           <input type="checkbox" checked={showPlaced} onChange={(e) => setShowPlaced(e.target.checked)} />
           Show placed
         </label>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", whiteSpace: "nowrap" }}>
+        <label className="filter-bar-check">
           <input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} />
           Show dropped
         </label>
