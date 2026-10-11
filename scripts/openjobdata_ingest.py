@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """OpenJobData ingest script for TalentOS JOB CEO pipeline.
 
-Downloads daily delta parquet files from the public HuggingFace bucket
-(Invicto69/Jobs-Dataset-bucket) — no token or account needed.
+Downloads daily delta parquet shards from the public HuggingFace dataset repo
+(scholarweave/Jobs-Dataset-v2) — no token or account needed. Migrated
+2026-10-11 from the earlier Invicto69/Jobs-Dataset-bucket storage bucket,
+which OpenJobData has retired in favor of this repo (same project, same core
+columns — see scripts/openjobdata_common.py's module docstring for the full
+layout comparison). A day's delta is now a glob of one or more shards under a
+date+run partition (data/changes/minimal/date=YYYY-MM-DD/run_id=.../
+part-*.parquet), not a single flat {date}.parquet file.
 Filters job titles using word-boundary-safe keyword matching from the
 MASTERPROMPT role library, then POSTs matched jobs to the Job CEO ingest API.
 
@@ -452,16 +458,26 @@ def matches_role(title: Any, role_group: str = "all", custom_keywords: Optional[
     return False
 
 
-def load_companies(fs, bucket_prefix: str) -> Dict[Any, Dict[str, Any]]:
-    """Load company lookup table from the bucket."""
-    companies_path = f"{bucket_prefix}/data/companies/companies.parquet"
+def load_companies(fs, dataset_prefix: str) -> Dict[Any, Dict[str, Any]]:
+    """Load company lookup table from the dataset's latest dated snapshot
+    (data/companies/snapshot_date=YYYY-MM-DD/part-*.parquet) — found dynamically
+    since snapshots are periodic, not a single static file."""
     try:
-        if not fs.exists(companies_path):
-            print("  WARNING: companies.parquet not found, proceeding without company names")
-            return {}
         import pandas as pd
-        with fs.open(companies_path, "rb") as f:
-            df = pd.read_parquet(f)
+        snapshot_dirs = sorted(fs.glob(f"{dataset_prefix}/data/companies/snapshot_date=*"))
+        if not snapshot_dirs:
+            print("  WARNING: no company snapshot found, proceeding without company names")
+            return {}
+        latest_snapshot_dir = snapshot_dirs[-1]
+        company_paths = sorted(fs.glob(f"{latest_snapshot_dir}/part-*.parquet"))
+        if not company_paths:
+            print(f"  WARNING: company snapshot {latest_snapshot_dir} has no part files, proceeding without company names")
+            return {}
+        frames = []
+        for company_path in company_paths:
+            with fs.open(company_path, "rb") as f:
+                frames.append(pd.read_parquet(f))
+        df = pd.concat(frames, ignore_index=True)
         lookup: Dict[Any, Dict[str, Any]] = {}
         for _, row in df.iterrows():
             cid = row.get("id")
@@ -482,27 +498,33 @@ def load_companies(fs, bucket_prefix: str) -> Dict[Any, Dict[str, Any]]:
         return {}
 
 
-def load_deltas(fs, bucket_prefix: str, days_back: int) -> "pd.DataFrame":
-    """Download daily delta parquet files for the last N days."""
+def load_deltas(fs, dataset_prefix: str, days_back: int) -> "pd.DataFrame":
+    """Download daily delta parquet shards for the last N days. Each day's delta is a
+    glob of one or more shards under a date+run partition
+    (data/changes/minimal/date=YYYY-MM-DD/run_id=.../part-*.parquet), not a single file."""
     import pandas as pd
 
     end_date = datetime.now(timezone.utc).date()
     dates = [end_date - timedelta(days=i) for i in range(days_back)]
     dates.sort()
 
-    remote_dir = f"{bucket_prefix}/data/minimal/changes"
+    remote_dir = f"{dataset_prefix}/data/changes/minimal"
     frames: List["pd.DataFrame"] = []
 
     for date in dates:
         date_str = date.strftime("%Y-%m-%d")
-        remote_path = f"{remote_dir}/{date_str}.parquet"
+        shard_glob = f"{remote_dir}/date={date_str}/**/*.parquet"
         try:
-            if not fs.exists(remote_path):
-                print(f"  {date_str}: no delta file (source gap, skipping)")
+            shard_paths = sorted(fs.glob(shard_glob))
+            if not shard_paths:
+                print(f"  {date_str}: no delta shards (source gap, skipping)")
                 continue
-            with fs.open(remote_path, "rb") as f:
-                df = pd.read_parquet(f)
-            print(f"  {date_str}: {len(df):,} rows downloaded")
+            day_frames = []
+            for shard_path in shard_paths:
+                with fs.open(shard_path, "rb") as f:
+                    day_frames.append(pd.read_parquet(f))
+            df = pd.concat(day_frames, ignore_index=True)
+            print(f"  {date_str}: {len(df):,} rows downloaded ({len(shard_paths)} shard(s))")
             frames.append(df)
         except Exception as e:
             print(f"  {date_str}: ERROR — {e}")
@@ -573,7 +595,10 @@ def build_job_payload(row: "pd.Series", companies: Dict[Any, Dict[str, Any]]) ->
         except Exception:
             pass
 
-    external_id = str(row.get("id") or row.get("job_id") or "")
+    # posting_id is the durable identifier in the current schema (the old bucket's
+    # "id" column no longer exists); job_id is a full-variant-only ATS-native id,
+    # kept as a secondary fallback.
+    external_id = str(row.get("posting_id") or row.get("job_id") or "")
 
     return {
         "title": title,
@@ -637,10 +662,10 @@ def main():
     # HF_TOKEN is optional (bucket is public) but speeds up rate limits if provided
     hf_token = os.environ.get("HF_TOKEN")
     fs = HfFileSystem(token=hf_token) if hf_token else HfFileSystem()
-    bucket_prefix = "buckets/Invicto69/Jobs-Dataset-bucket"
+    dataset_prefix = "datasets/scholarweave/Jobs-Dataset-v2"
 
     print(f"\nDownloading last {days_back} day(s) of delta files...")
-    df = load_deltas(fs, bucket_prefix, days_back)
+    df = load_deltas(fs, dataset_prefix, days_back)
 
     if df.empty:
         print("No delta rows found. Either no delta files exist for these dates, or the bucket is unavailable.")
@@ -648,15 +673,17 @@ def main():
 
     print(f"\nTotal raw rows: {len(df):,}")
 
-    # Filter active jobs only
-    if "status" in df.columns:
-        df = df[df["status"] == "active"]
-        print(f"After status=active filter: {len(df):,}")
+    # No status=='active' filter needed: data/changes/ only ever contains
+    # active_insert/active_update rows (verified on real data — closures live in
+    # the separate data/closed/ folder instead, which this script never reads).
+    # The old bucket's single changes file mixed both and needed a post-read
+    # filter; this dataset splits them at the folder level instead.
 
     # ── US-ONLY FILTER (strict) ───────────────────────────────────────────────
-    # The OpenJobData minimal schema has a 'country' column with ISO-2 codes
-    # (e.g. "US", "GB", "CA"). Reject every row that is not explicitly in the
-    # United States. Remote-only rows that have country=US are kept.
+    # The OpenJobData dataset's 'country' column carries free-text country names
+    # (e.g. "United States", "Netherlands") with occasional stray ISO-2 codes.
+    # Reject every row that is not explicitly in the United States. Remote-only
+    # rows that have country=US are kept.
     if "country" in df.columns:
         before_us = len(df)
         df = df[df["country"].str.upper().isin(["US", "USA", "UNITED STATES"])]
@@ -675,7 +702,7 @@ def main():
 
     # Load company lookup for enriching job data
     print("\nLoading company data...")
-    companies = load_companies(fs, bucket_prefix)
+    companies = load_companies(fs, dataset_prefix)
 
     # Deduplicate within this batch. Mirrors the authoritative signature rule
     # Job CEO itself uses server-side (computeJobDedupSignature in

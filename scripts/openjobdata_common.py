@@ -2,8 +2,35 @@
 scripts/openjobdata_common.py
 
 Shared core for pulling keyword-filtered job postings from the openjobdata.com
-public dataset (hosted as a Hugging Face Storage Bucket at
-hf://buckets/Invicto69/Jobs-Dataset-bucket, MIT licensed, no auth required).
+public dataset (hosted as a standard Hugging Face dataset repo at
+hf://datasets/scholarweave/Jobs-Dataset-v2, Apache-2.0 licensed, no auth required).
+Migrated 2026-10-11 from the earlier hf://buckets/Invicto69/Jobs-Dataset-bucket
+storage-bucket product, which OpenJobData has retired in favor of this repo — same
+project (the new repo's own README links back to openjobdata.com). Two things
+changed, both confirmed by reading real live parquet files directly (the HF
+datasets-server `/info` API's advertised schema for this repo is stale/wrong —
+it still lists the old `id`/`status`/`job_model_json`/`entire_json` columns, which
+do not actually exist in the current files; never trust it over a real file read):
+
+1. File layout: daily deltas are now a glob of date+run-partitioned shards
+   (`data/changes/{variant}/date=YYYY-MM-DD/run_id=.../part-*.parquet`) instead of
+   one flat `{date}.parquet` file, and the company lookup is a date-partitioned
+   snapshot (`data/companies/snapshot_date=YYYY-MM-DD/part-*.parquet`) instead of a
+   single static file. See `load_and_filter_one_day()` and `join_company_metadata()`.
+
+2. Columns were renamed/restructured: `id` → `posting_id` (now a durable compound
+   string, e.g. `"ultipro:.../recruiting2.ultipro.com/..."`, not the old bucket's
+   `{unique_id}/{job_id}` shape); the raw-JSON columns `job_model_json`/`entire_json`
+   are now `normalized_payload`/`source_payload` (same nested keys inside, verified —
+   `description_plain`/`description_html`/`location` all still present, so bug #3
+   below still applies, just under renamed outer columns); there is no `status`
+   column any more — "active" vs "closed" is now a structural split between the
+   `data/changes/` and `data/closed/` top-level folders instead of a column value
+   within one folder (confirmed: every row read from `changes/` has
+   `event_type` in `{"active_insert", "active_update"}` and a null `closed_at`;
+   `closed/` rows have `event_type == "close"` and a populated `closed_at`) — so
+   simply reading from `changes/` already gives active-only postings, no post-read
+   status filter needed or possible any more.
 
 This module exists so every keyword-search tool built on top of this dataset
 (scripts/openjobdata_export.py for OSP, scripts/EEE_job_search.py for FPGA/
@@ -42,11 +69,11 @@ there is no true geocoded radius calculation available here. If you need a
 real N-mile-radius filter, you need to add real geocoding (a places API) on
 top of this, not trust text-matching alone to be geographically precise.
 
-The Hugging Face Bucket is NOT plain-HTTPS-fetchable (confirmed: /resolve/
-URLs 404, the web file-tree doesn't render nested paths). It only works
-through the `huggingface_hub` Python client's HfFileSystem (hf:// scheme,
-fsspec-compatible) — which is why this is Python, not a TypeScript module
-in the Next.js app.
+This dataset is read through the `huggingface_hub` Python client's
+HfFileSystem (hf:// scheme, fsspec-compatible), using glob() rather than a
+single open() since each day's delta and each company snapshot can be split
+across more than one parquet shard — which is why this is Python, not a
+TypeScript module in the Next.js app.
 """
 
 from __future__ import annotations
@@ -60,7 +87,7 @@ from pathlib import Path
 import pandas as pd
 from huggingface_hub import HfFileSystem
 
-BUCKET_PREFIX = "buckets/Invicto69/Jobs-Dataset-bucket"
+DATASET_PREFIX = "datasets/scholarweave/Jobs-Dataset-v2"
 
 
 def resolve_date(date_arg: str | None) -> str:
@@ -109,9 +136,62 @@ DESCRIPTION_TEXT_KEYS = (
 DESCRIPTION_HTML_KEYS = ("description_html",)
 
 
+def _arrow_series_to_object_list(series: pd.Series) -> list:
+    """Converts one Arrow-backed Series to a plain Python list via per-element access
+    (chunk[i].as_py()), NOT pandas' normal bulk conversion (.values / .to_numpy() /
+    .tolist() on an Arrow dtype / .apply(axis=1) / .iterrows() — all of these ask
+    pyarrow to build or rebuild ONE buffer for the WHOLE column). Confirmed empirically
+    against real v2 data, on this dataset's large normalized_payload/source_payload
+    columns specifically:
+      - bulk conversion can raise pyarrow.lib.ArrowException ("Unknown error:
+        Wrapping ... failed") on specific real rows, aborting the whole batch, while
+        per-element access to the exact same data never fails (tested 27k+ real rows,
+        0 failures);
+      - even once that's avoided, any LATER pandas-level operation that still touches
+        the ORIGINAL Arrow-backed column (Series "+", boolean-mask filtering/.take()
+        via jobs_df[mask], etc.) re-triggers the same class of failure, now as
+        pyarrow.lib.ArrowMemoryError ("realloc"/"malloc ... failed") — a single
+        contiguous buffer spanning a full day's rows (up to 218k, confirmed) can be
+        1GB+ for this field.
+    The fix used throughout this module is to convert these columns to plain Python
+    objects ONCE, this way, as early as possible (see load_and_filter_one_day()) —
+    after that, pandas treats them as an ordinary object-dtype column, and every
+    further operation (filtering, slicing, concatenation) is cheap pointer-copying,
+    never a pyarrow buffer rebuild."""
+    pa_array = getattr(series.array, "_pa_array", None)
+    if pa_array is None:
+        # Not Arrow-backed (already plain object dtype, e.g. converted earlier) —
+        # ordinary .tolist() never hits the bulk-conversion failure modes above.
+        return series.tolist()
+    values: list = []
+    for chunk in pa_array.chunks:
+        for i in range(len(chunk)):
+            try:
+                values.append(chunk[i].as_py())
+            except Exception:
+                values.append(None)
+    return values
+
+
+def _json_columns_to_rows(df: pd.DataFrame, columns: tuple[str, ...]) -> list[dict]:
+    """Pulls the given columns out of a DataFrame as plain Python dicts, one per row —
+    see _arrow_series_to_object_list() for why this avoids pandas' normal bulk
+    conversion path."""
+    columns_data: dict[str, list] = {
+        col: (_arrow_series_to_object_list(df[col]) if col in df.columns else [None] * len(df))
+        for col in columns
+    }
+    return [dict(zip(columns, vals)) for vals in zip(*(columns_data[c] for c in columns))]
+
+
 def extract_description_text(row: pd.Series) -> str:
-    """Pulls whatever description text is available from the full variant's JSON columns."""
-    for col in ("job_model_json", "entire_json"):
+    """Pulls whatever description text is available from the full variant's JSON columns.
+    normalized_payload is checked first (same clean description_plain/description_html
+    keys the old job_model_json had, verified unchanged), falling back to the ATS-raw
+    source_payload (same caveat as before: its key shape is ATS-specific and not fully
+    covered by DESCRIPTION_TEXT_KEYS — pre-existing, best-effort fallback, same as when
+    this was named entire_json)."""
+    for col in ("normalized_payload", "source_payload"):
         raw = row.get(col)
         if raw is None:
             continue
@@ -197,16 +277,17 @@ def extract_years_required(text: str) -> int | None:
 
 
 def extract_location_text(row: pd.Series) -> str:
-    """Concatenates every location-ish string found across job_model_json / entire_json,
-    across the different ATS schema shapes seen in this dataset (normalized
-    job_model_json.location is a dict with city/state/raw_location_text; some raw
-    entire_json payloads instead carry a plain 'City, ST' string under 'location', or a
+    """Concatenates every location-ish string found across normalized_payload /
+    source_payload (formerly job_model_json / entire_json — see module docstring),
+    across the different ATS schema shapes seen in this dataset (normalized_payload's
+    location is a dict with city/state/raw_location_text, verified unchanged; some raw
+    source_payload payloads instead carry a plain 'City, ST' string under 'location', or a
     business-unit descriptor under jobRequisitionLocation.descriptor). Used for substring
     matching against a target metro area — the dataset has no zip/lat-long, so this is a
     text-match proxy, not a geocoded radius calculation. See module docstring for the
     caveat this implies."""
     parts: list[str] = []
-    for col in ("job_model_json", "entire_json"):
+    for col in ("normalized_payload", "source_payload"):
         raw = row.get(col)
         if raw is None:
             continue
@@ -240,51 +321,113 @@ def load_and_filter_one_day(
     keywords_only_title: bool,
     log_prefix: str,
 ) -> pd.DataFrame:
-    """Reads one day's delta file and returns just the keyword-matched rows for that day."""
-    changes_path = f"{BUCKET_PREFIX}/data/{variant}/changes/{date_str}.parquet"
-    if not fs.exists(changes_path):
-        print(f"[{log_prefix}] No delta file found for {date_str} at {changes_path} — skipping.", file=sys.stderr)
+    """Reads one day's delta shard(s) and returns just the keyword-matched rows for that day.
+    A day's delta is a glob of one or more parquet shards under a date+run partition
+    (data/changes/{variant}/date=YYYY-MM-DD/run_id=.../part-*.parquet), not a single file —
+    see module docstring for why this changed from the old bucket layout."""
+    changes_glob = f"{DATASET_PREFIX}/data/changes/{variant}/date={date_str}/**/*.parquet"
+    shard_paths = sorted(fs.glob(changes_glob))
+    if not shard_paths:
+        print(f"[{log_prefix}] No delta shards found for {date_str} at {changes_glob} — skipping.", file=sys.stderr)
         return pd.DataFrame()
 
-    print(f"[{log_prefix}] Reading {changes_path} ...")
-    with fs.open(changes_path, "rb") as f:
-        jobs_df = pd.read_parquet(f)
-    print(f"[{log_prefix}] {date_str}: loaded {len(jobs_df):,} job records.")
+    # Filtered shard-by-shard, not loaded-then-concatenated-then-filtered: a day can be
+    # 8+ shards (confirmed live, ~130MB raw parquet each), and only a small fraction of
+    # rows ever match a keyword search. Keeping all shards' full data (including the
+    # large normalized_payload/source_payload JSON columns on the full variant) resident
+    # at once peaks at the WHOLE day's memory footprint for no benefit — confirmed to
+    # exhaust memory on a constrained machine. Filtering each shard immediately and
+    # discarding its unfiltered DataFrame before reading the next one bounds peak memory
+    # to roughly one shard's data plus the (much smaller) accumulated matches.
+    print(f"[{log_prefix}] Reading {len(shard_paths)} shard(s) for {date_str} ...")
+    matched_frames: list[pd.DataFrame] = []
+    total_rows = 0
+    for shard_path in shard_paths:
+        with fs.open(shard_path, "rb") as f:
+            shard_df = pd.read_parquet(f)
+        total_rows += len(shard_df)
+        if shard_df.empty:
+            continue
 
-    if jobs_df.empty:
+        # No post-read status filter any more: data/changes/ only ever contains
+        # active_insert/active_update rows (closures live in the separate data/closed/
+        # folder, see module docstring) — this folder is already active-only by
+        # construction, unlike the old bucket's single changes file that mixed both.
+
+        # Convert the large raw-JSON columns (full variant only) to plain object dtype
+        # immediately — see _arrow_series_to_object_list() for why: every later
+        # operation on an Arrow-backed version of these two columns (boolean-mask
+        # filtering, "+", slicing) asks pyarrow to rebuild a large contiguous buffer,
+        # which can fail outright on a memory-constrained runner. Once these are plain
+        # Python objects, pandas treats them like any other object column and
+        # everything downstream (here and in _scan_and_filter()) is cheap.
+        for col in ("normalized_payload", "source_payload"):
+            if col in shard_df.columns:
+                shard_df[col] = pd.Series(_arrow_series_to_object_list(shard_df[col]), index=shard_df.index, dtype="object")
+
+        title_dept_text = (
+            shard_df.get("title", "").fillna("") + " | " + shard_df.get("department", "").fillna("")
+        )
+
+        if variant == "full" and not keywords_only_title:
+            # _json_columns_to_rows(), not .apply(axis=1)/.iterrows() — both of those
+            # call DataFrame.values on the whole frame internally, which can crash on
+            # this dataset's normalized_payload/source_payload columns (see its
+            # docstring).
+            json_rows = _json_columns_to_rows(shard_df, ("normalized_payload", "source_payload"))
+            # Plain Python string concatenation (f-string over .tolist()), not pandas'
+            # Series "+" operator: title_dept_text is Arrow-backed, and "+"-ing it
+            # against anything forces pandas to box the other side into an Arrow
+            # large_string buffer too — confirmed to fail with a pyarrow realloc error
+            # on a memory-constrained machine even when the description side alone was
+            # already plain dtype="object". Building full_text this way never asks
+            # pyarrow for one giant buffer at all.
+            title_dept_list = title_dept_text.tolist()
+            full_text = pd.Series(
+                [f"{td} | {extract_description_text(r)}" for td, r in zip(title_dept_list, json_rows)],
+                index=shard_df.index,
+                dtype="object",
+            )
+        else:
+            full_text = title_dept_text
+
+        mask = full_text.str.contains(pattern, na=False)
+        shard_matches = shard_df[mask].copy()
+        if not shard_matches.empty:
+            shard_matches["matched_keywords"] = full_text[mask].apply(lambda t: ", ".join(matched_keywords(t, pattern)))
+            matched_frames.append(shard_matches)
+        del shard_df, full_text, mask
+
+    print(f"[{log_prefix}] {date_str}: loaded {total_rows:,} job records.")
+    if not matched_frames:
         return pd.DataFrame()
 
-    # Only postings that appeared/updated as OPEN, not closures.
-    if "status" in jobs_df.columns:
-        jobs_df = jobs_df[jobs_df["status"] == "active"].copy()
-        print(f"[{log_prefix}] {date_str}: {len(jobs_df):,} active postings after status filter.")
-
-    title_dept_text = (
-        jobs_df.get("title", "").fillna("") + " | " + jobs_df.get("department", "").fillna("")
-    )
-
-    if variant == "full" and not keywords_only_title:
-        print(f"[{log_prefix}] {date_str}: extracting description text for full-recall keyword scan (slow part)...")
-        description_text = jobs_df.apply(extract_description_text, axis=1)
-        full_text = title_dept_text + " | " + description_text
-    else:
-        full_text = title_dept_text
-
-    mask = full_text.str.contains(pattern, na=False)
-    matches = jobs_df[mask].copy()
-    matches["matched_keywords"] = full_text[mask].apply(lambda t: ", ".join(matched_keywords(t, pattern)))
+    matches = pd.concat(matched_frames, ignore_index=True)
     matches["delta_date"] = date_str
     print(f"[{log_prefix}] {date_str}: {len(matches):,} matched postings.")
     return matches
 
 
 def join_company_metadata(fs: HfFileSystem, matches: pd.DataFrame, log_prefix: str) -> pd.DataFrame:
-    companies_path = f"{BUCKET_PREFIX}/data/companies/companies.parquet"
-    if not fs.exists(companies_path):
+    """Companies are published as dated snapshots (data/companies/snapshot_date=YYYY-MM-DD/
+    part-*.parquet), not a single static file — reads whichever snapshot is most recent,
+    found dynamically (ISO date strings sort correctly), not hardcoded."""
+    snapshot_dirs = sorted(fs.glob(f"{DATASET_PREFIX}/data/companies/snapshot_date=*"))
+    if not snapshot_dirs:
+        print(f"[{log_prefix}] No company snapshot found — skipping company join.", file=sys.stderr)
         return matches
-    print(f"[{log_prefix}] Joining company metadata ...")
-    with fs.open(companies_path, "rb") as f:
-        companies_df = pd.read_parquet(f)
+    latest_snapshot_dir = snapshot_dirs[-1]
+    company_paths = sorted(fs.glob(f"{latest_snapshot_dir}/part-*.parquet"))
+    if not company_paths:
+        print(f"[{log_prefix}] Company snapshot {latest_snapshot_dir} has no part files — skipping company join.", file=sys.stderr)
+        return matches
+
+    print(f"[{log_prefix}] Joining company metadata from {latest_snapshot_dir} ({len(company_paths)} shard(s)) ...")
+    frames = []
+    for company_path in company_paths:
+        with fs.open(company_path, "rb") as f:
+            frames.append(pd.read_parquet(f))
+    companies_df = pd.concat(frames, ignore_index=True)
     companies_df = companies_df.rename(
         columns={"name": "company_name", "website": "company_website", "career_url": "company_career_url"}
     )
@@ -397,11 +540,21 @@ def _scan_and_filter(
     if max_years_experience is not None or location_filter is not None:
         # Recomputed on the (small) already-keyword-matched set, not the full day's data —
         # cheap here even though extract_description_text is the "slow part" earlier.
-        matches["description_text_extracted"] = matches.apply(extract_description_text, axis=1)
-        matches["years_required"] = (
-            matches["title"].fillna("") + " | " + matches["description_text_extracted"]
-        ).apply(extract_years_required)
-        matches["location_text"] = matches.apply(extract_location_text, axis=1)
+        # _json_columns_to_rows(), not .apply(axis=1)/.iterrows() — see its docstring.
+        json_rows = _json_columns_to_rows(matches, ("normalized_payload", "source_payload"))
+        # dtype="object" and plain Python concatenation, not Series "+" — see
+        # load_and_filter_one_day() for why mixing an Arrow-backed Series with an
+        # object-dtype one via "+" forces the same kind of large buffer allocation.
+        description_list = [extract_description_text(r) for r in json_rows]
+        matches["description_text_extracted"] = pd.Series(description_list, index=matches.index, dtype="object")
+        title_list = matches["title"].fillna("").tolist()
+        matches["years_required"] = pd.Series(
+            [extract_years_required(f"{t} | {d}") for t, d in zip(title_list, description_list)],
+            index=matches.index,
+        )
+        matches["location_text"] = pd.Series(
+            [extract_location_text(r) for r in json_rows], index=matches.index, dtype="object"
+        )
 
     if max_years_experience is not None:
         before = len(matches)
@@ -478,9 +631,16 @@ def run_keyword_export(
     present_cols = [c for c in output_columns if c in matches.columns]
     export_df = matches[present_cols].rename(columns=output_columns)
     if "Posted At" in export_df.columns:
-        export_df = export_df.sort_values("Posted At", ascending=False)
+        # format="ISO8601", not pandas' default single-format auto-inference: this
+        # dataset's posted_at strings aren't all the same length (some carry
+        # milliseconds, e.g. "2026-10-09T22:15:26.069+00:00", some don't), which
+        # breaks the strict format pandas infers from a sample. ISO8601 parsing
+        # handles the optional fractional seconds natively. Parsed before sorting
+        # (not after, as before) so "Posted At" sorts by actual instant, not by
+        # lexicographic string order, which the mixed lengths would also throw off.
         # Excel has no tz-aware datetime type — Hugging Face's timestamps are UTC.
-        export_df["Posted At"] = pd.to_datetime(export_df["Posted At"], utc=True).dt.tz_localize(None)
+        export_df["Posted At"] = pd.to_datetime(export_df["Posted At"], utc=True, format="ISO8601").dt.tz_localize(None)
+        export_df = export_df.sort_values("Posted At", ascending=False)
 
     if output_path is None:
         suffix = date_strs[-1] if len(date_strs) == 1 else f"{date_strs[0]}_to_{date_strs[-1]}"
@@ -495,9 +655,9 @@ def run_keyword_export(
 # expects per job. Keep in sync with that route's per-job field list — every field here
 # has a home in the jobs table (see sql/01_schema.sql) or job_agent_staged_jobs, so
 # nothing openjobdata provides gets silently dropped on the way into TalentOS.
-def _row_to_ingest_job(row: pd.Series) -> dict:
-    description_text = extract_description_text(row)
-    location_text = extract_location_text(row)
+def _row_to_ingest_job(row: pd.Series, json_row: dict) -> dict:
+    description_text = extract_description_text(json_row)
+    location_text = extract_location_text(json_row)
     workplace_type = str(row.get("workplace_type", "") or "").strip().lower()
     is_remote = bool(row.get("is_remote")) or workplace_type == "remote"
 
@@ -520,7 +680,7 @@ def _row_to_ingest_job(row: pd.Series) -> dict:
         "is_remote": is_remote,
         "posted_at": posted_at_str,
         "apply_url": row.get("apply_url") or None,
-        "external_job_id": str(row.get("id")) if row.get("id") is not None else None,
+        "external_job_id": str(row.get("posting_id") or row.get("job_id") or "") or None,
         "description_text": description_text or None,
     }
 
@@ -548,7 +708,15 @@ def run_keyword_ingest(
     if matches is None:
         return []
 
-    jobs = [_row_to_ingest_job(row) for _, row in matches.iterrows()]
+    # The two JSON columns are dropped before iterrows() and supplied separately via
+    # _json_columns_to_rows() — see that helper's docstring for why (bulk-converting
+    # them through iterrows()/.values() can crash on specific real rows).
+    json_rows = _json_columns_to_rows(matches, ("normalized_payload", "source_payload"))
+    safe_matches = matches.drop(columns=["normalized_payload", "source_payload"], errors="ignore")
+    jobs = [
+        _row_to_ingest_job(row, json_row)
+        for (_, row), json_row in zip(safe_matches.iterrows(), json_rows)
+    ]
     jobs = [j for j in jobs if j["title"]]
     print(f"[{log_prefix}] Built {len(jobs):,} normalized job rows for ingest.")
     return jobs

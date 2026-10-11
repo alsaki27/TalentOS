@@ -9,36 +9,59 @@ below — no accounts, no API keys, no repo access required.
 
 ## 1. The data source (verified real, public, live)
 
-**OpenJobData** (https://openjobdata.com) is a public Hugging Face **storage bucket**
-(not a normal HF "dataset" — that's why searching HF's dataset search won't find it).
-No token or account needed.
+**OpenJobData** (https://openjobdata.com) is a public, standard Hugging Face **dataset
+repo** (migrated 2026-10-11 from an earlier storage-bucket product at a different HF
+account — if you see references elsewhere to `hf://buckets/Invicto69/...`, that's the
+old location). No token or account needed.
 
 ```
-Bucket URI: hf://buckets/Invicto69/Jobs-Dataset-bucket
+Dataset: hf://datasets/scholarweave/Jobs-Dataset-v2
 
-buckets/Invicto69/Jobs-Dataset-bucket/
+datasets/scholarweave/Jobs-Dataset-v2/
 ├── data/
-│   ├── minimal/changes/YYYY-MM-DD.parquet   <- daily new/updated jobs, lightweight columns
-│   ├── full/changes/YYYY-MM-DD.parquet      <- same, plus raw JSON payload (heavier)
-│   └── companies/companies.parquet          <- company_id -> name/website/industry lookup
+│   ├── changes/minimal/date=YYYY-MM-DD/run_id=.../part-*.parquet   <- daily new/updated jobs, lightweight columns (one or more shards per day)
+│   ├── changes/full/date=YYYY-MM-DD/run_id=.../part-*.parquet      <- same, plus raw JSON payload (heavier)
+│   ├── closed/minimal|full/date=YYYY-MM-DD/...                     <- jobs detected closed that day (separate from changes/ — see below)
+│   └── companies/snapshot_date=YYYY-MM-DD/part-*.parquet           <- company_id -> name/website/industry lookup, dated snapshots (use the latest)
 ```
 
 **Jobs schema** (`minimal` variant — what this pull uses):
-`id` (compound `{company_unique_id}/{job_id}`), `job_id`, `company_id` (FK → companies.id),
-`title`, `department`, `employment_type`, `workplace_type`, `country`, `is_remote`,
-`posted_at` (timezone-aware datetime), `apply_url`, `fetched_time`, `status`
-(`active`/`closed`), `close_time`.
+`posting_id` (durable compound id), `company_id` (FK → companies.id), `title`,
+`department`, `employment_type`, `workplace_type`, `country`, `is_remote`, `posted_at`
+(timezone-aware datetime, ISO8601 — note some values carry milliseconds and some don't,
+so parse with `pd.to_datetime(..., format="ISO8601")`, not a fixed-format string),
+`apply_url`, `first_seen_at`, `last_seen_at`, `closed_at`, `event_type` (`active_insert`/
+`active_update` — always, in this `changes/` folder; there is no `status` column any more).
+The `full` variant additionally has `job_id` and swaps `posting_id`'s absence for it as a
+secondary id, plus the raw JSON columns (see below).
+
+There is no `status` column, and no need for one: `data/changes/` only ever contains
+still-open postings (`event_type` is always `active_insert`/`active_update` there);
+closures live entirely in the separate `data/closed/` folder instead. Just reading from
+`changes/` already gives you active-only jobs.
 
 **Companies schema**: `id`, `name`, `website`, `ats`, `career_url`, `industry`, `size`,
 `locality`, `region`, `country`, `linkedin_url`, and more.
 
-Known gap: not every calendar date has a delta file (e.g. 2026-07-16 had none as of this
-writing) — that's a real gap in the source, not a bug in the pull script. Skip missing
-dates silently.
+Known gap: not every calendar date has a delta yet (today's, in particular, until the
+day's ingest run has happened) — that's a real gap in the source, not a bug in the pull
+script. Skip missing dates silently.
 
 There is **no free-text job description** in the minimal schema — only title/company/location/
-apply_url. If you need full descriptions, either use the `full` variant (has `entire_json` /
-`job_model_json` raw payloads, much heavier) or fetch each `apply_url` separately.
+apply_url. If you need full descriptions, either use the `full` variant (has `normalized_payload`
+with clean `description_plain`/`description_html` keys, and a raw `source_payload` fallback —
+these were named `job_model_json`/`entire_json` before the 2026-10-11 migration, same inner
+structure) or fetch each `apply_url` separately.
+
+**A note on scale and memory, if you paste this into a code-execution AI**: a single day's
+`full` variant can be 200K+ rows across multiple shards, and the raw JSON columns are large.
+If you hit a `pyarrow`-related memory or crash error, convert `normalized_payload`/
+`source_payload` to plain Python objects immediately after reading each shard (not via
+`.apply()`/`.iterrows()`/bulk `.values` — read the underlying Arrow array element-by-element
+instead), and filter/keep only matched rows before moving to the next shard, rather than
+concatenating every shard first. `scripts/openjobdata_common.py` in the TalentOS repo has the
+full, hardened version of this if you have repo access — prefer it over re-deriving this logic
+from scratch.
 
 ---
 
@@ -133,8 +156,7 @@ from typing import Any, Dict, List
 import pandas as pd
 from huggingface_hub import HfFileSystem
 
-BUCKET_PREFIX = "buckets/Invicto69/Jobs-Dataset-bucket"
-COMPANIES_PATH = f"{BUCKET_PREFIX}/data/companies/companies.parquet"
+DATASET_PREFIX = "datasets/scholarweave/Jobs-Dataset-v2"
 
 # Short acronyms need \b word boundaries -- naive substring matching hits "hOSPital",
 # "aCADemic", "reGIStered", "loGIStics". Longer domain words are safe as plain substrings.
@@ -163,12 +185,17 @@ def matches_role(title: Any) -> bool:
 
 
 def load_companies(fs: HfFileSystem) -> Dict[int, Dict[str, Any]]:
-    print(f"Loading companies lookup from hf://{COMPANIES_PATH} ...")
-    if not fs.exists(COMPANIES_PATH):
-        print("  WARNING: companies.parquet not found, proceeding without company names")
+    # Companies are dated snapshots now, not one static file — use the latest.
+    snapshot_dirs = sorted(fs.glob(f"{DATASET_PREFIX}/data/companies/snapshot_date=*"))
+    if not snapshot_dirs:
+        print("  WARNING: no company snapshot found, proceeding without company names")
         return {}
-    with fs.open(COMPANIES_PATH, "rb") as f:
-        companies_df = pd.read_parquet(f)
+    latest_dir = snapshot_dirs[-1]
+    company_paths = sorted(fs.glob(f"{latest_dir}/part-*.parquet"))
+    print(f"Loading companies lookup from hf://{latest_dir} ({len(company_paths)} shard(s)) ...")
+    companies_df = pd.concat(
+        [pd.read_parquet(fs.open(p, "rb")) for p in company_paths], ignore_index=True
+    )
     lookup = {
         int(row["id"]): {"name": row.get("name"), "career_url": row.get("career_url")}
         for _, row in companies_df.iterrows()
@@ -180,16 +207,16 @@ def load_companies(fs: HfFileSystem) -> Dict[int, Dict[str, Any]]:
 
 def load_deltas(fs: HfFileSystem, since_date: str, end_date: str) -> pd.DataFrame:
     dates = pd.date_range(start=since_date, end=end_date).strftime("%Y-%m-%d")
-    remote_dir = f"{BUCKET_PREFIX}/data/minimal/changes"
     frames: List[pd.DataFrame] = []
     for date_str in dates:
-        remote_path = f"{remote_dir}/{date_str}.parquet"
-        if not fs.exists(remote_path):
-            print(f"  {date_str}: no delta file (gap in source, skipping)")
+        # A day's delta is a glob of one or more shards under a date+run partition,
+        # not a single file (data/changes/minimal/date=YYYY-MM-DD/run_id=.../part-*.parquet).
+        shard_paths = sorted(fs.glob(f"{DATASET_PREFIX}/data/changes/minimal/date={date_str}/**/*.parquet"))
+        if not shard_paths:
+            print(f"  {date_str}: no delta shards (gap in source, skipping)")
             continue
-        with fs.open(remote_path, "rb") as f:
-            df = pd.read_parquet(f)
-        print(f"  {date_str}: {len(df):,} rows")
+        df = pd.concat([pd.read_parquet(fs.open(p, "rb")) for p in shard_paths], ignore_index=True)
+        print(f"  {date_str}: {len(df):,} rows ({len(shard_paths)} shard(s))")
         frames.append(df)
     if not frames:
         return pd.DataFrame()
@@ -211,14 +238,17 @@ def main():
 
     print(f"Total delta rows across range: {len(df):,}")
 
-    df["posted_at"] = pd.to_datetime(df["posted_at"], utc=True, errors="coerce")
+    # format="ISO8601", not a fixed-format string: posted_at values aren't all the
+    # same length (some carry milliseconds, some don't), which breaks pandas' default
+    # single-format auto-inference on a bulk column conversion.
+    df["posted_at"] = pd.to_datetime(df["posted_at"], utc=True, format="ISO8601", errors="coerce")
     since_ts = pd.Timestamp(since_date, tz="UTC")
     df = df[df["posted_at"].notna() & (df["posted_at"] >= since_ts)]
     print(f"After posted_at >= {since_date} filter: {len(df):,} rows")
 
-    if "status" in df.columns:
-        df = df[df["status"] == "active"]
-        print(f"After status=active filter: {len(df):,} rows")
+    # No status=='active' filter needed: data/changes/ only ever contains
+    # active_insert/active_update rows — closures live in the separate data/closed/
+    # folder, which this pull never reads.
 
     df = df[df["title"].apply(matches_role)]
     print(f"After role-title match: {len(df):,} rows")
@@ -233,7 +263,7 @@ def main():
     seen_sig: set = set()
     rows: List[Dict[str, Any]] = []
     for _, row in df.sort_values("posted_at", ascending=False).iterrows():
-        row_id = row.get("id")
+        row_id = row.get("posting_id") or row.get("job_id")  # "id" no longer exists
         if row_id and row_id in seen_ids:
             continue
 

@@ -2,7 +2,7 @@
 
 ## Architecture
 
-The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources jobs from **OpenJobData** (https://openjobdata.com — a public, daily-updated Hugging Face storage bucket at `hf://buckets/Invicto69/Jobs-Dataset-bucket`), not Apify.
+The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources jobs from **OpenJobData** (https://openjobdata.com — a public, daily-updated Hugging Face dataset repo at `hf://datasets/scholarweave/Jobs-Dataset-v2`, migrated 2026-10-11 from OpenJobData's earlier storage-bucket product), not Apify.
 
 ### Agents
 
@@ -73,12 +73,12 @@ The CEO can propose agent configuration changes. Proposals require human approva
 
 ## Required Setup
 
-The OpenJobData bucket (`hf://buckets/Invicto69/Jobs-Dataset-bucket`) is public — no
-dataset ID or HF token to configure. `scripts/openjobdata_ingest.py` reads
-`data/minimal/changes/YYYY-MM-DD.parquet` delta files directly via `HfFileSystem`,
-joins `data/companies/companies.parquet` for company names, filters titles against
-the 72 OSP/CAD/GIS keywords in `docs/keywords-osp-gis-cad.md`, and filters
-`posted_at >= SINCE_DATE`.
+The OpenJobData dataset (`hf://datasets/scholarweave/Jobs-Dataset-v2`) is public — no
+HF token to configure. `scripts/openjobdata_ingest.py` reads the daily delta shard(s)
+under `data/changes/minimal/date=YYYY-MM-DD/run_id=.../part-*.parquet` directly via
+`HfFileSystem`, joins the latest `data/companies/snapshot_date=YYYY-MM-DD/part-*.parquet`
+snapshot for company names, filters titles against the 72 OSP/CAD/GIS keywords in
+`docs/keywords-osp-gis-cad.md`, and filters `posted_at >= SINCE_DATE`.
 
 ### GitHub Secrets
 - `JOB_CEO_INGEST_SECRET` — Shared secret for ingest authentication

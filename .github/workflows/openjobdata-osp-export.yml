@@ -1,15 +1,15 @@
 name: OSP Jobs Daily Export (openjobdata.com)
 
 # Pulls yesterday's daily delta from the openjobdata.com public dataset
-# (hf://buckets/Invicto69/Jobs-Dataset-bucket, MIT licensed, no auth required),
+# (hf://datasets/scholarweave/Jobs-Dataset-v2, Apache-2.0 licensed, no auth
+# required — migrated 2026-10-11 from an earlier storage-bucket product),
 # filters to OSP/fiber-optic/telecom-construction relevant postings, and
 # uploads the result as an .xlsx workflow artifact.
 #
 # Why a GitHub Actions job and not a Vercel/Cloudflare cron route: the dataset
-# is a Hugging Face Storage Bucket, which is only reachable through the Python
-# huggingface_hub client (hf:// scheme) — there is no plain-HTTPS or Node/edge
-# path to it (confirmed: /resolve/ URLs 404, the web file-tree doesn't expose
-# nested paths). See scripts/openjobdata_export.py for the full explanation.
+# is only reachable through the Python huggingface_hub client (hf:// scheme) —
+# there is no plain-HTTPS or Node/edge path to it. See
+# scripts/openjobdata_export.py for the full explanation.
 #
 # This does NOT write into the TalentOS database. It is a standalone reporting
 # export. Wiring matched jobs into the `jobs` table would go through the

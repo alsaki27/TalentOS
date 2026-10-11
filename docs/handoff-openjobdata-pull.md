@@ -4,6 +4,17 @@
 **Repo:** https://github.com/alsaki27/TalentOS
 **Branch:** `saki-new-agent-layer` (not merged to `main` yet — trigger against this branch)
 
+> **Source migrated 2026-10-11.** The bucket URI, file layout, and column names below
+> (`hf://buckets/Invicto69/...`, `id`/`status`/`job_model_json`/`entire_json`, etc.) describe
+> the dataset as it was on 2026-07-19 and are kept here as a historical record — do not treat
+> them as current. OpenJobData now publishes at `hf://datasets/scholarweave/Jobs-Dataset-v2`
+> (a standard HF dataset repo, not a storage bucket), with a different file layout (dated,
+> multi-shard partitions) and renamed columns (`posting_id`, `normalized_payload`/
+> `source_payload`, no `status` column — see `scripts/openjobdata_common.py`'s module
+> docstring for the full comparison). `scripts/openjobdata_ingest.py` and
+> `scripts/openjobdata_common.py` already implement the new source correctly; the keyword
+> list and dedup/pipeline logic described below are unchanged.
+
 ---
 
 ## OpenJobData is real — verified
