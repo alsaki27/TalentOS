@@ -333,6 +333,66 @@ describe("runResumeForge", () => {
     expect(result.draft.skills[0]?.skills).toContain("Kubernetes");
   });
 
+  it("coverage retry updates only the six fields it was asked for, preserving the first draft's changeLog/missingRequirements/excludedKeywords/truthRisks even though the retry response omits them", async () => {
+    const requirementAnalysisWithEvidence = {
+      requirementAnalysis: [
+        {
+          requirement: "Kubernetes", category: "tool",
+          sourceEvidence: ["Base resume bullet: operated Kubernetes clusters for the payments team"],
+          status: "supported_but_not_surfaced", safeToAdd: true,
+        },
+      ],
+    };
+    const firstDraftWithBookkeeping = {
+      ...MINIMAL_VALID_DRAFT,
+      changeLog: [{ change: "Rewrote summary", reason: "JD alignment", evidenceId: null }],
+      missingRequirements: ["AWS certification"],
+      excludedKeywords: ["blockchain"],
+      truthRisks: [{ risk: "Possible overstatement", severity: "low" as const }],
+    };
+    // RESUME_DRAFT_RETRY_JSON_SCHEMA never asks for changeLog/missingRequirements/
+    // excludedKeywords/truthRisks, so a real retry response from the model looks
+    // like this: only the six fields it was asked to return.
+    const retryDraftWithoutBookkeeping = {
+      summary: null,
+      skills: [{ title: "Infrastructure", skills: ["Kubernetes"] }],
+      experience: [], education: [], certifications: [], projects: [],
+    };
+    const provider = mockProviderSequence(
+      JSON.stringify(DEFAULT_JOB_ONLY),
+      JSON.stringify(requirementAnalysisWithEvidence),
+      JSON.stringify(firstDraftWithBookkeeping),
+      JSON.stringify(retryDraftWithoutBookkeeping),
+    );
+
+    const { runResumeForge } = await import("@/lib/ai/application-agents/resumeForge");
+    const result = await runResumeForge({}, provider, makeContext());
+
+    expect(provider.send).toHaveBeenCalledTimes(4);
+    // The retry's own update was applied.
+    expect(result.draft.skills[0]?.skills).toContain("Kubernetes");
+    // The first draft's bookkeeping fields survive untouched - a blind
+    // Object.assign would have overwritten all four with ResumeDraftSchema's
+    // []-on-missing defaults from the retry response.
+    expect(result.draft.changeLog).toEqual(firstDraftWithBookkeeping.changeLog);
+    expect(result.draft.missingRequirements).toEqual(["AWS certification"]);
+    expect(result.draft.excludedKeywords).toEqual(["blockchain"]);
+    expect(result.draft.truthRisks).toEqual(firstDraftWithBookkeeping.truthRisks);
+
+    // The retry call itself requested the slimmer schema, not the full one.
+    const retryCallOpts = (provider.send as any).mock.calls[3][0];
+    expect(Object.keys(retryCallOpts.responseSchema.properties)).toEqual([
+      "summary", "skills", "experience", "education", "certifications", "projects",
+    ]);
+    // ...and the embedded previous-draft JSON in the retry prompt doesn't carry
+    // the bookkeeping fields either - nothing in the prompt asks the model to
+    // reproduce or reason about them.
+    const retryPromptText = retryCallOpts.messages[0].content[0].text as string;
+    const previousDraftJson = retryPromptText.slice(retryPromptText.indexOf("PREVIOUS DRAFT"));
+    expect(previousDraftJson).not.toContain("changeLog");
+    expect(previousDraftJson).not.toContain("AWS certification");
+  });
+
   it("Phase 5: reuses a seeded cachedRequirementAnalysis instead of paying for the classification call", async () => {
     const cached = [
       { requirement: "AutoCAD", category: "tool", sourceEvidence: ["base.skills[0]"], status: "supported_by_resume", safeToAdd: true },

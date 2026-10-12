@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { ResumeDraftSchema, ReviewScoreSchema, FinalResumeSchema } from "@/lib/ai/application-agents/schemas";
-import { RESUME_DRAFT_JSON_SCHEMA, REVIEW_SCORE_JSON_SCHEMA, FINAL_RESUME_JSON_SCHEMA } from "@/lib/ai/application-agents/jsonSchemas";
+import { RESUME_DRAFT_JSON_SCHEMA, RESUME_DRAFT_RETRY_JSON_SCHEMA, REVIEW_SCORE_JSON_SCHEMA, FINAL_RESUME_JSON_SCHEMA } from "@/lib/ai/application-agents/jsonSchemas";
 
 // A minimal validator for the JSON Schema subset jsonSchemas.ts actually
 // uses (type incl. nullable via a type array, properties/required,
@@ -124,6 +124,37 @@ describe("jsonSchemas round-trip - stays in sync with schemas.ts", () => {
 
     const schemaErrors = validateAgainstSchema(golden, FINAL_RESUME_JSON_SCHEMA);
     expect(schemaErrors).toEqual([]);
+  });
+
+  it("RESUME_DRAFT_RETRY_JSON_SCHEMA: a retry response with only the six editable fields validates, and ResumeDraftSchema fills the four omitted bookkeeping fields with their documented [] defaults rather than erroring", () => {
+    const retryGolden = {
+      summary: "Experienced GIS analyst.",
+      skills: [{ title: "GIS Software", skills: ["ArcGIS Pro", "QGIS"] }],
+      experience: [{
+        title: "GIS Technician", company: "Acme", location: "Tampa, FL",
+        startDate: "2024-01", endDate: null, bullets: ["Managed 500+ records"], evidenceIds: ["ev-1"],
+      }],
+      education: [{ degree: "B.S. Geography", school: "State U", field: null, graduationDate: "2023" }],
+      certifications: ["GISP"],
+      projects: [],
+    };
+
+    const schemaErrors = validateAgainstSchema(retryGolden, RESUME_DRAFT_RETRY_JSON_SCHEMA);
+    expect(schemaErrors).toEqual([]);
+
+    // The retry schema itself must not ask for the four bookkeeping fields -
+    // that's the entire point of using a slimmer schema for the retry call.
+    expect(RESUME_DRAFT_RETRY_JSON_SCHEMA.properties).not.toHaveProperty("changeLog");
+    expect(RESUME_DRAFT_RETRY_JSON_SCHEMA.properties).not.toHaveProperty("missingRequirements");
+    expect(RESUME_DRAFT_RETRY_JSON_SCHEMA.properties).not.toHaveProperty("excludedKeywords");
+    expect(RESUME_DRAFT_RETRY_JSON_SCHEMA.properties).not.toHaveProperty("truthRisks");
+
+    const parsed = ResumeDraftSchema.parse(retryGolden) as any;
+    expect(parsed).not.toHaveProperty("error");
+    expect(parsed.changeLog).toEqual([]);
+    expect(parsed.missingRequirements).toEqual([]);
+    expect(parsed.excludedKeywords).toEqual([]);
+    expect(parsed.truthRisks).toEqual([]);
   });
 
   it("catches a real drift: an object missing a JSON-Schema-required field fails the JSON Schema check even though schemas.ts's lenient parser accepts it", () => {

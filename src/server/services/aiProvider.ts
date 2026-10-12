@@ -239,13 +239,39 @@ export function buildProviderFromDbKey(
       const ANTHROPIC_VERSION = "2023-06-01";
       const DEFAULT_MODEL = "claude-sonnet-4-6";
       const DEFAULT_MAX_TOKENS = FALLBACK_MAX_TOKENS;
+      // Claude has no "return only JSON" text mode the way OpenAI-compatible
+      // APIs do. Forcing a single synthetic tool call is Anthropic's own
+      // documented pattern for guaranteed-schema-valid structured output -
+      // the response parsing below unwraps the forced tool's `input` back
+      // into a plain text block, so every existing caller's
+      // textOf(response.content) keeps working completely unchanged; the
+      // forced-tool mechanism is invisible outside this one case. No
+      // anthropic-provider key exists in production today, so this has zero
+      // effect on any current live call - it only activates the first time
+      // one is added.
+      const STRUCTURED_OUTPUT_TOOL_NAME = "emit_result";
       return {
-        async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+        async send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema }) {
           const controller = new AbortController();
           let timer: ReturnType<typeof setTimeout> | undefined;
           if (timeoutMs && timeoutMs > 0) {
             timer = setTimeout(() => controller.abort(), timeoutMs);
           }
+
+          const requestTools = [
+            ...tools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              input_schema: tool.inputSchema,
+            })),
+            ...(responseSchema
+              ? [{
+                  name: STRUCTURED_OUTPUT_TOOL_NAME,
+                  description: "Return the result. Always call this tool with the complete result - never respond with plain text.",
+                  input_schema: responseSchema,
+                }]
+              : []),
+          ];
 
           try {
             const res = await fetch(apiUrl, {
@@ -276,11 +302,8 @@ export function buildProviderFromDbKey(
                     };
                   }),
                 })),
-                tools: tools.map((tool) => ({
-                  name: tool.name,
-                  description: tool.description,
-                  input_schema: tool.inputSchema,
-                })),
+                tools: requestTools,
+                ...(responseSchema ? { tool_choice: { type: "tool", name: STRUCTURED_OUTPUT_TOOL_NAME } } : {}),
               }),
             });
             if (!res.ok) {
@@ -288,13 +311,19 @@ export function buildProviderFromDbKey(
               throw new Error(`Anthropic API error (${res.status}): ${body}`);
             }
             const data = await res.json();
+            const rawContent = (data.content ?? []).map((block: any) => ({
+              type: block.type === "tool_use" ? "tool_use" : "text",
+              ...(block.type === "tool_use"
+                ? { id: block.id, name: block.name, input: block.input }
+                : { text: block.text ?? "" }),
+            }));
+            const forcedResult = responseSchema
+              ? rawContent.find((block: any) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME)
+              : undefined;
             return {
-              content: (data.content ?? []).map((block: any) => ({
-                type: block.type === "tool_use" ? "tool_use" : "text",
-                ...(block.type === "tool_use"
-                  ? { id: block.id, name: block.name, input: block.input }
-                  : { text: block.text ?? "" }),
-              })),
+              content: forcedResult
+                ? [{ type: "text" as const, text: JSON.stringify((forcedResult as any).input) }]
+                : rawContent,
               stopReason: data.stop_reason ?? "end_turn",
               usage: data.usage ? { input_tokens: data.usage.input_tokens, output_tokens: data.usage.output_tokens } : undefined,
             };

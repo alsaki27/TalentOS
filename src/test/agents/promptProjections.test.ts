@@ -6,7 +6,7 @@
 // Polish slice). These tests prove the projection never drops the fields
 // each prompt actually depends on, regardless of input size.
 import { describe, it, expect } from "vitest";
-import { projectJobAnalysisForReview, projectDraftForReview } from "@/lib/ai/application-agents/promptProjections";
+import { projectJobAnalysisForReview, projectDraftForReview, projectJobAnalysisForDraft } from "@/lib/ai/application-agents/promptProjections";
 
 describe("projectJobAnalysisForReview", () => {
   it("keeps every requirementAnalysis row regardless of how large the job analysis is", () => {
@@ -87,5 +87,55 @@ describe("projectDraftForReview", () => {
     expect(JSON.stringify(projected)).not.toContain("z".repeat(100));
     expect((projected as any).changeLog).toBeUndefined();
     expect((projected as any).missingRequirements).toBeUndefined();
+  });
+});
+
+describe("projectJobAnalysisForDraft", () => {
+  it("keeps everything projectJobAnalysisForReview keeps, plus responsibilities, and drops the classification-only/already-re-encoded fields", () => {
+    const jobAnalysis = {
+      title: "Senior Engineer",
+      company: "Acme",
+      domain: "Infra",
+      seniority: "Senior",
+      rawSummary: "RAW-SUMMARY-MARKER " + "x".repeat(5000),
+      atsKeywords: ["Kubernetes", "Go"],
+      prohibitedUnsupportedClaims: ["PE license"],
+      requirementAnalysis: [
+        { requirement: "Kubernetes", category: "tool", sourceEvidence: [], status: "supported_by_resume", safeToAdd: true },
+      ],
+      responsibilities: ["Own the platform roadmap", "Mentor junior engineers"],
+      // Already re-encoded as requirementAnalysis entries by buildRequirementAnalysisPrompt - must be dropped.
+      requiredSkills: ["REQUIRED-SKILLS-MARKER"],
+      preferredSkills: ["PREFERRED-SKILLS-MARKER"],
+      tools: ["TOOLS-MARKER"],
+      methodologies: ["METHODOLOGIES-MARKER"],
+      certifications: ["CERTIFICATIONS-MARKER"],
+      // Classification-only, never needed for writing bullets - must be dropped.
+      evidenceRequirements: ["EVIDENCE-REQUIREMENTS-MARKER"],
+      ambiguities: ["AMBIGUITIES-MARKER"],
+    };
+
+    const projected = projectJobAnalysisForDraft(jobAnalysis);
+
+    expect(projected.title).toBe("Senior Engineer");
+    expect(projected.atsKeywords).toEqual(["Kubernetes", "Go"]);
+    expect(projected.requirementAnalysis).toHaveLength(1);
+    expect(projected.responsibilities).toEqual(["Own the platform roadmap", "Mentor junior engineers"]);
+
+    const serialized = JSON.stringify(projected);
+    expect(serialized).not.toContain("RAW-SUMMARY-MARKER");
+    expect(serialized).not.toContain("REQUIRED-SKILLS-MARKER");
+    expect(serialized).not.toContain("PREFERRED-SKILLS-MARKER");
+    expect(serialized).not.toContain("TOOLS-MARKER");
+    expect(serialized).not.toContain("METHODOLOGIES-MARKER");
+    expect(serialized).not.toContain("CERTIFICATIONS-MARKER");
+    expect(serialized).not.toContain("EVIDENCE-REQUIREMENTS-MARKER");
+    expect(serialized).not.toContain("AMBIGUITIES-MARKER");
+  });
+
+  it("degrades gracefully when responsibilities is missing or malformed", () => {
+    expect(projectJobAnalysisForDraft({}).responsibilities).toEqual([]);
+    expect(projectJobAnalysisForDraft(null).responsibilities).toEqual([]);
+    expect(projectJobAnalysisForDraft({ responsibilities: "not an array" }).responsibilities).toEqual([]);
   });
 });

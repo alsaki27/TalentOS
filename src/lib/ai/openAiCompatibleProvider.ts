@@ -84,9 +84,40 @@ export interface OpenAiCompatibleConfig {
   errorLabel: string; // e.g. "OpenAI API", "GLM API" — used in thrown error messages
 }
 
+/**
+ * Mirrors googleVertexProxyProvider.ts's response_format construction - the
+ * same shape, because this is the actual OpenAI Chat Completions convention
+ * that Vertex's own proxy already speaks. Confirmed live against OpenCode's
+ * chat-completions endpoint (both json_schema/strict and json_object return
+ * 200 with clean, fence-free JSON; the baseline call with neither wraps its
+ * output in a markdown fence that the caller then has to strip).
+ *
+ * Every hand-written schema in jsonSchemas.ts is already written to strict
+ * mode's requirements (every property in `required`, `additionalProperties:
+ * false` on every object, including nested ones - see that file's own doc
+ * comment) - so json_schema/strict is always safe to request wherever a
+ * caller passes responseSchema.
+ *
+ * Purely additive: a caller that doesn't pass responseSchema/responseMimeType
+ * (every agent except the resume-pipeline's three) gets no response_format
+ * field at all, identical to before this function existed.
+ */
+export function buildOpenAiResponseFormat(
+  responseSchema?: Record<string, unknown>,
+  responseMimeType?: string | null,
+): Record<string, unknown> | undefined {
+  if (responseSchema) {
+    return { type: "json_schema", json_schema: { name: "talentos_output", schema: responseSchema, strict: true } };
+  }
+  if (responseMimeType === "application/json") {
+    return { type: "json_object" };
+  }
+  return undefined;
+}
+
 export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): AiProvider {
   return {
-    async send({ system, messages, tools, temperature, maxTokens, timeoutMs }) {
+    async send({ system, messages, tools, temperature, maxTokens, timeoutMs, responseSchema, responseMimeType }) {
       var controller = new AbortController();
       var timer: ReturnType<typeof setTimeout> | undefined;
       if (timeoutMs && timeoutMs > 0) {
@@ -117,6 +148,10 @@ export function createOpenAiCompatibleProvider(config: OpenAiCompatibleConfig): 
           stream: false,
           ...config.extraBody,
           ...(tools.length > 0 ? { tools: toOpenAiTools(tools) } : {}),
+          ...(() => {
+            const responseFormat = buildOpenAiResponseFormat(responseSchema, responseMimeType);
+            return responseFormat ? { response_format: responseFormat } : {};
+          })(),
         }),
       });
 

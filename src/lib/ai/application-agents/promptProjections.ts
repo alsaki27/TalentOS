@@ -56,6 +56,31 @@ export function projectJobAnalysisForReview(jobAnalysis: any): ProjectedJobAnaly
   };
 }
 
+export interface ProjectedJobAnalysisForDraft extends ProjectedJobAnalysis {
+  responsibilities: string[];
+}
+
+/**
+ * Resume Forge's draft call needs slightly more than the review projection:
+ * `responsibilities` gives real context for expanding bullets ("what does
+ * this role actually do"), which Hiring Panel/Final Polish never need since
+ * they only grade/polish content that already exists. Still drops
+ * requiredSkills, preferredSkills, tools, methodologies, and certifications -
+ * every one of those is already re-encoded as its own requirementAnalysis
+ * entry (see buildRequirementAnalysisPrompt's requirementSources), so
+ * resending them here is pure duplication - and drops rawSummary/
+ * evidenceRequirements/ambiguities, which exist only to help the
+ * classification step reason about support, not to help write bullets.
+ */
+export function projectJobAnalysisForDraft(jobAnalysis: any): ProjectedJobAnalysisForDraft {
+  return {
+    ...projectJobAnalysisForReview(jobAnalysis),
+    responsibilities: Array.isArray(jobAnalysis?.responsibilities)
+      ? jobAnalysis.responsibilities.filter((r: unknown): r is string => typeof r === "string")
+      : [],
+  };
+}
+
 export interface ProjectedDraft {
   summary: string | null;
   skills: unknown;

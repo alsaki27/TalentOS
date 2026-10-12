@@ -117,6 +117,32 @@ export const RESUME_DRAFT_JSON_SCHEMA: JsonSchema = {
   additionalProperties: false,
 };
 
+// Resume Forge's "supported but missed" coverage retry (see
+// buildResumeForgeMissedRetryPrompt) only ever edits summary/skills/
+// experience/education/certifications/projects - it is never asked to
+// re-author changeLog, missingRequirements, excludedKeywords, or truthRisks,
+// so this schema omits them rather than spend output tokens regenerating
+// bookkeeping the retry doesn't touch. runResumeForge's merge after this
+// call is correspondingly selective: it copies back only the six fields
+// below, leaving the first draft's changeLog/missingRequirements/
+// excludedKeywords/truthRisks exactly as they were (ResumeDraftSchema
+// defaults an absent one of these four to [] on parse, which would silently
+// wipe the first draft's real values if the merge ever became a blind
+// Object.assign again - keep it selective).
+export const RESUME_DRAFT_RETRY_JSON_SCHEMA: JsonSchema = {
+  type: "object",
+  properties: {
+    summary: nullableString,
+    skills: { type: "array", items: skillGroupSchema },
+    experience: { type: "array", items: experienceEntrySchema },
+    education: { type: "array", items: educationEntrySchema },
+    certifications: { type: "array", items: { type: "string" } },
+    projects: { type: "array", items: projectEntrySchema },
+  },
+  required: ["summary", "skills", "experience", "education", "certifications", "projects"],
+  additionalProperties: false,
+};
+
 export const REVIEW_SCORE_JSON_SCHEMA: JsonSchema = {
   type: "object",
   properties: {

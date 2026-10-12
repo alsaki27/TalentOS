@@ -48,6 +48,55 @@ describe("database-managed Anthropic provider", () => {
     expect(result.usage).toEqual({ input_tokens: 12, output_tokens: 3 });
   });
 
+  it("forces structured output via a synthetic tool call when responseSchema is passed, and unwraps the result back into a plain text block", async () => {
+    const responseSchema = { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        content: [{ type: "tool_use", id: "tool_1", name: "emit_result", input: { foo: "bar" } }],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const provider = buildProviderFromDbKey("anthropic", "test-key", "claude-sonnet-5");
+
+    const result = await provider!.send({
+      system: "system",
+      messages: [{ role: "user", content: [{ type: "text", text: "Reply with JSON" }] }],
+      tools: [],
+      responseSchema,
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.tools).toEqual([
+      expect.objectContaining({ name: "emit_result", input_schema: responseSchema }),
+    ]);
+    expect(request.tool_choice).toEqual({ type: "tool", name: "emit_result" });
+    // The caller never sees a tool_use block - textOf(response.content) keeps working unchanged.
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }) }]);
+  });
+
+  it("does not force tool_choice or add the synthetic tool when no responseSchema is passed", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({
+        content: [{ type: "text", text: "plain answer" }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 4, output_tokens: 2 },
+      }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const provider = buildProviderFromDbKey("anthropic", "test-key", "claude-sonnet-5");
+
+    const result = await provider!.send({
+      system: "system",
+      messages: [{ role: "user", content: [{ type: "text", text: "Hi" }] }],
+      tools: [],
+    });
+
+    const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(request.tools).toEqual([]);
+    expect(request).not.toHaveProperty("tool_choice");
+    expect(result.content).toEqual([{ type: "text", text: "plain answer" }]);
+  });
+
   it("aborts a stalled request and exposes a classified timeout error", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
       const signal = init?.signal;

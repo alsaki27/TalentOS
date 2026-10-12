@@ -17,7 +17,7 @@
 import type { AiProvider } from "@/lib/ai/provider";
 import type { AgentContext, AgentOptions } from "./types";
 import { ResumeDraftSchema, type ResumeDraftV1, JobAnalysisSchema, type JobAnalysisV1, type JobOnlyAnalysisV1 } from "./schemas";
-import { RESUME_DRAFT_JSON_SCHEMA } from "./jsonSchemas";
+import { RESUME_DRAFT_JSON_SCHEMA, RESUME_DRAFT_RETRY_JSON_SCHEMA } from "./jsonSchemas";
 import {
   buildResumeForgePrompt,
   buildResumeForgeMissedRetryPrompt,
@@ -508,7 +508,7 @@ export async function runResumeForge(
           temperature: options.temperature,
           maxTokens: options.max_output_tokens,
           timeoutMs: options.timeout_ms,
-          responseSchema: RESUME_DRAFT_JSON_SCHEMA,
+          responseSchema: RESUME_DRAFT_RETRY_JSON_SCHEMA,
           responseMimeType: "application/json",
         });
         assertNotTruncated(retryResponse, "Resume Forge (coverage retry)");
@@ -520,7 +520,18 @@ export async function runResumeForge(
           );
         } else {
           applyForgeGuards(retryValidated, baseContent, baseExperience, baseEducation);
-          Object.assign(validated, retryValidated);
+          // Selective merge, not Object.assign: the retry's own request/schema
+          // (RESUME_DRAFT_RETRY_JSON_SCHEMA) never asks for changeLog/
+          // missingRequirements/excludedKeywords/truthRisks, and
+          // ResumeDraftSchema.parse defaults each of those to [] when absent -
+          // a blind Object.assign would silently wipe the first draft's real
+          // values for all four with those empty-array defaults.
+          validated.summary = retryValidated.summary;
+          validated.skills = retryValidated.skills;
+          validated.experience = retryValidated.experience;
+          validated.education = retryValidated.education;
+          validated.certifications = retryValidated.certifications;
+          validated.projects = retryValidated.projects;
           console.warn("[Agent:ResumeForge] COVERAGE RETRY applied - re-checking coverage");
         }
       } catch (err: any) {

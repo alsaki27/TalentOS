@@ -4,6 +4,7 @@
 
 import { readBaseSummary } from "../resumeIntegrity";
 import { mergeSkillSources } from "./mergeSkillSources";
+import { projectJobAnalysisForDraft } from "../promptProjections";
 
 /**
  * Normalise a single bullet that may be stored as a plain string or as a { text: string }
@@ -198,7 +199,7 @@ ${bulletRequirements || "  - Most recent role: minimum 6 bullets, maximum 7 bull
 Humanity may worship keywords, but credibility still gets the interview.
 
 JOB ANALYSIS:
-${JSON.stringify(jobAnalysis)}
+${JSON.stringify(projectJobAnalysisForDraft(jobAnalysis))}
 
 REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS above is the authority):
 * requirementAnalysis classifies every material JD requirement with a status and safeToAdd flag. You MUST follow it exactly:
@@ -260,6 +261,21 @@ Return ONLY valid JSON. No markdown fences, no explanation.`;
  * as grounding for "this candidate can truthfully claim this") is now
  * included directly, so the retry has real material instead of guessing.
  */
+/**
+ * Strips the fields this retry never touches (changeLog, missingRequirements,
+ * excludedKeywords, truthRisks) before the previous draft is embedded in the
+ * retry prompt. The retry isn't asked to reason about or reproduce them -
+ * runResumeForge's merge after this call leaves the first draft's real
+ * values for all four exactly as they were - so sending them here would only
+ * be tokens spent on content neither the instructions nor the response
+ * schema reference.
+ */
+function stripRetryIrrelevantFields(previousDraft: unknown): unknown {
+  if (!previousDraft || typeof previousDraft !== "object" || Array.isArray(previousDraft)) return previousDraft;
+  const { changeLog, missingRequirements, excludedKeywords, truthRisks, ...rest } = previousDraft as Record<string, unknown>;
+  return rest;
+}
+
 export function buildResumeForgeMissedRetryPrompt(
   missed: { requirement: string; sourceEvidence: string[] }[],
   previousDraft: unknown
@@ -273,7 +289,10 @@ never invent detail beyond what the evidence states):
 ${missed.map((m) => `- ${m.requirement}\n  Evidence: ${m.sourceEvidence.length > 0 ? m.sourceEvidence.map((e) => `"${e}"`).join("; ") : "(none cited — infer only from the PREVIOUS DRAFT below, never invent)"}`).join("\n")}
 
 HARD RULES FOR THIS CORRECTION PASS:
-* Return the COMPLETE resume JSON again, with the same overall shape as the previous draft.
+* Return JSON with exactly these six fields: summary, skills, experience, education,
+  certifications, projects — the same shape as the previous draft below, minus its
+  bookkeeping fields (changeLog, missingRequirements, excludedKeywords, truthRisks), which
+  this pass never touches and the system keeps from the previous draft unchanged.
 * Add each missed requirement BOTH to the most relevant existing skills category AND woven
   naturally into an existing experience bullet of the role where the candidate actually used
   it. Extend the bullet's existing facts — NEVER invent outcomes, metrics, employers, titles,
@@ -284,8 +303,8 @@ HARD RULES FOR THIS CORRECTION PASS:
   stays missing. Only the named missed requirements above may be added.
 * Keep everything within one page.
 
-PREVIOUS DRAFT (return this exact shape with only the minimal additions):
-${JSON.stringify(previousDraft)}
+PREVIOUS DRAFT (return this same shape with only the minimal additions):
+${JSON.stringify(stripRetryIrrelevantFields(previousDraft))}
 
 Return ONLY valid JSON. No markdown fences, no explanation.`;
 }
