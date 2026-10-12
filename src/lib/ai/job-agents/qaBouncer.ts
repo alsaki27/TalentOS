@@ -14,6 +14,21 @@ export async function runQaBouncer(
     stagedJob = ctx.previousOutputs.stagedJob as StagedJob | undefined;
   } catch (_) {}
 
+  // Short-circuit confident regex verdicts before ever calling AI: an obvious
+  // false-positive-industry title (e.g. "Software Engineer") or 3+ strong
+  // target-industry keyword matches are reliable enough on their own that an
+  // AI call adds cost without adding confidence. Everything else (thin or
+  // ambiguous signal) still goes to AI exactly as before, with this same
+  // regex result reused as the on-failure fallback below instead of being
+  // recomputed.
+  var regexVerdict = classifyWithRegex(stagedJob);
+  var isConfidentRegexVerdict =
+    (regexVerdict.tier === "skip" && regexVerdict.reason.indexOf("False positive match") === 0) ||
+    regexVerdict.tier === "best";
+  if (isConfidentRegexVerdict) {
+    return regexVerdict;
+  }
+
   if (stagedJob) {
     try {
       var response = await provider.send({
@@ -39,7 +54,7 @@ export async function runQaBouncer(
     }
   }
 
-  return classifyWithRegex(stagedJob);
+  return regexVerdict;
 }
 
 function parseAiJson(raw: string): unknown {

@@ -207,4 +207,74 @@ describe("Job CEO Matchmaker control", () => {
     expect(mocks.createJob).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ processed: 1, matched: 0, logged: 1, skipped: 0 });
   });
+
+  describe("fresher-roles-only experience gate", () => {
+    // Deep Fetch's single AI call already extracts yearsExperience (a free-text
+    // string, e.g. "5+ years") onto the staging row's requirements field - these
+    // regression-guard that value actually gates the job now instead of being
+    // silently discarded before createJob(), and that it's checked BEFORE the
+    // Matchmaker AI call so a rejected job doesn't pay for that call either.
+    it("drops a job whose extracted experience requirement exceeds the 5-year fresher cap, without calling Matchmaker", async () => {
+      mocks.findAgentConfigByAutomationId.mockResolvedValue(activeConfig);
+      mocks.claimNextStagedBatch.mockResolvedValue([
+        { ...stagedJob, requirements: { yearsExperience: "7+ years" } },
+      ]);
+
+      const result = await processMatchmakerBatch("run-1");
+
+      expect(mocks.callWithUsageTracking).not.toHaveBeenCalled();
+      expect(mocks.createJob).not.toHaveBeenCalled();
+      expect(mocks.updateStaged).toHaveBeenCalledWith(
+        "staged-1",
+        expect.objectContaining({ stage: "qa_dropped", qa_reason: expect.stringContaining("7 yrs") })
+      );
+      expect(result).toMatchObject({ processed: 1, matched: 0, logged: 0, skipped: 1 });
+    });
+
+    it("takes the highest number in a range like '3-5 years' and keeps a job exactly at the 5-year cap (not over it)", async () => {
+      mocks.findAgentConfigByAutomationId.mockResolvedValue(activeConfig);
+      mocks.claimNextStagedBatch.mockResolvedValue([
+        { ...stagedJob, requirements: { yearsExperience: "3-5 years" } },
+      ]);
+
+      const result = await processMatchmakerBatch("run-1");
+
+      expect(mocks.createJob).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ processed: 1, matched: 1, logged: 1, skipped: 0 });
+    });
+
+    it("ignores an implausible figure (e.g. '80+ years', an AI extraction glitch picking up unrelated text) rather than treating it as a real requirement", async () => {
+      mocks.findAgentConfigByAutomationId.mockResolvedValue(activeConfig);
+      mocks.claimNextStagedBatch.mockResolvedValue([
+        { ...stagedJob, requirements: { yearsExperience: "80+ years" } },
+      ]);
+
+      const result = await processMatchmakerBatch("run-1");
+
+      expect(mocks.createJob).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ processed: 1, matched: 1, logged: 1, skipped: 0 });
+    });
+
+    it("does not gate a job whose experience requirement has no stated number (absence isn't evidence it's over the cap)", async () => {
+      mocks.findAgentConfigByAutomationId.mockResolvedValue(activeConfig);
+      mocks.claimNextStagedBatch.mockResolvedValue([
+        { ...stagedJob, requirements: { yearsExperience: "Not specified" } },
+      ]);
+
+      const result = await processMatchmakerBatch("run-1");
+
+      expect(mocks.createJob).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ processed: 1, matched: 1, logged: 1, skipped: 0 });
+    });
+
+    it("does not gate a job with no requirements at all (the common case for most postings)", async () => {
+      mocks.findAgentConfigByAutomationId.mockResolvedValue(activeConfig);
+      mocks.claimNextStagedBatch.mockResolvedValue([{ ...stagedJob, requirements: null }]);
+
+      const result = await processMatchmakerBatch("run-1");
+
+      expect(mocks.createJob).toHaveBeenCalledTimes(1);
+      expect(result).toMatchObject({ processed: 1, matched: 1, logged: 1, skipped: 0 });
+    });
+  });
 });

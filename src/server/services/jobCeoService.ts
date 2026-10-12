@@ -49,6 +49,37 @@ const DEEP_FETCH_CONCURRENCY = 3;
 
 const MIN_DESCRIPTION_LENGTH = 100;
 
+// Fresher-roles-only product policy: TalentOS serves entry-level/fresher candidates,
+// so a posting requiring more than this many years of experience is rejected before
+// it ever reaches the live jobs table. Matches the existing precedent used elsewhere
+// in this codebase for the same policy (sql/neon_fixes/060_seed_avirup_resume_search_profiles.sql's
+// candidate search-profile prompt: "Reject roles requiring more than 5 years of experience").
+const EXPERIENCE_YEARS_MAX = 5;
+
+// A plausibility ceiling, not a policy knob: no genuine "years of experience required"
+// figure realistically exceeds this. Found live while building the companion existing-jobs
+// audit (scripts/audit-experience-level-existing-jobs.mjs) — a real posting's "80+ years"
+// referred to the EMPLOYER's company history ("Over the past 80+ years, Buehler has
+// established..."), not a candidate requirement, and a naive max-of-all-numbers approach
+// picked that over the posting's actual, much lower, real requirement. Deep Fetch's
+// yearsExperience is a short AI-extracted phrase (not a whole document), so this exact
+// failure mode is less likely here than in the full-text audit script, but the guard is
+// cheap and correct either way.
+const PLAUSIBLE_MAX_YEARS = 40;
+
+// Deep Fetch's yearsExperience is a free-text string per DeepFetchResultV1 (e.g.
+// "5+ years", "3-5 years", "at least 4 years") — extracts every number found and
+// returns the highest PLAUSIBLE one, same strategy as scripts/openjobdata_common.py's
+// extract_years_required(). A string with no stated (plausible) number returns null and
+// is NOT treated as "exceeds the cap" — absence of a stated requirement isn't evidence it
+// needs more experience than the cap.
+function parseYearsExperience(raw: string): number | null {
+  const matches = raw.match(/\d{1,2}/g);
+  if (!matches) return null;
+  const numbers = matches.map((m) => parseInt(m, 10)).filter((n) => Number.isFinite(n) && n <= PLAUSIBLE_MAX_YEARS);
+  return numbers.length > 0 ? Math.max(...numbers) : null;
+}
+
 /**
  * Concurrency-limited parallel executor.
  * Runs tasks in rolling windows of `concurrency` so we never issue more than
@@ -290,6 +321,25 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
     try {
       const title = row.title ?? "";
       const company = row.company ?? "";
+
+      // Deep Fetch's single AI call already extracts yearsExperience from the
+      // description (schema-validated) and stores it on the staging row - reuse it
+      // here as a reject gate instead of discarding it (it previously never reached
+      // jobRow/createJob() at all). Checked before the Matchmaker call so a job that
+      // fails this gate also never pays for that AI call. yearsExperience is a free-text
+      // string per DeepFetchResultV1 (e.g. "5+ years", "3-5 years"), not a number -
+      // parseYearsExperience() extracts the highest stated figure, same approach as
+      // scripts/openjobdata_common.py's extract_years_required().
+      const yearsExperienceRaw = row.requirements && typeof row.requirements === "object"
+        ? (row.requirements as Record<string, unknown>).yearsExperience
+        : undefined;
+      const yearsExperience = typeof yearsExperienceRaw === "string" ? parseYearsExperience(yearsExperienceRaw) : null;
+      if (yearsExperience !== null && yearsExperience > EXPERIENCE_YEARS_MAX) {
+        const reason = `Experience requirement (${yearsExperience} yrs, from "${yearsExperienceRaw}") exceeds fresher-role policy (max ${EXPERIENCE_YEARS_MAX})`;
+        console.log(`[Job CEO] Dropping "${title}" @ "${company}" — ${reason}`);
+        await updateStaged(row.id, { stage: "qa_dropped", qa_reason: reason, claimed_at: null as any, claim_expires_at: null as any });
+        return { processed: 1, matched: 0, logged: 0, skipped: 1 };
+      }
 
       const matchResult = candidateMatchingEnabled
         ? (await callAgent("job_ceo_matchmaker", ctx, async (provider) => {

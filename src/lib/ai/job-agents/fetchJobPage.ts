@@ -43,16 +43,37 @@ export function isSafeExternalUrl(rawUrl: string): boolean {
 }
 
 var JINA_MIN_QUALITY_CHARS = 500;
-var KNOWN_LOGIN_PATTERNS = /sign\s*(in|up|on)|log\s*in|create\s*(an\s*)?account|agree\s*&?\s*join|you\s*must\s*be\s*signed\s*in/i;
+// Trailing \b on each alternative matters: without it, "sign\s*(in|up|on)" matches
+// the literal substring "sign"+"in" inside ordinary words like "Signing" (as in "$500
+// Signing Bonus", a real, common perk line in legitimate job descriptions) - confirmed
+// live against real data: every current production match of this pattern turned out to
+// be exactly this false positive, none a real login wall. Same reasoning for "account"
+// (would otherwise prefix-match "accounting").
+var KNOWN_LOGIN_PATTERNS = /sign\s*(in|up|on)\b|log\s*in\b|create\s*(an\s*)?account\b|agree\s*&?\s*join|you\s*must\s*be\s*signed\s*in/i;
 
-function looksLikeLoginWall(text: string): boolean {
+export function looksLikeLoginWall(text: string): boolean {
   var first500 = text.substring(0, 500).toLowerCase();
   return KNOWN_LOGIN_PATTERNS.test(first500) && text.length < 8000;
 }
 
-function isContentUseless(text: string): boolean {
+// A posting whose apply_url is an application-FORM link (not a job-detail page) can
+// scrape back a browser/application error page instead of real content. These pages
+// are often LONGER than the Description Enricher's 500-char "too thin to trust" cutoff,
+// so without this check a long garbage page looks "complete" and is saved verbatim as
+// description_text, never revisited. Deliberately no length ceiling here (unlike
+// looksLikeLoginWall's <8000 check) — long garbage is exactly the shape this catches.
+var KNOWN_ERROR_PAGE_PATTERNS =
+  /application\s*(has\s*)?expired|no\s*longer\s*(accepting|available|active)|position\s*(has\s*been\s*|is\s*)?(filled|closed)|job\s*(posting\s*)?(is\s*)?(no\s*longer|not)\s*available|page\s*not\s*found|\b404\b|access\s*denied|\bforbidden\b|verify\s*(that\s*)?you(?:'re|\s*are)\s*(a\s*)?human|\bcaptcha\b|something\s*went\s*wrong|unexpected\s*error\s*(has\s*)?occurred/i;
+
+export function looksLikeErrorPage(text: string): boolean {
+  var prefix = text.substring(0, 3000);
+  return KNOWN_ERROR_PAGE_PATTERNS.test(prefix);
+}
+
+export function isContentUseless(text: string): boolean {
   if (text.length < 200) return true;
   if (looksLikeLoginWall(text)) return true;
+  if (looksLikeErrorPage(text)) return true;
   return false;
 }
 
@@ -149,6 +170,11 @@ async function tryDirectFetch(url: string): Promise<string | null> {
 
     if (looksLikeLoginWall(text)) {
       console.warn(`[Deep Fetch] Direct fetch returned login/authentication wall for: ${url.substring(0, 100)}`);
+      return null;
+    }
+
+    if (looksLikeErrorPage(text)) {
+      console.warn(`[Deep Fetch] Direct fetch returned an error/expired/unavailable page for: ${url.substring(0, 100)}`);
       return null;
     }
 

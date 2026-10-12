@@ -15,7 +15,13 @@ The JOB CEO is a multi-agent job-ingestion pipeline for TalentOS. It sources job
 | **Matchmaker** | `job_ceo_matchmaker` | Matches jobs to candidates (>=90%), drafts outreach |
 | **Description Enricher** | `job_ceo_enricher` | Backfills full descriptions for already-logged jobs with thin/missing text, on its own cron |
 
-All agents use `gemini-2.5-pro` as primary model with `gemini-2.5-flash` fallback.
+Model routing (real, per `sql/neon_fixes/042_agent_model_overrides.sql` — this is already
+cost-optimized, correcting an earlier, stale claim here that all agents used the reasoning
+tier): `job_ceo_orchestrator` and `job_ceo_matchmaker` use `gemini-2.5-pro` (reasoning tier);
+`job_ceo_scout`, `job_ceo_qa`, `job_ceo_deep_fetch`, and `job_ceo_enricher` use the cheaper
+`gemini-2.5-flash-lite`. QA Bouncer additionally short-circuits to its own regex classifier
+(no AI call at all) for confident cases — an obvious off-industry title, or 3+ strong
+target-industry keyword matches — only calling AI for genuinely ambiguous jobs.
 
 ### Why descriptions can come out thin, and how Description Enricher fixes it
 
@@ -25,6 +31,15 @@ a working direct URL (depends on the dataset's own column layout), and even when
 URL exists, a single failed fetch (bot-blocked site, JS-rendered page, transient
 error) leaves the thin description permanent — nothing ever revisits a `jobs` row
 after it's logged.
+
+`fetchJobPage.ts`'s content-quality gate (`isContentUseless()`) rejects known login walls
+and known error/expired/unavailable/404/captcha pages before they're ever saved as
+`description_text` — not just short content. This closes a real gap found in production:
+some OpenJobData postings supply an application-FORM url rather than a job-detail url, and
+scraping one can return a browser/application error page; because those pages were often
+*longer* than the Enricher's 500-char "too thin to trust" cutoff, a long garbage page used
+to look "complete" and was never revisited. Fixed at the source (the shared fetch function
+both Deep Fetch and the Enricher call), not by changing either length threshold.
 
 Description Enricher is a separate agent that runs independently of the ingest
 pipeline, on its own 15-minute cron (`job-description-enrichment` in
@@ -39,11 +54,22 @@ instead of waiting for the next tick.
 ## Data Flow
 
 1. **Scout**: Query Scout generates search terms for OpenJobData
-2. **Ingest**: GitHub Actions downloads daily parquet, pre-filters, POSTs to `/api/job-ceo/ingest`
-3. **QA**: QA Bouncer scores each job (best/medium/worthy/skip)
-4. **Deep Fetch**: Deep Fetch scrapes source URLs for full JD text
-5. **Matchmaking**: Matchmaker compares against candidate pool, drafts outreach for 90%+ matches
+2. **Ingest**: GitHub Actions downloads daily parquet, pre-filters on keyword title match
+   and a fresher-roles-only senior-title filter, POSTs to `/api/job-ceo/ingest`
+3. **Deep Fetch**: Deep Fetch scrapes source URLs for full JD text and extracts
+   `requirements` (including years-of-experience), staged under `"ingested"` → `"researched"`
+4. **QA**: QA Bouncer scores each already-fetched job (best/medium/worthy/skip), staged
+   `"researched"` → `"qa_passed"`/`"qa_dropped"` — **runs after Deep Fetch, not before**
+   (corrected here; this doc previously stated the opposite order)
+5. **Matchmaking**: Matchmaker first rejects any job whose extracted years-of-experience
+   exceeds the fresher-roles cap (5 years) without calling AI, then — for jobs that pass —
+   compares against the candidate pool and drafts outreach for 90%+ matches
 6. **Log**: Matching jobs are created in the `jobs` table with `source='openjobdata'`
+
+A QA-before-Deep-Fetch reorder (skipping the scrape+AI-extraction step entirely for jobs QA
+would reject as off-industry) is a known, larger follow-up — deferred because it requires
+renaming the run's status values (`ingesting`/`qa`/`deep_fetch`/`matchmaking`) to stay
+self-consistent with the new order, touching the dispatcher and the admin run-status UI.
 
 ## API Endpoints
 

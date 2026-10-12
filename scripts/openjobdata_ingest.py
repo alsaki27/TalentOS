@@ -214,6 +214,24 @@ _BOUNDED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Fresher-roles-only product policy: title-level seniority signal, same pattern as
+# scripts/openjobdata_common.py's is_senior_title() (kept in sync — that module isn't
+# imported here, this script is self-contained). Deliberately conservative: a plain
+# "Fiber Design Engineer" with no seniority modifier is NOT flagged, even though it
+# could be filled at any level. Catches the cheap, title-obvious majority of senior
+# postings before a job is even POSTed to Job CEO; body-text experience requirements
+# that a junior-sounding title doesn't reveal are caught downstream instead, in
+# jobCeoService.ts's reject gate on Deep Fetch's extracted yearsExperience.
+_SENIOR_TITLE_RE = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|distinguished|fellow|director|head of|chief|"
+    r"iv|iii|level\s*(3|4|5)|l[3-5])\b",
+    re.IGNORECASE,
+)
+
+
+def is_senior_title(title: Any) -> bool:
+    return bool(_SENIOR_TITLE_RE.search(str(title or "")))
+
 # Role group definitions — mirrors TalentOS jobAgentRoleLibrary.ts exactly.
 ROLE_GROUPS: Dict[str, Dict[str, Any]] = {
     "A": {
@@ -699,6 +717,18 @@ def main():
     if df.empty:
         print("No jobs matched the keyword filter.")
         sys.exit(0)
+
+    # ── FRESHER-ROLES-ONLY FILTER ─────────────────────────────────────────────
+    # TalentOS serves entry-level/fresher candidates — drop title-obviously-senior
+    # postings before they're ever POSTed to Job CEO. See is_senior_title() above.
+    before_senior = len(df)
+    df = df[~df["title"].apply(is_senior_title)]
+    print(f"After fresher-roles filter: {len(df):,} (dropped {before_senior - len(df):,} senior-titled rows)")
+
+    if df.empty:
+        print("No jobs matched after the fresher-roles filter.")
+        sys.exit(0)
+    # ─────────────────────────────────────────────────────────────────────────
 
     # Load company lookup for enriching job data
     print("\nLoading company data...")
