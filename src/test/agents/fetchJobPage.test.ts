@@ -6,7 +6,7 @@
 // looksLikeErrorPage()/isContentUseless() close that gap — see fetchJobPage.ts.
 
 import { describe, it, expect } from "vitest";
-import { isContentUseless, looksLikeErrorPage, looksLikeLoginWall } from "@/lib/ai/job-agents/fetchJobPage";
+import { isContentUseless, looksLikeErrorPage, looksLikeLoginWall, normalizeJobDetailUrl } from "@/lib/ai/job-agents/fetchJobPage";
 
 function padTo(text: string, minLength: number): string {
   if (text.length >= minLength) return text;
@@ -94,5 +94,42 @@ describe("looksLikeLoginWall false-positive regression", () => {
 
   it("still flags a genuine 'log in to continue' wall", () => {
     expect(looksLikeLoginWall("You must log in to continue. Create an account to apply for this position.")).toBe(true);
+  });
+});
+
+describe("normalizeJobDetailUrl", () => {
+  // Reported live: jobs stuck at stage "no_description" (0 chars fetched) despite the
+  // description being visible when a person opens the same link in a browser — because
+  // OpenJobData's apply_url pointed at the application-FORM sub-page, not the job-detail
+  // page. Both transforms below were verified by fetching the real URL before being added.
+
+  it("strips Lever's trailing /apply segment to reach the job-detail page", () => {
+    expect(normalizeJobDetailUrl("https://jobs.lever.co/waremalcomb/bc2847db-ba2b-4ee0-9c4c-9e77f7d0e831/apply")).toBe(
+      "https://jobs.lever.co/waremalcomb/bc2847db-ba2b-4ee0-9c4c-9e77f7d0e831"
+    );
+  });
+
+  it("is case-insensitive on Lever's /apply segment", () => {
+    expect(normalizeJobDetailUrl("https://jobs.lever.co/acme/abc123/Apply")).toBe("https://jobs.lever.co/acme/abc123");
+  });
+
+  it("leaves a Lever job-detail url (no trailing /apply) unchanged", () => {
+    const url = "https://jobs.lever.co/waremalcomb/bc2847db-ba2b-4ee0-9c4c-9e77f7d0e831";
+    expect(normalizeJobDetailUrl(url)).toBe(url);
+  });
+
+  it("rewrites Paylocity's Apply path to Details to reach the job-detail page", () => {
+    expect(normalizeJobDetailUrl("https://recruiting.paylocity.com/Recruiting/Jobs/Apply/4403585")).toBe(
+      "https://recruiting.paylocity.com/Recruiting/Jobs/Details/4403585"
+    );
+  });
+
+  it("leaves urls from unrelated hosts completely unchanged, including ones ending in /apply", () => {
+    const url = "https://example.com/careers/some-job/apply";
+    expect(normalizeJobDetailUrl(url)).toBe(url);
+  });
+
+  it("leaves a malformed url unchanged rather than throwing", () => {
+    expect(normalizeJobDetailUrl("not a url")).toBe("not a url");
   });
 });

@@ -33,7 +33,11 @@ export var JOB_CEO_CONFIG_DEFAULTS = {
     displayName: "Deep Fetch",
     temperature: 0.2,
     maxOutputTokens: 2048,
-    timeoutMs: 60000,       // Must exceed Jina fetch (30s) + direct HTTP (8s) + AI extraction (8s) = ~46s
+    // Not currently read by the live dispatch path - jobCeoService.ts's
+    // processDeepFetchBatch() hardcodes its own timeout_ms inline instead (see that file for
+    // the real, current value and the reasoning). Left here as the schema default in case
+    // another caller ever reads it directly.
+    timeoutMs: 45000,
     maxAttempts: 1,
     approvalPolicy: "auto" as const,
     minimumScore: 0,

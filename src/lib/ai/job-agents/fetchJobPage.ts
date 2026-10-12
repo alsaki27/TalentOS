@@ -42,6 +42,48 @@ export function isSafeExternalUrl(rawUrl: string): boolean {
   return true;
 }
 
+// Some ATS platforms give OpenJobData (and other sources) an application-FORM url for a
+// posting, not the job-detail page itself. A form page has little to no extractable prose
+// (input fields, not paragraphs), so Deep Fetch can succeed technically and still return
+// ~0 usable characters — the exact shape of jobs stuck at stage "no_description" despite the
+// description being visible when a person opens the same posting in a browser. Each rule
+// below was verified live (fetched both the original and transformed URL, confirmed the
+// transformed one returns the real job-detail content) before being added — not a guess:
+//   - Lever (jobs.lever.co/{company}/{postingId}/apply): the identical URL with the
+//     trailing "/apply" segment removed is the job-detail page.
+//   - Paylocity (recruiting.paylocity.com/Recruiting/Jobs/Apply/{id}): the identical URL
+//     with "Apply" replaced by "Details" in the path is the job-detail page.
+// Applied once, before the fetch cascade starts, so the FIRST attempt already targets the
+// real content instead of wasting a fetch on a form page that was always going to be ~empty.
+// Falls back to the original URL untouched for every other host — this is an allow-list of
+// verified transforms, not a blind "strip trailing /apply" rule that could mis-handle a
+// platform where /apply is the only valid page.
+export function normalizeJobDetailUrl(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+  const hostname = url.hostname.toLowerCase();
+
+  if (hostname === "jobs.lever.co") {
+    const segments = url.pathname.split("/").filter(Boolean);
+    if (segments.length > 0 && segments[segments.length - 1].toLowerCase() === "apply") {
+      segments.pop();
+      url.pathname = "/" + segments.join("/");
+      return url.toString();
+    }
+  }
+
+  if (hostname === "recruiting.paylocity.com" && /\/Recruiting\/Jobs\/Apply\//i.test(url.pathname)) {
+    url.pathname = url.pathname.replace(/\/Recruiting\/Jobs\/Apply\//i, "/Recruiting/Jobs/Details/");
+    return url.toString();
+  }
+
+  return rawUrl;
+}
+
 var JINA_MIN_QUALITY_CHARS = 500;
 // Trailing \b on each alternative matters: without it, "sign\s*(in|up|on)" matches
 // the literal substring "sign"+"in" inside ordinary words like "Signing" (as in "$500
@@ -141,7 +183,7 @@ function extractJsonLd(html: string): string | null {
 
 async function tryDirectFetch(url: string): Promise<string | null> {
   var controller = new AbortController();
-  var timeout = setTimeout(function () { controller.abort(); }, 45000); // 45s — gives time before 60s AI timeout
+  var timeout = setTimeout(function () { controller.abort(); }, 55000); // 55s — the scrape cascade runs unbounded by the (separate, later) AI-call timeout
 
   try {
     var response = await fetch(url, {
@@ -249,17 +291,33 @@ async function tryJinaFetch(url: string, requestTimeoutMs: number, noCache = fal
   }
 }
 
-export async function fetchJobPageText(url: string): Promise<string> {
-  if (!isSafeExternalUrl(url)) {
-    console.warn(`[Deep Fetch] Unsafe URL rejected: ${url.substring(0, 100)}`);
+export async function fetchJobPageText(rawUrl: string): Promise<string> {
+  if (!isSafeExternalUrl(rawUrl)) {
+    console.warn(`[Deep Fetch] Unsafe URL rejected: ${rawUrl.substring(0, 100)}`);
     return "";
+  }
+
+  // Normalized once, up front: for known ATS apply-form urls (Lever, Paylocity), this
+  // targets the real job-detail page on the FIRST attempt instead of wasting all 3 layers
+  // scraping a form page that was always going to return ~0 usable characters.
+  var url = normalizeJobDetailUrl(rawUrl);
+  if (url !== rawUrl) {
+    console.log(`[Deep Fetch] Normalized apply-form url to detail page: ${rawUrl.substring(0, 100)} -> ${url.substring(0, 100)}`);
   }
 
   var rawText: string | null = null;
 
+  // Layer timeouts below are deliberately generous (the scrape cascade runs unbounded by
+  // the AI-call timeout — see deepFetch.ts/enricher.ts, which await this function fully
+  // before ever touching their own, separate AI timeout). Bot-blocked ATS platforms
+  // (confirmed live: ADP, UKG/UltiPro serve an immediate "unsupported browser" page
+  // regardless of wait time) won't be fixed by more time - those need a fundamentally
+  // different approach (real browser rendering) - but a genuinely slow-rendering
+  // JS-heavy page has a real chance of succeeding with more of it.
+
   // ── Layer 1: Jina with JS-wait headers (handles React/SPA ATS platforms) ──
   try {
-    rawText = await tryJinaFetch(url, 50000, false);
+    rawText = await tryJinaFetch(url, 65000, false);
   } catch (err) {
     console.warn(`[Deep Fetch] Jina attempt 1 failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
   }
@@ -269,7 +327,7 @@ export async function fetchJobPageText(url: string): Promise<string> {
   // ── Layer 2: Jina retry with no-cache (avoids stale/empty cached responses) ──
   console.log(`[Deep Fetch] Jina layer 1 returned nothing — retrying with X-No-Cache for: ${url.substring(0, 100)}`);
   try {
-    rawText = await tryJinaFetch(url, 50000, true);
+    rawText = await tryJinaFetch(url, 65000, true);
   } catch (err) {
     console.warn(`[Deep Fetch] Jina attempt 2 (no-cache) failed (${(err as Error).message ?? String(err)}) for: ${url.substring(0, 100)}`);
   }

@@ -39,9 +39,13 @@ import { backgroundDispatch } from "@/server/lib/waitUntil";
 // Items per dispatch call for fast stages (QA, matchmaking).
 const BATCH_SIZE = 20;
 
-// Deep fetch processes fewer per batch — each can take up to ~145s with 3-layer retry.
-// With DEEP_FETCH_CONCURRENCY=3 and 5 items: ceil(5/3)=2 rounds × 145s = 290s < 5min claim.
-const DEEP_FETCH_BATCH_SIZE = 5;
+// Deep fetch processes fewer per batch — each job can take up to ~230s worst case now
+// (3-layer scrape cascade up to 185s, deliberately widened to give genuinely slow
+// JS-heavy ATS pages more time to render, + up to 45s for the AI extraction call that
+// follows it — see fetchJobPage.ts/deepFetch.ts; the scrape phase runs unbounded by the
+// AI call's own timeout, they're sequential, not nested).
+// With DEEP_FETCH_CONCURRENCY=3 and 3 items: ceil(3/3)=1 round × 230s = 230s < 5min claim.
+const DEEP_FETCH_BATCH_SIZE = 3;
 
 const STAGE_CONCURRENCY = 6;
 // Deep fetch uses lower concurrency — Jina has a global 429 risk above this
@@ -234,7 +238,13 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
         var opts: AgentOptions = {
           temperature: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.temperature,
           max_output_tokens: JOB_CEO_CONFIG_DEFAULTS.job_ceo_deep_fetch.maxOutputTokens,
-          timeout_ms: 150000, // 150s — accommodates 3-layer fetch: Jina(50s) + Jina-no-cache(50s) + direct(45s) + AI parsing
+          // 45s — this bounds ONLY the AI extraction call itself (deepFetch.ts passes it to
+          // provider.send({timeoutMs}), after the scrape has already fully completed) — it
+          // was previously set to 150000 under the mistaken assumption that it also covered
+          // the 3-layer scrape cascade, which actually runs earlier and unbounded by this
+          // value, using its own internal timeouts (see fetchJobPage.ts). 45s is generous
+          // for a flash-lite text-extraction call on already-cleaned text.
+          timeout_ms: 45000,
         };
         return runDeepFetch(opts, provider, ctx);
       });
