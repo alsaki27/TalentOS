@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import { configuredSharedGmailEmail } from "@/server/runtimeConfig";
+import { candidatePortalAccessAllowed } from "@/server/auth/candidateAuth";
 
 export async function GET(_req: Request, { params }: { params: { token: string } }) {
   let candidate: any;
@@ -20,6 +21,9 @@ export async function GET(_req: Request, { params }: { params: { token: string }
     || (candidate.portal_token_expires_at && new Date(candidate.portal_token_expires_at).getTime() < Date.now())
   ) {
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
+  }
+  if (!(await candidatePortalAccessAllowed(candidate.id))) {
+    return NextResponse.json({ error: "Complete the required agreement before using the portal.", code: "ONBOARDING_REQUIRED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
 
   let data: any;

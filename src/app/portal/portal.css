@@ -2094,3 +2094,209 @@ body:has(.portal-root) {
   .portal-hero-chip { flex-basis: calc(50% - 5px); }
   .portal-main { padding: 14px 12px 52px; }
 }
+
+/* ---------- Required candidate agreement onboarding ---------- */
+.portal-onboarding-gate,
+.portal-onboarding-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--p-bg);
+  color: var(--p-ink);
+}
+
+.portal-onboarding-gate {
+  color: var(--p-ink-soft);
+  text-align: center;
+}
+
+.portal-onboarding-gate-card {
+  width: min(100%, 480px);
+  padding: 28px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-lg);
+  background: var(--p-surface);
+  box-shadow: 0 18px 60px rgba(var(--p-shadow-rgb), 0.16);
+}
+
+.portal-onboarding-gate-card h1 {
+  margin: 0 0 8px;
+  color: var(--p-ink);
+  font-size: 20px;
+}
+
+.portal-onboarding-gate-card p { margin: 0 0 20px; }
+
+.portal-onboarding-dialog {
+  width: min(100%, 980px);
+  max-height: min(94dvh, 1120px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--p-border);
+  border-radius: 20px;
+  background: var(--p-surface);
+  box-shadow: 0 24px 80px rgba(var(--p-shadow-rgb), 0.24);
+}
+
+.portal-onboarding-header {
+  padding: 24px 30px 16px;
+  border-bottom: 1px solid var(--p-border);
+}
+
+.portal-onboarding-header .portal-logo { margin-bottom: 18px; }
+
+.portal-onboarding-header h1 {
+  margin: 14px 0 5px;
+  color: var(--p-ink);
+  font-size: clamp(22px, 3vw, 30px);
+  letter-spacing: -0.025em;
+}
+
+.portal-onboarding-header p {
+  margin: 0;
+  color: var(--p-ink-soft);
+  font-size: 14px;
+}
+
+.portal-onboarding-step {
+  float: right;
+  margin-top: 5px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 104, 107, 0.28);
+  border-radius: 999px;
+  background: var(--p-coral-soft);
+  color: var(--p-coral);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.portal-agreement-scroll {
+  min-height: 150px;
+  max-height: 34dvh;
+  margin: 18px 30px 0;
+  overflow: auto;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-md);
+  background: color-mix(in srgb, var(--p-bg) 70%, var(--p-surface));
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+}
+
+.portal-agreement-scroll:focus-visible {
+  outline: 3px solid rgba(18, 36, 97, 0.25);
+  outline-offset: 2px;
+}
+
+.portal-agreement-scroll pre {
+  margin: 0;
+  padding: 20px 22px;
+  color: var(--p-ink);
+  font: 13px/1.75 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.portal-agreement-read-status {
+  margin: 7px 30px 0;
+  color: var(--p-ink-soft);
+  font-size: 12px;
+}
+
+.portal-agreement-read-status.is-complete { color: #087f5b; font-weight: 700; }
+
+.portal-onboarding-form {
+  display: grid;
+  gap: 14px;
+  padding: 16px 30px 24px;
+  overflow: auto;
+}
+
+.portal-onboarding-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.portal-onboarding-choice legend {
+  width: 100%;
+  margin-bottom: 4px;
+  color: var(--p-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.portal-onboarding-choice legend span,
+.portal-onboarding-field label span { color: var(--p-coral); }
+
+.portal-onboarding-choice label,
+.portal-onboarding-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--p-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.portal-onboarding-choice input,
+.portal-onboarding-checkbox input {
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
+  margin: 1px 0 0;
+  accent-color: var(--p-navy-fill);
+}
+
+.portal-onboarding-field { display: grid; gap: 6px; max-width: 320px; }
+.portal-onboarding-field label { color: var(--p-ink); font-size: 13px; font-weight: 700; }
+.portal-onboarding-field input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-bg);
+  color: var(--p-ink);
+  font-size: 18px;
+  letter-spacing: 0.32em;
+}
+.portal-onboarding-field small { color: var(--p-ink-soft); font-size: 11px; }
+
+.portal-onboarding-privacy {
+  padding: 12px 14px;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-sm);
+  background: var(--p-navy-soft);
+  color: var(--p-ink);
+  font-size: 12px;
+}
+.portal-onboarding-privacy p { margin: 4px 0 0; color: var(--p-ink-soft); line-height: 1.55; }
+
+.portal-onboarding-checkbox { align-items: flex-start; }
+.portal-onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 5px;
+  border-top: 1px solid var(--p-border);
+}
+.portal-onboarding-actions .portal-btn { width: auto; min-width: 135px; }
+
+@media (max-width: 680px) {
+  .portal-onboarding-page { padding: 0; }
+  .portal-onboarding-dialog { width: 100%; height: 100dvh; max-height: none; border: 0; border-radius: 0; }
+  .portal-onboarding-header { padding: 18px 18px 13px; }
+  .portal-onboarding-header .portal-logo { margin-bottom: 12px; }
+  .portal-onboarding-step { float: none; display: inline-flex; margin-top: 0; }
+  .portal-agreement-scroll { max-height: 31dvh; margin: 14px 18px 0; }
+  .portal-agreement-scroll pre { padding: 14px; font-size: 12px; }
+  .portal-agreement-read-status { margin-inline: 18px; }
+  .portal-onboarding-form { padding: 13px 18px max(16px, env(safe-area-inset-bottom)); }
+  .portal-onboarding-actions { flex-direction: column-reverse; }
+  .portal-onboarding-actions .portal-btn { width: 100%; }
+}

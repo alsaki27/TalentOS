@@ -9,6 +9,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createJWT, verifyJWT } from "@/server/auth/jwt";
 import { queryOne, execute } from "@/server/db/neon";
+import { CANDIDATE_AGREEMENT_VERSION, CANDIDATE_PRIVACY_NOTICE_VERSION } from "@/lib/candidatePortalAgreementVersion";
 
 export const CANDIDATE_TOKEN_COOKIE = "skarion_candidate_token";
 export const CANDIDATE_OAUTH_STATE_COOKIE = "skarion_candidate_oauth_state";
@@ -22,6 +23,8 @@ export interface CandidateAccount {
   google_sub: string | null;
   password_hash: string | null;
   account_created_at: string | null;
+  has_contract?: boolean;
+  onboarding_complete?: boolean;
 }
 
 export async function findCandidateByLoginEmail(email: string) {
@@ -51,9 +54,16 @@ export async function findCandidateByPortalToken(token: string) {
 
 export async function findCandidateById(id: string) {
   return queryOne<CandidateAccount>(
-    `SELECT id, name, email, account_email, google_sub, password_hash, account_created_at
-     FROM candidates WHERE id = $1`,
-    [id]
+    `SELECT c.id, c.name, c.email, c.account_email, c.google_sub, c.password_hash, c.account_created_at,
+            c.has_contract,
+            (c.has_contract OR EXISTS (
+              SELECT 1 FROM candidate_portal_acceptances a
+               WHERE a.candidate_id = c.id
+                 AND a.agreement_version = $2
+                 AND a.privacy_notice_version = $3
+            )) AS onboarding_complete
+       FROM candidates c WHERE c.id = $1`,
+    [id, CANDIDATE_AGREEMENT_VERSION, CANDIDATE_PRIVACY_NOTICE_VERSION]
   );
 }
 
@@ -136,10 +146,33 @@ export async function getCurrentCandidateContext() {
   return { candidateId: candidate.id, candidate };
 }
 
-export async function requireCurrentCandidate() {
+export async function requireCurrentCandidate(options: { allowIncompleteOnboarding?: boolean } = {}) {
   const context = await getCurrentCandidateContext();
   if (!context) {
     return { context: null, response: NextResponse.json({ error: "Authentication required" }, { status: 401 }) };
   }
+  if (!options.allowIncompleteOnboarding && !context.candidate.onboarding_complete) {
+    return {
+      context: null,
+      response: NextResponse.json(
+        { error: "Complete the required candidate agreement and onboarding before using the portal.", code: "ONBOARDING_REQUIRED" },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      ),
+    };
+  }
   return { context, response: null };
+}
+
+export async function candidatePortalAccessAllowed(candidateId: string): Promise<boolean> {
+  const row = await queryOne<{ allowed: boolean }>(
+    `SELECT (c.has_contract OR EXISTS (
+              SELECT 1 FROM candidate_portal_acceptances a
+               WHERE a.candidate_id = c.id
+                 AND a.agreement_version = $2
+                 AND a.privacy_notice_version = $3
+            )) AS allowed
+       FROM candidates c WHERE c.id = $1`,
+    [candidateId, CANDIDATE_AGREEMENT_VERSION, CANDIDATE_PRIVACY_NOTICE_VERSION],
+  );
+  return row?.allowed === true;
 }

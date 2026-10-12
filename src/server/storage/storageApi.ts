@@ -187,6 +187,53 @@ export async function uploadFile(
   return { url: getPublicUrl(path) };
 }
 
+// Candidate contracts contain sensitive employment terms, so they must live in
+// a dedicated private R2 bucket and must never receive an R2_PUBLIC_URL. The
+// regular resume bucket may be publicly addressable and is intentionally not
+// used for these documents.
+function getCandidateContractsBucket(): string {
+  const bucket = process.env.R2_CANDIDATE_CONTRACTS_BUCKET_NAME?.trim() || "";
+  if (!bucket || bucket === R2_BUCKET_NAME) {
+    throw new Error("Private candidate contract storage is not configured.");
+  }
+  if (!isConfigured()) {
+    throw new Error("R2 credentials are not configured for private candidate contract storage.");
+  }
+  return bucket;
+}
+
+export async function uploadPrivateCandidateContract(path: string, buffer: Uint8Array, contentType: string): Promise<void> {
+  const bucket = getCandidateContractsBucket();
+  const body = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  const headers = await signRequest("PUT", bucket, path, "", { "Content-Type": contentType }, body);
+  const response = await fetch(getR2Url(bucket, path), { method: "PUT", headers, body });
+  if (!response.ok) {
+    throw new Error(`Private contract upload failed (${response.status}).`);
+  }
+}
+
+export async function downloadPrivateCandidateContract(path: string): Promise<{ buffer: Uint8Array; contentType: string }> {
+  const bucket = getCandidateContractsBucket();
+  const headers = await signRequest("GET", bucket, path, "");
+  const response = await fetch(getR2Url(bucket, path), { method: "GET", headers });
+  if (!response.ok) {
+    throw new Error(`Private contract download failed (${response.status}).`);
+  }
+  return {
+    buffer: new Uint8Array(await response.arrayBuffer()),
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+  };
+}
+
+export async function deletePrivateCandidateContract(path: string): Promise<void> {
+  const bucket = getCandidateContractsBucket();
+  const headers = await signRequest("DELETE", bucket, path, "");
+  const response = await fetch(getR2Url(bucket, path), { method: "DELETE", headers });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Private contract deletion failed (${response.status}).`);
+  }
+}
+
 export async function downloadFile(path: string): Promise<Blob> {
   if (!isConfigured()) {
     throw new Error(

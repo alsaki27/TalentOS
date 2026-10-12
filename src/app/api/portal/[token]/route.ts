@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne } from "@/server/db/neon";
 import { buildCandidatePortalDashboard } from "@/lib/portalDashboard";
+import { candidatePortalAccessAllowed } from "@/server/auth/candidateAuth";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,9 @@ export async function GET(_req: NextRequest, { params }: { params: { token: stri
     || (candidate.portal_token_expires_at && new Date(candidate.portal_token_expires_at).getTime() < Date.now())
   ) {
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
+  }
+  if (!(await candidatePortalAccessAllowed(candidate.id))) {
+    return NextResponse.json({ error: "Sign in and complete the required agreement before opening this portal link.", code: "ONBOARDING_REQUIRED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
 
   const dashboard = await buildCandidatePortalDashboard(candidate.id, candidate.name);

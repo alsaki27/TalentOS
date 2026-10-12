@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { queryOne, execute } from "@/server/db/neon";
+import { candidatePortalAccessAllowed } from "@/server/auth/candidateAuth";
 
 export async function PATCH(req: NextRequest, { params }: { params: { token: string } }) {
   const candidate = await queryOne<{ id: string; portal_token_expires_at: string | null; portal_token_revoked_at: string | null }>(
@@ -9,6 +10,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { token: str
   if (!candidate) return NextResponse.json({ error: "Portal link not found." }, { status: 404 });
   if (candidate.portal_token_revoked_at || (candidate.portal_token_expires_at && new Date(candidate.portal_token_expires_at).getTime() < Date.now())) {
     return NextResponse.json({ error: "Portal link expired." }, { status: 410 });
+  }
+  if (!(await candidatePortalAccessAllowed(candidate.id))) {
+    return NextResponse.json({ error: "Complete the required agreement before using the portal.", code: "ONBOARDING_REQUIRED" }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
   const body = await req.json().catch(() => ({}));
   const value = typeof body.enrolledAt === "string" ? body.enrolledAt : "";

@@ -1,0 +1,2 @@
+export const CANDIDATE_AGREEMENT_VERSION = "2026-08-04-v1" as const;
+export const CANDIDATE_PRIVACY_NOTICE_VERSION = "2026-10-11-v1" as const;

@@ -14,6 +14,7 @@ import { AuditPanel } from "@/components/candidates/AuditPanel";
 import { TrainingAuditPanel } from "@/components/candidates/TrainingAuditPanel";
 import { CandidateOptCountdownCard } from "@/components/candidates/CandidateOptCountdownCard";
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
+import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
 
 interface BaseResumeSummary {
@@ -68,6 +69,7 @@ interface Evidence {
 interface CandidateDetail {
   id: string;
   name: string;
+  has_contract: boolean;
   email: string | null;
   phone: string | null;
   status: string;
@@ -357,7 +359,7 @@ export default function CandidateProfilePage() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [passwordResetting, setPasswordResetting] = useState(false);
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
+  const [activeTab, setActiveTab] = useState<"Applications" | "Profile Overview" | "Training Audit" | "OPT Status" | "Contract" | "Source of Truth" | "Evidence Bank" | "Base Resumes" | "Tailored Resumes" | "Notes & Caveats" | "Audit">("Applications");
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
   const [showAddEvidence, setShowAddEvidence] = useState(false);
@@ -405,6 +407,21 @@ export default function CandidateProfilePage() {
     const res = await fetch(`/api/candidates/${id}`);
     setCandidate(await res.json());
     setLoading(false);
+  }
+
+  async function updateHasContract(hasContract: boolean) {
+    const response = await fetch(`/api/candidates/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ has_contract: hasContract }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || "Could not update contract status.");
+    setCandidate((current) => current ? { ...current, has_contract: hasContract } : current);
+  }
+
+  function markContractUploaded() {
+    setCandidate((current) => current ? { ...current, has_contract: true } : current);
   }
 
   useEffect(() => { load(); }, [id]);
@@ -1064,7 +1081,7 @@ export default function CandidateProfilePage() {
           WebkitOverflowScrolling: "touch",
         }}
       >
-        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
+        {(["Applications", "Profile Overview", "Training Audit", "OPT Status", "Contract", "Source of Truth", "Evidence Bank", "Base Resumes", "Tailored Resumes", "Notes & Caveats", "Audit"] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1300,6 +1317,17 @@ export default function CandidateProfilePage() {
           <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} />
           <CandidateOptStatusPanel candidateId={candidate.id} canEdit={isManager} />
         </>
+      )}
+
+      {activeTab === "Contract" && (
+        <CandidateContractsPanel
+          candidateId={candidate.id}
+          candidateName={candidate.name}
+          hasContract={Boolean(candidate.has_contract)}
+          canManage={isManager}
+          onContractStatusChange={updateHasContract}
+          onContractUploaded={markContractUploaded}
+        />
       )}
 
       {activeTab === "Source of Truth" && (

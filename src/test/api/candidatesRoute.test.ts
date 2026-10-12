@@ -30,30 +30,32 @@ describe("GET /api/candidates", () => {
 
     const [dataSql, dataParams] = mocks.query.mock.calls[0];
     const [countSql, countParams] = mocks.queryOne.mock.calls[0];
-    expect(dataSql).toContain("c.pipeline_stage <> ALL($8::text[])");
-    expect(countSql).toContain("pipeline_stage <> ALL($6::text[])");
+    // $6 is now the has_contract filter (migration 117), which pushed
+    // offset/limit/hidden-stages each one slot further right than before.
+    expect(dataSql).toContain("c.pipeline_stage <> ALL($9::text[])");
+    expect(countSql).toContain("pipeline_stage <> ALL($7::text[])");
     // pipelineStage ($5) is the 5th positional param in both queries.
     expect(dataParams[4]).toBe("");
     expect(countParams[4]).toBe("");
-    expect(dataParams[7]).toEqual(["placed", "dropped"]);
-    expect(countParams[5]).toEqual(["placed", "dropped"]);
+    expect(dataParams[8]).toEqual(["placed", "dropped"]);
+    expect(countParams[6]).toEqual(["placed", "dropped"]);
   });
 
   it("opting one group back in only un-hides that group", async () => {
     await GET(req("?showPlaced=1"));
-    expect(mocks.query.mock.calls[0][1][7]).toEqual(["dropped"]);
+    expect(mocks.query.mock.calls[0][1][8]).toEqual(["dropped"]);
 
     vi.clearAllMocks();
     mocks.query.mockResolvedValue([]);
     mocks.queryOne.mockResolvedValue({ total: 0 });
 
     await GET(req("?showDropped=1"));
-    expect(mocks.query.mock.calls[0][1][7]).toEqual(["placed"]);
+    expect(mocks.query.mock.calls[0][1][8]).toEqual(["placed"]);
   });
 
   it("un-hides both when both boxes are ticked", async () => {
     await GET(req("?showPlaced=1&showDropped=1"));
-    expect(mocks.query.mock.calls[0][1][7]).toEqual([]);
+    expect(mocks.query.mock.calls[0][1][8]).toEqual([]);
   });
 
   it("an explicit single-stage filter is not blocked by the default exclusion, even with both boxes unticked", async () => {

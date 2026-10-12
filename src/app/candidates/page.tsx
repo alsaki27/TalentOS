@@ -18,6 +18,7 @@ interface Candidate {
   target_tier: string | null;
   resume_filename: string | null;
   avatar_url: string | null;
+  has_contract: boolean;
   audit_status?: string | null;
   audit_progress?: number | null;
   audit_mock_interviews?: number | null;
@@ -120,6 +121,9 @@ function CandidateProfileCard({
 
       <div className="candidate-profile-tags">
         {candidate.target_tier && <span className="candidate-info-tag">{candidate.target_tier.replaceAll("_", " ").toUpperCase()}</span>}
+        <span className={`candidate-info-tag candidate-contract-status ${candidate.has_contract ? "has-contract" : "no-contract"}`}>
+          {candidate.has_contract ? "Contract on file" : "No contract"}
+        </span>
         {candidate.email?.includes("example.com") && <span className="badge badge-warning">Test record</span>}
       </div>
 
@@ -201,6 +205,7 @@ export default function CandidatesPage() {
   const [search, setSearch] = useState("");
   const [stageFilter, setStageFilter] = useState("");
   const [tierFilter, setTierFilter] = useState("");
+  const [contractFilter, setContractFilter] = useState("");
   // Placed and dropped candidates are hidden by default - most day-to-day
   // work happens on the still-active roster. Each tick box opts one group
   // back in without affecting the other.
@@ -222,6 +227,7 @@ export default function CandidatesPage() {
     if (search) params.set("search", search);
     if (stageFilter) params.set("pipelineStage", stageFilter);
     if (tierFilter) params.set("tier", tierFilter);
+    if (contractFilter) params.set("hasContract", contractFilter);
     if (showPlaced) params.set("showPlaced", "1");
     if (showDropped) params.set("showDropped", "1");
     return params;
@@ -245,7 +251,7 @@ export default function CandidatesPage() {
   }
 
   // Any filter/search change re-queries from page 1.
-  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, showPlaced, showDropped, pageSize]);
+  useEffect(() => { load(1, pageSize); }, [search, stageFilter, tierFilter, contractFilter, showPlaced, showDropped, pageSize]);
 
   async function changeStage(id: string, stage: string) {
     setStageUpdating(id);
@@ -299,11 +305,11 @@ export default function CandidatesPage() {
     const res = await fetch(`/api/candidates?${buildParams(1, 1000)}`, { cache: "no-store" });
     const data = await res.json();
     const rows = data.items ?? [];
-    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "target_tier", "resume_filename", "audit_status", "audit_progress", "audit_mock_interviews"]);
+    const csv = toCsv(rows, ["name", "email", "phone", "pipeline_stage", "has_contract", "target_tier", "resume_filename", "audit_status", "audit_progress", "audit_mock_interviews"]);
     downloadCsv("candidates.csv", csv);
   }
 
-  const filtersActive = search || stageFilter || tierFilter || showPlaced || showDropped;
+  const filtersActive = search || stageFilter || tierFilter || contractFilter || showPlaced || showDropped;
 
   return (
     <div className="candidates-page">
@@ -328,6 +334,11 @@ export default function CandidatesPage() {
           <option value="adjacent_1">Adjacent 1 (Civil/CAD)</option>
           <option value="adjacent_2">Adjacent 2 (Telecom)</option>
         </select>
+        <select aria-label="Filter by contract status" value={contractFilter} onChange={(e) => setContractFilter(e.target.value)}>
+          <option value="">All contract statuses</option>
+          <option value="yes">Has contract</option>
+          <option value="no">No contract</option>
+        </select>
         <label className="filter-bar-check">
           <input type="checkbox" checked={showPlaced} onChange={(e) => setShowPlaced(e.target.checked)} />
           Show placed
@@ -337,7 +348,7 @@ export default function CandidatesPage() {
           Show dropped
         </label>
         {filtersActive && (
-          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); setShowPlaced(false); setShowDropped(false); }}>Clear filters</button>
+          <button onClick={() => { setSearch(""); setStageFilter(""); setTierFilter(""); setContractFilter(""); setShowPlaced(false); setShowDropped(false); }}>Clear filters</button>
         )}
         <button onClick={exportCsv}>Export CSV</button>
       </div>
@@ -414,6 +425,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [hasContract, setHasContract] = useState<boolean | null>(null);
   const [targetTier, setTargetTier] = useState("");
   const [linkedinUrl, setLinkedinUrl] = useState("");
   const [githubUrl, setGithubUrl] = useState("");
@@ -437,6 +449,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     setName("");
     setEmail("");
     setPhone("");
+    setHasContract(null);
     setTargetTier("");
     setLinkedinUrl("");
     setGithubUrl("");
@@ -458,12 +471,14 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   async function submit() {
     if (!name.trim()) { setError("Name is required."); return; }
+    if (hasContract === null) { setError("Choose whether the candidate has a signed Skarion agreement."); return; }
     setSaving(true);
     setError("");
     setFeedback(null);
 
     const payload = {
       name,
+      has_contract: hasContract,
       email: email || null,
       phone: phone || null,
       target_tier: targetTier || null,
@@ -540,6 +555,11 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
               <label>Phone</label>
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(optional)" />
             </div>
+            <fieldset className="field-group candidate-contract-choice" aria-required="true">
+              <legend>Does this candidate have a signed Skarion agreement? <span style={{ color: "var(--danger)" }}>*</span></legend>
+              <label><input type="radio" name="candidate-has-contract" checked={hasContract === true} onChange={() => setHasContract(true)} /> Yes</label>
+              <label><input type="radio" name="candidate-has-contract" checked={hasContract === false} onChange={() => setHasContract(false)} /> No</label>
+            </fieldset>
             <div className="field-group">
               <label>Target tier</label>
               <select value={targetTier} onChange={(e) => setTargetTier(e.target.value)}>
@@ -618,7 +638,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
           {step === 1 ? (
             <>
               <button onClick={onClose}>Cancel</button>
-              <button className="btn-primary" onClick={() => setStep(2)} disabled={!name.trim()}>
+              <button className="btn-primary" onClick={() => setStep(2)} disabled={!name.trim() || hasContract === null}>
                 Next
               </button>
             </>

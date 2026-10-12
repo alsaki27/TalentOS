@@ -7,6 +7,7 @@ import { MASTER_DATA_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
+import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
 
 interface StudentAuditEnrichmentRow {
@@ -81,6 +82,8 @@ export async function GET(req: NextRequest) {
   const status = url.searchParams.get("status") || "";
   const tier = url.searchParams.get("tier") || "";
   const pipelineStage = url.searchParams.get("pipelineStage") || "";
+  const hasContractParam = url.searchParams.get("hasContract");
+  const hasContract = hasContractParam === "yes" ? true : hasContractParam === "no" ? false : null;
   const showPlaced = url.searchParams.get("showPlaced") === "1";
   const showDropped = url.searchParams.get("showDropped") === "1";
   // Placed and dropped candidates are hidden by default - most work happens
@@ -92,10 +95,6 @@ export async function GET(req: NextRequest) {
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
-  const columns = compact
-    ? "c.id, c.name, c.resume_url, c.resume_filename, EXISTS(SELECT 1 FROM base_resumes br WHERE br.candidate_id = c.id) as has_base_resume"
-    : "c.id, c.name, c.email, c.phone, c.status, c.pipeline_stage, c.target_tier, c.resume_filename, c.avatar_url, c.created_at";
-
   // Actively-applying candidates surface first, then not-started, then placed, then dropped last.
   const stageOrder = `CASE c.pipeline_stage
       WHEN 'applying' THEN 0
@@ -106,30 +105,65 @@ export async function GET(req: NextRequest) {
       ELSE 5
     END`;
 
-  const dataSql = `
-    SELECT ${columns} FROM candidates c
-    WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
-      AND ($3 = '' OR c.status = $3)
-      AND ($4 = '' OR c.target_tier = $4)
-      AND ($5 = '' OR c.pipeline_stage = $5)
-      AND ($5 <> '' OR c.pipeline_stage <> ALL($8::text[]))
-    ORDER BY ${stageOrder}, c.name ASC
-    OFFSET $6 LIMIT $7
-  `;
-  const countSql = `
-    SELECT COUNT(*)::int as total FROM candidates
-    WHERE ($1 = '' OR name ILIKE $2 OR email ILIKE $2)
-      AND ($3 = '' OR status = $3)
-      AND ($4 = '' OR target_tier = $4)
-      AND ($5 = '' OR pipeline_stage = $5)
-      AND ($5 <> '' OR pipeline_stage <> ALL($6::text[]))
-  `;
+  async function loadPage(hasContractColumn: boolean) {
+    const columns = compact
+      ? "c.id, c.name, c.resume_url, c.resume_filename, EXISTS(SELECT 1 FROM base_resumes br WHERE br.candidate_id = c.id) as has_base_resume"
+      : `c.id, c.name, c.email, c.phone, c.status, c.pipeline_stage, c.target_tier, c.resume_filename, c.avatar_url, c.created_at, ${hasContractColumn ? "c.has_contract" : "TRUE AS has_contract"}`;
+    const contractFilter = hasContractColumn ? "AND ($6::boolean IS NULL OR c.has_contract = $6)" : "";
+    const offsetParam = hasContractColumn ? 7 : 6;
+    const limitParam = hasContractColumn ? 8 : 7;
+    const hiddenStagesParam = hasContractColumn ? 9 : 8;
+    const countHiddenStagesParam = hasContractColumn ? 7 : 6;
+    const dataSql = `
+      SELECT ${columns} FROM candidates c
+      WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
+        AND ($3 = '' OR c.status = $3)
+        AND ($4 = '' OR c.target_tier = $4)
+        AND ($5 = '' OR c.pipeline_stage = $5)
+        ${contractFilter}
+        AND ($5 <> '' OR c.pipeline_stage <> ALL($${hiddenStagesParam}::text[]))
+      ORDER BY ${stageOrder}, c.name ASC
+      OFFSET $${offsetParam} LIMIT $${limitParam}
+    `;
+    const countSql = `
+      SELECT COUNT(*)::int as total FROM candidates c
+      WHERE ($1 = '' OR c.name ILIKE $2 OR c.email ILIKE $2)
+        AND ($3 = '' OR c.status = $3)
+        AND ($4 = '' OR c.target_tier = $4)
+        AND ($5 = '' OR c.pipeline_stage = $5)
+        ${hasContractColumn ? "AND ($6::boolean IS NULL OR c.has_contract = $6)" : ""}
+        AND ($5 <> '' OR c.pipeline_stage <> ALL($${countHiddenStagesParam}::text[]))
+    `;
+    const dataParams = hasContractColumn
+      ? [search, searchParam, status, tier, pipelineStage, hasContract, offset, pageSize, hiddenStages]
+      : [search, searchParam, status, tier, pipelineStage, offset, pageSize, hiddenStages];
+    const countParams = hasContractColumn
+      ? [search, searchParam, status, tier, pipelineStage, hasContract, hiddenStages]
+      : [search, searchParam, status, tier, pipelineStage, hiddenStages];
+
+    const [data, countRow] = await Promise.all([
+      query<Record<string, any>>(dataSql, dataParams),
+      queryOne<{ total: number }>(countSql, countParams),
+    ]);
+    return { data, countRow };
+  }
 
   try {
-    const [data, countRow] = await Promise.all([
-      query<Record<string, any>>(dataSql, [search, searchParam, status, tier, pipelineStage, offset, pageSize, hiddenStages]),
-      queryOne<{ total: number }>(countSql, [search, searchParam, status, tier, pipelineStage, hiddenStages]),
-    ]);
+    let result: Awaited<ReturnType<typeof loadPage>>;
+    try {
+      result = await loadPage(true);
+    } catch (error) {
+      if (!isMissingPostgresColumn(error, "has_contract")) throw error;
+      // Migration 117 is additive and still pending. Older rows are defined to
+      // have contracts, so keep the existing candidate list available while
+      // the migration is scheduled. The `No contract` filter cannot match until
+      // the new column exists.
+      result = hasContract === false
+        ? { data: [], countRow: { total: 0 } }
+        : await loadPage(false);
+    }
+
+    const { data, countRow } = result;
     const auditItems = compact ? (data ?? []) : await enrichWithStudentAudit(data ?? []);
     const items = !compact && includeOptDays ? await enrichWithOptApproval(auditItems) : auditItems;
     return NextResponse.json({ items, total: countRow?.total ?? 0, page, pageSize });
@@ -148,17 +182,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "name is required" }, { status: 400 });
   }
 
+  if (typeof body.has_contract !== "boolean") {
+    return NextResponse.json({ error: "Select whether this candidate has a signed Skarion agreement." }, { status: 400 });
+  }
+
   if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
     return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
   }
 
   try {
-    const sql = `
-      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-      RETURNING *
-    `;
-    const data = await queryOne<Record<string, any>>(sql, [
+    const values = [
       body.name,
       body.email ?? null,
       body.phone ?? null,
@@ -175,7 +208,30 @@ export async function POST(req: NextRequest) {
       body.work_mode_preference ?? null,
       body.available_start_date ?? null,
       body.target_roles ?? null,
-    ]);
+      body.has_contract,
+    ];
+    const sql = `
+      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles, has_contract)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      RETURNING *
+    `;
+    let hasContractColumn = true;
+    let data: Record<string, any> | null;
+    try {
+      data = await queryOne<Record<string, any>>(sql, values);
+    } catch (error) {
+      if (!isMissingPostgresColumn(error, "has_contract")) throw error;
+      if (!body.has_contract) {
+        return NextResponse.json({ error: "The candidate contract database update is required before creating a candidate marked No. No candidate was created." }, { status: 503 });
+      }
+      hasContractColumn = false;
+      data = await queryOne<Record<string, any>>(
+        `INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         RETURNING *`,
+        values.slice(0, 16),
+      );
+    }
     if (!data) throw new Error("Insert failed");
 
     if (context && data) {
@@ -196,7 +252,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    return NextResponse.json(data, { status: 201 });
+    return NextResponse.json(hasContractColumn ? data : { ...data, has_contract: true }, { status: 201 });
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

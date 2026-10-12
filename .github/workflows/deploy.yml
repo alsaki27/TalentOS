@@ -13,7 +13,8 @@ name: Deploy TalentOS (Cloudflare)
 # secret already set on the live Worker (JWT_SECRET, AI_KEYS_ENCRYPTION_SECRET,
 # CRON_SECRET, SUPABASE_*, AI provider keys, etc.) is left untouched by
 # this workflow - add an explicit `secret put` step here if one of those
-# ever needs to be rotated through CI instead of by hand.
+# ever needs to be rotated through CI instead of by hand. Candidate SSN
+# encryption and the private contract bucket are optional until configured.
 on:
   workflow_run:
     workflows: ["CI"]
@@ -218,6 +219,8 @@ jobs:
             --arg skarion_crm_api_url "$SKARION_CRM_API_URL" \
             --arg gmail_push_token "$GMAIL_PUSH_TOKEN" \
             --arg gmail_pubsub_topic "$GMAIL_PUBSUB_TOPIC" \
+            --arg candidate_ssn_encryption_key "$CANDIDATE_SSN_ENCRYPTION_KEY" \
+            --arg candidate_contracts_bucket "$R2_CANDIDATE_CONTRACTS_BUCKET_NAME" \
             '{
               DATABASE_URL: $database_url,
               JWT_SECRET: $jwt_secret,
@@ -233,6 +236,8 @@ jobs:
             + (if $skarion_crm_api_url != "" then {SKARION_CRM_API_URL: $skarion_crm_api_url} else {} end)
             + (if $gmail_push_token != "" then {GMAIL_PUSH_TOKEN: $gmail_push_token} else {} end)
             + (if $gmail_pubsub_topic != "" then {GMAIL_PUBSUB_TOPIC: $gmail_pubsub_topic} else {} end)
+            + (if $candidate_ssn_encryption_key != "" then {CANDIDATE_SSN_ENCRYPTION_KEY: $candidate_ssn_encryption_key} else {} end)
+            + (if $candidate_contracts_bucket != "" then {R2_CANDIDATE_CONTRACTS_BUCKET_NAME: $candidate_contracts_bucket} else {} end)
             ' > "$SECRETS_FILE"
           npx wrangler deploy --secrets-file "$SECRETS_FILE" --message "TalentOS ${GITHUB_SHA}" --tag "$GITHUB_SHA"
         env:
@@ -252,6 +257,8 @@ jobs:
           SKARION_CRM_API_URL: ${{ secrets.SKARION_CRM_API_URL }}
           GMAIL_PUSH_TOKEN: ${{ secrets.GMAIL_PUSH_TOKEN }}
           GMAIL_PUBSUB_TOPIC: ${{ secrets.GMAIL_PUBSUB_TOPIC }}
+          CANDIDATE_SSN_ENCRYPTION_KEY: ${{ secrets.CANDIDATE_SSN_ENCRYPTION_KEY }}
+          R2_CANDIDATE_CONTRACTS_BUCKET_NAME: ${{ vars.R2_CANDIDATE_CONTRACTS_BUCKET_NAME }}
 
       - name: Verify active Worker version and Hyperdrive binding
         run: npm run cf:verify-live

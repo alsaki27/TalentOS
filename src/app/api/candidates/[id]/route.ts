@@ -9,14 +9,20 @@ import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { deleteStorageFile } from "@/lib/storage";
 import { deleteResumeFile } from "@/lib/resumeStorage";
+import { deletePrivateCandidateContract } from "@/server/storage/storageApi";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
+import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const candidate = await queryOne<Record<string, any>>('SELECT * FROM candidates WHERE id = $1', [params.id]);
     if (!candidate) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // The contract migration may be pending on an older database. Existing
+    // candidates are defined as contracted, so keep their profile consistent
+    // with the candidates-list compatibility behavior until it is applied.
+    if (typeof candidate.has_contract !== "boolean") candidate.has_contract = true;
     // Never send the candidate's password hash to the browser, even to staff.
     delete candidate.password_hash;
 
@@ -53,6 +59,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
     return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
   }
+  if (body.has_contract !== undefined && typeof body.has_contract !== "boolean") {
+    return NextResponse.json({ error: "has_contract must be true or false" }, { status: 400 });
+  }
 
   const allowedFields = [
     "name", "email", "phone", "status", "pipeline_stage", "target_tier",
@@ -64,7 +73,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "eeo_gender", "eeo_race", "eeo_veteran", "eeo_disability",
     "home_address", "birth_date", "open_to_relocation",
     "driving_license", "driving_license_state", "driving_license_expiry",
-    "pe_license_il", "education_gpa", "education_gpa_year",
+    "pe_license_il", "education_gpa", "education_gpa_year", "has_contract",
   ];
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
@@ -103,6 +112,9 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
     return NextResponse.json(data);
   } catch (error: any) {
+    if ("has_contract" in body && isMissingPostgresColumn(error, "has_contract")) {
+      return NextResponse.json({ error: "Apply candidate contract migration 117 before changing contract status." }, { status: 503 });
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
@@ -117,6 +129,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       [params.id]
     );
     const resumes = await query<{ file_url: string | null }>('SELECT file_url FROM resumes WHERE candidate_id = $1', [params.id]);
+    const contractFiles = await query<{ storage_key: string }>(
+      'SELECT storage_key FROM candidate_contract_files WHERE candidate_id = $1',
+      [params.id],
+    ).catch(() => []);
 
     await execute('DELETE FROM candidates WHERE id = $1', [params.id]);
 
@@ -124,6 +140,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: { id: stri
       deleteResumeFile(candidate?.resume_url),
       deleteStorageFile(candidate?.avatar_url),
       ...(resumes ?? []).map((r: any) => deleteResumeFile(r.file_url)),
+      ...contractFiles.map((file) => deletePrivateCandidateContract(file.storage_key).catch((error) => {
+        console.error("[Candidate contracts] Private file cleanup failed.", error instanceof Error ? error.message : "unknown error");
+      })),
     ]);
 
     if (context) {

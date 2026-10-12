@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getCurrentCandidateContext } from "@/server/auth/candidateAuth";
+import { requireCurrentCandidate } from "@/server/auth/candidateAuth";
 import { hashPassword, verifyPassword } from "@/server/auth/crypto";
 import { execute } from "@/server/db/neon";
 
 // Logged-in password change. Initial password set during invite acceptance goes
 // through /api/portal/invite/[token]/complete instead (no existing password yet).
 export async function PATCH(req: NextRequest) {
-  const context = await getCurrentCandidateContext();
-  if (!context) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  }
+  const { context, response } = await requireCurrentCandidate();
+  if (response) return response;
 
   const body = await req.json();
   const currentPassword = String(body.current_password ?? "");

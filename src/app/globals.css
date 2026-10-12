@@ -3016,6 +3016,55 @@ label {
   letter-spacing: 0.04em;
 }
 
+.candidate-contract-status.has-contract {
+  --info-rgb: 16, 185, 129;
+  --info: #34d399;
+}
+
+.candidate-contract-status.no-contract {
+  --info-rgb: 244, 63, 94;
+  --info: #fb7185;
+}
+
+.candidate-contract-choice {
+  min-width: 0;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.candidate-contract-choice legend { padding: 0 5px; font-size: 13px; }
+.candidate-contract-choice label { display: inline-flex; align-items: center; gap: 7px; margin-right: 18px; font-size: 13px; }
+
+.candidate-contract-panel { display: flex; flex-direction: column; gap: 20px; }
+.candidate-contract-panel-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.candidate-contract-panel-heading h2 { margin: 4px 0; font-size: 20px; }
+.candidate-contract-panel-heading p { margin: 0; }
+.candidate-contract-eyebrow { color: var(--accent-hover); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.candidate-contract-status-pill { flex: 0 0 auto; padding: 7px 11px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; font-weight: 800; }
+.candidate-contract-status-pill.is-yes { border-color: rgba(16,185,129,.35); background: rgba(16,185,129,.12); color: #34d399; }
+.candidate-contract-status-pill.is-no { border-color: rgba(244,63,94,.35); background: rgba(244,63,94,.12); color: #fb7185; }
+.candidate-contract-status-control { display: grid; gap: 7px; max-width: 440px; }
+.candidate-contract-status-control label { font-size: 12px; font-weight: 750; color: var(--ink-soft); }
+.candidate-contract-status-control p { margin: 0; font-size: 12px; }
+.candidate-contract-upload { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 16px; border: 1px dashed var(--border); border-radius: 12px; background: rgba(var(--accent-rgb), .035); }
+.candidate-contract-upload p { margin: 4px 0 0; font-size: 12px; }
+.candidate-contract-upload input[type="file"] { max-width: 100%; }
+.candidate-contract-file-list h3 { margin: 0 0 10px; font-size: 14px; }
+.candidate-contract-file-list ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.candidate-contract-file-list li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.candidate-contract-file-list li > div { display: grid; gap: 4px; min-width: 0; }
+.candidate-contract-file-list li strong { overflow-wrap: anywhere; }
+.candidate-contract-file-list li span { color: var(--ink-soft); font-size: 11px; }
+.candidate-contract-file-list li a { flex: 0 0 auto; font-size: 12px; font-weight: 700; }
+.candidate-contract-restricted { margin: 0; padding: 13px 15px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink-soft); font-size: 13px; }
+
+@media (max-width: 600px) {
+  .candidate-contract-panel-heading { flex-direction: column; }
+  .candidate-contract-file-list li { align-items: flex-start; }
+}
+
 .candidate-profile-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

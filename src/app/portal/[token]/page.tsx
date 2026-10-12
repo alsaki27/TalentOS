@@ -3,6 +3,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import CandidatePortalDashboard from "@/components/portal/CandidatePortalDashboard";
 
@@ -60,6 +61,7 @@ export default function CandidatePortalPage() {
   const [gmailAccounts, setGmailAccounts] = useState<PortalGmailAccount[]>([]);
   const [gmailLoading, setGmailLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [agreementRequired, setAgreementRequired] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<"overview" | "dashboard">("overview");
   const [enrolledAt, setEnrolledAt] = useState("");
@@ -69,7 +71,13 @@ export default function CandidatePortalPage() {
   useEffect(() => {
     if (!token) return;
     fetch(`/api/portal/${token}`).then(async (res) => {
-      if (!res.ok) { setNotFound(true); setLoading(false); return; }
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        setAgreementRequired(res.status === 403 && payload.code === "ONBOARDING_REQUIRED");
+        setNotFound(!(res.status === 403 && payload.code === "ONBOARDING_REQUIRED"));
+        setLoading(false);
+        return;
+      }
       const portalData = await res.json();
       setData(portalData);
       setEnrolledAt(portalData.skarionEnrolledAt || "");
@@ -86,6 +94,15 @@ export default function CandidatePortalPage() {
   }, [token]);
 
   if (loading) return <p className="muted">Loading…</p>;
+  if (agreementRequired) {
+    return (
+      <div className="empty">
+        <h2>Sign in to finish portal onboarding</h2>
+        <p>This portal link is locked until you review the agreement and complete the required onboarding choices.</p>
+        <Link href="/portal/login" className="btn-primary">Sign in</Link>
+      </div>
+    );
+  }
   if (notFound || !data) {
     return <div className="empty">This link isn't valid. Please ask your recruiter for an updated link.</div>;
   }

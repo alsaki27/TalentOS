@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { pageParams, pickFields, requirePublicApiScope } from "@/lib/publicApiAuth";
 import { query, queryOne } from "@/server/db/neon";
+import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 
 const CANDIDATE_FIELDS = [
   "name", "email", "phone", "status", "target_tier", "notes", "resume_url",
   "resume_filename", "target_roles", "preferred_locations", "salary_expectation",
-  "work_authorization", "avatar_url",
+  "work_authorization", "avatar_url", "has_contract",
 ];
 
 export async function GET(req: NextRequest) {
@@ -54,10 +55,16 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });
+  if (body.has_contract !== undefined && typeof body.has_contract !== "boolean") {
+    return NextResponse.json({ error: "has_contract must be true or false when provided" }, { status: 400 });
+  }
 
   const payload = {
     ...pickFields(body, CANDIDATE_FIELDS),
     status: body.status ?? "active",
+    // Existing integrations predate this field. Preserve their behavior using
+    // the requested legacy-candidate default until they send an explicit value.
+    has_contract: body.has_contract ?? true,
   };
 
   let data: any;
@@ -66,10 +73,25 @@ export async function POST(req: NextRequest) {
   const keys = Object.keys(payload);
   const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
   const values = keys.map((k) => (payload as any)[k]);
-  data = await queryOne(
-    `INSERT INTO candidates (${keys.join(", ")}) VALUES (${placeholders}) RETURNING *`,
-    values
-  );
+  try {
+    data = await queryOne(
+      `INSERT INTO candidates (${keys.join(", ")}) VALUES (${placeholders}) RETURNING *`,
+      values
+    );
+  } catch (insertError) {
+    if (!isMissingPostgresColumn(insertError, "has_contract")) throw insertError;
+    if (payload.has_contract === false) {
+      return NextResponse.json({ error: "The candidate contract database update is required before creating a candidate marked No. No candidate was created." }, { status: 503 });
+    }
+    const legacyKeys = keys.filter((key) => key !== "has_contract");
+    const legacyPlaceholders = legacyKeys.map((_, i) => `$${i + 1}`).join(", ");
+    const legacyValues = legacyKeys.map((key) => (payload as any)[key]);
+    data = await queryOne(
+      `INSERT INTO candidates (${legacyKeys.join(", ")}) VALUES (${legacyPlaceholders}) RETURNING *`,
+      legacyValues
+    );
+    if (data) data.has_contract = true;
+  }
   error = data ? null : { message: "Insert failed" };
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
