@@ -31,6 +31,7 @@ interface DashboardRow {
   interview_time_zone: string | null;
   interview_format: "online" | "onsite" | null;
   interview_stages: { round_number: number; scheduled_at: string | null; time_zone: string | null; interview_format: "online" | "onsite" | null; status: string; rescheduled_at: string | null }[] | null;
+  candidate_timezone: string | null;
 }
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
@@ -88,7 +89,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         iv.scheduled_at AS interview_scheduled_at,
         iv.time_zone AS interview_time_zone,
         iv.interview_format,
-        stages.interview_stages
+        stages.interview_stages,
+        (SELECT timezone FROM candidates WHERE id = $1) AS candidate_timezone
       FROM applications a
       JOIN jobs j ON a.job_id = j.id
       LEFT JOIN target_jobs tj ON tj.job_id = j.id AND tj.candidate_id = a.candidate_id

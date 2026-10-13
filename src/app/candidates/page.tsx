@@ -7,6 +7,7 @@ import { toCsv, downloadCsv } from "@/lib/csv";
 import Pagination from "@/components/Pagination";
 import { CANDIDATE_PIPELINE_STAGES } from "@/lib/candidatePipeline";
 import { formatOptCalendarDate, getOptApprovalCountdown, localCalendarDateIso } from "@/lib/candidateOptStatus";
+import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 
 interface Candidate {
   id: string;
@@ -431,6 +432,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [githubUrl, setGithubUrl] = useState("");
   const [portfolioUrl, setPortfolioUrl] = useState("");
   const [visaStatus, setVisaStatus] = useState("");
+  const [currentLocation, setCurrentLocation] = useState("");
   const [locationPreference, setLocationPreference] = useState("");
   const [workModePreference, setWorkModePreference] = useState("");
   const [availableStartDate, setAvailableStartDate] = useState("");
@@ -455,6 +457,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     setGithubUrl("");
     setPortfolioUrl("");
     setVisaStatus("");
+    setCurrentLocation("");
     setLocationPreference("");
     setWorkModePreference("");
     setAvailableStartDate("");
@@ -471,6 +474,8 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
 
   async function submit() {
     if (!name.trim()) { setError("Name is required."); return; }
+    if (!email.trim()) { setError("Email is required."); return; }
+    if (!currentLocation.trim()) { setError("Current location is required — it's used to detect the candidate's timezone."); return; }
     if (hasContract === null) { setError("Choose whether the candidate has a signed Skarion agreement."); return; }
     setSaving(true);
     setError("");
@@ -479,7 +484,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
     const payload = {
       name,
       has_contract: hasContract,
-      email: email || null,
+      email: email.trim(),
       phone: phone || null,
       target_tier: targetTier || null,
       linkedin_url: linkedinUrl || null,
@@ -487,6 +492,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
       portfolio_url: portfolioUrl || null,
       visa_status: visaStatus || null,
       target_industries: targetIndustries.split(",").map((s) => s.trim()).filter(Boolean),
+      current_location: currentLocation.trim(),
       location_preference: locationPreference || null,
       work_mode_preference: workModePreference || null,
       available_start_date: availableStartDate || null,
@@ -548,7 +554,7 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
             </div>
             <div className="field-group">
-              <label>Email</label>
+              <label>Email <span style={{ color: "var(--danger)" }}>*</span></label>
               <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email@example.com" />
             </div>
             <div className="field-group">
@@ -584,6 +590,18 @@ function AddCandidateModal({ onClose, onCreated }: { onClose: () => void; onCrea
             <div className="field-group">
               <label>Visa Status</label>
               <input value={visaStatus} onChange={(e) => setVisaStatus(e.target.value)} placeholder="e.g. H-1B, OPT, Citizen..." />
+            </div>
+            <div className="field-group">
+              <label>Current Location <span style={{ color: "var(--danger)" }}>*</span></label>
+              <input value={currentLocation} onChange={(e) => setCurrentLocation(e.target.value)} placeholder="City, State (e.g. Dallas, TX)" />
+              {currentLocation.trim() && (() => {
+                const { timezone } = deriveTimezoneFromLocation(currentLocation);
+                return (
+                  <p style={{ margin: "4px 0 0", fontSize: 12, color: timezone ? "var(--accent)" : "var(--ink-soft)" }}>
+                    {timezone ? `Detected timezone: ${timezone}` : "Timezone not detected yet — use \"City, ST\" format"}
+                  </p>
+                );
+              })()}
             </div>
             <div className="field-group">
               <label>Location Preference</label>

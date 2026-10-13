@@ -9,6 +9,7 @@ import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne } from "@/server/db/neon";
 import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
+import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 
 interface StudentAuditEnrichmentRow {
   candidate_id: string;
@@ -186,14 +187,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Select whether this candidate has a signed Skarion agreement." }, { status: 400 });
   }
 
+  if (!body.email || typeof body.email !== "string" || !body.email.trim()) {
+    return NextResponse.json({ error: "email is required" }, { status: 400 });
+  }
+
+  if (!body.current_location || typeof body.current_location !== "string" || !body.current_location.trim()) {
+    return NextResponse.json({ error: "current_location is required — it's used to detect the candidate's timezone" }, { status: 400 });
+  }
+
   if (body.pipeline_stage !== undefined && !isCandidatePipelineStage(body.pipeline_stage)) {
     return NextResponse.json({ error: "Invalid candidate pipeline stage" }, { status: 400 });
   }
 
+  // Derived server-side (not trusted from the client) so it can't drift from
+  // current_location — same mapper used by the backfill script, kept in sync by being
+  // the one shared implementation.
+  const { timezone } = deriveTimezoneFromLocation(body.current_location);
+
   try {
     const values = [
       body.name,
-      body.email ?? null,
+      body.email.trim(),
       body.phone ?? null,
       body.status ?? "active",
       body.pipeline_stage ?? "not_started",
@@ -209,10 +223,12 @@ export async function POST(req: NextRequest) {
       body.available_start_date ?? null,
       body.target_roles ?? null,
       body.has_contract,
+      body.current_location.trim(),
+      timezone,
     ];
     const sql = `
-      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles, has_contract)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles, has_contract, current_location, timezone)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *
     `;
     let hasContractColumn = true;
@@ -226,10 +242,10 @@ export async function POST(req: NextRequest) {
       }
       hasContractColumn = false;
       data = await queryOne<Record<string, any>>(
-        `INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        `INSERT INTO candidates (name, email, phone, status, pipeline_stage, target_tier, notes, linkedin_url, github_url, portfolio_url, visa_status, target_industries, location_preference, work_mode_preference, available_start_date, target_roles, current_location, timezone)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $18, $19)
          RETURNING *`,
-        values.slice(0, 16),
+        values,
       );
     }
     if (!data) throw new Error("Insert failed");

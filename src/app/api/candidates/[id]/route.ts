@@ -13,6 +13,7 @@ import { deletePrivateCandidateContract } from "@/server/storage/storageApi";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isCandidatePipelineStage } from "@/lib/candidatePipeline";
+import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 import { isMissingPostgresColumn } from "@/server/db/schemaCompatibility";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -68,7 +69,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     "notes", "resume_url", "resume_filename",
     "target_roles", "preferred_locations", "salary_expectation", "work_authorization",
     "linkedin_url", "github_url", "portfolio_url", "visa_status",
-    "target_industries", "location_preference", "work_mode_preference", "available_start_date",
+    "target_industries", "current_location", "location_preference", "work_mode_preference", "available_start_date",
     "portal_token_expires_at", "portal_token_revoked_at", "verified_skills",
     "eeo_gender", "eeo_race", "eeo_veteran", "eeo_disability",
     "home_address", "birth_date", "open_to_relocation",
@@ -78,6 +79,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
+  }
+
+  // Re-derive server-side whenever current_location changes, so timezone can never drift
+  // from it (never trusted directly from the client) — same mapper the create path and the
+  // backfill script use, kept in sync by being the one shared implementation.
+  if ("current_location" in updates) {
+    const { timezone } = deriveTimezoneFromLocation(updates.current_location as string | null);
+    updates.timezone = timezone;
   }
 
   try {

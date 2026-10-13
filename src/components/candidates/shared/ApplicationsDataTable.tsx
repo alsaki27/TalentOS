@@ -5,7 +5,7 @@ import StatusBadge from "./StatusBadge";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ScheduleInterviewModal, { InterviewDetails } from "./ScheduleInterviewModal";
 import ManageInterviewStagesModal from "./ManageInterviewStagesModal";
-import { formatZonedDateTime } from "@/lib/easternTime";
+import { formatZonedDateTime, formatAnyZonedTime } from "@/lib/easternTime";
 
 export interface InterviewStageSummary {
   round_number: number;
@@ -38,6 +38,10 @@ interface DashboardApplication {
   interview_time_zone?: string | null;
   interview_format?: "online" | "onsite" | null;
   interview_stages?: InterviewStageSummary[];
+  // The candidate's own IANA timezone (derived from their current location — see
+  // usTimezoneFromLocation.ts), independent of whichever zone the recruiter picked when
+  // scheduling the interview. Null if not yet determined for this candidate.
+  candidate_timezone?: string | null;
 }
 
 interface ApplicationsDataTableProps {
@@ -81,6 +85,16 @@ function formatDate(dateStr: string | null): string {
   var day = parseInt(m[3], 10);
   if (monthIdx < 0 || monthIdx > 11 || day < 1 || day > 31) return "—";
   return months[monthIdx] + " " + day + ", " + m[1];
+}
+
+// The scheduled display above always shows the ONE zone a recruiter picked when booking
+// (one of the 5 interview-scheduling zones). Candidates aren't all in those 5 zones, so this
+// renders a small second line with the same instant converted into the candidate's own,
+// separately-derived timezone — omitted entirely when unknown, or when it's the same zone
+// as what's already shown (no redundant second line).
+function candidateLocalTimeLabel(scheduledAtIso: string | null, scheduledTimeZone: string | null, candidateTimeZone: string | null | undefined): string | null {
+  if (!scheduledAtIso || !candidateTimeZone || candidateTimeZone === scheduledTimeZone) return null;
+  return formatAnyZonedTime(scheduledAtIso, candidateTimeZone);
 }
 
 function copyToClipboard(text: string, setFeedback: (v: string | null) => void) {
@@ -384,32 +398,48 @@ export default function ApplicationsDataTable({
                       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                         {app.interview_stages.map(function (stage) {
                           var cancelled = stage.status === "cancelled";
+                          var candidateLocal = cancelled ? null : candidateLocalTimeLabel(stage.scheduled_at, stage.time_zone, app.candidate_timezone);
                           return (
-                            <div key={stage.round_number} title={cancelled ? "Cancelled" : stage.rescheduled_at ? "Rescheduled" : undefined} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                              <span style={{
-                                fontSize: 9, fontWeight: 800, color: "var(--ink-soft)", flexShrink: 0,
-                                background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 4px", lineHeight: "13px",
-                              }}>S{stage.round_number}</span>
-                              <span style={{
-                                color: cancelled ? "var(--ink-soft)" : "var(--ink)", fontWeight: 600, fontSize: 11,
-                                textDecoration: cancelled ? "line-through" : "none",
-                              }}>
-                                {stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "TBD"}
-                              </span>
-                              {stage.interview_format && (
-                                <span style={{ fontSize: 11, flexShrink: 0 }}>{stage.interview_format === "online" ? "🎥" : "🏢"}</span>
+                            <div key={stage.round_number} title={cancelled ? "Cancelled" : stage.rescheduled_at ? "Rescheduled" : undefined} style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                <span style={{
+                                  fontSize: 9, fontWeight: 800, color: "var(--ink-soft)", flexShrink: 0,
+                                  background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 4, padding: "1px 4px", lineHeight: "13px",
+                                }}>S{stage.round_number}</span>
+                                <span style={{
+                                  color: cancelled ? "var(--ink-soft)" : "var(--ink)", fontWeight: 600, fontSize: 11,
+                                  textDecoration: cancelled ? "line-through" : "none",
+                                }}>
+                                  {stage.scheduled_at ? formatZonedDateTime(stage.scheduled_at, stage.time_zone) : "TBD"}
+                                </span>
+                                {stage.interview_format && (
+                                  <span style={{ fontSize: 11, flexShrink: 0 }}>{stage.interview_format === "online" ? "🎥" : "🏢"}</span>
+                                )}
+                                {stage.rescheduled_at && <span style={{ fontSize: 10, color: "#f59e0b", flexShrink: 0 }}>↻</span>}
+                              </div>
+                              {candidateLocal && (
+                                <span style={{ fontSize: 10, color: "var(--ink-soft)", paddingLeft: 24 }}>
+                                  {candidateLocal} candidate&rsquo;s time
+                                </span>
                               )}
-                              {stage.rescheduled_at && <span style={{ fontSize: 10, color: "#f59e0b", flexShrink: 0 }}>↻</span>}
                             </div>
                           );
                         })}
                       </div>
                     ) : app.interview_scheduled_at ? (
-                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <span style={{ color: "var(--ink)", fontWeight: 600, fontSize: 11 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
-                        {app.interview_format && (
-                          <span style={{ fontSize: 11, flexShrink: 0 }}>{app.interview_format === "online" ? "🎥" : "🏢"}</span>
-                        )}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                          <span style={{ color: "var(--ink)", fontWeight: 600, fontSize: 11 }}>{formatZonedDateTime(app.interview_scheduled_at, app.interview_time_zone)}</span>
+                          {app.interview_format && (
+                            <span style={{ fontSize: 11, flexShrink: 0 }}>{app.interview_format === "online" ? "🎥" : "🏢"}</span>
+                          )}
+                        </div>
+                        {(() => {
+                          var candidateLocal = candidateLocalTimeLabel(app.interview_scheduled_at ?? null, app.interview_time_zone ?? null, app.candidate_timezone);
+                          return candidateLocal ? (
+                            <span style={{ fontSize: 10, color: "var(--ink-soft)" }}>{candidateLocal} candidate&rsquo;s time</span>
+                          ) : null;
+                        })()}
                       </div>
                     ) : <span style={{ color: "var(--ink-soft)", opacity: 0.5 }}>—</span>}
                   </td>

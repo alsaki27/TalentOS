@@ -13,9 +13,11 @@ import { CandidateNotesPanel } from "@/components/candidates/CandidateNotesPanel
 import { AuditPanel } from "@/components/candidates/AuditPanel";
 import { TrainingAuditPanel } from "@/components/candidates/TrainingAuditPanel";
 import { CandidateOptCountdownCard } from "@/components/candidates/CandidateOptCountdownCard";
+import { CandidateTimezoneCard } from "@/components/candidates/CandidateTimezoneCard";
 import { CandidateOptStatusPanel } from "@/components/candidates/CandidateOptStatusPanel";
 import { CandidateContractsPanel } from "@/components/candidates/CandidateContractsPanel";
 import CandidateApplicationsDashboard from "@/components/candidates/CandidateApplicationsDashboard";
+import { deriveTimezoneFromLocation } from "@/lib/usTimezoneFromLocation";
 
 interface BaseResumeSummary {
   id: string;
@@ -89,6 +91,8 @@ interface CandidateDetail {
   target_industries: string[] | null;
   verified_skills: string[] | null;
   location_preference: string | null;
+  current_location: string | null;
+  timezone: string | null;
   work_mode_preference: string | null;
   available_start_date: string | null;
   eeo_gender?: string | null;
@@ -1618,6 +1622,12 @@ export default function CandidateProfilePage() {
       {activeTab === "Applications" && (
         <>
           <CandidateOptCountdownCard candidateId={candidate.id} candidateName={candidate.name} marginBottom={20} />
+          <CandidateTimezoneCard
+            candidateName={candidate.name}
+            timezone={candidate.timezone}
+            currentLocation={candidate.current_location}
+            marginBottom={20}
+          />
           <Suspense fallback={<div style={{ padding: 20, color: "var(--ink-soft)" }}>Loading dashboard...</div>}>
             <CandidateApplicationsDashboard candidateId={candidate.id} />
           </Suspense>
@@ -1916,6 +1926,7 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
   const [visaStatus, setVisaStatus] = useState(candidate.visa_status ?? "");
   const [targetIndustries, setTargetIndustries] = useState(candidate.target_industries?.join(", ") ?? "");
   const [verifiedSkills, setVerifiedSkills] = useState(candidate.verified_skills?.join(", ") ?? "");
+  const [currentLocation, setCurrentLocation] = useState(candidate.current_location ?? "");
   const [locationPreference, setLocationPreference] = useState(candidate.location_preference ?? "");
   const [workModePreference, setWorkModePreference] = useState(candidate.work_mode_preference ?? "");
   const [availableStartDate, setAvailableStartDate] = useState(candidate.available_start_date ?? "");
@@ -1947,6 +1958,7 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
       visa_status: visaStatus.trim() || null,
       target_industries: targetIndustries ? targetIndustries.split(",").map((s) => s.trim()).filter(Boolean) : null,
       verified_skills: verifiedSkills ? verifiedSkills.split(",").map((s) => s.trim()).filter(Boolean) : [],
+      current_location: currentLocation.trim() || null,
       location_preference: locationPreference.trim() || null,
       work_mode_preference: workModePreference.trim() || null,
       available_start_date: availableStartDate || null,
@@ -1999,6 +2011,18 @@ function EditProfileModal({ candidate, onClose, onSaved }: { candidate: Candidat
               <div className="field-group">
                 <label>Phone number</label>
                 <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="e.g. +1 (555) 010-2030" />
+              </div>
+              <div className="field-group">
+                <label>Current location</label>
+                <input value={currentLocation} onChange={(e) => setCurrentLocation(e.target.value)} placeholder="e.g. Dallas, TX" />
+                {currentLocation.trim() && (() => {
+                  const { timezone } = deriveTimezoneFromLocation(currentLocation);
+                  return (
+                    <p style={{ margin: "4px 0 0", fontSize: 12, color: timezone ? "var(--accent)" : "var(--ink-soft)" }}>
+                      {timezone ? `Detected timezone: ${timezone}` : "Timezone not detected yet — use \"City, ST\" format"}
+                    </p>
+                  );
+                })()}
               </div>
               <div className="field-group">
                 <label>Location preference</label>

@@ -29,6 +29,7 @@ interface DashboardRow {
   next_action: string | null;
   candidate_id: string;
   candidate_name: string;
+  candidate_timezone: string | null;
   job_id: string;
   job_title: string;
   company_name: string;
@@ -182,7 +183,7 @@ export async function GET(req: NextRequest) {
         a.priority,
         COALESCE(a.applied_at, CASE WHEN a.ae_stage = 'applied' THEN a.ae_applied_at END) AS applied_at,
         a.follow_up_at, a.next_action, a.tailored_resume_version_id,
-        a.candidate_id, c.name AS candidate_name,
+        a.candidate_id, c.name AS candidate_name, c.timezone AS candidate_timezone,
         j.id AS job_id, j.title AS job_title, j.company AS company_name,
         j.company_website,
         j.source AS job_source,
