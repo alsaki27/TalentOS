@@ -55,7 +55,18 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
     // const autoSuggestRanRef = useRef(false); // only used by the disabled general auto-suggest effect below
+    // Guards against a concurrent/duplicate in-flight fetch only - NOT a
+    // permanent "already tried" lock. Previously this was set to true right
+    // before the fetch and never reset on failure, so a single transient AI
+    // error (rate limit, route cooldown - confirmed live: the falood_ai
+    // automation skipped ~81% of its calls over a 14-day window due to route
+    // cooldowns) silently and permanently disabled this feature for the rest
+    // of the browser session, with zero indication anything had gone wrong.
+    // That's the root cause of "the skill suggestions sometimes just don't
+    // show up" - reset to false on failure so a later effect re-run (or the
+    // manual retry button below) can try again.
     const skillGapTriggeredRef = useRef(false);
+    const [skillGapStatus, setSkillGapStatus] = useState<'idle' | 'checking' | 'error'>('idle');
 
     // Initial suggestions (empty now, waiting for user input)
     // We no longer need a separate 'suggestions' state for the bottom view if we render them in chat.
@@ -406,15 +417,39 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
     // one first. (Previously queued them one-at-a-time via a
     // 'remainingSkillQueue' field revealed by a second effect as each prior
     // suggestion was resolved - removed since nothing queues anymore.)
-    useEffect(() => {
+    // `manual` distinguishes a user-clicked retry from the silent automatic
+    // check: the automatic path stays quiet when preconditions aren't met
+    // yet (e.g. JD not pasted), but a manual click always gets *some*
+    // response so the button never appears to do nothing.
+    const checkSkillGaps = useCallback((manual: boolean) => {
         if (skillGapTriggeredRef.current) return;
         if (messages.some(m => m.id === 'skill-gap-intro')) { skillGapTriggeredRef.current = true; return; }
-        if (!jobDescription || jobDescription.trim().length < 80) return;
-        const currentSkills = flattenResumeSkills(state.resumeData.skills as any);
+
+        if (!jobDescription || jobDescription.trim().length < 80) {
+            if (manual) {
+                setChatHistory([...messages, {
+                    id: `skill-gap-error-${Date.now()}`,
+                    role: 'assistant',
+                    content: 'I need a job description first - paste one above and I can check for skills worth adding.',
+                }]);
+            }
+            return;
+        }
         const skillCategories = (state.resumeData.skills as any)?.categorized ?? [];
-        if (skillCategories.length === 0) return; // nothing to add skills into yet
+        if (skillCategories.length === 0) {
+            if (manual) {
+                setChatHistory([...messages, {
+                    id: `skill-gap-error-${Date.now()}`,
+                    role: 'assistant',
+                    content: "This draft doesn't have a skills section to add into yet.",
+                }]);
+            }
+            return;
+        }
+        const currentSkills = flattenResumeSkills(state.resumeData.skills as any);
 
         skillGapTriggeredRef.current = true;
+        setSkillGapStatus('checking');
 
         fetch('/api/falood/skill-gap', {
             method: 'POST',
@@ -426,19 +461,78 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                 candidateId: candidateId || undefined,
             }),
         })
-            .then(res => res.ok ? res.json() : { gaps: [] })
+            .then(async (res) => {
+                if (!res.ok) {
+                    const body = await res.json().catch(() => ({}));
+                    throw new Error(body?.error || `Request failed (${res.status})`);
+                }
+                return res.json();
+            })
             .then(({ gaps }: { gaps: SkillGapItem[] }) => {
-                if (!Array.isArray(gaps) || gaps.length === 0) return;
+                setSkillGapStatus('idle');
+                // A clean empty result is a real, final answer ("nothing
+                // missing right now") - leave the trigger ref set to true so
+                // the automatic effect (which re-runs on every chat message,
+                // since `messages` is one of its deps) doesn't re-call the AI
+                // on every subsequent message. Only a genuine fetch failure
+                // (below) resets the ref, since that's the one case that
+                // should be retryable.
+                if (!Array.isArray(gaps) || gaps.length === 0) {
+                    if (manual) {
+                        setChatHistory([...messages, {
+                            id: `skill-gap-error-${Date.now()}`,
+                            role: 'assistant',
+                            content: "I checked - no skill gaps found against this job description right now.",
+                        }]);
+                    }
+                    return;
+                }
                 const introMsg: ChatMessage = {
                     id: 'skill-gap-intro',
                     role: 'assistant',
                     content: `I compared this draft against the job description${candidateId ? ", your base resume, and your confirmed skills" : " and your base resume"}, and found ${gaps.length} skill${gaps.length > 1 ? 's' : ''} worth considering. Each is its own card below - scroll through and accept or reject them individually, in any order.`,
                     suggestions: gaps.map(buildSkillGapSuggestion),
                 };
+                skillGapTriggeredRef.current = true; // 'skill-gap-intro' now guards future runs
                 setChatHistory([...messages, introMsg]);
             })
-            .catch(() => { /* Non-fatal: the general auto-suggest effect above still runs regardless. */ });
-    }, [jobDescription, messages, state.resumeData.skills, candidateId, setChatHistory]);
+            .catch((err) => {
+                // Reset the guard so this is retryable - automatically on the
+                // next qualifying effect re-run, or immediately via the
+                // header's retry button - instead of permanently and
+                // silently disabling the feature for the rest of the session.
+                skillGapTriggeredRef.current = false;
+                setSkillGapStatus('error');
+                const alreadyReported = messages.some(m => m.id === 'skill-gap-error');
+                if (!alreadyReported || manual) {
+                    setChatHistory([...messages, {
+                        id: alreadyReported ? `skill-gap-error-${Date.now()}` : 'skill-gap-error',
+                        role: 'assistant',
+                        content: `I couldn't check for skill suggestions (${err instanceof Error ? err.message : 'AI service temporarily unavailable'}). This is usually temporary - click the retry icon next to "AI Copilot" above to try again.`,
+                    }]);
+                }
+            });
+    }, [messages, jobDescription, state.resumeData.skills, candidateId, setChatHistory]);
+
+    // Deterministic skill-gap suggestions (see docs/FALOOD_COPILOT_SKILL_GAP_SUGGESTIONS_PLAN_2026-08-24.md).
+    // Separate from the general auto-suggest effect above on purpose: which
+    // skills are missing vs. present is exact, checkable data, not something
+    // worth leaving to AI judgment. Fires once per session (guarded by the
+    // 'skill-gap-intro' marker persisting in chatHistory, same pattern the
+    // page already uses for its 'tailor-context' seed message).
+    //
+    // Renders every missing skill as its own separate card, all at once -
+    // per explicit user request 2026-08-25 ("provide me all the skills one
+    // by one... so I can scroll down and accept or reject"). Each card is
+    // still its own independent accept/reject action (never bundled into
+    // one suggestion), just no longer gated behind resolving the previous
+    // one first. (Previously queued them one-at-a-time via a
+    // 'remainingSkillQueue' field revealed by a second effect as each prior
+    // suggestion was resolved - removed since nothing queues anymore.)
+    useEffect(() => {
+        checkSkillGaps(false);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [jobDescription, messages, state.resumeData.skills, candidateId]);
 
     return (
         <div className="flex flex-col h-full gap-2 relative">
@@ -446,6 +540,19 @@ export const AiSuggestions: React.FC<{ candidateId?: string | null }> = ({ candi
                 <div className="flex items-center gap-2">
                     <Sparkles className="h-4 w-4 text-indigo-500" />
                     <h2 className="font-semibold text-sm">AI Copilot</h2>
+                    <button
+                        type="button"
+                        title={skillGapStatus === 'error' ? 'Last skill check failed - click to retry' : 'Check for skill suggestions'}
+                        aria-label="Check for skill suggestions"
+                        onClick={() => checkSkillGaps(true)}
+                        disabled={skillGapStatus === 'checking'}
+                        className={cn(
+                            "h-5 w-5 rounded flex items-center justify-center text-muted-foreground hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-50",
+                            skillGapStatus === 'error' && "text-amber-600"
+                        )}
+                    >
+                        <RefreshCw className={cn("h-3 w-3", skillGapStatus === 'checking' && "animate-spin")} />
+                    </button>
                 </div>
                 <div className="flex items-center gap-2">
                     <Badge variant="secondary" className="text-[10px]">
