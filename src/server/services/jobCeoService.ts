@@ -52,6 +52,21 @@ const STAGE_CONCURRENCY = 6;
 const DEEP_FETCH_CONCURRENCY = 3;
 
 const MIN_DESCRIPTION_LENGTH = 100;
+// Adzuna's search API only returns an excerpt. For this source, require a
+// genuinely enriched employer-page description before QA/matching can run.
+// Other sources keep the existing 100-character floor unchanged.
+const ADZUNA_MIN_DESCRIPTION_LENGTH = 1500;
+
+function getDescriptionMinimumForStagedRow(row: { raw?: unknown }): number {
+  let raw = row.raw;
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  const source = raw && typeof raw === "object"
+    ? String((raw as Record<string, unknown>).source ?? "").toLowerCase()
+    : "";
+  return source === "adzuna" ? ADZUNA_MIN_DESCRIPTION_LENGTH : MIN_DESCRIPTION_LENGTH;
+}
 
 // Fresher-roles-only product policy: TalentOS serves entry-level/fresher candidates,
 // so a posting requiring more than this many years of experience is rejected before
@@ -228,6 +243,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
   if (batch.length === 0) return { processed: 0, researched: 0, skipped: 0 };
 
   const results = await runConcurrent(batch, DEEP_FETCH_CONCURRENCY, async (row) => {
+    const minimumDescriptionLength = getDescriptionMinimumForStagedRow(row);
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },
@@ -250,9 +266,9 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
       });
       var fetchResult = result.result as { descriptionText: string; requirements: Record<string, unknown> };
       var finalDesc = fetchResult.descriptionText || row.description_text || "";
-      if (String(finalDesc).length < MIN_DESCRIPTION_LENGTH) {
-        console.warn(`[Job CEO] Deep Fetch — description too short (${String(finalDesc).length} chars) for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — skipping`);
-        await updateStaged(row.id, { stage: "no_description", description_text: finalDesc, last_error: "Description too short (" + String(finalDesc).length + " chars)", claimed_at: null as any, claim_expires_at: null as any });
+      if (String(finalDesc).length < minimumDescriptionLength) {
+        console.warn(`[Job CEO] Deep Fetch — description too short (${String(finalDesc).length} chars; need ${minimumDescriptionLength}) for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — skipping`);
+        await updateStaged(row.id, { stage: "no_description", description_text: finalDesc, last_error: "Description too short (" + String(finalDesc).length + " chars; need " + minimumDescriptionLength + ")", claimed_at: null as any, claim_expires_at: null as any });
         if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
         return { processed: 1, researched: 0, skipped: 1 };
       }
@@ -268,7 +284,7 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
       var errMsg = (err as Error).message ?? String(err);
       console.error(`[Job CEO] Deep Fetch FAILED for "${row.title ?? "?"}" @ "${row.company ?? "?"}" (row=${row.id}): ${errMsg}`);
       console.error(`[Job CEO] Deep Fetch diagnostics — source_url=${row.source_url ?? "null"}, existing_desc_len=${String(row.description_text ?? "").length}, has_raw=${String(row.raw != null)}`);
-      if (String(row.description_text ?? "").length < MIN_DESCRIPTION_LENGTH) {
+      if (String(row.description_text ?? "").length < minimumDescriptionLength) {
         console.warn(`[Job CEO] Deep Fetch — no usable description for "${row.title ?? "?"}" @ "${row.company ?? "?"}" — marking as no_description`);
         await updateStaged(row.id, { stage: "no_description", description_text: row.description_text, last_error: errMsg, claimed_at: null as any, claim_expires_at: null as any });
         if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});

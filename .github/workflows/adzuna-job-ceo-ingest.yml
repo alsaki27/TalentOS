@@ -1,0 +1,91 @@
+name: Adzuna → Job CEO ingest
+
+# Daily Adzuna discovery using TalentOS's effective Job CEO keyword set.
+# Scheduled at 23:00 UTC (05:00 Bangladesh time). Manual runs default to dry-run;
+# this still consumes Adzuna/search API calls but does not stage jobs.
+on:
+  schedule:
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+    inputs:
+      role_group:
+        description: "TalentOS role group id, or 'all'."
+        required: false
+        default: "all"
+      days:
+        description: "Maximum posting age in days (1–31)."
+        required: false
+        default: "2"
+      runs_per_day:
+        description: "Keyword rotation cadence (1 or 2 runs/day)."
+        required: false
+        default: "1"
+      dry_run:
+        description: "Search and resolve direct links without writing to TalentOS."
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: adzuna-job-ceo-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: neon-cloudflare-migration
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Adzuna collector dependencies
+        run: pip install -r scripts/requirements-adzuna-job-ceo.txt
+
+      - name: Search Adzuna and stage matching jobs
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          INGEST_SECRET: ${{ secrets.JOB_CEO_INGEST_SECRET }}
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          ROLE_GROUP: ${{ inputs.role_group || 'all' }}
+          DAYS: ${{ inputs.days || '2' }}
+          RUNS_PER_DAY: ${{ inputs.runs_per_day || '1' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          ARGS=(--role-group "$ROLE_GROUP" --days "$DAYS" --runs-per-day "$RUNS_PER_DAY" --call-budget 35)
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python scripts/adzuna_job_ceo_ingest.py "${ARGS[@]}"
+
+      - name: Drive Job CEO pipeline to completion
+        if: ${{ success() && !inputs.dry_run }}
+        env:
+          BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 3000))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            response=$(curl -sS --fail-with-body --max-time 300 \
+              -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              -H "Content-Type: application/json" \
+              "$BASE_URL/api/job-ceo/dispatch")
+            needs_dispatch=$(printf '%s' "$response" | jq -r '.needsDispatch // true')
+            stage=$(printf '%s' "$response" | jq -r '.stage // "unknown"')
+            count=$(printf '%s' "$response" | jq -r '.count // 0')
+            echo "Job CEO dispatch: stage=$stage count=$count needsDispatch=$needs_dispatch"
+            if [ "$needs_dispatch" = "false" ]; then
+              echo "Job CEO pipeline completed."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Job CEO dispatch did not finish within 50 minutes."
+          exit 1
