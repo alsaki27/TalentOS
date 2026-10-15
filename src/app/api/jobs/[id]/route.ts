@@ -10,6 +10,7 @@ import { logActivity } from "@/lib/activity";
 import { triggerWebhooks } from "@/lib/webhookEngine";
 import { query, queryOne, execute } from "@/server/db/neon";
 import { findJobById } from "@/server/repositories/jobsRepository";
+import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -67,6 +68,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const updates: Record<string, unknown> = {};
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
+  }
+
+  // System-derived columns are never admin-editable directly (not in
+  // allowedFields above) - they're recomputed here whenever description_text
+  // is part of this edit, so a manual edit stays in sync the same way every
+  // other job-writing path does (jobsRepository.ts's createJob/createJobs/
+  // updateJob/recordEnrichmentAttempt). Zero AI cost, pure regex.
+  if ("description_text" in updates) {
+    const detection = detectJobEligibilityRestrictions(updates.description_text as string | null | undefined);
+    updates.eligibility_restricted = detection.eligibilityRestricted;
+    updates.requires_citizenship = detection.requiresCitizenship;
+    updates.citizenship_countries = detection.citizenshipCountries;
+    updates.export_control_restricted = detection.exportControlRestricted;
+    updates.eligibility_restriction_evidence = detection.evidence;
+    updates.eligibility_detected_at = new Date().toISOString();
   }
 
   if ("job_category" in body) {

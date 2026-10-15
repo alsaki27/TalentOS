@@ -588,7 +588,7 @@ export async function listApplicationQueue(
       a.ae_reviewed_by_user_id, a.ae_reviewed_by_name, a.ae_reviewed_at,
       a.ae_applied_by_user_id, a.ae_applied_by_name, a.ae_applied_at,
       jsonb_build_object('id', c.id, 'name', c.name, 'email', c.email, 'phone', c.phone, 'resume_url', c.resume_url, 'resume_filename', c.resume_filename, 'candidate_number', c.candidate_number, 'avatar_url', c.avatar_url) as candidates,
-      jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score, 'job_number', j.job_number) as jobs,
+      jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'source_url', j.source_url, 'job_category', j.job_category, 'category_relevance_score', j.category_relevance_score, 'job_number', j.job_number, 'eligibility_restricted', j.eligibility_restricted, 'requires_citizenship', j.requires_citizenship, 'citizenship_countries', j.citizenship_countries, 'export_control_restricted', j.export_control_restricted, 'eligibility_restriction_evidence', j.eligibility_restriction_evidence) as jobs,
       w.status as workflow_status,
       w.id as workflow_id,
       w.current_stage as workflow_stage,

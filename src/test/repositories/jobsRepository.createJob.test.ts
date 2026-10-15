@@ -14,7 +14,7 @@ vi.mock("@/server/services/jobDuplicateGuard", () => ({
 
 import { query, queryOne } from "@/server/db/neon";
 import { checkJobDuplicate, checkJobDuplicatesBatch } from "@/server/services/jobDuplicateGuard";
-import { createJob, createJobs } from "@/server/repositories/jobsRepository";
+import { createJob, createJobs, updateJob } from "@/server/repositories/jobsRepository";
 
 const EXISTING = {
   id: "job-1",
@@ -120,5 +120,78 @@ describe("createJobs", () => {
 
     expect(result.inserted).toEqual([]);
     expect(result.duplicates).toHaveLength(1);
+  });
+});
+
+describe("eligibility-restriction detection (zero AI cost, wired at write time)", () => {
+  it("createJob tags a job whose description_text contains a citizenship/clearance requirement", async () => {
+    (checkJobDuplicate as any).mockResolvedValue({ isDuplicate: false, fingerprint: null });
+    (queryOne as any).mockResolvedValue({ id: "job-4", title: "Cleared Role" });
+
+    await createJob({
+      title: "Cleared Role",
+      description_text: "Must be a U.S. citizen with an active Secret clearance to be considered.",
+    });
+
+    const [sql, values] = (queryOne as any).mock.calls[0];
+    const cols = (sql as string).match(/INSERT INTO jobs \(([^)]+)\)/)![1].split(", ");
+    const get = (col: string) => values[cols.indexOf(col)];
+
+    expect(get("eligibility_restricted")).toBe(true);
+    expect(get("requires_citizenship")).toBe(true);
+    expect(get("citizenship_countries")).toEqual(["United States"]);
+    expect(get("export_control_restricted")).toBe(true);
+    expect(get("eligibility_restriction_evidence")).toBeTruthy();
+  });
+
+  it("createJob leaves the eligibility columns at their safe defaults for an ordinary posting", async () => {
+    (checkJobDuplicate as any).mockResolvedValue({ isDuplicate: false, fingerprint: null });
+    (queryOne as any).mockResolvedValue({ id: "job-5", title: "GIS Technician" });
+
+    await createJob({
+      title: "GIS Technician",
+      description_text: "Looking for a GIS Technician with ArcGIS experience. Full benefits.",
+    });
+
+    const [sql, values] = (queryOne as any).mock.calls[0];
+    const cols = (sql as string).match(/INSERT INTO jobs \(([^)]+)\)/)![1].split(", ");
+    const get = (col: string) => values[cols.indexOf(col)];
+
+    expect(get("eligibility_restricted")).toBe(false);
+    expect(get("requires_citizenship")).toBe(false);
+    expect(get("citizenship_countries")).toBeNull();
+    expect(get("export_control_restricted")).toBe(false);
+  });
+
+  it("createJob does not add eligibility columns at all when no description_text is provided", async () => {
+    (checkJobDuplicate as any).mockResolvedValue({ isDuplicate: false, fingerprint: null });
+    (queryOne as any).mockResolvedValue({ id: "job-6", title: "No Description" });
+
+    await createJob({ title: "No Description" });
+
+    const [sql] = (queryOne as any).mock.calls[0];
+    expect(sql).not.toContain("eligibility_restricted");
+  });
+
+  it("updateJob recomputes eligibility columns when description_text is part of the update", async () => {
+    (queryOne as any).mockResolvedValue({ id: "job-1" });
+
+    await updateJob("job-1", { description_text: "This role requires ITAR compliance and a Top Secret clearance." });
+
+    const [sql, values] = (queryOne as any).mock.calls[0];
+    expect(sql).toContain("eligibility_restricted = $");
+    expect(sql).toContain("export_control_restricted = $");
+    const setClauseKeys = (sql as string).match(/SET (.+) WHERE/)![1].split(", ").map((kv) => kv.split(" = ")[0]);
+    const get = (col: string) => values[setClauseKeys.indexOf(col)];
+    expect(get("export_control_restricted")).toBe(true);
+  });
+
+  it("updateJob does not touch eligibility columns when the update has nothing to do with description_text", async () => {
+    (queryOne as any).mockResolvedValue({ id: "job-1" });
+
+    await updateJob("job-1", { job_category: "OSP", category_tags: ["OSP", "Fiber"] });
+
+    const [sql] = (queryOne as any).mock.calls[0];
+    expect(sql).not.toContain("eligibility_restricted");
   });
 });

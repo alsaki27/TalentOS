@@ -38,7 +38,9 @@ const JOB_COLUMNS = `
   job_poster_profile_url, job_poster_photo_url, job_category, category_tags,
   category_relevance_score, category_status, ai_suggested_category,
   salary_min, salary_max, salary_currency, salary_period,
-  work_authorization, work_authorization_evidence, last_seen_at, created_at
+  work_authorization, work_authorization_evidence, last_seen_at, created_at,
+  eligibility_restricted, requires_citizenship, citizenship_countries,
+  export_control_restricted, eligibility_restriction_evidence
 `;
 
 export async function GET(req: NextRequest) {

@@ -4,6 +4,7 @@
 import { query, queryOne, execute } from "@/server/db/neon";
 import { computeApplyLinkFingerprint } from "@/lib/jobUrlFingerprint";
 import { computeContentIdentityKey, computeTitleLocationKey } from "@/lib/jobContentIdentity";
+import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
 import {
   checkJobDuplicate,
   checkJobDuplicatesBatch,
@@ -55,6 +56,29 @@ export interface JobCaptureMeta {
  * silently blinds the whole content guard, so identity is derived only from
  * stable, caller-supplied values.
  */
+/**
+ * Recomputes the citizenship/export-control eligibility columns from
+ * `description_text` and merges them into `row`, but only when
+ * `description_text` is actually one of the fields being written - a caller
+ * updating unrelated fields (e.g. jobCategorization.ts's own updateJob()
+ * calls, which never touch description_text) must never have these columns
+ * silently reset. Zero AI cost, pure regex (see jobEligibilityRestrictions.ts) -
+ * safe to call synchronously on every job-writing path.
+ */
+function withEligibilityDetection<T extends Record<string, unknown>>(row: T): T {
+  if (!("description_text" in row)) return row;
+  const detection = detectJobEligibilityRestrictions(row.description_text as string | null | undefined);
+  return {
+    ...row,
+    eligibility_restricted: detection.eligibilityRestricted,
+    requires_citizenship: detection.requiresCitizenship,
+    citizenship_countries: detection.citizenshipCountries,
+    export_control_restricted: detection.exportControlRestricted,
+    eligibility_restriction_evidence: detection.evidence,
+    eligibility_detected_at: new Date().toISOString(),
+  };
+}
+
 function identityInputs(row: Record<string, unknown>, meta?: JobCaptureMeta) {
   const str = (v: unknown) => (v as string | null | undefined) ?? null;
   const url = str(row.apply_url) ?? str(row.source_url);
@@ -448,6 +472,7 @@ export async function updateJob(
   id: string,
   updates: Record<string, unknown>
 ): Promise<JobRow> {
+  updates = withEligibilityDetection(updates);
   const keys = Object.keys(updates).filter((k) => updates[k] !== undefined);
   if (keys.length === 0) throw new Error("No fields to update");
   const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -563,7 +588,7 @@ export async function createJob(
     if (contentCheck.isContentDuplicate) score = contentCheck.score;
   }
 
-  const fullRow = await toSqlRow({ ...enrichedRow, apply_link_fingerprint: fingerprint });
+  const fullRow = await toSqlRow(withEligibilityDetection({ ...enrichedRow, apply_link_fingerprint: fingerprint }));
   const cols = Object.keys(fullRow);
   const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
   const values = cols.map((c) => fullRow[c]);
@@ -642,7 +667,10 @@ export async function createJobs(rows: Record<string, any>[]): Promise<{
   // hypothetical batch mixing multiple platforms in one call would miss an
   // in-batch pair, mirroring the same accepted non-goal already documented
   // above for same-batch fingerprint collisions.
-  toInsert.forEach((row) => stampIdentityKeys(row));
+  toInsert.forEach((row, i) => {
+    stampIdentityKeys(row);
+    toInsert[i] = withEligibilityDetection(row);
+  });
   const contentChecks = await checkContentDuplicatesBatch(
     toInsert.map((r) => contentCandidate(r, (r.apply_link_fingerprint as string | null) ?? null))
   );
@@ -830,6 +858,18 @@ export async function recordEnrichmentAttempt(
   if (patch.description_text !== undefined) {
     fields.push(`description_text = $${idx++}`);
     values.push(patch.description_text);
+    const detection = detectJobEligibilityRestrictions(patch.description_text);
+    fields.push(`eligibility_restricted = $${idx++}`);
+    values.push(detection.eligibilityRestricted);
+    fields.push(`requires_citizenship = $${idx++}`);
+    values.push(detection.requiresCitizenship);
+    fields.push(`citizenship_countries = $${idx++}`);
+    values.push(detection.citizenshipCountries);
+    fields.push(`export_control_restricted = $${idx++}`);
+    values.push(detection.exportControlRestricted);
+    fields.push(`eligibility_restriction_evidence = $${idx++}`);
+    values.push(detection.evidence);
+    fields.push(`eligibility_detected_at = NOW()`);
   }
   values.push(id);
   await execute(

@@ -6,6 +6,8 @@ import { openFaloodStudio } from "@/lib/falood/openStudio";
 import ScheduleInterviewModal, { InterviewDetails } from "./ScheduleInterviewModal";
 import ManageInterviewStagesModal from "./ManageInterviewStagesModal";
 import { formatZonedDateTime, formatAnyZonedTime } from "@/lib/easternTime";
+import { ShieldAlert } from "lucide-react";
+import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 
 export interface InterviewStageSummary {
   round_number: number;
@@ -30,6 +32,11 @@ interface DashboardApplication {
   job_source: string;
   source_url: string | null;
   location: string | null;
+  eligibility_restricted?: boolean | null;
+  requires_citizenship?: boolean | null;
+  citizenship_countries?: string[] | null;
+  export_control_restricted?: boolean | null;
+  eligibility_restriction_evidence?: string | null;
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
@@ -212,7 +219,12 @@ export default function ApplicationsDataTable({
               var isLoading = localStatusLoading[app.application_id];
 
               return (
-                <tr key={app.application_id} style={{ borderBottom: "1px solid var(--border)", transition: "background 0.15s" }}>
+                <tr key={app.application_id} style={{
+                  borderBottom: "1px solid var(--border)", transition: "background 0.15s",
+                  ...(app.eligibility_restricted
+                    ? { borderLeft: "4px solid var(--restricted)", background: "rgba(var(--restricted-rgb), 0.10)" }
+                    : {}),
+                }}>
                   {showCandidateColumn && (
                     <td style={{ padding: "10px 12px", fontWeight: 600 }}>
                       {app.candidate_id ? (
@@ -235,9 +247,31 @@ export default function ApplicationsDataTable({
                     )}
                   </td>
                   <td style={{ padding: "10px 12px" }}>
-                    {app.source_url ? (
-                      <a href={app.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--ink)", textDecoration: "none" }}>{app.job_title}</a>
-                    ) : <span style={{ color: "var(--ink)" }}>{app.job_title}</span>}
+                    {/* Restricted tag sits on its own line below the title instead of
+                        inline after it - the full label text (e.g. "Citizenship: United
+                        States") appended directly after a long job title in this narrow,
+                        fixed-width column was forcing multi-line wraps that bloated the
+                        row height. Full reasoning now lives only in the tooltip; the
+                        visible tag stays one short word so it never wraps on its own. */}
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+                      {app.source_url ? (
+                        <a href={app.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--ink)", textDecoration: "none" }}>{app.job_title}</a>
+                      ) : <span style={{ color: "var(--ink)" }}>{app.job_title}</span>}
+                      {app.eligibility_restricted && (
+                        <span
+                          title={formatEligibilityRestrictionLabel(app) + (app.eligibility_restriction_evidence ? " — " + app.eligibility_restriction_evidence : "")}
+                          style={{
+                            display: "inline-flex", alignItems: "center", gap: 3,
+                            fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 999,
+                            background: "rgba(var(--restricted-rgb), 0.18)", color: "var(--restricted)",
+                            border: "1px solid rgba(var(--restricted-rgb), 0.45)", whiteSpace: "nowrap",
+                          }}
+                        >
+                          <ShieldAlert size={10} />
+                          Restricted
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td style={{ padding: "10px 12px" }}>
                     <span style={{

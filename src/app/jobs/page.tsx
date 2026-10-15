@@ -7,6 +7,8 @@ import Papa from "papaparse";
 import { toCsv, downloadCsv } from "@/lib/csv";
 import { TableSkeleton } from "../Skeleton";
 import { DateRangePicker } from "@/components/DateRangePicker";
+import { ShieldAlert } from "lucide-react";
+import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 
 interface MatchScore {
   job_id: string;
@@ -46,6 +48,11 @@ interface Job {
   salary_currency: string | null;
   salary_period: string | null;
   work_authorization: string | null;
+  eligibility_restricted?: boolean | null;
+  requires_citizenship?: boolean | null;
+  citizenship_countries?: string[] | null;
+  export_control_restricted?: boolean | null;
+  eligibility_restriction_evidence?: string | null;
   applicant_count: number;
   applicants: Applicant[];
   content_duplicate_of: string | null;
@@ -1044,6 +1051,16 @@ export default function JobsPage() {
                     ) : null}
                     {job.work_authorization && job.work_authorization !== "unspecified" && (
                       <span className="badge" style={{ fontSize: 11 }}>{WORK_AUTH_LABELS[job.work_authorization] ?? job.work_authorization}</span>
+                    )}
+                    {job.eligibility_restricted && (
+                      <span
+                        className="badge badge-restricted"
+                        style={{ fontSize: 11, marginLeft: 6 }}
+                        title={job.eligibility_restriction_evidence ?? "This posting has an eligibility restriction."}
+                      >
+                        <ShieldAlert size={11} style={{ marginRight: 3, verticalAlign: "text-bottom" }} />
+                        {formatEligibilityRestrictionLabel(job)}
+                      </span>
                     )}
                   </td>
                   <td className="muted">

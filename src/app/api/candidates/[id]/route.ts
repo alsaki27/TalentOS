@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
     const rawApplications = await query<Record<string, any>>(`
       SELECT a.*,
-        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'role_tier', j.role_tier) as jobs
+        jsonb_build_object('id', j.id, 'title', j.title, 'company', j.company, 'location', j.location, 'role_tier', j.role_tier, 'eligibility_restricted', j.eligibility_restricted, 'requires_citizenship', j.requires_citizenship, 'citizenship_countries', j.citizenship_countries, 'export_control_restricted', j.export_control_restricted, 'eligibility_restriction_evidence', j.eligibility_restriction_evidence) as jobs
       FROM applications a
       LEFT JOIN jobs j ON a.job_id = j.id
       WHERE a.candidate_id = $1

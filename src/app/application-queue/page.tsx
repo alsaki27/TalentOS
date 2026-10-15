@@ -5,6 +5,8 @@ import Link from "next/link";
 import { openFaloodStudio } from "@/lib/falood/openStudio";
 import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
+import { ShieldAlert } from "lucide-react";
+import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -44,7 +46,7 @@ interface QueueItem {
   ae_applied_by_name: string | null;
   ae_applied_at: string | null;
   candidates: { id: string; name: string; email: string | null; phone: string | null; resume_url: string | null; resume_filename: string | null; candidate_number: number | null; avatar_url: string | null } | null;
-  jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null } | null;
+  jobs: { id: string; title: string; company: string | null; location: string | null; source_url: string | null; job_category: string | null; category_relevance_score: number | null; job_number: number | null; eligibility_restricted?: boolean | null; requires_citizenship?: boolean | null; citizenship_countries?: string[] | null; export_control_restricted?: boolean | null; eligibility_restriction_evidence?: string | null } | null;
   workflow_status?: string | null;
   workflow_id?: string | null;
   workflow_stage?: number | null;
@@ -1273,7 +1275,7 @@ export default function ApplicationQueuePage() {
             </thead>
             <tbody>
               {items.map(item => (
-                <tr key={item.id} className={expandedWorkflow === item.id ? "row-expanded" : ""}>
+                <tr key={item.id} className={[expandedWorkflow === item.id ? "row-expanded" : "", item.jobs?.eligibility_restricted ? "row-restricted" : ""].filter(Boolean).join(" ")}>
                   <td><input type="checkbox" style={{ width: "auto" }} checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} /></td>
                   
                   <td className="cell-main">
@@ -1319,6 +1321,16 @@ export default function ApplicationQueuePage() {
                         </div>
                         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
                           {item.jobs.job_category && <span className="badge badge-info cell-category-badge">{item.jobs.job_category}</span>}
+                          {item.jobs.eligibility_restricted && (
+                            <span
+                              className="badge badge-restricted"
+                              style={{ fontSize: 11 }}
+                              title={formatEligibilityRestrictionLabel(item.jobs) + (item.jobs.eligibility_restriction_evidence ? " — " + item.jobs.eligibility_restriction_evidence : "")}
+                            >
+                              <ShieldAlert size={11} style={{ marginRight: 3, verticalAlign: "text-bottom" }} />
+                              Restricted
+                            </span>
+                          )}
                           {item.jobs.source_url && !item.jobs.source_url.includes("example.com") && <a href={item.jobs.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 12 }}>Posting</a>}
                         </div>
                       </>

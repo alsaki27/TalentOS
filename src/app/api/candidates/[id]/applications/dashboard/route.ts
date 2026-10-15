@@ -23,6 +23,11 @@ interface DashboardRow {
   salary_min: number | null;
   salary_max: number | null;
   salary_currency: string | null;
+  eligibility_restricted: boolean | null;
+  requires_citizenship: boolean | null;
+  citizenship_countries: string[] | null;
+  export_control_restricted: boolean | null;
+  eligibility_restriction_evidence: string | null;
   fit_score: number | null;
   recommendation: string | null;
   tailored_resume_version_id: string | null;
@@ -83,6 +88,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         j.salary_min,
         j.salary_max,
         j.salary_currency,
+        j.eligibility_restricted,
+        j.requires_citizenship,
+        j.citizenship_countries,
+        j.export_control_restricted,
+        j.eligibility_restriction_evidence,
         tj.fit_score,
         tj.recommendation,
         sp.storage_url AS sharepoint_resume_url,

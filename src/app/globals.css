@@ -20,6 +20,7 @@
   --accent-hover: #a78bfa; /* violet-400 */
   --warn: #fb923c; /* orange-400 */
   --danger: #f43f5e; /* rose-500 */
+  --restricted: #14b8a6; /* teal-500 - eligibility-restriction badge (citizenship/export-control); deliberately distinct from danger/warn/info/accent since it's informational, not a severity status */
   --radius: 12px;
   --radius-lg: 16px;
   --radius-sm: 8px;
@@ -30,6 +31,7 @@
      instead of hardcoded hex pastels that only look right on white. */
   --accent-rgb: 139, 92, 246; /* violet-500 */
   --danger-rgb: 244, 63, 94; /* rose-500 */
+  --restricted-rgb: 20, 184, 166; /* teal-500 */
   --warn-rgb: 251, 146, 60;
   --neutral-rgb: 148, 163, 184; /* slate-400 */
   --shadow-color: 0, 0, 0;
@@ -1714,6 +1716,33 @@ label {
   color: var(--warn);
 }
 
+/* Eligibility restriction (citizenship / export-control / security
+   clearance) badge - deliberately a new color (teal), not danger/warning,
+   since this is an informational flag to check, not a severity status. */
+.badge-restricted {
+  background: rgba(var(--restricted-rgb), 0.18);
+  color: var(--restricted);
+  border: 1px solid rgba(var(--restricted-rgb), 0.45);
+}
+
+/* Application Queue row highlight for the same flag - a left border plus a
+   background tint, intentionally new since this page has no existing
+   row-level background precedent (only .overdue's text-color-only style).
+   Bumped from an earlier, barely-visible 3px/0.06 pass after user feedback
+   that the tag needed to read as clearly "colorful" at a glance, not just
+   technically present. */
+.row-restricted {
+  border-left: 4px solid var(--restricted);
+  background: rgba(var(--restricted-rgb), 0.10);
+}
+/* `.table tr:hover td` (above) sets an opaque per-cell hover background that
+   would otherwise paint over and hide this row's own tint while the pointer
+   is over it. Same selector specificity, declared later, so it wins the
+   cascade and keeps (and slightly strengthens) the teal tint on hover too. */
+.row-restricted:hover td {
+  background: rgba(var(--restricted-rgb), 0.15);
+}
+
 .muted {
   color: var(--ink-soft);
 }
@@ -2577,9 +2606,11 @@ label {
   --accent-hover: #45a075;
   --warn: #d4723a;
   --danger: #e2584a;
+  --restricted: #2a9d8f;
 
   --accent-rgb: 79, 174, 130;
   --danger-rgb: 226, 88, 74;
+  --restricted-rgb: 42, 157, 143;
   --warn-rgb: 212, 114, 58;
   --neutral-rgb: 154, 159, 168;
   --shadow-color: 0, 0, 0;
