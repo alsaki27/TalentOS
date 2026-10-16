@@ -23,6 +23,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import urlparse
@@ -485,12 +486,31 @@ def run(args: argparse.Namespace) -> int:
     )
     if result.get("dry_run"):
         return 0
+    run_id = str(result.get("run_id") or "").strip()
+    if not run_id:
+        print("ERROR: TalentOS did not return the Job CEO run id.")
+        return 1
+    try:
+        run_id = str(uuid.UUID(run_id))
+    except ValueError:
+        print("ERROR: TalentOS returned an invalid Job CEO run id.")
+        return 1
+
+    # The GitHub Action must poll the exact run created by this ingest. Local
+    # invocations have no GITHUB_OUTPUT and continue to behave like a CLI.
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output:
+        with open(github_output, "a", encoding="utf-8") as output_file:
+            output_file.write(f"run_id={run_id}\n")
+            output_file.write(f"staged={int(result.get('staged', 0))}\n")
+
     if result.get("failed_batches"):
         print(f"ERROR: Job CEO ingest failed for batch(es): {result['failed_batches']}")
         return 1
     print(
         f"Done: source=adzuna staged={result.get('staged', 0)} "
-        f"duplicates_skipped={result.get('skipped', 0)} api_calls={client.calls_used}"
+        f"duplicates_skipped={result.get('skipped', 0)} api_calls={client.calls_used} "
+        f"run_id={run_id}"
     )
     return 0
 

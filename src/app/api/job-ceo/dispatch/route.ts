@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await dispatchAndChain();
+    const result = await dispatchAndChain(req.nextUrl.searchParams.get("runId") || undefined);
     // Expose needsDispatch so external pollers (GitHub Actions curl loop)
     // can detect when the run is fully complete and stop looping.
     return NextResponse.json({
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const result = await dispatchAndChain();
+    const result = await dispatchAndChain(req.nextUrl.searchParams.get("runId") || undefined);
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message ?? String(err) }, { status: 500 });

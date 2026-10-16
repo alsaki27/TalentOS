@@ -487,10 +487,16 @@ export interface DispatchResult {
   message?: string;
 }
 
-export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
-  const run = await findEarliestActiveRun();
+export async function dispatchNextJobCeoWork(runId?: string): Promise<DispatchResult> {
+  const run = runId ? await findRunById(runId) : await findEarliestActiveRun();
   if (!run) {
-    return { dispatched: false, runId: null, stage: null, count: 0, needsDispatch: false };
+    return { dispatched: false, runId: runId ?? null, stage: null, count: 0, needsDispatch: false };
+  }
+
+  // A scoped dispatcher must never fall through to another run when its target
+  // is already terminal. The unscoped dispatcher keeps its historical behavior.
+  if (!["ingesting", "qa", "deep_fetch", "matchmaking"].includes(run.status)) {
+    return { dispatched: false, runId: run.id, stage: run.status, count: 0, needsDispatch: false };
   }
 
   const currentStatus = run.status;
@@ -649,8 +655,8 @@ export async function dispatchNextJobCeoWork(): Promise<DispatchResult> {
   return { dispatched: false, runId: null, stage: null, count: 0, needsDispatch: false };
 }
 
-export async function dispatchAndChain(): Promise<DispatchResult> {
-  const result = await dispatchNextJobCeoWork();
+export async function dispatchAndChain(runId?: string): Promise<DispatchResult> {
+  const result = await dispatchNextJobCeoWork(runId);
   var totalProcessed = result.count;
 
   if (result.needsDispatch) {
@@ -666,7 +672,7 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
       while (r.needsDispatch && iteration < MAX_ITERATIONS) {
         iteration++;
         var stageStart = Date.now();
-        r = await dispatchNextJobCeoWork();
+        r = await dispatchNextJobCeoWork(runId);
         totalProcessed += r.count;
         var stageMs = Date.now() - stageStart;
 
@@ -688,8 +694,10 @@ export async function dispatchAndChain(): Promise<DispatchResult> {
     } else {
       const baseUrl = process.env.TALENTOS_BASE_URL || "https://talent.skarion.com";
       const cronSecret = process.env.CRON_SECRET;
+      const dispatchUrl = new URL(`${baseUrl}/api/job-ceo/dispatch`);
+      if (runId) dispatchUrl.searchParams.set("runId", runId);
       await backgroundDispatch(
-        fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+        fetch(dispatchUrl.toString(), {
           method: "POST",
           headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined
         }).catch((err) =>

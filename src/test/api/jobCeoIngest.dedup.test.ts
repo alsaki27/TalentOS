@@ -5,7 +5,7 @@
 // a bare title|company signature. See computeJobDedupSignature's docstring
 // and jobCeoDedupSignature.test.ts for the underlying unit coverage.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createRun: vi.fn(),
@@ -64,9 +64,14 @@ const ACTALENT_GIS_2 = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200 })));
   process.env.JOB_CEO_INGEST_SECRET = "test-secret";
   mocks.createRun.mockResolvedValue({ id: "run-1" });
   mocks.insertStaged.mockImplementation(async (_runId: string, rows: unknown[]) => rows.length);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("POST /api/job-ceo/ingest — dedup by external_job_id", () => {
@@ -168,5 +173,20 @@ describe("POST /api/job-ceo/ingest — derives the new run's source from the job
   it("ignores a non-string or blank raw.source rather than passing it through", async () => {
     await POST(req({ jobs: [{ title: "X", company: "Y", raw: { source: "   " } }] }));
     expect(mocks.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: "openjobdata" }));
+  });
+
+  it("scopes Adzuna's initial dispatch kick to the run created for that ingest", async () => {
+    const previousBaseUrl = process.env.TALENTOS_BASE_URL;
+    process.env.TALENTOS_BASE_URL = "https://talentos.test";
+    try {
+      await POST(req({ jobs: [{ ...ACTALENT_GIS_1, raw: { source: "adzuna" } }] }));
+      expect(fetch).toHaveBeenCalledWith(
+        "https://talentos.test/api/job-ceo/dispatch?runId=run-1",
+        expect.objectContaining({ method: "POST" })
+      );
+    } finally {
+      if (previousBaseUrl === undefined) delete process.env.TALENTOS_BASE_URL;
+      else process.env.TALENTOS_BASE_URL = previousBaseUrl;
+    }
   });
 });

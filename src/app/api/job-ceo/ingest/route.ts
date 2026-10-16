@@ -39,11 +39,12 @@ export async function POST(req: NextRequest) {
     // carries the same source, and reading it off the first job is exact,
     // not a guess. "openjobdata" remains the fallback only for a caller that
     // sets no raw.source at all, preserving today's behavior for that case.
+    const runSource = jobs
+      .map((j) => (j.raw && typeof j.raw === "object" ? (j.raw as Record<string, unknown>).source : undefined))
+      .find((s): s is string => typeof s === "string" && s.trim().length > 0);
+
     let runId = body.runId;
     if (!runId) {
-      const runSource = jobs
-        .map((j) => (j.raw && typeof j.raw === "object" ? (j.raw as Record<string, unknown>).source : undefined))
-        .find((s): s is string => typeof s === "string" && s.trim().length > 0);
       const run = await createRun({ triggerType: "cron", source: runSource ?? "openjobdata" });
       runId = run.id;
     }
@@ -92,9 +93,16 @@ export async function POST(req: NextRequest) {
         (process.env.NODE_ENV === "development"
           ? "http://localhost:3000"
           : "https://talent.skarion.com");
+      const dispatchUrl = new URL(`${baseUrl}/api/job-ceo/dispatch`);
+      // Adzuna's GitHub Action owns completion polling for its specific run.
+      // Its initial kick must carry the same scope so it cannot consume an
+      // unrelated source's older active run.
+      if (runSource?.toLowerCase() === "adzuna") {
+        dispatchUrl.searchParams.set("runId", runId);
+      }
       const cronSecret = process.env.CRON_SECRET;
       await backgroundDispatch(
-        fetch(`${baseUrl}/api/job-ceo/dispatch`, {
+        fetch(dispatchUrl.toString(), {
           method: "POST",
           // Bug 2 fix: include auth header so dispatch route does not reject with 401.
           headers: cronSecret ? { Authorization: `Bearer ${cronSecret}` } : undefined,

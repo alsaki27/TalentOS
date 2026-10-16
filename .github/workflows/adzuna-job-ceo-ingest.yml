@@ -33,7 +33,7 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +47,7 @@ jobs:
         run: pip install -r scripts/requirements-adzuna-job-ceo.txt
 
       - name: Search Adzuna and stage matching jobs
+        id: ingest
         env:
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
@@ -64,28 +65,103 @@ jobs:
           python scripts/adzuna_job_ceo_ingest.py "${ARGS[@]}"
 
       - name: Drive Job CEO pipeline to completion
-        if: ${{ success() && !inputs.dry_run }}
+        if: ${{ success() && !inputs.dry_run && steps.ingest.outputs.run_id != '' }}
         env:
           BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 3000))
+          BASE_URL="${BASE_URL%/}"
+          RUN_ID="${{ steps.ingest.outputs.run_id }}"
+          if [[ ! "$RUN_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+            echo "::error::The Adzuna ingest step did not provide a valid Job CEO run id."
+            exit 1
+          fi
+          if [[ -z "$CRON_SECRET" ]]; then
+            echo "::error::CRON_SECRET is required to drive the Job CEO pipeline."
+            exit 1
+          fi
+
+          # A 40-job Adzuna run can legitimately spend close to an hour in
+          # Deep Fetch. Allow 75 minutes for that run, with collector time and
+          # a safety margin before the 90-minute GitHub job timeout.
+          deadline=$((SECONDS + 4500))
+          consecutive_failures=0
+          dispatch_response=$(mktemp)
+          status_response=$(mktemp)
+          trap 'rm -f "$dispatch_response" "$status_response"' EXIT
+
           while [ "$SECONDS" -lt "$deadline" ]; do
-            response=$(curl -sS --fail-with-body --max-time 300 \
+            dispatch_http=$(curl -sS -o "$dispatch_response" -w '%{http_code}' \
+              --max-time 300 --connect-timeout 15 \
               -X POST \
               -H "Authorization: Bearer $CRON_SECRET" \
               -H "Content-Type: application/json" \
-              "$BASE_URL/api/job-ceo/dispatch")
-            needs_dispatch=$(printf '%s' "$response" | jq -r '.needsDispatch // true')
-            stage=$(printf '%s' "$response" | jq -r '.stage // "unknown"')
-            count=$(printf '%s' "$response" | jq -r '.count // 0')
-            echo "Job CEO dispatch: stage=$stage count=$count needsDispatch=$needs_dispatch"
-            if [ "$needs_dispatch" = "false" ]; then
-              echo "Job CEO pipeline completed."
-              exit 0
+              "$BASE_URL/api/job-ceo/dispatch?runId=$RUN_ID" || true)
+
+            if [[ ! "$dispatch_http" =~ ^2[0-9][0-9]$ ]] || \
+              ! jq -e --arg run_id "$RUN_ID" '.runId == $run_id and (.needsDispatch | type == "boolean")' "$dispatch_response" >/dev/null; then
+              consecutive_failures=$((consecutive_failures + 1))
+              echo "::warning::Scoped Job CEO dispatch failed (HTTP ${dispatch_http:-unknown}); failure $consecutive_failures/5."
+              if [ "$consecutive_failures" -ge 5 ]; then
+                echo "::error::Five consecutive scoped Job CEO dispatch calls failed."
+                cat "$dispatch_response"
+                exit 1
+              fi
+              sleep 10
+              continue
             fi
-            sleep 5
+
+            stage=$(jq -r '.stage // "unknown"' "$dispatch_response")
+            count=$(jq -r '.count // 0' "$dispatch_response")
+            needs_dispatch=$(jq -r '.needsDispatch' "$dispatch_response")
+
+            status_http=$(curl -sS -o "$status_response" -w '%{http_code}' \
+              --max-time 30 --connect-timeout 15 \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$BASE_URL/api/job-ceo/runs/$RUN_ID" || true)
+            if [[ "$status_http" != "200" ]] || ! jq -e '.run.status' "$status_response" >/dev/null; then
+              consecutive_failures=$((consecutive_failures + 1))
+              echo "::warning::Could not read Adzuna run status (HTTP ${status_http:-unknown}); failure $consecutive_failures/5."
+              if [ "$consecutive_failures" -ge 5 ]; then
+                echo "::error::Five consecutive Adzuna run-status checks failed."
+                cat "$status_response"
+                exit 1
+              fi
+              sleep 10
+              continue
+            fi
+
+            consecutive_failures=0
+            run_status=$(jq -r '.run.status' "$status_response")
+            echo "Adzuna Job CEO run=$RUN_ID status=$run_status stage=$stage count=$count needsDispatch=$needs_dispatch"
+            case "$run_status" in
+              completed)
+                echo "Adzuna Job CEO pipeline completed for run $RUN_ID."
+                exit 0
+                ;;
+              failed|cancelled)
+                echo "::error::Adzuna Job CEO run $RUN_ID ended with status=$run_status."
+                jq -r '.run.last_error // "No error detail recorded."' "$status_response"
+                exit 1
+                ;;
+              ingesting|qa|deep_fetch|matchmaking)
+                ;;
+              *)
+                echo "::error::Unexpected status '$run_status' for Adzuna run $RUN_ID."
+                exit 1
+                ;;
+            esac
+
+            # needsDispatch=false can mean another worker currently holds the
+            # staging-row lease. Keep checking this run's persisted status and
+            # retry after a short wait; never use global queue emptiness as the
+            # completion condition.
+            if [ "$needs_dispatch" = "true" ]; then
+              sleep 5
+            else
+              sleep 15
+            fi
           done
-          echo "::error::Job CEO dispatch did not finish within 50 minutes."
+          echo "::error::Adzuna Job CEO run $RUN_ID did not finish within 75 minutes."
           exit 1
