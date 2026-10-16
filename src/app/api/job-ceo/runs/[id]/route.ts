@@ -5,9 +5,21 @@ import { countByStage } from "@/server/repositories/jobCeoStagingRepository";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // The middleware permits CRON_SECRET for this read-only endpoint so the
+  // Adzuna workflow can poll without a browser session. Re-check machine
+  // credentials here as defense in depth; session-authenticated staff requests
+  // without an Authorization header continue through middleware as before.
+  const authHeader = req.headers.get("authorization");
+  if (authHeader) {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+  }
+
   try {
     const run = await findRunById(params.id);
     if (!run) {

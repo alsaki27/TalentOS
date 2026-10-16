@@ -166,6 +166,14 @@ function isJobCeoAuthorized(req: NextRequest, pathname: string) {
     if (!secret) return false;
     return req.headers.get("authorization") === `Bearer ${secret}`;
   }
+  // Adzuna's GitHub Action polls its specific run after dispatch. Permit only
+  // the read-only run status route with CRON_SECRET; staging, cancellation,
+  // deletion, and all other run-management endpoints remain staff-session-only.
+  if (req.method === "GET" && /^\/api\/job-ceo\/runs\/[^/]+$/.test(pathname)) {
+    const secret = process.env.CRON_SECRET;
+    if (!secret) return false;
+    return req.headers.get("authorization") === `Bearer ${secret}`;
+  }
   // effective-keywords and seen-external-ids are the two read paths the
   // agency-source scripts (actalent_ingest.py, broadstaff_ingest.py) call
   // alongside /api/job-ceo/ingest - each route already carries its own
