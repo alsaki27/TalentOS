@@ -479,7 +479,13 @@ export async function recordAiKeyFailure(id: string, error: string): Promise<voi
     status = "invalid_credential";
   } else if (errLower.includes("rate limit") || errLower.includes("429")) {
     status = "rate_limited";
-  } else if (errLower.includes("quota") || errLower.includes("billing")) {
+  } else if (
+    errLower.includes("quota") ||
+    errLower.includes("billing") ||
+    errLower.includes("402") ||
+    errLower.includes("insufficient funds") ||
+    errLower.includes("payment required")
+  ) {
     status = "quota_exhausted";
   } else {
     status = "failing";
