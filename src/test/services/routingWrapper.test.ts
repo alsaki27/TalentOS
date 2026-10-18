@@ -123,6 +123,8 @@ describe("callWithUsageTracking error paths", () => {
     expect(classifyAiErrorCode(new Error("429 rate limit"))).toBe("rate_limit");
     expect(classifyAiErrorCode(new Error("The operation was aborted"))).toBe("timeout");
     expect(classifyAiErrorCode(new Error("OpenCode API error (530): tunnel unavailable"))).toBe("server_error");
+    expect(classifyAiErrorCode(new Error('OpenCode API error (402): {"message":"Insufficient funds"}'))).toBe("billing_error");
+    expect(classifyAiErrorCode(new Error("Payment required: account balance exhausted"))).toBe("billing_error");
     expect(classifyAiErrorCode(new Error('OpenCode API error (403): {"message":"Model access is disabled"}'))).toBe("model_unavailable");
     expect(classifyAiErrorCode(new Error("OpenCode API error (403): invalid credential"))).toBe("auth_error");
   });
@@ -795,6 +797,47 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
     // maxProviderAttempts: 1 (zero configured retries) would, before this
     // fix, give up immediately after account A's 429 - proving the same-rank
     // pool retry to account B is bounded independently of the chain budget.
+    const result = await callWithUsageTracking(
+      "application_resume_forge",
+      { maxProviderAttempts: 1 },
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(calls).toEqual(["opencode-a:glm-5.3", "opencode-b:glm-5.3"]);
+    expect(result.aiKeyId).toBe("opencode-b");
+    expect(result.routeRank).toBe(1);
+  });
+
+  it("retries a sibling OpenCode account after an account-scoped 402 billing failure", async () => {
+    mockGetAiRuntimeConfig.mockResolvedValue({
+      active_routing_state_id: null,
+      allow_unrouted_fallback: false,
+      pooled_retry_bounded_by_route_rank: true,
+    });
+    const routes = [
+      { id: "r1", automation_id: "application_resume_forge", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+    ];
+    mockQuery.mockImplementation(async (sql: string) => (sql.includes("ai_automation_routes") ? routes : []));
+    mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const keys = [
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "working" },
+      { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
+    ];
+    mockListEnabledAiKeys.mockResolvedValue(keys);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => {
+      const key = keys.find((candidate) => candidate.id === id)!;
+      return { ...key, decrypted_key: id, is_enabled: true, model: null, base_url: "https://example.test", chat_endpoint: null, custom_headers: null, provider_config: {} };
+    });
+    const calls: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        calls.push(`${key}:${model}`);
+        if (key === "opencode-a") throw new Error('OpenCode API error (402): {"message":"Insufficient funds"}');
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
     const result = await callWithUsageTracking(
       "application_resume_forge",
       { maxProviderAttempts: 1 },

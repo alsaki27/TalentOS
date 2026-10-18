@@ -824,6 +824,7 @@ export async function callWithUsageTracking<T>(
       // still fail to produce the structured payload the pipeline requires.
       const isRetriable = [
         "rate_limit",
+        "billing_error",
         "auth_error",
         "model_unavailable",
         "timeout",
@@ -922,6 +923,10 @@ export function classifyAiErrorCode(err: any): string | null {
   if (httpStatusMatch) {
     const status = Number(httpStatusMatch[1]);
     if (status === 401) return "auth_error";
+    // OpenCode returns HTTP 402 when an individual account has exhausted its
+    // balance. Treat it as key-scoped so the pool can rotate to another
+    // account for the same model instead of failing the whole workflow.
+    if (status === 402) return "billing_error";
     if (status === 403) {
       if (isModelAccessUnavailable(msg)) return "model_unavailable";
       return "auth_error";
@@ -935,6 +940,8 @@ export function classifyAiErrorCode(err: any): string | null {
 
   // ── 4. Keyword fallback for non-standard error shapes ───────────────────────
   if (isModelAccessUnavailable(msg)) return "model_unavailable";
+  if (msg.includes("insufficient funds") || msg.includes("payment required")) return "billing_error";
+  if (msg.includes("billing") && (msg.includes("balance") || msg.includes("credit"))) return "billing_error";
   if (msg.includes("aborted") || msg.includes("timed out") || msg.includes("timeout")) return "timeout";
   if (msg.includes("unauthorized") || msg.includes("invalid api key")) return "auth_error";
   if (msg.includes("rate limit") || msg.includes("quota")) return "rate_limit";
