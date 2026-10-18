@@ -6,11 +6,12 @@ import { ResumeForm } from '@/components/falood/resumify/components/form/ResumeF
 import { ResumePreview } from '@/components/falood/resumify/components/preview/ResumePreview';
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Download, FileDown, Palette, Save, Settings, Sparkles, Upload } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Download, FileDown, Palette, Save, Settings, Sparkles, Upload } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
 import { generateResumePdfBlob, resumifyResumeDataToExportDocument, uploadResumeExport } from '@/lib/falood/clientExport';
+import { isResumeDataEffectivelyEmpty } from '@/lib/falood/resumeEmptyCheck';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -50,6 +51,17 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         latestStateRef.current = { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions };
     }, [state.resumeData, state.chatHistory, state.jobDescription, state.versions]);
     const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
+    // Mirrors hasLoadedInitialData for synchronous reads from callbacks/
+    // closures (isDirty, persistTailoredApplication) that intentionally use
+    // refs rather than depending on React state directly - see
+    // latestStateRef above for the same pattern. This is THE fix for the
+    // data-loss incident: nothing may be considered "safe to persist" until
+    // this ref is true, i.e. until a real load has actually succeeded.
+    const hasLoadedInitialDataRef = useRef(false);
+    useEffect(() => {
+        hasLoadedInitialDataRef.current = hasLoadedInitialData;
+    }, [hasLoadedInitialData]);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
     const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
 
@@ -58,13 +70,29 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         setTimeout(() => setToastMsg(null), 3000);
     };
 
-    // Load the saved application and pre-populate the AI with job context
-    useEffect(() => {
-        const load = async () => {
+    // Load the saved application and pre-populate the AI with job context.
+    // `load` is a useCallback (not a plain function inside the effect) so
+    // the error screen's Retry button can call the exact same path.
+    const load = useCallback(async () => {
+                setIsLoading(true);
+                setLoadError(null);
             try {
                 const res = await fetch(`/api/falood/applications?id=${applicationId}`);
                 const json = await res.json();
-                if (json.success && json.data) {
+                if (!res.ok || !json.success || !json.data) {
+                    throw new Error(json?.error || 'This resume could not be found.');
+                }
+                // A response that parses but carries no real resume content
+                // (null/undefined/wrong type) must never be treated as "the
+                // resume is legitimately blank" - that's indistinguishable
+                // from the load having actually failed, and importing it
+                // would silently arm every save path with the placeholder
+                // content. Fail loudly instead; the error screen below is
+                // the only safe thing to show here.
+                if (json.data.resumeData === null || json.data.resumeData === undefined || typeof json.data.resumeData !== 'object') {
+                    throw new Error('The server returned no resume content for this session.');
+                }
+                {
                     dispatch({ type: 'IMPORT_RESUME_DATA', payload: json.data.resumeData });
                     dispatch({ type: 'SET_JOB_DESCRIPTION', payload: json.data.jobDescription || '' });
                     // candidateId may also be embedded in a legacy "meta-candidate"
@@ -97,14 +125,41 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                 }
             } catch (error) {
                 console.error("Error loading application for tailoring", error);
+                // Never fall through to the normal editable UI on a failed
+                // load - that UI starts from the blank placeholder resume,
+                // and every save path (autosave, explicit Save, exit-flush)
+                // would then be one navigation-away or button-click from
+                // persisting that placeholder over whatever's really saved.
+                // Showing a dedicated error screen instead (below) makes
+                // that impossible: there is no editable resume on screen to
+                // accidentally save until a load has genuinely succeeded.
+                setLoadError(error instanceof Error ? error.message : 'Failed to load this resume.');
             } finally {
                 setIsLoading(false);
             }
-        };
-        load();
     }, [applicationId, company, jobTitle, dispatch]);
 
+    useEffect(() => {
+        void load();
+        // Intentionally run only on mount/applicationId change, not on every
+        // `load` identity change (load's own deps include jobTitle/company,
+        // which come from the URL and don't need a fresh fetch on their own).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [applicationId]);
+
     const persistTailoredApplication = useCallback(async (showSuccessToast = false) => {
+        // THE fix for the data-loss incident: nothing may be persisted until
+        // a real load has actually completed. Before this guard, every
+        // caller of this function (autosave, the explicit Save button, the
+        // exit-flush safety net) could fire while the page still held the
+        // blank placeholder resume - e.g. the load was still in flight, or
+        // had failed - and would happily PATCH that placeholder over real
+        // saved content. See resumeEmptyCheck.ts for the full writeup.
+        if (!hasLoadedInitialDataRef.current) {
+            if (showSuccessToast) showToast('Still loading this resume - please wait a moment and try again.');
+            return false;
+        }
+
         // Never let two PATCHes race - see isSavingRef's declaration for why.
         // The debounce effect below re-checks and retries once this clears,
         // so a save that's skipped here is never silently lost.
@@ -121,6 +176,25 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             jobDescription: latestState.jobDescription,
             versions: latestState.versions,
         });
+
+        // Independent, structural backstop (same check the server now also
+        // enforces): never send a save that would regress real content down
+        // to the blank shape. This catches any future bug that gets state
+        // into that condition in some other way, not just the one race this
+        // incident was caused by.
+        if (isResumeDataEffectivelyEmpty(latestState.resumeData)) {
+            let lastSavedWasEmpty = true;
+            try {
+                const parsed = lastSavedSnapshotRef.current ? JSON.parse(lastSavedSnapshotRef.current) : null;
+                lastSavedWasEmpty = isResumeDataEffectivelyEmpty(parsed?.resumeData);
+            } catch { /* malformed snapshot - treat as empty, allow nothing through on the empty side either */ }
+            if (!lastSavedWasEmpty) {
+                console.error('[Tailor Studio] Refused to save: resume content is empty but the last loaded/saved version was not. This page may not have loaded correctly - reload before editing.');
+                setSaveStatus('error');
+                if (showSuccessToast) showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
+                return false;
+            }
+        }
 
         if (snapshot === lastSavedSnapshotRef.current) {
             // Autosave already persisted exactly this content - confirm
@@ -177,6 +251,18 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     };
 
     const handleSaveVersion = async () => {
+        // Same guard as persistTailoredApplication, and for the same reason
+        // - this function does its own independent PATCH (including
+        // overwriting `versions`), so it needs its own copy of the check
+        // rather than relying on that function's guard.
+        if (!hasLoadedInitialDataRef.current) {
+            showToast('Still loading this resume - please wait a moment and try again.');
+            return;
+        }
+        if (isResumeDataEffectivelyEmpty(state.resumeData)) {
+            showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
+            return;
+        }
         if (isSavingRef.current) {
             pendingSaveRef.current = true;
             return;
@@ -283,9 +369,31 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     // sendBeacon relies on to survive page unload - since sendBeacon itself
     // can only send POST, not PATCH.
     useEffect(() => {
-        const isDirty = () => JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
+        // THE root cause of the data-loss incident lived here: this used to
+        // read `JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current`
+        // with no check that a real load had ever completed.
+        // lastSavedSnapshotRef.current is null until load() succeeds, so
+        // stringify(anything) !== null is always true - meaning leaving the
+        // page (tab close, tab switch, in-app navigation) before the load
+        // finished made this unconditionally report "dirty" and flush the
+        // still-blank placeholder resume to the server, overwriting real
+        // saved content. Requiring hasLoadedInitialDataRef first closes that
+        // off entirely: nothing here can fire until a load has genuinely
+        // succeeded.
+        const isDirty = () =>
+            hasLoadedInitialDataRef.current && JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
         const flushBeacon = () => {
             const { resumeData, chatHistory, jobDescription } = latestStateRef.current;
+            // Belt-and-suspenders, same check as persistTailoredApplication:
+            // isDirty() already requires a completed load, but this is the
+            // one save path with no server round-trip to report an error
+            // back (keepalive/unload requests can't be awaited or shown to
+            // the user), so it gets its own independent check rather than
+            // relying solely on the server-side guard to catch it silently.
+            if (isResumeDataEffectivelyEmpty(resumeData)) {
+                console.error('[Tailor Studio] Skipped exit-flush: resume content is empty.');
+                return;
+            }
             const body = JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory });
             // Browsers cap in-flight keepalive bodies at 64KB total and reject
             // anything over it outright. Use keepalive only when it fits;
@@ -345,6 +453,29 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
 
     if (isLoading) {
         return <div className="flex items-center justify-center h-[600px]"><p className="muted">Loading resume for tailoring…</p></div>;
+    }
+
+    // Never render the editable form/preview on a failed load - that UI
+    // starts from the blank placeholder resume, and every save path on this
+    // page would then be one click or one tab-switch away from persisting
+    // that placeholder over whatever's actually saved. See isDirty() above
+    // and persistTailoredApplication's guard for the matching halves of this
+    // fix - this screen is what makes the failure visible instead of silent.
+    if (loadError) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[600px] gap-4 text-center px-4">
+                <AlertTriangle className="w-10 h-10 text-amber-500" />
+                <div>
+                    <h2 className="text-lg font-semibold mb-1">Couldn&apos;t load this resume</h2>
+                    <p className="muted text-sm max-w-md">{loadError}</p>
+                    <p className="muted text-xs mt-2">Nothing was changed - it&apos;s safe to retry.</p>
+                </div>
+                <div className="flex gap-2">
+                    <Button size="sm" onClick={() => void load()}>Retry</Button>
+                    <Link href="/falood"><Button size="sm" variant="outline">Back to Falood</Button></Link>
+                </div>
+            </div>
+        );
     }
 
     return (

@@ -8,6 +8,7 @@ import {
   mergeResumifyEditorIntoBaseResume,
 } from "@/lib/falood/resumeDocumentAdapters";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
 
 export const runtime = "nodejs";
 
@@ -170,6 +171,29 @@ export async function PATCH(req: NextRequest) {
     }
 
     if ("resumeData" in body) {
+      // Structural backstop against the exit-flush race (see
+      // resumeEmptyCheck.ts for the full incident writeup): refuse any write
+      // that would replace existing real content with the blank-placeholder
+      // shape, regardless of what client-side bug (this one or a future one)
+      // produced it. A brand-new session's first save is still allowed -
+      // this only blocks a non-empty -> empty regression.
+      if (isResumeDataEffectivelyEmpty(body.resumeData)) {
+        const existingRow = await queryOne<{ resume_data: unknown }>(
+          `SELECT resume_data FROM falood_saved_applications WHERE id = $1`,
+          [id]
+        );
+        const existingData = existingRow ? (safeParseJson(existingRow.resume_data) as any) : null;
+        if (existingRow && !isResumeDataEffectivelyEmpty(existingData)) {
+          console.error(`[Falood Applications PATCH] Refused to overwrite non-empty resume_data with an empty one for id=${id}`);
+          return NextResponse.json(
+            {
+              success: false,
+              error: "Refusing to save: this would replace existing resume content with a blank resume. Reload the page and try again - if the problem persists, the page may not have finished loading before you tried to save.",
+            },
+            { status: 409 }
+          );
+        }
+      }
       updates.push(`resume_data = $${values.length + 1}`);
       values.push(JSON.stringify(body.resumeData));
     }
