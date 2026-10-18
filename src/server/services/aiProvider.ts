@@ -13,6 +13,7 @@ import {
   getAiKeyWithDecryptedKey,
   recordAiKeySuccess,
   recordAiKeyFailure,
+  isKeyCoolingDown,
   type AiProvider as DbAiProvider,
   type AiApiKeyMetadata,
 } from "@/server/repositories/aiKeyRepository";
@@ -637,10 +638,7 @@ export async function getActiveProviderWithFallback(excludeKeyIds?: Set<string>)
   for (const key of dbKeys) {
     if (excludeKeyIds?.has(key.id)) continue;
     if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(key.status as any)) continue;
-    if (["rate_limited", "quota_exhausted"].includes(key.status as any)) {
-      const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
-      if (Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000) continue;
-    }
+    if (isKeyCoolingDown(key)) continue;
     const keyRow = await getAiKeyWithDecryptedKey(key.id);
     if (!keyRow) continue;
     const provider = buildProviderFromDbKey(keyRow.provider, keyRow.decrypted_key, keyRow.model, keyRow.base_url, keyRow.chat_endpoint, keyRow.custom_headers, keyRow.provider_config);

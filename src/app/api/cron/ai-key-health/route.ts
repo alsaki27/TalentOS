@@ -37,6 +37,7 @@ export async function GET(req: NextRequest) {
      FROM ai_api_keys
      WHERE is_enabled = true
        AND status = ANY($1::text[])
+       AND (cooldown_until IS NULL OR cooldown_until <= now())
      ORDER BY status ASC, failure_count ASC`,
     [recoveryStatuses]
   );

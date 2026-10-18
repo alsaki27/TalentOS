@@ -35,6 +35,14 @@ vi.mock("@/server/repositories/aiKeyRepository", () => ({
   getAiKeyWithDecryptedKey: mockGetAiKeyWithDecryptedKey,
   recordAiKeySuccess: mockRecordAiKeySuccess,
   recordAiKeyFailure: mockRecordAiKeyFailure,
+  isKeyCoolingDown: (key: any) => {
+    if (key.provider === "google_vertex_proxy") return false;
+    if (key.status !== "rate_limited" && key.status !== "quota_exhausted") return false;
+    const explicitUntil = key.cooldown_until ? Date.parse(key.cooldown_until) : Number.NaN;
+    if (Number.isFinite(explicitUntil)) return Date.now() < explicitUntil;
+    const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
+    return Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000;
+  },
 }));
 
 vi.mock("@/server/repositories/aiRuntimeConfigRepository", () => ({
@@ -443,8 +451,10 @@ describe("callWithUsageTracking error paths", () => {
         : []
     );
     mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
+    const sixteenMinutesAgo = new Date(Date.now() - 16 * 60_000).toISOString();
+    const twoHoursAhead = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
     mockListEnabledAiKeys.mockResolvedValue([
-      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: new Date().toISOString() },
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: sixteenMinutesAgo, cooldown_until: twoHoursAhead },
       { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
       { id: "opencode-c", provider: "opencode", priority: 30, created_at: "2026-01-03", status: "working" },
     ]);
@@ -485,8 +495,9 @@ describe("callWithUsageTracking error paths", () => {
     );
     mockQueryOne.mockImplementation(async (sql: string) => (sql.includes("ai_key_pool_cursors") ? { start_index: "0" } : null));
     const sixteenMinutesAgo = new Date(Date.now() - 16 * 60_000).toISOString();
+    const oneMinuteAgo = new Date(Date.now() - 60_000).toISOString();
     mockListEnabledAiKeys.mockResolvedValue([
-      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: sixteenMinutesAgo },
+      { id: "opencode-a", provider: "opencode", priority: 10, created_at: "2026-01-01", status: "rate_limited", last_failure_at: sixteenMinutesAgo, cooldown_until: oneMinuteAgo },
       { id: "opencode-b", provider: "opencode", priority: 20, created_at: "2026-01-02", status: "working" },
     ]);
     mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
@@ -889,6 +900,177 @@ describe("callWithUsageTracking per-model rate-limit failover", () => {
 
     expect(resultOne.aiKeyId).toBe("opencode-b");
     expect(resultTwo.aiKeyId).toBe("opencode-b");
+  });
+});
+
+describe("OpenCode shared route breaker and model-scoped retries", () => {
+  const oneKey = {
+    id: "opencode-a",
+    provider: "opencode",
+    priority: 10,
+    created_at: "2026-01-01",
+    status: "working",
+  };
+
+  function configurePool(routes: any[], health: any = {
+    recent_failures: 0,
+    recent_not_found: 0,
+    recent_timeouts: 0,
+    recent_invalid_outputs: 0,
+    last_success_at: null,
+    last_failure_at: null,
+  }) {
+    mockGetAiRuntimeConfig.mockResolvedValue({ active_routing_state_id: null, allow_unrouted_fallback: false });
+    mockQuery.mockImplementation(async (sql: string) =>
+      sql.includes("ai_automation_routes") ? routes : []
+    );
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("ai_key_pool_cursors")) return { start_index: "0" };
+      if (sql.includes("ai_usage_events")) return health;
+      return null;
+    });
+    mockListEnabledAiKeys.mockResolvedValue([oneKey]);
+    mockGetAiKeyWithDecryptedKey.mockImplementation(async (id: string) => ({
+      ...oneKey,
+      id,
+      decrypted_key: id,
+      is_enabled: true,
+      model: null,
+      base_url: "https://opencode.example.com/v1",
+      chat_endpoint: "/chat/completions",
+      custom_headers: null,
+      provider_config: {},
+    }));
+    mockBuildProviderFromDbKey.mockImplementation(() => ({
+      send: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }], stopReason: "end_turn" }),
+    }));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockQuery.mockReset().mockResolvedValue([]);
+    mockQueryOne.mockReset().mockResolvedValue(null);
+    mockExecute.mockReset().mockResolvedValue({ rowCount: 1 });
+    mockListEnabledAiKeys.mockReset().mockResolvedValue([]);
+    mockGetAiKeyWithDecryptedKey.mockReset().mockResolvedValue(null);
+    mockRecordAiKeySuccess.mockReset().mockResolvedValue(undefined);
+    mockRecordAiKeyFailure.mockReset().mockResolvedValue(undefined);
+    mockBuildProviderFromDbKey.mockReset().mockReturnValue(null);
+    mockGetAiRuntimeConfig.mockReset().mockResolvedValue({ active_routing_state_id: null, allow_unrouted_fallback: false });
+    mockGetActiveProviderWithFallback.mockReset().mockResolvedValue(null);
+  });
+
+  it("binds the per-account exclusion codes and keeps NULL error codes countable", async () => {
+    const routes = [{ id: "route-1", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" }];
+    configurePool(routes);
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("job_categorization");
+
+    expect(resolved?.aiKeyId).toBe("opencode-a");
+    const healthCall = mockQueryOne.mock.calls.find(([sql]) => String(sql).includes("ai_usage_events"));
+    expect(healthCall?.[0]).toContain("error_code IS NULL OR NOT (error_code = ANY($5::text[]))");
+    expect(healthCall?.[0]).toContain("COUNT(*) FILTER (WHERE error_code = 'not_found')");
+    expect(healthCall?.[0]).not.toContain("recent_auth_errors");
+    expect(healthCall?.[1]).toEqual([
+      "job_categorization",
+      "opencode",
+      "glm-5.3",
+      15,
+      ["rate_limit", "billing_error", "auth_error", "model_unavailable"],
+    ]);
+  });
+
+  it("does not let another account's auth error trip the pool-wide breaker", async () => {
+    const routes = [{ id: "route-1", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" }];
+    configurePool(routes, {
+      recent_failures: 0,
+      recent_not_found: 0,
+      recent_auth_errors: 1,
+      recent_timeouts: 0,
+      recent_invalid_outputs: 0,
+      last_success_at: null,
+      last_failure_at: new Date().toISOString(),
+    });
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("job_categorization");
+
+    expect(resolved?.aiKeyId).toBe("opencode-a");
+  });
+
+  it("still reopens a route immediately after a later success", async () => {
+    const routes = [{ id: "route-1", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" }];
+    const lastFailure = Date.now() - 30_000;
+    configurePool(routes, {
+      recent_failures: 3,
+      recent_not_found: 2,
+      recent_timeouts: 2,
+      recent_invalid_outputs: 3,
+      last_failure_at: new Date(lastFailure).toISOString(),
+      last_success_at: new Date(lastFailure + 1).toISOString(),
+    });
+
+    const { getProviderForAutomation } = await import("@/lib/ai/routing");
+    const resolved = await getProviderForAutomation("job_categorization");
+
+    expect(resolved?.aiKeyId).toBe("opencode-a");
+  });
+
+  it.each([
+    ["invalid_output", new SyntaxError("Invalid model output")],
+    ["configuration_error", new Error("OpenCode API error (400): unsupported schema")],
+    ["not_found", new Error("OpenCode API error (404): model not found")],
+  ])("retries %s on the same key's next model route", async (_caseName, firstError) => {
+    const routes = [
+      { id: "route-1", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+      { id: "route-2", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 2, is_enabled: true, model_override: "qwen3.7-plus" },
+    ];
+    configurePool(routes);
+    const modelsTried: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, _key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        modelsTried.push(model);
+        if (model === "glm-5.3") throw firstError;
+        return { content: [{ type: "text", text: "ok" }], stopReason: "end_turn" };
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    const result = await callWithUsageTracking(
+      "job_categorization",
+      undefined,
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    );
+
+    expect(modelsTried).toEqual(["glm-5.3", "qwen3.7-plus"]);
+    expect(result.aiKeyId).toBe("opencode-a");
+    expect(result.model).toBe("qwen3.7-plus");
+    expect(result.routeRank).toBe(2);
+  });
+
+  it("continues excluding the whole pooled key on a gateway server error", async () => {
+    const routes = [
+      { id: "route-1", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 1, is_enabled: true, model_override: "glm-5.3" },
+      { id: "route-2", automation_id: "job_categorization", ai_key_id: null, provider: "opencode", rank: 2, is_enabled: true, model_override: "qwen3.7-plus" },
+    ];
+    configurePool(routes);
+    const modelsTried: string[] = [];
+    mockBuildProviderFromDbKey.mockImplementation((_provider: string, _key: string, model: string) => ({
+      send: vi.fn().mockImplementation(async () => {
+        modelsTried.push(model);
+        throw new Error("OpenCode API error (530): tunnel unavailable");
+      }),
+    }));
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    await expect(callWithUsageTracking(
+      "job_categorization",
+      undefined,
+      (provider) => provider.send({ system: "s", messages: [], tools: [] }),
+    )).rejects.toThrow("tunnel unavailable");
+
+    expect(modelsTried).toEqual(["glm-5.3"]);
   });
 });
 

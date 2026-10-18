@@ -53,6 +53,7 @@ export interface AiApiKeyRow {
   last_tested_at: string | null;
   last_success_at: string | null;
   last_failure_at: string | null;
+  cooldown_until?: string | null;
   last_error: string | null;
   usage_count: number;
   failure_count: number;
@@ -96,6 +97,7 @@ export interface AiApiKeyMetadata {
   last_tested_at: string | null;
   last_success_at: string | null;
   last_failure_at: string | null;
+  cooldown_until?: string | null;
   last_error: string | null;
   usage_count: number;
   failure_count: number;
@@ -173,7 +175,7 @@ export interface UpdateAiKeyInput {
 // Shared by all metadata-returning SELECTs to keep the surface in sync.
 const METADATA_COLUMNS = `id, provider, label, model, default_model, base_url, priority,
        is_enabled, status, last_tested_at, last_test_status,
-       last_test_latency_ms, last_success_at, last_failure_at,
+       last_test_latency_ms, last_success_at, last_failure_at, cooldown_until,
        last_error_code, last_error_message, usage_count, failure_count,
        daily_request_warning, daily_request_limit, monthly_request_limit,
        monthly_budget_warning_usd, monthly_budget_limit_usd, notes,
@@ -199,6 +201,7 @@ function toMetadata(row: AiApiKeyRow): AiApiKeyMetadata {
     last_tested_at: row.last_tested_at,
     last_success_at: row.last_success_at,
     last_failure_at: row.last_failure_at,
+    cooldown_until: row.cooldown_until ?? null,
     last_error: row.last_error,
     usage_count: row.usage_count,
     failure_count: row.failure_count,
@@ -463,7 +466,7 @@ export async function updateAiKeyModels(
 export async function recordAiKeySuccess(id: string): Promise<void> {
   const now = new Date().toISOString();
   await execute(
-    `UPDATE ai_api_keys SET status = $1, last_success_at = $2, last_tested_at = $3, usage_count = usage_count + 1, updated_at = $4 WHERE id = $5`,
+    `UPDATE ai_api_keys SET status = $1, last_success_at = $2, last_tested_at = $3, cooldown_until = NULL, usage_count = usage_count + 1, updated_at = $4 WHERE id = $5`,
     ["working", now, now, now, id]
   );
 }
@@ -491,10 +494,50 @@ export async function recordAiKeyFailure(id: string, error: string): Promise<voi
     status = "failing";
   }
 
-  const now = new Date().toISOString();
+  // OpenCode returns account-specific weekly/monthly quota signals in its
+  // error body. A short generic cooldown causes repeated paid probes of a
+  // depleted account; use bounded cause-aware windows, while leaving ordinary
+  // burst 429s on the existing 15-minute fallback below.
+  const limitName = safeError.match(/\blimitName\s*["']?\s*[:=]\s*["']?(weekly|monthly)\b/i)?.[1]?.toLowerCase();
+  const nowDate = new Date();
+  let cooldownUntil: string | null = null;
+  if (limitName === "monthly" || (status === "quota_exhausted" && !limitName)) {
+    cooldownUntil = new Date(nowDate.getTime() + 24 * 60 * 60_000).toISOString();
+  } else if (limitName === "weekly") {
+    cooldownUntil = new Date(nowDate.getTime() + 4 * 60 * 60_000).toISOString();
+  }
+
+  const now = nowDate.toISOString();
   await execute(
-    `UPDATE ai_api_keys SET status = $1, last_failure_at = $2, last_tested_at = $3, last_error = $4, failure_count = failure_count + 1, updated_at = $5 WHERE id = $6`,
-    [status, now, now, safeError, now, id]
+    `UPDATE ai_api_keys SET status = $1, last_failure_at = $2, last_tested_at = $3, last_error = $4, cooldown_until = $5, failure_count = failure_count + 1, updated_at = $6 WHERE id = $7`,
+    [status, now, now, safeError, cooldownUntil, now, id]
   );
+}
+
+const DEFAULT_KEY_COOLDOWN_MS = 15 * 60_000;
+
+/**
+ * Whether a transiently rate-limited/quota-exhausted key is still cooling
+ * down. NULL cooldown_until intentionally preserves the historical 15-minute
+ * behavior. Vertex is a safety-net provider and must remain callable even if
+ * its health metadata says rate-limited; the provider response/backoff is the
+ * source of truth there.
+ */
+export function isKeyCoolingDown(key: {
+  provider?: string | null;
+  status: AiKeyStatus;
+  last_failure_at?: string | null;
+  cooldown_until?: string | null;
+}, nowMs = Date.now()): boolean {
+  if (key.provider === "google_vertex_proxy") return false;
+  if (key.status !== "rate_limited" && key.status !== "quota_exhausted") return false;
+
+  if (key.cooldown_until) {
+    const cooldownUntil = Date.parse(key.cooldown_until);
+    if (Number.isFinite(cooldownUntil)) return nowMs < cooldownUntil;
+  }
+
+  const failedAt = key.last_failure_at ? Date.parse(key.last_failure_at) : Number.NaN;
+  return Number.isFinite(failedAt) && nowMs - failedAt < DEFAULT_KEY_COOLDOWN_MS;
 }
 

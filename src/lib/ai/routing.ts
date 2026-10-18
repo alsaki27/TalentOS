@@ -6,7 +6,7 @@
 import { AiProvider, AiMessage, AiTool } from "@/lib/ai/provider";
 import { estimateCost } from "@/lib/ai/pricing";
 import { query, queryOne, execute } from "@/server/db/neon";
-import { listEnabledAiKeys, getAiKeyWithDecryptedKey, recordAiKeyFailure, recordAiKeySuccess, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
+import { listEnabledAiKeys, getAiKeyWithDecryptedKey, recordAiKeyFailure, recordAiKeySuccess, isKeyCoolingDown, type AiProvider as DbAiProvider, type AiKeyStatus } from "@/server/repositories/aiKeyRepository";
 import { buildProviderFromDbKey, getActiveProviderWithFallback } from "@/server/services/aiProvider";
 import { createMockProvider } from "@/lib/ai/mockProvider";
 import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
@@ -67,10 +67,15 @@ function keyModelId(keyId: string, model: string | null | undefined): string {
 // automatically after a short cooldown.
 const ROUTE_HEALTH_WINDOW_MINUTES = 15;
 
+// These signals belong to individual credentials (or a key/model entitlement),
+// not the shared OpenCode model route. Counting them in the pool-wide breaker
+// can block healthy sibling accounts precisely when round-robin recovery is
+// needed; their in-call exclusions and per-key cooldown already handle them.
+const PER_ACCOUNT_FAILURE_CODES = ["rate_limit", "billing_error", "auth_error", "model_unavailable"];
+
 type RouteHealthRow = {
   recent_failures: number | string | null;
   recent_not_found: number | string | null;
-  recent_auth_errors: number | string | null;
   recent_timeouts: number | string | null;
   recent_invalid_outputs: number | string | null;
   last_success_at: string | null;
@@ -100,9 +105,11 @@ async function checkRouteHealth(
   try {
     const health = await queryOne<RouteHealthRow>(
       `SELECT
-         COUNT(*) FILTER (WHERE outcome IN ('failure', 'timeout'))::int AS recent_failures,
-         COUNT(*) FILTER (WHERE error_code IN ('not_found', 'model_unavailable'))::int AS recent_not_found,
-         COUNT(*) FILTER (WHERE error_code = 'auth_error')::int AS recent_auth_errors,
+         COUNT(*) FILTER (
+           WHERE outcome IN ('failure', 'timeout')
+             AND (error_code IS NULL OR NOT (error_code = ANY($5::text[])))
+         )::int AS recent_failures,
+         COUNT(*) FILTER (WHERE error_code = 'not_found')::int AS recent_not_found,
          COUNT(*) FILTER (WHERE error_code = 'timeout')::int AS recent_timeouts,
          COUNT(*) FILTER (WHERE error_code = 'invalid_output')::int AS recent_invalid_outputs,
          MAX(created_at) FILTER (WHERE outcome = 'success') AS last_success_at,
@@ -112,7 +119,7 @@ async function checkRouteHealth(
          AND provider = $2
          AND model = $3
          AND created_at >= NOW() - make_interval(mins => $4)`,
-      [automationId, provider, model, ROUTE_HEALTH_WINDOW_MINUTES]
+      [automationId, provider, model, ROUTE_HEALTH_WINDOW_MINUTES, PER_ACCOUNT_FAILURE_CODES]
     );
     if (!health) return { blocked: false };
 
@@ -125,12 +132,10 @@ async function checkRouteHealth(
     }
 
     const notFound = Number(health.recent_not_found ?? 0);
-    const authErrors = Number(health.recent_auth_errors ?? 0);
     const timeouts = Number(health.recent_timeouts ?? 0);
     const invalidOutputs = Number(health.recent_invalid_outputs ?? 0);
     const failures = Number(health.recent_failures ?? 0);
 
-    if (authErrors >= 1) return { blocked: true, reason: "route_auth_cooldown" };
     if (notFound >= 2) return { blocked: true, reason: "route_not_found_cooldown" };
     if (timeouts >= 2) return { blocked: true, reason: "route_timeout_cooldown" };
     if (invalidOutputs >= 3) return { blocked: true, reason: "route_output_cooldown" };
@@ -145,19 +150,10 @@ async function checkRouteHealth(
 }
 
 function isKeyHealthBlocked(
-  keyRow: { provider?: string | null; status: AiKeyStatus; last_failure_at?: string | null },
+  keyRow: { provider?: string | null; status: AiKeyStatus; last_failure_at?: string | null; cooldown_until?: string | null },
 ): boolean {
   if (["disabled", "invalid", "invalid_credential", "admin_limit_reached"].includes(keyRow.status)) return true;
-  if (keyRow.status !== "rate_limited" && keyRow.status !== "quota_exhausted") return false;
-  // A transient status on the explicitly configured Vertex route must not
-  // make the safety net disappear. The provider call is the source of truth;
-  // its rate-limit result is persisted as next_retry_at and keeps workflows
-  // queued with backoff instead of turning them into terminal failures.
-  if (keyRow.provider === "google_vertex_proxy") return false;
-  const failedAt = keyRow.last_failure_at ? Date.parse(keyRow.last_failure_at) : Number.NaN;
-  // Provider-side throttles are not permanent circuit breakers. Retry after a
-  // cooling window; database request/budget limits remain independently enforced.
-  return Number.isFinite(failedAt) && Date.now() - failedAt < 15 * 60_000;
+  return isKeyCoolingDown(keyRow);
 }
 
 async function checkKeyLimits(keyRow: any): Promise<{ allowed: boolean; reason?: string }> {
@@ -843,19 +839,25 @@ export async function callWithUsageTracking<T>(
           if (resolved.aiKeyId) excludedKeyIds.add(resolved.aiKeyId);
           else if (resolved.name) excludedProviders.add(resolved.name);
         } else if (
-          (errorCode === "rate_limit" || errorCode === "timeout") &&
+          (errorCode === "rate_limit" ||
+            errorCode === "timeout" ||
+            errorCode === "invalid_output" ||
+            errorCode === "configuration_error" ||
+            errorCode === "not_found") &&
           resolved.aiKeyId &&
           ROUND_ROBIN_POOL_PROVIDERS.has(resolved.name)
         ) {
-          // A throttle or model-call timeout must not suppress a later
-          // configured model route that reuses the same pooled credential.
-          // Excluding the whole key on timeout made GLM's slow/hung response
-          // prevent Qwen/Luna on that same OpenCode account from ever being
-          // attempted (the exact failure seen in production). Keep the
-          // exclusion scoped to key+model; authentication failures still
-          // exclude the credential itself above.
+          // These failures are specific to the current model/request, not the
+          // credential. Keep the exclusion scoped to key+model so a different
+          // model on the same pooled account can still be attempted. This
+          // already fixed the production timeout case; malformed output,
+          // unsupported request settings, and missing model IDs have the same
+          // scope. Authentication failures still exclude the credential.
           excludedKeyModels.add(keyModelId(resolved.aiKeyId, resolved.model));
         } else if (resolved.aiKeyId) {
+          // Keep server_error key-wide: OpenCode's 530 tunnel-unavailable
+          // response is treated as a gateway-level outage, unlike failures
+          // that are model/request-specific above.
           // Keep the route rank alive and rotate to a sibling key for pooled
           // providers. The next route rank is reached only after the entire
           // same-provider pool has been exhausted or cooled down.
