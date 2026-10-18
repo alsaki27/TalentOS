@@ -24,7 +24,7 @@ const ROLE_GROUPS: RoleGroup[] = [
     titles: [
       "OSP Design Engineer", "Outside Plant Engineer", "OSP Engineer",
       "Fiber Design Engineer", "FTTH Design Engineer", "Fiber Optic Design Engineer",
-      "Telecom Design Engineer", "Splice Engineer", "Fiber Splicing Engineer",
+      "Telecom Design Engineer",
       "OSP Planning Engineer", "OSP CAD Designer", "Fiber Network Engineer",
       "Fiber Construction Engineer", "Outside Plant Designer",
       "Telecommunications Engineer", "Fiber Route Engineer",
@@ -35,7 +35,7 @@ const ROLE_GROUPS: RoleGroup[] = [
       "Fiber Construction Manager", "OSP Estimator",
       "Telecom Infrastructure Engineer", "Broadband Design Engineer",
       "FTTx Design Engineer", "Fiber Network Planner", "OSP QC Engineer",
-      "Fiber Splice Technician", "Broadband Network Engineer", "Fiber Engineer",
+      "Broadband Network Engineer", "Fiber Engineer",
       // New additions
       "OSP CAD Drafter", "OSP Design Engineering Apprentice",
       "OSP Design Engineering Specialist", "OSP Engineering Technician",

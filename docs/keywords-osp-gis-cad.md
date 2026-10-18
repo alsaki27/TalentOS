@@ -1,8 +1,8 @@
 # Search Keywords — OSP, GIS, CAD/Drafting
 
-Source of truth: `src/lib/jobAgentRoleLibrary.ts`, groups A, B, C. 72 titles total.
+Source of truth: `src/lib/jobAgentRoleLibrary.ts`, groups A, B, C. 69 titles total.
 
-## OSP / Fiber (34)
+## OSP / Fiber (31)
 ```
 OSP Design Engineer
 Outside Plant Engineer
@@ -11,8 +11,6 @@ Fiber Design Engineer
 FTTH Design Engineer
 Fiber Optic Design Engineer
 Telecom Design Engineer
-Splice Engineer
-Fiber Splicing Engineer
 OSP Planning Engineer
 OSP CAD Designer
 Fiber Network Engineer
@@ -36,7 +34,6 @@ Broadband Design Engineer
 FTTx Design Engineer
 Fiber Network Planner
 OSP QC Engineer
-Fiber Splice Technician
 Broadband Network Engineer
 Fiber Engineer
 ```
@@ -89,4 +86,4 @@ Environmental GIS Analyst
 GIS Support Specialist
 ```
 
-34 + 19 + 19 = **72 titles**.
+31 + 19 + 19 = **69 titles**.

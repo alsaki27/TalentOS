@@ -55,7 +55,7 @@ _SAFE_ROOTS = [
     # ── Group A: OSP / Fiber ──────────────────────────────────────────────────
     "osp design engineer", "outside plant engineer", "osp engineer",
     "fiber design engineer", "ftth design engineer", "fiber optic design engineer",
-    "telecom design engineer", "splice engineer", "fiber splicing engineer",
+    "telecom design engineer",
     "osp planning engineer", "osp cad designer", "fiber network engineer",
     "fiber construction engineer", "outside plant designer",
     "telecommunications engineer", "fiber route engineer",
@@ -66,7 +66,7 @@ _SAFE_ROOTS = [
     "fiber construction manager", "osp estimator",
     "telecom infrastructure engineer", "broadband design engineer",
     "fttx design engineer", "fiber network planner", "osp qc engineer",
-    "fiber splice technician", "broadband network engineer", "fiber engineer",
+    "broadband network engineer", "fiber engineer",
     "osp cad drafter", "osp design engineering apprentice",
     "osp design engineering specialist", "osp engineering technician",
     "permit design engineer", "permit drafter",
@@ -214,6 +214,22 @@ _BOUNDED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Titles removed from job pulling (2026-10-18, per explicit request). Checked
+# ahead of every other match path, including a custom --keywords override —
+# the generic "splice"/"splicing" substrings above stay (they still catch
+# other splice-technician title variants), so without this check these three
+# full phrases would keep matching through those broader roots even after
+# being deleted from _SAFE_ROOTS and ROLE_GROUPS["A"]["safe"] above.
+_EXCLUDED_TITLES = [
+    "splice engineer",
+    "fiber splicing engineer",
+    "fiber splice technician",
+]
+
+
+def _is_excluded_title(title_lower: str) -> bool:
+    return any(excluded in title_lower for excluded in _EXCLUDED_TITLES)
+
 # Fresher-roles-only product policy: title-level seniority signal, same pattern as
 # scripts/openjobdata_common.py's is_senior_title() (kept in sync — that module isn't
 # imported here, this script is self-contained). Deliberately conservative: a plain
@@ -245,7 +261,7 @@ ROLE_GROUPS: Dict[str, Dict[str, Any]] = {
             "pole attachment", "utility coordination", "fiber cad",
             "osp design engineer", "outside plant engineer",
             "fiber design engineer", "ftth design engineer", "fiber optic design engineer",
-            "telecom design engineer", "splice engineer", "fiber splicing engineer",
+            "telecom design engineer",
             "osp cad drafter", "osp design engineering apprentice",
             "osp design engineering specialist", "osp engineering technician",
             "permit design engineer", "permit drafter", "broadband design engineer",
@@ -456,6 +472,9 @@ def matches_role(title: Any, role_group: str = "all", custom_keywords: Optional[
         return False
 
     title_lower = title.lower().replace("fiberglass", "")
+
+    if _is_excluded_title(title_lower):
+        return False
 
     # Custom keyword filter takes priority if provided
     if custom_keywords:

@@ -65,17 +65,17 @@ from scratch.
 
 ---
 
-## 2. The 72 keywords
+## 2. The 69 keywords
 
 Three groups, sourced from TalentOS's internal role library. These are **reference titles**
 used to build the matcher below — do not match on them as literal exact phrases (see §3 for
 why that fails).
 
-### OSP / Fiber (34)
+### OSP / Fiber (31)
 ```
 OSP Design Engineer, Outside Plant Engineer, OSP Engineer, Fiber Design Engineer,
 FTTH Design Engineer, Fiber Optic Design Engineer, Telecom Design Engineer,
-Splice Engineer, Fiber Splicing Engineer, OSP Planning Engineer, OSP CAD Designer,
+OSP Planning Engineer, OSP CAD Designer,
 Fiber Network Engineer, Fiber Construction Engineer, Outside Plant Designer,
 Telecommunications Engineer, Fiber Route Engineer, Aerial Fiber Design Engineer,
 Underground Fiber Design Engineer, Joint Use Engineer, Make Ready Engineer,
@@ -83,7 +83,7 @@ Fiber Permitting Engineer, GIS Fiber Design Technician, OSP Project Engineer,
 Fiber Design Technician, OSP Field Engineer, Fiber Construction Manager,
 OSP Estimator, Telecom Infrastructure Engineer, Broadband Design Engineer,
 FTTx Design Engineer, Fiber Network Planner, OSP QC Engineer,
-Fiber Splice Technician, Broadband Network Engineer, Fiber Engineer
+Broadband Network Engineer, Fiber Engineer
 ```
 
 ### CAD / Drafting (19)
@@ -104,16 +104,16 @@ Cartographer, Remote Sensing Analyst, GIS Database Technician, GIS QA/QC Analyst
 Land Records GIS Analyst, Environmental GIS Analyst, GIS Support Specialist
 ```
 
-34 + 19 + 19 = **72 titles**.
+31 + 19 + 19 = **69 titles**.
 
 ---
 
 ## 3. Critical: how to match titles (read before writing your own matcher)
 
 We tried the obvious approach first — check whether a posting's title contains one of the
-72 phrases above verbatim — and it badly under-counted. Real job postings almost never use
+69 phrases above verbatim — and it badly under-counted. Real job postings almost never use
 the exact templated phrasing ("Manager - OSP Construction", "Fiber Technician - Cedar
-Rapids", "GIS Lead" — none of those contain a full 72-list phrase as a substring). Switching
+Rapids", "GIS Lead" — none of those contain a full 69-list phrase as a substring). Switching
 to root-term matching multiplied the real match count by ~3x on the same data.
 
 **Second trap**: naive substring checks on short 3-letter acronyms are unsafe. `"osp"` is a
