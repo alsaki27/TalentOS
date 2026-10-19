@@ -597,6 +597,9 @@ export async function listApplicationQueue(
       CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END as hiring_panel_recruiter_score,
       CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END as hiring_panel_role_fit_score,
       CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END as hiring_panel_truth_score,
+      CASE WHEN (qf.data->>'score') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (qf.data->>'score')::numeric END as qualification_fit_score,
+      qf.data->>'status' as qualification_fit_status,
+      CASE WHEN (qf.data->>'evidenceCoverage') ~ '^-?[0-9]+$' THEN (qf.data->>'evidenceCoverage')::int END as qualification_fit_evidence_coverage,
       score.average_score,
       a.tailored_resume_version_id as workflow_resume_version_id,
       rv.title as workflow_resume_title,
@@ -622,6 +625,11 @@ export async function listApplicationQueue(
       WHERE workflow_id = w.id AND automation_id = 'application_final_polish'
       ORDER BY created_at DESC LIMIT 1
     ) fp ON true
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
+      ORDER BY created_at DESC LIMIT 1
+    ) qf ON true
     LEFT JOIN LATERAL (
       SELECT AVG(value)::numeric AS average_score
       FROM (VALUES

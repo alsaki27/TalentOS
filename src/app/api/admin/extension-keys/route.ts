@@ -15,6 +15,7 @@ const VALID_SCOPES = [
   "extension:evidence:write",
   "extension:adapters:read",
   "extension:resume:read",
+  "extension:application:assign",
 ];
 
 async function sha256(input: string): Promise<string> {
@@ -33,9 +34,12 @@ export async function GET(request: NextRequest) {
   if (response) return response;
   try {
     const rows = await query(
-      `SELECT id, label, scopes, candidate_id, created_at, revoked_at
-       FROM extension_api_keys
-       ORDER BY created_at DESC`
+      `SELECT k.id, k.label, k.scopes, k.candidate_id, k.owner_user_id,
+              p.display_name AS owner_name, p.email AS owner_email, p.role AS owner_role,
+              k.created_at, k.last_used_at, k.revoked_at
+         FROM extension_api_keys k
+         LEFT JOIN profiles p ON p.user_id = k.owner_user_id
+        ORDER BY k.created_at DESC`
     );
     return NextResponse.json({ keys: rows });
   } catch (err) {
@@ -48,7 +52,7 @@ export async function POST(request: NextRequest) {
   if (response) return response;
   try {
     const body = await request.json();
-    const { label, scopes, candidateId } = body;
+    const { label, scopes, candidateId, ownerUserId } = body;
 
     if (!label || typeof label !== "string") {
       return NextResponse.json({ error: "label is required" }, { status: 400 });
@@ -64,28 +68,44 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const needsTeamMemberOwner = requestedScopes.some((scope) =>
+      scope === "extension:job:capture" || scope === "extension:application:assign"
+    );
+    if (needsTeamMemberOwner && (typeof ownerUserId !== "string" || !ownerUserId.trim())) {
+      return NextResponse.json({ error: "An active team member must own job-capture and candidate-logging keys." }, { status: 400 });
+    }
+    if (ownerUserId) {
+      const owner = await queryOne<{ user_id: string }>(
+        `SELECT user_id FROM profiles
+          WHERE user_id = $1 AND is_active = true`,
+        [ownerUserId],
+      );
+      if (!owner) return NextResponse.json({ error: "Key owner must be an active team member." }, { status: 400 });
+    }
+
     // Generate the key and hash it for storage
     const plaintextKey = generateKey();
     const keyHash = await sha256(plaintextKey);
 
     const row = await queryOne<{ id: string }>(
-      `INSERT INTO extension_api_keys (label, key_hash, scopes, candidate_id)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO extension_api_keys (label, key_hash, scopes, candidate_id, owner_user_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id`,
-      [label, keyHash, requestedScopes, candidateId ?? null]
+      [label, keyHash, requestedScopes, candidateId ?? null, ownerUserId ?? null]
     );
 
     // Audit
     await guardedSafetyCheck({
       operation: "create",
       resource: "extension_api_keys",
-      detail: `Issued key "${label}" with scopes [${requestedScopes.join(", ")}]`,
+      detail: `Issued key "${label}"${ownerUserId ? ` for team member ${ownerUserId}` : ""} with scopes [${requestedScopes.join(", ")}]`,
     });
 
     // Return plaintext ONCE — never stored, never retrievable again
     return NextResponse.json({
       id: row!.id,
       label,
+      ownerUserId: ownerUserId ?? null,
       key: plaintextKey,
       scopes: requestedScopes,
       message: "Save this key — it cannot be retrieved again.",

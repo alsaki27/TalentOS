@@ -5,6 +5,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authenticateExtension, checkRequiredHeaders, checkIdempotencyKey, extensionError, EXTENSION_SCOPES, withExtensionCors } from "@/lib/extensionAuth";
 import { createJob } from "@/server/repositories/jobsRepository";
+import { detectJobEligibilityRestrictions } from "@/lib/jobEligibilityRestrictions";
+import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
 export async function POST(request: NextRequest) {
   return withExtensionCors(async (req) => {
@@ -24,10 +26,18 @@ export async function POST(request: NextRequest) {
         // employer from the site it was scraped off, and a real location from a
         // fragment of the job description.
         signals, isRemote, externalId, postedAt, employmentType, sourceUrl, identityUrls,
+        acknowledgeEligibility,
       } = body;
 
       if (!title || !applyUrl || !jdText) {
         return extensionError("validation_error", "title, applyUrl, and jdText are required.", 400);
+      }
+
+      const eligibility = detectJobEligibilityRestrictions(String(jdText));
+      if (eligibility.eligibilityRestricted && acknowledgeEligibility !== true) {
+        return NextResponse.json({
+          error: { code: "eligibility_ack_required", message: "This posting contains citizenship, clearance, or export-control restrictions. Review and confirm before adding it.", details: eligibility },
+        }, { status: 409 });
       }
 
       // You can store atsDetected or screenshotUrl in notes if you want to keep them
@@ -71,6 +81,16 @@ export async function POST(request: NextRequest) {
       );
 
       if (outcome.status === "duplicate") {
+        if (auth.key.owner_user_id) {
+          await recordExtensionActivity({
+            actorUserId: auth.key.owner_user_id,
+            extensionKeyId: auth.key.id,
+            eventType: "job_duplicate",
+            jobId: outcome.existing.id,
+            idempotencyKey: req.headers.get("idempotency-key"),
+            metadata: { title, company: company ?? null, eligibilityAcknowledged: eligibility.eligibilityRestricted },
+          });
+        }
         return NextResponse.json({
           jobId: outcome.existing.id,
           duplicate: true,
@@ -78,7 +98,18 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      return NextResponse.json({ jobId: outcome.job.id, duplicate: false }, { status: 201 });
+      if (auth.key.owner_user_id) {
+        await recordExtensionActivity({
+          actorUserId: auth.key.owner_user_id,
+          extensionKeyId: auth.key.id,
+          eventType: "job_added",
+          jobId: outcome.job.id,
+          idempotencyKey: req.headers.get("idempotency-key"),
+          metadata: { title, company: company ?? null, eligibilityAcknowledged: eligibility.eligibilityRestricted },
+        });
+      }
+
+      return NextResponse.json({ jobId: outcome.job.id, duplicate: false, eligibility }, { status: 201 });
     } catch (err) {
       return extensionError("internal_error", String(err), 500);
     }

@@ -163,6 +163,7 @@ export default function NavBar() {
     { href: "/candidate-job-matches", label: "Candidate Match Review", show: canJobs },
     { href: "/admin/ai",              label: "AI Control Center",     show: isAdmin },
     { href: "/admin/extension-keys",  label: "Extension API Keys",    show: isAdmin },
+    { href: "/admin/extension-reports", label: "Team Activity Reports", show: isAdmin },
     { href: "/ats-score",             label: "ATS Score Analysis",    show: true },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team",                  label: "Team",                  show: isAdmin },

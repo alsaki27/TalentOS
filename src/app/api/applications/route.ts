@@ -18,6 +18,7 @@ import { triggerAiWorkflowForApplication } from "@/server/services/applicationAi
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { getSourceOfTruth, parseSourceOfTruth } from "@/server/services/sourceOfTruthService";
 import { callWithUsageTracking } from "@/lib/ai/routing";
+import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
 export async function GET(req: NextRequest) {
   const currentUser = await getCurrentUserContext();
@@ -120,6 +121,32 @@ export async function POST(req: NextRequest) {
       adhoc_job_raw_text: body.adhoc_job_raw_text ?? null,
       source_type: body.source_type ?? "base_resume",
     })));
+
+    if (hasJobId) {
+      for (const application of data) {
+        const baseResumeId = candidateResumes[application.candidate_id]?.base_resume_id ?? body.base_resume_id ?? null;
+        await recordExtensionActivity({
+          actorUserId: currentUser.profile.user_id,
+          eventType: "candidate_logged",
+          jobId: body.job_id,
+          applicationId: application.id,
+          candidateId: application.candidate_id,
+          baseResumeId,
+          metadata: { source: "talentos_application_form", initialStatus: status },
+        }).catch((error) => console.error("[extension-activity] Could not record team candidate log", error));
+        if (status === "applied") {
+          await recordExtensionActivity({
+            actorUserId: currentUser.profile.user_id,
+            eventType: "application_applied",
+            jobId: body.job_id,
+            applicationId: application.id,
+            candidateId: application.candidate_id,
+            baseResumeId,
+            metadata: { source: "talentos_application_form", initialStatus: status },
+          }).catch((error) => console.error("[extension-activity] Could not record team application submission", error));
+        }
+      }
+    }
 
     for (const application of data) {
       await execute(

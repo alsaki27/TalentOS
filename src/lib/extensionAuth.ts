@@ -4,7 +4,7 @@
 // Returns the error envelope specified in docs/A4_EXTENSION_API.md on failure.
 
 import { NextRequest, NextResponse } from "next/server";
-import { queryOne } from "@/server/db/neon";
+import { execute, queryOne } from "@/server/db/neon";
 
 export const EXTENSION_SCOPES = {
   jobCapture: "extension:job:capture",
@@ -13,6 +13,7 @@ export const EXTENSION_SCOPES = {
   evidenceWrite: "extension:evidence:write",
   adaptersRead: "extension:adapters:read",
   resumeRead: "extension:resume:read",
+  applicationAssign: "extension:application:assign",
 } as const;
 
 export type ExtensionScope = typeof EXTENSION_SCOPES[keyof typeof EXTENSION_SCOPES];
@@ -22,6 +23,7 @@ interface ExtensionKeyRow {
   label: string;
   scopes: string[];
   candidate_id: string | null;
+  owner_user_id: string | null;
 }
 
 const CORS_ALLOWED_HEADERS =
@@ -75,7 +77,7 @@ async function sha256(input: string): Promise<string> {
 
 export async function authenticateExtension(
   request: NextRequest,
-  requiredScope: ExtensionScope
+  requiredScope: ExtensionScope | ExtensionScope[]
 ): Promise<{ key: ExtensionKeyRow } | NextResponse> {
   // Extract token from Authorization: Bearer tos_... or x-api-key header
   let token: string | null = null;
@@ -94,7 +96,7 @@ export async function authenticateExtension(
   // Hash the token and look it up
   const tokenHash = await sha256(token);
   const row = await queryOne<ExtensionKeyRow>(
-    `SELECT id, label, scopes, candidate_id
+    `SELECT id, label, scopes, candidate_id, owner_user_id
      FROM extension_api_keys
      WHERE key_hash = $1 AND revoked_at IS NULL`,
     [tokenHash]
@@ -105,9 +107,13 @@ export async function authenticateExtension(
   }
 
   // Check scope
-  if (!row.scopes.includes(requiredScope)) {
-    return errorResponse("missing_scope", `This key does not have the required scope: ${requiredScope}`, 403);
+  const requiredScopes = Array.isArray(requiredScope) ? requiredScope : [requiredScope];
+  const missingScopes = requiredScopes.filter((scope) => !row.scopes.includes(scope));
+  if (missingScopes.length > 0) {
+    return errorResponse("missing_scope", `This key does not have the required scope: ${missingScopes.join(", ")}`, 403);
   }
+
+  await execute("UPDATE extension_api_keys SET last_used_at = NOW() WHERE id = $1", [row.id]);
 
   return { key: row };
 }

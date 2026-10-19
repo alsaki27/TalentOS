@@ -7,11 +7,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const queryOneMock = vi.hoisted(() => vi.fn());
+const executeMock = vi.hoisted(() => vi.fn().mockResolvedValue({ rowCount: 1 }));
 
 vi.mock("@/server/db/neon", () => ({
   query: vi.fn().mockResolvedValue([]),
   queryOne: queryOneMock,
-  execute: vi.fn().mockResolvedValue({ rowCount: 1 }),
+  execute: executeMock,
 }));
 
 import { NextRequest, NextResponse } from "next/server";
@@ -24,6 +25,7 @@ function makeRequest(headers: Record<string, string>): NextRequest {
 describe("authenticateExtension", () => {
   beforeEach(() => {
     queryOneMock.mockReset();
+    executeMock.mockClear();
   });
 
   it("rejects with 401 invalid_key when no token is present (no auth header, no x-api-key)", async () => {
@@ -102,5 +104,36 @@ describe("authenticateExtension", () => {
     if (res instanceof NextResponse) {
       expect(res.status).toBe(401);
     }
+  });
+
+  it("requires every scope for combined extension workflows", async () => {
+    queryOneMock.mockResolvedValue({
+      id: "key-3", label: "AE key", scopes: [EXTENSION_SCOPES.jobCapture],
+      candidate_id: null, owner_user_id: "ae-1",
+    });
+    const res = await authenticateExtension(
+      makeRequest({ authorization: "Bearer tos_partial" }),
+      [EXTENSION_SCOPES.jobCapture, EXTENSION_SCOPES.applicationAssign],
+    );
+    expect(res).toBeInstanceOf(NextResponse);
+    if (res instanceof NextResponse) {
+      expect(res.status).toBe(403);
+      expect((await res.json()).error.message).toContain(EXTENSION_SCOPES.applicationAssign);
+    }
+    expect(executeMock).not.toHaveBeenCalled();
+  });
+
+  it("updates last-used time after a valid scoped key authenticates", async () => {
+    const row = {
+      id: "key-4", label: "AE key", scopes: [EXTENSION_SCOPES.jobCapture, EXTENSION_SCOPES.applicationAssign],
+      candidate_id: null, owner_user_id: "ae-1",
+    };
+    queryOneMock.mockResolvedValue(row);
+    const res = await authenticateExtension(
+      makeRequest({ authorization: "Bearer tos_valid_ae" }),
+      [EXTENSION_SCOPES.jobCapture, EXTENSION_SCOPES.applicationAssign],
+    );
+    expect(res).not.toBeInstanceOf(NextResponse);
+    expect(executeMock).toHaveBeenCalledWith("UPDATE extension_api_keys SET last_used_at = NOW() WHERE id = $1", [row.id]);
   });
 });

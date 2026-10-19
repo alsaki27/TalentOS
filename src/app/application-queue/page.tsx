@@ -55,6 +55,9 @@ interface QueueItem {
   hiring_panel_recruiter_score?: number | null;
   hiring_panel_role_fit_score?: number | null;
   hiring_panel_truth_score?: number | null;
+  qualification_fit_score?: number | null;
+  qualification_fit_status?: string | null;
+  qualification_fit_evidence_coverage?: number | null;
   average_score?: number | null;
   one_page_fit_score?: number | null;
   page_fit_metrics?: PageFitMetrics | null;
@@ -1398,7 +1401,7 @@ export default function ApplicationQueuePage() {
                     )}
                   </td>
 
-                  <td>
+                  <td className="queue-score-column">
                     <QueueScoreCell item={item} />
                   </td>
 
@@ -1588,11 +1591,37 @@ function scoreLabel(value: number | null | undefined): string {
 function QueueScoreCell({ item }: { item: QueueItem }) {
   const average = item.average_score == null ? null : Number(item.average_score);
   const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
-  if (average == null && finalScore == null) return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
+  const atsScore = item.hiring_panel_ats_score == null ? null : Number(item.hiring_panel_ats_score);
+  const qualificationFit = item.qualification_fit_score == null ? null : Number(item.qualification_fit_score);
+  const hasQualificationStatus = Boolean(item.qualification_fit_status);
+  if (average == null && finalScore == null && atsScore == null && !hasQualificationStatus && !item.workflow_id) {
+    return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
+  }
+  const fitLabel = qualificationFit !== null
+    ? `Fit ${scoreLabel(qualificationFit)}${item.qualification_fit_status === "needs_review" ? ": review" : ""}`
+    : item.qualification_fit_status === "needs_review"
+      ? "Fit: review"
+      : item.qualification_fit_status === "insufficient_evidence"
+        ? "Fit: insufficient evidence"
+        : ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "")
+          ? "Fit: unavailable"
+          : "Fit: pending";
+  const fitTone = item.qualification_fit_status === "scored"
+    ? "badge-success"
+    : hasQualificationStatus
+      ? "badge-warning"
+      : "badge-info";
+  const fitTitle = item.qualification_fit_evidence_coverage == null
+    ? ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "") && !hasQualificationStatus
+      ? "No Qualification fit scorecard is stored for this workflow; it may be a historical workflow or a scorecard persistence failure."
+      : "Evidence-based qualification fit"
+    : `Evidence-based qualification fit; ${item.qualification_fit_evidence_coverage}% evidence coverage`;
   return (
-    <div style={{ display: "grid", gap: 2, fontSize: 11 }}>
-      <span className="badge badge-info" title="Average of ATS, recruiter, role fit, truth, and Final QA scores">Avg {scoreLabel(average)}</span>
-      <span className="text-muted" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>
+    <div className="queue-score-cell" style={{ fontSize: 11 }}>
+      {average !== null && <span className="badge badge-info queue-score-badge" title="Average of available ATS, recruiter, role fit, truth, and Final QA scores. Qualification fit is excluded.">Avg {scoreLabel(average)}</span>}
+      {atsScore !== null && <span className="text-muted queue-score-detail" title="Hiring Panel ATS score">ATS {scoreLabel(atsScore)}</span>}
+      <span className={`badge ${fitTone} queue-score-badge`} title={fitTitle}>{fitLabel}</span>
+      {finalScore !== null && <span className="text-muted queue-score-detail" title="Final Polish QA score">Final {scoreLabel(finalScore)}</span>}
     </div>
   );
 }
@@ -1603,16 +1632,18 @@ function QueueFindingsPanel({ details }: { details: any }) {
   const artifacts: any[] = details?.artifacts ?? [];
   const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
   const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
+  const qualificationFit = artifacts.find((a) => a.automation_id === "application_qualification_fit")?.data;
   return (
     <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
       {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(90px, 1fr))", gap: 4 }}>
             {[
               ["ATS", hiringPanel.atsScore],
               ["Recruiter", hiringPanel.recruiterScore],
               ["Role fit", hiringPanel.roleFitScore],
               ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
+              ["Qualification", qualificationFit?.score],
             ].map(([label, value]) => (
               <div key={String(label)} style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>{label}</div>
@@ -1620,6 +1651,50 @@ function QueueFindingsPanel({ details }: { details: any }) {
               </div>
             ))}
           </div>
+          {qualificationFit && (
+            <div style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 5, display: "grid", gap: 5 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <strong>Qualification fit {scoreLabel(qualificationFit.score)}</strong>
+                <span className={`badge ${qualificationFit.status === "scored" ? "badge-success" : "badge-warning"}`}>
+                  {qualificationFit.status === "scored" ? "evidence scored" : qualificationFit.status.replaceAll("_", " ")}
+                </span>
+                {typeof qualificationFit.evidenceCoverage === "number" && (
+                  <span className="text-muted">{qualificationFit.evidenceCoverage}% evidence coverage</span>
+                )}
+              </div>
+              <div className="muted">{qualificationFit.summary}</div>
+              <div className="text-muted" style={{ fontSize: 10 }}>
+                Formula: 10 × earned weight ÷ resolved weight; unresolved requirements are excluded from the score and counted in evidence coverage. Hard minimum-experience gaps cap the score at 4.0. Rubric: {qualificationFit.rubricVersion}.
+                {typeof qualificationFit.rawScore === "number" && typeof qualificationFit.score === "number" && qualificationFit.score < qualificationFit.rawScore
+                  ? ` Raw score ${scoreLabel(qualificationFit.rawScore)} was capped to ${scoreLabel(qualificationFit.score)}.`
+                  : ""}
+              </div>
+              {Array.isArray(qualificationFit.criteria) && qualificationFit.criteria.length > 0 && (
+                <div style={{ display: "grid", gap: 4 }}>
+                  {qualificationFit.criteria.slice(0, 8).map((criterion: any, index: number) => (
+                    <div key={`${criterion.requirement}-${index}`} style={{ display: "grid", gridTemplateColumns: "minmax(130px, 1fr) auto", gap: 8, alignItems: "start" }}>
+                      <div>
+                        <div>{criterion.requirement}</div>
+                        {criterion.jobEvidence && (
+                          <div className="text-muted" style={{ fontSize: 10 }}>Job: {criterion.jobEvidence}</div>
+                        )}
+                        {Array.isArray(criterion.evidenceExcerpts) && criterion.evidenceExcerpts.length > 0 && (
+                          <div className="text-muted" style={{ fontSize: 10 }}>Candidate evidence: {criterion.evidenceExcerpts.join("; ")}</div>
+                        )}
+                        {Array.isArray(criterion.evidence) && criterion.evidence.length > 0 && (
+                          <div className="text-muted" style={{ fontSize: 10 }}>Source: {criterion.evidence.join(", ")}</div>
+                        )}
+                      </div>
+                      <span className="text-muted" title={criterion.explanation}>
+                        {String(criterion.status).replace(/_/g, " ")} · {criterion.points}/{criterion.weight}
+                      </span>
+                    </div>
+                  ))}
+                  {qualificationFit.criteria.length > 8 && <span className="text-muted">+ {qualificationFit.criteria.length - 8} more criteria</span>}
+                </div>
+              )}
+            </div>
+          )}
           {hiringPanel.overallComment && <div style={{ fontStyle: "italic", color: "var(--ink-soft)" }}>&quot;{hiringPanel.overallComment}&quot;</div>}
           {hiringPanel.disposition && (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>

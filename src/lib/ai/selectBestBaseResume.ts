@@ -5,7 +5,7 @@
 
 import { query as neonQuery } from "@/server/db/neon";
 
-interface BaseResumeCandidate {
+export interface BaseResumeCandidate {
   id: string;
   name: string;
   target_industry: string | null;
@@ -13,7 +13,7 @@ interface BaseResumeCandidate {
   content: any;
 }
 
-interface TargetJob {
+export interface TargetJob {
   title?: string | null;
   job_category?: string | null;
   description_text?: string | null;
@@ -27,13 +27,32 @@ export interface BestBaseResumeResult {
   reason: string;
 }
 
+/**
+ * Shared deterministic selector for an already-loaded set of base resumes.
+ * Keep this as the single scoring implementation used by the AI workflow and
+ * extension picker so both choose the same resume without an extra model call.
+ */
+export function chooseBestBaseResume(
+  rows: BaseResumeCandidate[],
+  targetJob: TargetJob,
+): BestBaseResumeResult | null {
+  let best: BestBaseResumeResult | null = null;
+  for (const row of rows) {
+    const { score, reason } = scoreBaseResumeDomainFit(row, targetJob);
+    if (!best || score > best.score) {
+      best = { resume: row, score, reason };
+    }
+  }
+  return best;
+}
+
 function tokenize(s: string): Set<string> {
   return new Set(
     s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2)
   );
 }
 
-function domainScore(base: BaseResumeCandidate, job: TargetJob): { score: number; reason: string } {
+export function scoreBaseResumeDomainFit(base: BaseResumeCandidate, job: TargetJob): { score: number; reason: string } {
   let score = 0;
   const reasons: string[] = [];
 
@@ -89,7 +108,7 @@ function domainScore(base: BaseResumeCandidate, job: TargetJob): { score: number
 
   return {
     score,
-    reason: reasons.length > 0 ? reasons.join("; ") : "no domain match — fallback to most recent",
+    reason: reasons.length > 0 ? reasons.join("; ") : "No strong domain match; use recency as the tie-breaker.",
   };
 }
 
@@ -106,15 +125,5 @@ export async function selectBestBaseResume(
     [candidateId]
   );
 
-  if (rows.length === 0) return null;
-
-  let best: BestBaseResumeResult | null = null;
-  for (const row of rows) {
-    const { score, reason } = domainScore(row, targetJob);
-    if (!best || score > best.score) {
-      best = { resume: row, score, reason };
-    }
-  }
-
-  return best;
+  return chooseBestBaseResume(rows, targetJob);
 }

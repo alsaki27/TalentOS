@@ -1294,6 +1294,33 @@ label {
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.app-queue-page .queue-score-column {
+  min-width: 0;
+}
+.app-queue-page .queue-score-cell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+.app-queue-page .queue-score-badge {
+  justify-self: start;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+.app-queue-page .queue-score-detail {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
 .app-queue-page .table td a,
 .app-queue-page .table td .row-link {
   overflow-wrap: anywhere;

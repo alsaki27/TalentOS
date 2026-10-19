@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 
 const queryOneMock = vi.hoisted(() => vi.fn());
 const queryMock = vi.hoisted(() => vi.fn());
+const executeMock = vi.hoisted(() => vi.fn().mockResolvedValue({ rowCount: 1 }));
 
 vi.mock("@/server/db/neon", () => ({
   query: queryMock,
   queryOne: queryOneMock,
+  execute: executeMock,
 }));
 
 vi.mock("@/lib/ai/routing", () => ({

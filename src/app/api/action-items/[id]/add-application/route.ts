@@ -4,6 +4,7 @@ import { queryOne, execute } from "@/server/db/neon";
 import { createApplications } from "@/server/repositories/applicationsRepository";
 import { createJob } from "@/server/repositories/jobsRepository";
 import { notifyInteractiveDuplicateBlocked } from "@/lib/jobDuplicateNotify";
+import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const { context, response } = await requireCurrentUser();
@@ -67,6 +68,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     created_by: context!.profile.user_id,
   }]))[0];
   if (!application) return NextResponse.json({ error: "Could not create application record." }, { status: 500 });
+
+  if (!existing) {
+    await recordExtensionActivity({
+      actorUserId: context!.profile.user_id,
+      eventType: "application_applied",
+      jobId: job.id,
+      applicationId: application.id,
+      candidateId: task.candidate_id,
+      metadata: { source: "untracked_application_resolution", actionItemId: task.id },
+    }).catch((error) => console.error("[extension-activity] Could not record team resolved application", error));
+  }
 
   await execute("UPDATE action_items SET application_id = $1, status = 'done', resolved_at = now(), resolved_by_user_id = $2, resolution_kind = 'manual_resolution', resolution_note = $3 WHERE id = $4", [application.id, context!.profile.user_id, `AE added application: ${company} — ${jobTitle}`, task.id]);
   await execute("INSERT INTO candidate_workflow_events (candidate_id, application_id, action_item_id, email_communication_id, event_type, actor_type, actor_user_id, payload) VALUES ($1, $2, $3, $4, 'untracked_application_added', 'ae', $5, $6)", [task.candidate_id, application.id, task.id, task.email_communication_id, context!.profile.user_id, JSON.stringify({ company, jobTitle, applyUrl })]);

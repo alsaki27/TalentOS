@@ -14,15 +14,12 @@
 //   hiring_panel:  p99 103s / max 119s  -> 150s (was 120s)
 //   final_polish:  p99 157s / max 179s  -> 220s (was 180s)
 //
-// resume_forge bumped again 2026-09 (180s -> 240s) when Job Lens's work
-// (job-only extraction + per-candidate requirement classification, each its
-// own provider call) was folded into this stage instead of running as its
-// own - see resumeForge.ts's analyzeJob(). Up to 4 sequential provider calls
-// can now happen in one stage attempt (job-only extraction, requirement
-// analysis, draft, optional coverage retry) where at most 2 happened before;
-// each still gets its own full timeoutMs individually, but the *outer*
-// per-attempt guard in processWorkflowStage (timeoutMs*2+5s) needed more
-// headroom for the realistic combined case.
+// Resume Forge's per-provider timeout is 300s (updated 2026-10) to match the
+// live five-minute agent setting. Job Lens's extraction/classification
+// and the draft/optional coverage retry can make up to four sequential calls
+// in this stage. Each provider call gets its own timeout; the outer stage
+// guard in processWorkflowStage separately allows combined-call headroom,
+// capped at the dispatch ceiling.
 
 export const AGENT_CONFIG_DEFAULTS = {
   // No longer its own pipeline stage (folded into application_resume_forge -
@@ -43,7 +40,7 @@ export const AGENT_CONFIG_DEFAULTS = {
     displayName: "Resume Forge",
     temperature: 0.3,
     maxOutputTokens: 32768,
-    timeoutMs: 240_000,
+    timeoutMs: 300_000,
     maxAttempts: 2,
     approvalPolicy: "risk_based" as const,
     minimumScore: 0,

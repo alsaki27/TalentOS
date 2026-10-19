@@ -77,24 +77,35 @@ export const heuristicFieldMapper: FieldMapper = {
     const usedHeaders = new Set<string>();
     const normalizedHeaders = headers.map((h) => ({ original: h, normalized: normalizeHeader(h) }));
 
-    for (const field of Object.keys(SYNONYMS) as SchemaField[]) {
-      const synonyms = SYNONYMS[field].map(normalizeHeader);
+    const fields = Object.keys(SYNONYMS) as SchemaField[];
 
-      let best = normalizedHeaders.find(
+    // Reserve every exact header match before fuzzy matching. Otherwise an early
+    // field can claim a near-match that is an exact match for a later field
+    // (for example, `description_text` being consumed as `description_html`).
+    for (const field of fields) {
+      const synonyms = SYNONYMS[field].map(normalizeHeader);
+      const exact = normalizedHeaders.find(
         (h) => !usedHeaders.has(h.original) && synonyms.includes(h.normalized)
       );
-
-      if (!best) {
-        let bestScore = 0;
-        for (const h of normalizedHeaders) {
-          if (usedHeaders.has(h.original)) continue;
-          for (const syn of synonyms) {
-            const score = similarity(h.normalized, syn);
-            if (score > bestScore) { bestScore = score; best = h; }
-          }
-        }
-        if (bestScore < FUZZY_THRESHOLD) best = undefined;
+      if (exact) {
+        mapping[field] = exact.original;
+        usedHeaders.add(exact.original);
       }
+    }
+
+    for (const field of fields) {
+      if (mapping[field]) continue;
+      const synonyms = SYNONYMS[field].map(normalizeHeader);
+      let best: typeof normalizedHeaders[number] | undefined;
+      let bestScore = 0;
+      for (const h of normalizedHeaders) {
+        if (usedHeaders.has(h.original)) continue;
+        for (const syn of synonyms) {
+          const score = similarity(h.normalized, syn);
+          if (score > bestScore) { bestScore = score; best = h; }
+        }
+      }
+      if (bestScore < FUZZY_THRESHOLD) best = undefined;
 
       if (best) {
         mapping[field] = best.original;

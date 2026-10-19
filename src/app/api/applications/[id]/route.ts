@@ -16,6 +16,7 @@ import {
   deleteApplication,
 } from "@/server/repositories/applicationsRepository";
 import { APPLICATION_STAGES } from "@/lib/applicationStages";
+import { recordExtensionActivity } from "@/server/services/extensionActivityService";
 
 const AE_STAGES = ["in_ai_pipeline", "ready_for_review", "ready_for_application", "applied"] as const;
 
@@ -229,6 +230,49 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
 
   try {
     const data = await updateApplication(params.id, updates);
+
+    // Team reports count completed workflow actions, not page views or repeated
+    // saves. These events are written only when the application crosses the
+    // review hand-off or applied stage. Telemetry failures must not undo a
+    // successful application update.
+    if (currentUser.profile.is_active) {
+      const reachedReviewComplete =
+        previousAeStage === "ready_for_review" && updates.ae_stage === "ready_for_application";
+      const reachedApplied =
+        (updates.ae_stage === "applied" && previousAeStage !== "applied") ||
+        (updates.status === "applied" && previousStatus !== "applied");
+
+      const activityWrites: Promise<unknown>[] = [];
+      if (reachedReviewComplete) {
+        activityWrites.push(recordExtensionActivity({
+          actorUserId: currentUser.profile.user_id,
+          eventType: "application_reviewed",
+          applicationId: params.id,
+          jobId: currentApplication?.job_id,
+          candidateId: currentApplication?.candidate_id,
+          metadata: { fromStage: previousAeStage, toStage: updates.ae_stage },
+        }));
+      }
+      if (reachedApplied) {
+        activityWrites.push(recordExtensionActivity({
+          actorUserId: currentUser.profile.user_id,
+          eventType: "application_applied",
+          applicationId: params.id,
+          jobId: currentApplication?.job_id,
+          candidateId: currentApplication?.candidate_id,
+          metadata: {
+            fromStatus: previousStatus,
+            toStatus: updates.status,
+            fromStage: previousAeStage,
+            toStage: updates.ae_stage ?? null,
+          },
+        }));
+      }
+      for (const activityWrite of activityWrites) {
+        try { await activityWrite; }
+        catch (error) { console.error("[extension-activity] Could not record team application action", error); }
+      }
+    }
 
     let createdInterview: unknown = null;
     if (interviewToCreate) {

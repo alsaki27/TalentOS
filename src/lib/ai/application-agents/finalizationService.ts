@@ -23,6 +23,13 @@ import { renderResumePdfDoc } from "@/lib/falood/skarionPdfDocument";
 import { archiveResumeToSharePoint } from "@/server/services/resumeSharePointArchiveService";
 import { computeFinalScores, resumeDocumentText } from "./finalResumeScoring";
 import type { JobAnalysisV1 } from "./schemas";
+import {
+  computeQualificationFit,
+  QUALIFICATION_FIT_RUBRIC_VERSION,
+  resolveQualificationJobDescription,
+  type QualificationFitResult,
+} from "./qualificationFit";
+import { sha256Hex } from "@/lib/sha256";
 
 export async function finalizeWorkflow(
   workflowId: string,
@@ -48,9 +55,9 @@ export async function finalizeWorkflow(
 
   const wf = await queryOne<{
     id: string; application_id: string; candidate_id: string; job_id: string | null; base_resume_id: string | null;
-    config_snapshot: any;
+    config_snapshot: any; created_at: string;
   }>(
-    `SELECT w.id, w.application_id, w.base_resume_id, w.config_snapshot,
+    `SELECT w.id, w.application_id, w.base_resume_id, w.config_snapshot, w.created_at,
             a.candidate_id, a.job_id
      FROM application_ai_workflows w
      JOIN applications a ON w.application_id = a.id
@@ -188,6 +195,54 @@ export async function finalizeWorkflow(
   // requirements (older artifacts).
   const jobLensArtifact = artifacts.find((a) => a.automation_id === "application_job_lens");
   const jobLensData = jobLensArtifact?.data as JobAnalysisV1 | undefined;
+  const qualificationJobAnalysisArtifact = artifacts
+    .filter((a) => a.automation_id === "application_job_lens")
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  const qualificationJobAnalysis = qualificationJobAnalysisArtifact?.data as JobAnalysisV1 | undefined;
+  const resumeForgeInputArtifact = artifacts
+    .filter((a) => a.automation_id === "application_resume_forge:input")
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+  const resumeForgeContext = (resumeForgeInputArtifact?.data as any)?.context ?? {};
+  const jobSnapshot = resumeForgeContext.job ?? {};
+  const sourceOfTruthSnapshot = resumeForgeContext.sourceOfTruth ?? {};
+  const qualificationJobDescription = resolveQualificationJobDescription(jobSnapshot);
+  const qualificationCandidateSnapshot = {
+    // Use the exact candidate snapshot Resume Forge analyzed. Falling back to
+    // a current base-resume row could make citations resolve against content
+    // that was not present when the workflow ran.
+    baseResume: resumeForgeContext.baseResume ?? null,
+    verifiedSkills: Array.isArray(resumeForgeContext.verifiedSkills) ? resumeForgeContext.verifiedSkills : [],
+    sourceOfTruthSkills: Array.isArray(sourceOfTruthSnapshot.confirmedSkills) ? sourceOfTruthSnapshot.confirmedSkills : [],
+    evidence: Array.isArray(resumeForgeContext.evidence) ? resumeForgeContext.evidence : [],
+  };
+  let qualificationFit: QualificationFitResult | null = null;
+  let qualificationFitJson: string | null = null;
+  let qualificationFitHash: string | null = null;
+  try {
+    qualificationFit = computeQualificationFit({
+      jobDescription: qualificationJobDescription,
+      jobTitle: jobSnapshot.title ?? qualificationJobAnalysis?.title ?? null,
+      jobAnalysis: qualificationJobAnalysis,
+      ...qualificationCandidateSnapshot,
+      evaluatedAt: wf.created_at,
+    });
+    const qualificationFitArtifactData = {
+      ...qualificationFit,
+      evaluatedAt: wf.created_at,
+      sourceHashes: {
+        jobDescription: await sha256Hex(qualificationJobDescription ?? ""),
+        candidateEvidence: await sha256Hex(JSON.stringify(qualificationCandidateSnapshot)),
+        requirementAnalysis: await sha256Hex(JSON.stringify(qualificationJobAnalysis?.requirementAnalysis ?? [])),
+      },
+    };
+    qualificationFitJson = JSON.stringify(qualificationFitArtifactData);
+    qualificationFitHash = await sha256Hex(qualificationFitJson);
+  } catch (err: any) {
+    // This is an advisory score. An unexpected legacy artifact shape or hash
+    // issue must not block the resume that the pipeline just completed.
+    console.error(`[finalizeWorkflow] Could not calculate Qualification fit for workflow ${workflowId}:`, err?.message || err);
+  }
+  const qualificationFitSequence = Math.max(0, ...artifacts.map((artifact) => artifact.sequence_number)) + 1;
   const normalizedFinal = normalizeResumeContentForExport(studioDocument);
   const finalScores = computeFinalScores({
     finalText: resumeDocumentText(normalizedFinal),
@@ -304,6 +359,24 @@ export async function finalizeWorkflow(
     throw new Error(`Finalization failed for workflow ${workflowId}: ${err.message || err}`);
   }
 
+  // Qualification fit is advisory and must never prevent a completed resume
+  // from being saved. Persist its artifact after the core finalization commit,
+  // in its own transaction, and report any issue without failing the workflow.
+  if (qualificationFit && qualificationFitJson && qualificationFitHash) {
+    try {
+      await dbSql.transaction([
+        dbSql`DELETE FROM application_ai_artifacts
+          WHERE workflow_id = ${workflowId}::uuid AND automation_id = 'application_qualification_fit'`,
+        dbSql`INSERT INTO application_ai_artifacts
+          (workflow_id, automation_id, sequence_number, schema_version, content_hash, data)
+          VALUES (${workflowId}::uuid, 'application_qualification_fit', ${qualificationFitSequence},
+            ${qualificationFit.rubricVersion}, ${qualificationFitHash}, ${qualificationFitJson}::jsonb)`,
+      ]);
+    } catch (err: any) {
+      console.error(`[finalizeWorkflow] Could not persist Qualification fit for workflow ${workflowId}:`, err?.message || err);
+    }
+  }
+
   if (!exportReady) {
     console.warn(`[finalizeWorkflow] Workflow ${workflowId} completed with exportReady=false — resume saved as draft, needs manual review (see unresolvedWarnings).`);
   }
@@ -369,6 +442,14 @@ export async function finalizeWorkflow(
         truthScore: finalScores.truthScore,
         supportedCoverage: finalScores.supportedCoverage,
       },
+      qualificationFit: qualificationFit
+        ? {
+            score: qualificationFit.score,
+            status: qualificationFit.status,
+            evidenceCoverage: qualificationFit.evidenceCoverage,
+            rubricVersion: qualificationFit.rubricVersion,
+          }
+        : { score: null, status: "unavailable", rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION },
       exportReady,
     },
   }).catch((err: any) => {

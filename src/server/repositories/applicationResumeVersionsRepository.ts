@@ -8,6 +8,8 @@ export type ResumeVersionSourceType = "base_resume" | "original_resume" | "blank
 
 export interface ApplicationResumeVersionRow {
   id: string;
+  application_id?: string | null;
+  job_id?: string | null;
   candidate_id: string;
   base_resume_id: string | null;
   target_job_id: string;
