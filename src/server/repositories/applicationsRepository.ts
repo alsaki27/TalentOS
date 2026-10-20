@@ -592,7 +592,6 @@ export async function listApplicationQueue(
       w.status as workflow_status,
       w.id as workflow_id,
       w.current_stage as workflow_stage,
-      w.config_snapshot->>'qualificationFitRubricVersion' as qualification_fit_expected_version,
       CASE WHEN (fp.data->>'finalQaScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN CASE WHEN (fp.data->>'finalQaScore')::numeric BETWEEN 20 AND 100 THEN (fp.data->>'finalQaScore')::numeric / 10 ELSE (fp.data->>'finalQaScore')::numeric END END as workflow_score,
       CASE WHEN (hp.data->>'atsScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'atsScore')::numeric END as hiring_panel_ats_score,
       CASE WHEN (hp.data->>'recruiterScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'recruiterScore')::numeric END as hiring_panel_recruiter_score,

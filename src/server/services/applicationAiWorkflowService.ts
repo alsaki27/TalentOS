@@ -14,7 +14,6 @@ import { runResumeForge, JOB_ANALYSIS_CHECKPOINT_ID } from "@/lib/ai/application
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
-import { QUALIFICATION_FIT_RUBRIC_VERSION } from "@/lib/ai/application-agents/qualificationFit";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
 import {
@@ -187,10 +186,6 @@ export async function startWorkflow(input: {
     routingStateId,
     routeSnapshot,
     pipelineVariant: input.pipelineVariant ?? null,
-    // Mark when the workflow began with Qualification fit enabled. The queue
-    // uses this to distinguish a legacy run from a post-rollout run whose
-    // scorecard failed to persist.
-    qualificationFitRubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
     cachedRequirementAnalysis: input.cachedRequirementAnalysis ?? null,
   };
 
