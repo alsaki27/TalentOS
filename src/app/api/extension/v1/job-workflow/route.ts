@@ -407,3 +407,7 @@ export const POST = withExtensionCors(async (request) => {
     return extensionError("internal_error", error instanceof Error ? error.message : String(error), 500);
   }
 });
+
+export async function OPTIONS(request: NextRequest) {
+  return withExtensionCors(async () => new NextResponse(null, { status: 204 }))(request);
+}

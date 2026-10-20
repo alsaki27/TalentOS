@@ -7,14 +7,17 @@ const mocks = vi.hoisted(() => ({
   getSourceOfTruth: vi.fn(), parseSourceOfTruth: vi.fn(), callWithUsageTracking: vi.fn(),
 }));
 
-vi.mock("@/lib/extensionAuth", () => ({
-  EXTENSION_SCOPES: { jobCapture: "extension:job:capture", applicationAssign: "extension:application:assign" },
-  authenticateExtension: mocks.authenticate,
-  checkIdempotencyKey: vi.fn(() => null),
-  checkRequiredHeaders: vi.fn(() => null),
-  extensionError: (code: string, message: string, status: number) => Response.json({ error: { code, message } }, { status }),
-  withExtensionCors: (handler: (request: Request) => unknown) => handler,
-}));
+vi.mock("@/lib/extensionAuth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/extensionAuth")>();
+  return {
+    ...actual,
+    EXTENSION_SCOPES: { jobCapture: "extension:job:capture", applicationAssign: "extension:application:assign" },
+    authenticateExtension: mocks.authenticate,
+    checkIdempotencyKey: vi.fn(() => null),
+    checkRequiredHeaders: vi.fn(() => null),
+    extensionError: (code: string, message: string, status: number) => Response.json({ error: { code, message } }, { status }),
+  };
+});
 vi.mock("@/server/repositories/applicationsRepository", () => ({ createApplications: mocks.createApplications }));
 vi.mock("@/server/repositories/jobsRepository", () => ({ createJob: mocks.createJob }));
 vi.mock("@/server/db/neon", () => ({ query: mocks.query, queryOne: mocks.queryOne, execute: mocks.execute }));
@@ -30,7 +33,7 @@ vi.mock("@/server/services/extensionJobMatchService", () => ({
 vi.mock("@/server/services/extensionActivityService", () => ({ recordExtensionActivity: mocks.recordActivity }));
 
 import { NextRequest } from "next/server";
-import { GET, POST } from "@/app/api/extension/v1/job-workflow/route";
+import { GET, OPTIONS, POST } from "@/app/api/extension/v1/job-workflow/route";
 
 const jobId = "11111111-1111-4111-8111-111111111111";
 const candidateId = "22222222-2222-4222-8222-222222222222";
@@ -79,6 +82,27 @@ describe("team extension job workflow", () => {
     });
     mocks.triggerWorkflow.mockResolvedValue({ started: true, workflowId: "wf-1" });
     mocks.getSourceOfTruth.mockResolvedValue({ lastParsedAt: "2026-10-18T00:00:00.000Z" });
+  });
+
+  it("answers the candidate workflow preflight with the extension CORS headers", async () => {
+    const origin = "chrome-extension://kpenlaknocoaehpmagoihofcfpnejdhh";
+    const request = new NextRequest("https://talentos.test/api/extension/v1/job-workflow", {
+      method: "OPTIONS",
+      headers: {
+        origin,
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type,idempotency-key,x-talentos-client",
+      },
+    });
+
+    const response = await OPTIONS(request);
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(response.headers.get("access-control-allow-methods")).toContain("POST");
+    expect(response.headers.get("access-control-allow-headers")).toContain("Idempotency-Key");
+    expect(response.headers.get("access-control-allow-headers")).toContain("X-TalentOS-Client");
+    expect(mocks.authenticate).not.toHaveBeenCalled();
   });
 
   it("returns the active candidate picker, base-resume scores, and assignment owners", async () => {
