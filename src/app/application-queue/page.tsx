@@ -7,6 +7,7 @@ import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
+import { missingQualificationFitDisplay } from "@/lib/qualificationFitDisplay";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -50,6 +51,7 @@ interface QueueItem {
   workflow_status?: string | null;
   workflow_id?: string | null;
   workflow_stage?: number | null;
+  qualification_fit_expected_version?: string | null;
   workflow_score?: number | null;
   hiring_panel_ats_score?: number | null;
   hiring_panel_recruiter_score?: number | null;
@@ -1594,6 +1596,7 @@ function QueueScoreCell({ item }: { item: QueueItem }) {
   const atsScore = item.hiring_panel_ats_score == null ? null : Number(item.hiring_panel_ats_score);
   const qualificationFit = item.qualification_fit_score == null ? null : Number(item.qualification_fit_score);
   const hasQualificationStatus = Boolean(item.qualification_fit_status);
+  const missingFit = missingQualificationFitDisplay(item.workflow_status, item.qualification_fit_expected_version);
   if (average == null && finalScore == null && atsScore == null && !hasQualificationStatus && !item.workflow_id) {
     return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
   }
@@ -1603,18 +1606,20 @@ function QueueScoreCell({ item }: { item: QueueItem }) {
       ? "Fit: review"
       : item.qualification_fit_status === "insufficient_evidence"
         ? "Fit: insufficient evidence"
-        : ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "")
-          ? "Fit: unavailable"
-          : "Fit: pending";
+        : item.qualification_fit_status === "scored"
+          ? "Fit: score missing"
+          : missingFit.label;
   const fitTone = item.qualification_fit_status === "scored"
-    ? "badge-success"
+    ? qualificationFit === null ? "badge-warning" : "badge-success"
     : hasQualificationStatus
       ? "badge-warning"
-      : "badge-info";
+      : missingFit.tone;
   const fitTitle = item.qualification_fit_evidence_coverage == null
-    ? ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "") && !hasQualificationStatus
-      ? "No Qualification fit scorecard is stored for this workflow; it may be a historical workflow or a scorecard persistence failure."
-      : "Evidence-based qualification fit"
+    ? item.qualification_fit_status === "scored"
+      ? "The scorecard status is scored, but its numeric score is missing. Check the stored scorecard."
+      : hasQualificationStatus
+        ? "Evidence-based qualification fit; see the scorecard status for why a numeric score is withheld."
+        : missingFit.title
     : `Evidence-based qualification fit; ${item.qualification_fit_evidence_coverage}% evidence coverage`;
   return (
     <div className="queue-score-cell" style={{ fontSize: 11 }}>
