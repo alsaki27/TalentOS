@@ -7,6 +7,7 @@ import { formatScoreOutOfTen, formatPageFitSummary } from "@/lib/scoreScale";
 import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFailureClassifier";
 import { ShieldAlert } from "lucide-react";
 import { formatEligibilityRestrictionLabel } from "@/lib/jobEligibilityRestrictions";
+import { missingQualificationFitDisplay, qualificationFitScoreText } from "@/lib/qualificationFitDisplay";
 
 interface PageFitMetrics {
   pageCount: number;
@@ -56,8 +57,11 @@ interface QueueItem {
   hiring_panel_role_fit_score?: number | null;
   hiring_panel_truth_score?: number | null;
   qualification_fit_score?: number | null;
+  qualification_fit_score_min?: number | null;
+  qualification_fit_score_max?: number | null;
   qualification_fit_status?: string | null;
   qualification_fit_evidence_coverage?: number | null;
+  qualification_fit_job_grounding_coverage?: number | null;
   average_score?: number | null;
   one_page_fit_score?: number | null;
   page_fit_metrics?: PageFitMetrics | null;
@@ -143,19 +147,16 @@ const AE_STAGE_STYLES: Record<string, { background: string; border: string; colo
 
 // Drag-to-resize column widths (persisted to localStorage) — order here
 // must match the <colgroup>/<th> order in the table below.
-// v2: the four single-ID columns were merged into two labeled ID columns, and
-// the remaining widths were rebalanced so the whole table fits a standard
-// desktop without a horizontal scrollbar at readable (non-shrunken) text
-// sizes. Bumping the key retires any v1 widths saved against the old column
-// set, which would otherwise pin users to the previous cramped layout.
-const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v2";
+// v3: widen Scores so Avg, ATS, Fit, and Final are readable together, and
+// retire saved v2 widths so existing browsers pick up the improved default.
+const COLUMN_WIDTHS_STORAGE_KEY = "aq-column-widths-v3";
 const MIN_COLUMN_WIDTH = 50;
 const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   checkbox: 32,
   candidate: 205,
   job: 205,
   aiPipeline: 158,
-  score: 100,
+  score: 200,
   stage: 200,
   owner: 120,
   due: 78,
@@ -265,6 +266,7 @@ export default function ApplicationQueuePage() {
   const [total, setTotal] = useState(0);
   const [stats, setStats] = useState<QueueStats>({ all: 0, mine: 0, pendingAeReview: 0, pendingAeApplication: 0, aiPipeline: 0, failed: 0 });
   const [stageFilter, setStageFilter] = useState("");
+  const [fitScoreFilter, setFitScoreFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
@@ -329,6 +331,7 @@ export default function ApplicationQueuePage() {
     if (search) p.set("search", search);
     if (candidateFilter) p.set("candidate_id", candidateFilter);
     if (stageFilter) p.set("stage", stageFilter);
+    if (fitScoreFilter) p.set("fit_score", fitScoreFilter);
     if (ownerFilter) p.set("owner", ownerFilter);
     if (priorityFilter) p.set("priority", priorityFilter);
     if (reviewFilter) p.set("review", reviewFilter);
@@ -414,7 +417,7 @@ export default function ApplicationQueuePage() {
     } catch {}
   }
 
-  var hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
+  var hasOtherActiveFilters = Boolean(searchInput || candidateFilter || stageFilter || fitScoreFilter || ownerFilter || priorityFilter || reviewFilter || workModeFilter);
   var hasActiveFilters = hasOtherActiveFilters || Boolean(timeWindow);
 
   function clearFilters() {
@@ -422,6 +425,7 @@ export default function ApplicationQueuePage() {
     setSearch("");
     setCandidateFilter("");
     setStageFilter("");
+    setFitScoreFilter("");
     setOwnerFilter("");
     setPriorityFilter("");
     setReviewFilter("");
@@ -452,7 +456,7 @@ export default function ApplicationQueuePage() {
       .catch(console.error);
   }, []);
 
-  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, ownerFilter, priorityFilter, reviewFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
+  useEffect(() => { load(1); }, [search, candidateFilter, stageFilter, fitScoreFilter, ownerFilter, priorityFilter, reviewFilter, workModeFilter, viewFilter, timeWindow, sort, sortDirection, pageSize]);
 
   // Lightweight live-update: instead of re-fetching the whole queue (which
   // resets scroll/selection and feels like a page reload), poll just the
@@ -1057,7 +1061,7 @@ export default function ApplicationQueuePage() {
       )}
 
       <div className="page-kicker" style={{ marginBottom: 8 }}>
-        Counts below reflect every active filter (search, owner, priority, review, stage, work mode, and Activity) — currently: {TIME_WINDOW_LABELS[timeWindow]}{hasOtherActiveFilters ? ", plus other active filters" : ""}.
+        Counts below reflect every active filter (search, owner, priority, review, stage, fit score, work mode, and Activity) — currently: {TIME_WINDOW_LABELS[timeWindow]}{hasOtherActiveFilters ? ", plus other active filters" : ""}.
       </div>
 
       <div className="stats-strip">
@@ -1089,6 +1093,23 @@ export default function ApplicationQueuePage() {
               {Object.entries(STAGE_FILTER_LABELS).map(([value, label]) => (
                 <option key={value} value={value}>{label.replace(/^[^ ]+ /, "")}</option>
               ))}
+            </select>
+          </div>
+          <div className="filter-field">
+            <span className="filter-label">Fit score</span>
+            <select
+              className="input"
+              value={fitScoreFilter}
+              onChange={e => setFitScoreFilter(e.target.value)}
+              aria-label="Filter by qualification fit score"
+              title="For provisional fit ranges, bands use the displayed conservative lower-bound score."
+            >
+              <option value="">All fit scores</option>
+              <option value="8_10">8.0–10.0</option>
+              <option value="6_8">6.0–&lt;8.0</option>
+              <option value="4_6">4.0–&lt;6.0</option>
+              <option value="0_4">0.0–&lt;4.0</option>
+              <option value="no_score">No numeric score</option>
             </select>
           </div>
           <div className="filter-field">
@@ -1248,7 +1269,17 @@ export default function ApplicationQueuePage() {
         <div className="empty-state" style={{ padding: "40px 0", textAlign: "center", color: "var(--ink-soft)" }}>No application tickets found.</div>
       ) : (
         <div className="table-shell">
-          <table className="table table-compact" style={{ tableLayout: "fixed" }}>
+          <table
+            className="table table-compact"
+            style={{
+              tableLayout: "fixed",
+              width: "100%",
+              minWidth: COLUMN_ORDER.reduce(
+                (total, id) => total + (columnWidths[id] ?? DEFAULT_COLUMN_WIDTHS[id]),
+                0,
+              ),
+            }}
+          >
             <colgroup>
               {COLUMN_ORDER.map((id) => (
                 <col key={id} style={{ width: columnWidths[id] ?? DEFAULT_COLUMN_WIDTHS[id] }} />
@@ -1593,31 +1624,45 @@ function QueueScoreCell({ item }: { item: QueueItem }) {
   const finalScore = item.workflow_score == null ? null : Number(item.workflow_score);
   const atsScore = item.hiring_panel_ats_score == null ? null : Number(item.hiring_panel_ats_score);
   const qualificationFit = item.qualification_fit_score == null ? null : Number(item.qualification_fit_score);
+  const qualificationFitRange = item.qualification_fit_score_min == null || item.qualification_fit_score_max == null
+    ? null
+    : { min: Number(item.qualification_fit_score_min), max: Number(item.qualification_fit_score_max) };
   const hasQualificationStatus = Boolean(item.qualification_fit_status);
+  const missingFit = missingQualificationFitDisplay(item.workflow_status);
   if (average == null && finalScore == null && atsScore == null && !hasQualificationStatus && !item.workflow_id) {
     return <span className="text-muted" style={{ fontSize: 12 }}>Queued</span>;
   }
   const fitLabel = qualificationFit !== null
-    ? `Fit ${scoreLabel(qualificationFit)}${item.qualification_fit_status === "needs_review" ? ": review" : ""}`
+    ? `Fit ${scoreLabel(qualificationFit)}${item.qualification_fit_status === "needs_review" ? " · needs review" : ""}`
+    : qualificationFitRange
+      ? `Fit ${qualificationFitScoreText(null, qualificationFitRange)} · ${item.qualification_fit_status === "needs_review" ? "needs review" : "provisional"}${item.qualification_fit_evidence_coverage == null ? "" : ` · ${item.qualification_fit_evidence_coverage}% evidence`}`
     : item.qualification_fit_status === "needs_review"
       ? "Fit: review"
       : item.qualification_fit_status === "insufficient_evidence"
         ? "Fit: insufficient evidence"
-        : ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "")
-          ? "Fit: unavailable"
-          : "Fit: pending";
+        : item.qualification_fit_status === "scored"
+          ? "Fit: score missing"
+          : missingFit.label;
   const fitTone = item.qualification_fit_status === "scored"
-    ? "badge-success"
+    ? qualificationFit === null ? "badge-warning" : "badge-success"
     : hasQualificationStatus
       ? "badge-warning"
-      : "badge-info";
-  const fitTitle = item.qualification_fit_evidence_coverage == null
-    ? ["completed", "failed", "cancelled"].includes(item.workflow_status ?? "") && !hasQualificationStatus
-      ? "No Qualification fit scorecard is stored for this workflow; it may be a historical workflow or a scorecard persistence failure."
-      : "Evidence-based qualification fit"
-    : `Evidence-based qualification fit; ${item.qualification_fit_evidence_coverage}% evidence coverage`;
+      : missingFit.tone;
+  const fitCoverageTitle = [
+    item.qualification_fit_evidence_coverage == null ? null : `${item.qualification_fit_evidence_coverage}% candidate evidence coverage`,
+    item.qualification_fit_job_grounding_coverage == null ? null : `${item.qualification_fit_job_grounding_coverage}% job-requirement grounding`,
+  ].filter(Boolean).join("; ");
+  const fitTitle = fitCoverageTitle
+    ? `Evidence-based qualification fit; ${fitCoverageTitle}`
+    : item.qualification_fit_evidence_coverage == null
+      ? item.qualification_fit_status === "scored"
+      ? "The scorecard status is scored, but its numeric score is missing. Check the stored scorecard."
+      : hasQualificationStatus
+        ? "Evidence-based qualification fit; see the scorecard status for why a numeric score is withheld."
+        : missingFit.title
+      : `Evidence-based qualification fit; ${item.qualification_fit_evidence_coverage}% candidate evidence coverage`;
   return (
-    <div className="queue-score-cell" style={{ fontSize: 11 }}>
+    <div className="queue-score-cell">
       {average !== null && <span className="badge badge-info queue-score-badge" title="Average of available ATS, recruiter, role fit, truth, and Final QA scores. Qualification fit is excluded.">Avg {scoreLabel(average)}</span>}
       {atsScore !== null && <span className="text-muted queue-score-detail" title="Hiring Panel ATS score">ATS {scoreLabel(atsScore)}</span>}
       <span className={`badge ${fitTone} queue-score-badge`} title={fitTitle}>{fitLabel}</span>
@@ -1633,6 +1678,9 @@ function QueueFindingsPanel({ details }: { details: any }) {
   const hiringPanel = artifacts.find((a) => a.automation_id === "application_hiring_panel")?.data;
   const finalPolish = artifacts.find((a) => a.automation_id === "application_final_polish")?.data;
   const qualificationFit = artifacts.find((a) => a.automation_id === "application_qualification_fit")?.data;
+  const qualificationFitText = qualificationFit
+    ? qualificationFitScoreText(qualificationFit.score, qualificationFit.scoreRange)
+    : "—";
   return (
     <div style={{ marginTop: 6, padding: 8, background: "var(--surface-3)", borderRadius: 4, fontSize: 11, display: "grid", gap: 8 }}>
       {!details ? <div className="muted">Loading…</div> : !hiringPanel ? <div className="muted">Hiring Panel hasn't run yet.</div> : (
@@ -1643,28 +1691,34 @@ function QueueFindingsPanel({ details }: { details: any }) {
               ["Recruiter", hiringPanel.recruiterScore],
               ["Role fit", hiringPanel.roleFitScore],
               ["Truth", typeof hiringPanel.truthfulnessRisk === "number" ? Math.max(0, 10 - hiringPanel.truthfulnessRisk) : null],
-              ["Qualification", qualificationFit?.score],
             ].map(([label, value]) => (
               <div key={String(label)} style={{ textAlign: "center" }}>
                 <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>{label}</div>
                 <div style={{ fontSize: 14, fontWeight: 600 }}>{scoreLabel(value as number | null) }</div>
               </div>
             ))}
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 9, color: "var(--ink-soft)" }}>Qualification</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{qualificationFitText}</div>
+            </div>
           </div>
           {qualificationFit && (
             <div style={{ padding: 8, border: "1px solid var(--border)", borderRadius: 5, display: "grid", gap: 5 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <strong>Qualification fit {scoreLabel(qualificationFit.score)}</strong>
+                <strong>Qualification fit {qualificationFitText}</strong>
                 <span className={`badge ${qualificationFit.status === "scored" ? "badge-success" : "badge-warning"}`}>
                   {qualificationFit.status === "scored" ? "evidence scored" : qualificationFit.status.replaceAll("_", " ")}
                 </span>
                 {typeof qualificationFit.evidenceCoverage === "number" && (
-                  <span className="text-muted">{qualificationFit.evidenceCoverage}% evidence coverage</span>
+                  <span className="text-muted">{qualificationFit.evidenceCoverage}% candidate evidence</span>
+                )}
+                {typeof qualificationFit.jobGroundingCoverage === "number" && (
+                  <span className="text-muted">{qualificationFit.jobGroundingCoverage}% job requirements grounded</span>
                 )}
               </div>
               <div className="muted">{qualificationFit.summary}</div>
               <div className="text-muted" style={{ fontSize: 10 }}>
-                Formula: 10 × earned weight ÷ resolved weight; unresolved requirements are excluded from the score and counted in evidence coverage. Hard minimum-experience gaps cap the score at 4.0. Rubric: {qualificationFit.rubricVersion}.
+                Range: the lower end uses confirmed earned weight over all requirement weight; the upper end includes unresolved requirement weight. Candidate evidence coverage and job requirement grounding are shown separately. A verified hard experience gap caps the result at 4.0. Rubric: {qualificationFit.rubricVersion}.
                 {typeof qualificationFit.rawScore === "number" && typeof qualificationFit.score === "number" && qualificationFit.score < qualificationFit.rawScore
                   ? ` Raw score ${scoreLabel(qualificationFit.rawScore)} was capped to ${scoreLabel(qualificationFit.score)}.`
                   : ""}

@@ -78,19 +78,25 @@ describe("computeQualificationFit", () => {
   });
 
   it("requires review when a hard blocker has no verified evidence, even if it is the only criterion", () => {
-    const result = computeQualificationFit(input([
-      requirement("Python", "hard_blocker"),
-    ]));
+    const result = computeQualificationFit({
+      ...input([{
+        ...requirement("Active security clearance", "hard_blocker"),
+        category: "clearance",
+      }]),
+      jobDescription: `${jobDescription} The role requires an active security clearance before work begins.`,
+    });
 
     expect(result.status).toBe("needs_review");
     expect(result.score).toBeNull();
     expect(result.evidenceCoverage).toBe(0);
+    expect(result.criteria[0].status).toBe("hard_requirement_not_evidenced");
   });
 
   it("does not award a hard requirement from a valid pointer to unrelated candidate text", () => {
     const result = computeQualificationFit({
-      ...input([requirement("Python", "supported_by_resume", ["base.skills[1]"])]),
-      jobDescription: "This role requires Python skills to build dependable data systems for a technical team.",
+      ...input([requirement("AWS", "supported_by_resume", ["base.skills[1]"])]),
+      jobDescription: "This role requires AWS skills to build dependable data systems for a technical team.",
+      baseResume: { content: { skills: ["Terraform", "SQL"], experience: [], education: [], certifications: [] } },
     });
 
     expect(result.status).toBe("needs_review");
@@ -99,16 +105,118 @@ describe("computeQualificationFit", () => {
     expect(result.criteria[0].evidence).toEqual([]);
   });
 
-  it("withholds a score when resolved evidence is below the coverage threshold", () => {
+  it("shows an uncertainty range when candidate evidence coverage is below the point-score threshold", () => {
     const result = computeQualificationFit(input([
       requirement("Python", "supported_by_resume", ["base.skills[0]"]),
       requirement("SQL", "unsupported"),
       requirement("communicate clearly", "unsupported"),
     ]));
 
-    expect(result.status).toBe("insufficient_evidence");
+    expect(result.status).toBe("provisional");
     expect(result.score).toBeNull();
+    expect(result.scoreRange).toEqual({ min: 6.7, max: 10 });
     expect(result.evidenceCoverage).toBeLessThan(result.minimumEvidenceCoverage);
+  });
+
+  it("keeps a numeric range for grounded requirements when another extracted requirement cannot be anchored to the job", () => {
+    const result = computeQualificationFit(input([
+      requirement("Python", "supported_by_resume", ["base.skills[0]"]),
+      requirement("PMP certification", "unsupported"),
+    ]));
+
+    expect(result.status).toBe("needs_review");
+    expect(result.score).toBeNull();
+    expect(result.scoreRange).toEqual({ min: 5, max: 10 });
+    expect(result.jobGroundingCoverage).toBe(50);
+    expect(result.criteria.find((criterion) => criterion.requirement === "PMP certification"))
+      .toMatchObject({ status: "job_unverified", jobGrounded: false, resolved: false });
+    expect(result.summary).toContain("could not be anchored");
+  });
+
+  it("matches reviewed technical aliases without weakening candidate citation checks", () => {
+    const result = computeQualificationFit({
+      ...input([requirement("GIS", "supported_by_resume", ["base.skills[0]"])]),
+      jobDescription: "The role supports a geographic information system and reliable spatial data operations.",
+      baseResume: { content: { skills: ["GIS"], experience: [], education: [], certifications: [] } },
+    });
+
+    expect(result.jobGroundingCoverage).toBe(100);
+    expect(result.criteria[0]).toMatchObject({ jobGrounded: true, status: "meets" });
+    expect(result.status).toBe("scored");
+    expect(result.score).toBe(10);
+  });
+
+  it("resolves whole experience-record citations from the frozen resume snapshot", () => {
+    const result = computeQualificationFit({
+      ...input([requirement("Python", "supported_by_resume", ["base.experience[0]"])]),
+      baseResume: {
+        content: {
+          skills: [],
+          experience: [{ title: "Python Developer", bullets: ["Built Python automation for data systems."] }],
+          education: [],
+          certifications: [],
+        },
+      },
+    });
+
+    expect(result.criteria[0]).toMatchObject({ status: "meets", evidence: ["base.experience[0]"] });
+    expect(result.criteria[0].evidenceExcerpts[0]).toContain("Python automation");
+  });
+
+  it("resolves legacy confirmed-skill citations for credential evidence", () => {
+    const result = computeQualificationFit({
+      ...input([{
+        ...requirement("Security+", "supported_by_resume", ["confirmed:Security+"]),
+        category: "cert",
+      }]),
+      jobDescription: "The successful candidate has a Security+ certification and experience supporting technical systems.",
+      sourceOfTruthSkills: ["Security+"],
+      baseResume: { content: { skills: [], experience: [], education: [], certifications: [] } },
+    });
+
+    expect(result.criteria[0]).toMatchObject({ status: "meets", evidence: ["confirmed:Security+"] });
+  });
+
+  it("uses an exact confirmed skill match if Resume Forge marked the requirement unsupported", () => {
+    const result = computeQualificationFit({
+      ...input([requirement("Python", "unsupported")]),
+      sourceOfTruthSkills: ["Python"],
+      baseResume: { content: { skills: [], experience: [], education: [], certifications: [] } },
+    });
+
+    expect(result.criteria[0]).toMatchObject({ status: "meets", evidence: ["sot:Python"] });
+    expect(result.status).toBe("scored");
+    expect(result.score).toBe(10);
+  });
+
+  it("does not match a skill by an accidental substring", () => {
+    const result = computeQualificationFit({
+      ...input([requirement("Java", "unsupported")]),
+      jobDescription: "This role requires Java development and reliable data systems experience for a collaborative technical team.",
+      baseResume: { content: { skills: [], experience: [], education: [], certifications: [] } },
+      sourceOfTruthSkills: ["JavaScript"],
+    });
+
+    expect(result.criteria[0].status).toBe("not_evidenced");
+    expect(result.score).toBeNull();
+  });
+
+  it("does not produce an exact point score when a hard requirement is unknown", () => {
+    const result = computeQualificationFit({
+      ...input([
+        {
+          ...requirement("Active security clearance", "hard_blocker"),
+          category: "clearance",
+        },
+        requirement("Python", "supported_by_resume", ["base.skills[0]"]),
+      ]),
+      jobDescription: `${jobDescription} The role requires an active security clearance before work begins.`,
+    });
+
+    expect(result.status).toBe("needs_review");
+    expect(result.score).toBeNull();
+    expect(result.scoreRange).not.toBeNull();
+    expect(result.summary).toContain("hard requirements lack confirmed candidate evidence");
   });
 
   it("caps a documented hard minimum-experience shortfall at 4.0 without treating it as an auto-rejection", () => {

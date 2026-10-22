@@ -1300,9 +1300,11 @@ label {
 .app-queue-page .queue-score-cell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  gap: 6px;
   width: 100%;
   min-width: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .app-queue-page .queue-score-badge {
   justify-self: start;
@@ -1317,6 +1319,7 @@ label {
   display: block;
   max-width: 100%;
   min-width: 0;
+  font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;

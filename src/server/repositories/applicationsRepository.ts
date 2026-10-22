@@ -144,6 +144,7 @@ export interface ListApplicationsQuery {
   owner?: string;
   priority?: string;
   review?: string;
+  fitScoreBand?: string;
   view?: "all" | "mine" | "ae_review" | "ae_application" | "failed";
   userId?: string;
   userEmail?: string | null;
@@ -180,6 +181,28 @@ export interface ApplicationQueueStats {
 
 export interface ApplicationQueueResult extends PaginatedApplicationsResult {
   stats: ApplicationQueueStats;
+}
+
+const QUALIFICATION_FIT_SCORE_BANDS = new Set(["8_10", "6_8", "4_6", "0_4", "no_score"]);
+
+function qualificationFitScoreFilterValueSql(artifactAlias = "qf"): string {
+  return `ROUND(COALESCE(
+    CASE WHEN (${artifactAlias}.data->>'score') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (${artifactAlias}.data->>'score')::numeric END,
+    CASE WHEN (${artifactAlias}.data->'scoreRange'->>'min') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (${artifactAlias}.data->'scoreRange'->>'min')::numeric END
+  ), 1)`;
+}
+
+function qualificationFitScoreBandPredicate(band: string, artifactAlias = "qf"): string {
+  if (!QUALIFICATION_FIT_SCORE_BANDS.has(band)) return "";
+  const score = qualificationFitScoreFilterValueSql(artifactAlias);
+  switch (band) {
+    case "8_10": return `${score} >= 8 AND ${score} <= 10`;
+    case "6_8": return `${score} >= 6 AND ${score} < 8`;
+    case "4_6": return `${score} >= 4 AND ${score} < 6`;
+    case "0_4": return `${score} >= 0 AND ${score} < 4`;
+    case "no_score": return `${score} IS NULL`;
+    default: return "";
+  }
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -562,11 +585,24 @@ export async function listApplicationQueue(
   const review = queryParams.review || "";
   const view = queryParams.view || "all";
   const workMode = queryParams.workMode || "";
+  const requestedFitScoreBand = queryParams.fitScoreBand || "";
+  const fitScoreBand = QUALIFICATION_FIT_SCORE_BANDS.has(requestedFitScoreBand)
+    ? requestedFitScoreBand
+    : "";
 
   const offset = (page - 1) * pageSize;
   const searchParam = `%${search}%`;
   const excludeStatuses = queryParams.excludeStatuses ?? DEFAULT_EXCLUDED_STATUSES;
   const timeWindowHours = queryParams.timeWindowHours ?? null;
+  const fitScorePredicate = qualificationFitScoreBandPredicate(fitScoreBand);
+  const fitScoreFilterSql = fitScorePredicate ? `AND (${fitScorePredicate})` : "";
+  const fitScoreArtifactJoin = fitScoreBand ? `
+    LEFT JOIN LATERAL (
+      SELECT data FROM application_ai_artifacts
+      WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
+      ORDER BY created_at DESC LIMIT 1
+    ) qf ON true
+  ` : "";
   const sort = queryParams.sort === "final_score" || queryParams.sort === "average_score"
     ? queryParams.sort
     : "due";
@@ -598,8 +634,11 @@ export async function listApplicationQueue(
       CASE WHEN (hp.data->>'roleFitScore') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (hp.data->>'roleFitScore')::numeric END as hiring_panel_role_fit_score,
       CASE WHEN (hp.data->>'truthfulnessRisk') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN GREATEST(0, 10 - (hp.data->>'truthfulnessRisk')::numeric) END as hiring_panel_truth_score,
       CASE WHEN (qf.data->>'score') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (qf.data->>'score')::numeric END as qualification_fit_score,
+      CASE WHEN (qf.data->'scoreRange'->>'min') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (qf.data->'scoreRange'->>'min')::numeric END as qualification_fit_score_min,
+      CASE WHEN (qf.data->'scoreRange'->>'max') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (qf.data->'scoreRange'->>'max')::numeric END as qualification_fit_score_max,
       qf.data->>'status' as qualification_fit_status,
       CASE WHEN (qf.data->>'evidenceCoverage') ~ '^-?[0-9]+$' THEN (qf.data->>'evidenceCoverage')::int END as qualification_fit_evidence_coverage,
+      CASE WHEN (qf.data->>'jobGroundingCoverage') ~ '^-?[0-9]+$' THEN (qf.data->>'jobGroundingCoverage')::int END as qualification_fit_job_grounding_coverage,
       score.average_score,
       a.tailored_resume_version_id as workflow_resume_version_id,
       rv.title as workflow_resume_title,
@@ -678,6 +717,7 @@ export async function listApplicationQueue(
       -- the matching logic in the stat-tile count.
       AND ($14::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($14::int * INTERVAL '1 hour'))
       AND ($18 = '' OR j.work_mode = $18)
+      ${fitScoreFilterSql}
     ORDER BY ${orderBy}
     OFFSET $10 LIMIT $11
   `;
@@ -712,6 +752,7 @@ export async function listApplicationQueue(
       WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
       ORDER BY created_at DESC LIMIT 1
     ) w ON true
+    ${fitScoreArtifactJoin}
     WHERE NOT (a.status = ANY($1))
       AND (($2 = '' AND $13::int IS NULL)
         OR ($2 <> '' AND (c.name ILIKE $3 OR j.title ILIKE $3 OR j.company ILIKE $3 OR j.location ILIKE $3))
@@ -736,6 +777,7 @@ export async function listApplicationQueue(
       AND ($15 = '' OR a.status = $15)
       AND ($12::int IS NULL OR (CASE WHEN $7 = 'failed' THEN w.updated_at ELSE a.created_at END) >= NOW() - ($12::int * INTERVAL '1 hour'))
       AND ($16 = '' OR j.work_mode = $16)
+      ${fitScoreFilterSql}
   `;
   const countRow = await queryOne<{ total: number }>(countSql, [
     excludeStatuses,
@@ -769,6 +811,7 @@ export async function listApplicationQueue(
     aeStageFilter,
     statusStageFilter,
     workMode,
+    fitScoreBand,
     timeWindowHours,
     userId: queryParams.userId ?? "",
   });
@@ -795,6 +838,7 @@ interface QueueStatsFilters {
   aeStageFilter: string;
   statusStageFilter: string;
   workMode: string;
+  fitScoreBand: string;
   timeWindowHours: number | null;
   userId: string;
 }
@@ -804,8 +848,8 @@ interface QueueStatsFilters {
  * AE Application pending / AI Pipeline / Failed).
  *
  * Every filter the caller currently has active (search incl. ID search,
- * owner, priority, review status, stage, work mode, and the Activity
- * time-window picker) is applied here too, via predicates that mirror
+ * owner, priority, review status, stage, qualification fit score, work mode,
+ * and the Activity time-window picker) is applied here too, via predicates that mirror
  * listApplicationQueue's own dataSql/countSql above - so these numbers
  * always describe exactly what's currently filtered, never a fixed
  * all-time snapshot. Confirmed live: before this fix, picking "Past 7
@@ -822,6 +866,8 @@ interface QueueStatsFilters {
  * narrows the list but not the tile counts) will resurface.
  */
 async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueStats> {
+  const fitScorePredicate = qualificationFitScoreBandPredicate(f.fitScoreBand);
+  const fitScoreFilterSql = fitScorePredicate ? `AND (${fitScorePredicate})` : "";
   // Every filter shared across all 5 buckets. Deliberately excludes the
   // `view` tab itself (all/mine/ae_review/ae_application/workflow) - each
   // bucket below defines its own membership condition instead, since that
@@ -844,6 +890,7 @@ async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueSt
     AND ($11::int IS NULL OR a.created_at >= NOW() - ($11::int * INTERVAL '1 hour'))
     AND ($12 = '' OR a.status = $12)
     AND ($13 = '' OR j.work_mode = $13)
+    ${fitScoreFilterSql}
   `;
   const commonParams: unknown[] = [
     f.excludeStatuses,
@@ -873,6 +920,13 @@ async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueSt
       WHERE application_id = a.id AND status IN ('queued','running','waiting','completed','failed')
       ORDER BY created_at DESC LIMIT 1
     ) w ON true
+    ${f.fitScoreBand ? `
+      LEFT JOIN LATERAL (
+        SELECT data FROM application_ai_artifacts
+        WHERE workflow_id = w.id AND automation_id = 'application_qualification_fit'
+        ORDER BY created_at DESC LIMIT 1
+      ) qf ON true
+    ` : ""}
   `;
 
   // Same as commonWhere, except the Activity time-window applies to the
@@ -899,6 +953,7 @@ async function buildQueueStats(f: QueueStatsFilters): Promise<ApplicationQueueSt
     AND ($11::int IS NULL OR w.updated_at >= NOW() - ($11::int * INTERVAL '1 hour'))
     AND ($12 = '' OR a.status = $12)
     AND ($13 = '' OR j.work_mode = $13)
+    ${fitScoreFilterSql}
   `;
 
   const [allRow, mineRow, reviewRow, applicationRow, aiPipelineRow, failedRow] = await Promise.all([

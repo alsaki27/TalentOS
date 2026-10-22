@@ -1,20 +1,27 @@
 import type { JobAnalysisV1, RequirementAnalysisEntry } from "./schemas";
 
-export const QUALIFICATION_FIT_RUBRIC_VERSION = "qualification-fit-v1";
+export const QUALIFICATION_FIT_RUBRIC_VERSION = "qualification-fit-v2";
 
-export type QualificationFitStatus = "scored" | "needs_review" | "insufficient_evidence";
+export type QualificationFitStatus = "scored" | "provisional" | "needs_review" | "insufficient_evidence";
 export type QualificationCriterionStatus =
   | "meets"
   | "not_evidenced"
   | "hard_requirement_not_evidenced"
   | "below_minimum_experience"
-  | "experience_needs_verification";
+  | "experience_needs_verification"
+  | "job_unverified";
+
+export interface QualificationFitScoreRange {
+  min: number;
+  max: number;
+}
 
 export interface QualificationFitCriterion {
   requirement: string;
   category: string;
   priority: "hard" | "required" | "preferred";
   status: QualificationCriterionStatus;
+  jobGrounded: boolean;
   resolved: boolean;
   weight: number;
   points: number;
@@ -29,8 +36,10 @@ export interface QualificationFitResult {
   minimumEvidenceCoverage: number;
   status: QualificationFitStatus;
   score: number | null;
+  scoreRange: QualificationFitScoreRange | null;
   rawScore: number | null;
   evidenceCoverage: number | null;
+  jobGroundingCoverage: number | null;
   summary: string;
   criteria: QualificationFitCriterion[];
 }
@@ -99,6 +108,40 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9+#.]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+const JOB_TERM_EQUIVALENTS: string[][] = [
+  ["geographic information system", "geographic information systems", "gis", "geospatial"],
+  ["outside plant", "osp"],
+  ["fiber optic", "fibre optic", "fiber optics", "fibre optics"],
+  ["help desk", "service desk"],
+  ["customer support", "customer service"],
+  ["business intelligence", "bi"],
+  ["artificial intelligence", "ai"],
+  ["machine learning", "ml"],
+  ["large language model", "large language models", "llm", "llms"],
+  ["computer aided design", "computer-aided design", "cad"],
+  ["amazon web services", "aws"],
+  ["google cloud platform", "gcp"],
+  ["microsoft azure", "azure"],
+  ["structured query language", "sql"],
+  ["extract transform load", "etl"],
+];
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeJobTerms(value: string): string {
+  let normalized = normalize(value);
+  for (const equivalents of JOB_TERM_EQUIVALENTS) {
+    const canonical = normalize(equivalents[0]);
+    for (const alias of equivalents.slice(1)) {
+      const normalizedAlias = normalize(alias);
+      normalized = normalized.replace(new RegExp(`\\b${escapeRegExp(normalizedAlias)}\\b`, "g"), canonical);
+    }
+  }
+  return normalized.replace(/\s+/g, " ").trim();
+}
+
 function baseContent(value: unknown): Record<string, any> {
   const row = asRecord(value);
   const content = asRecord(row.content);
@@ -127,6 +170,36 @@ function resolvePointer(root: unknown, path: string): unknown {
   return current;
 }
 
+function extractResumeCitationText(value: unknown, section: string): string | null {
+  const allowedKeys = new Set([
+    "title", "role", "position", "description", "summary", "bullets", "achievements",
+    "responsibilities", "details", "text", "skills", "technologies", "tools", "keywords",
+    "degree", "field", "major", "credential", "certification", "issuer", "specialization",
+    ...(section === "skills" || section === "education" || section === "certifications"
+      ? ["name", "label", "value", "skill"]
+      : []),
+  ]);
+  const parts: string[] = [];
+  const visit = (item: unknown, depth: number): void => {
+    if (parts.join(" ").length >= 900 || depth > 4) return;
+    if (typeof item === "string" && item.trim()) {
+      parts.push(item.trim());
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const child of item.slice(0, 20)) visit(child, depth + 1);
+      return;
+    }
+    const record = asRecord(item);
+    for (const [key, child] of Object.entries(record)) {
+      if (allowedKeys.has(key.toLowerCase())) visit(child, depth + 1);
+    }
+  };
+  visit(value, 0);
+  const text = parts.join(" ").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 900) : null;
+}
+
 function resolveCitationExcerpt(
   citation: string,
   material: Record<string, any>,
@@ -136,14 +209,18 @@ function resolveCitationExcerpt(
 ): string | null {
   const value = citation.trim();
   if (value.startsWith("base.")) {
-    const referenced = resolvePointer(material, value.slice("base.".length));
-    if (typeof referenced === "string" && referenced.trim()) return referenced.trim().slice(0, 280);
-    if (Array.isArray(referenced)) return referenced.find((entry) => typeof entry === "string" && entry.trim())?.trim().slice(0, 280) ?? null;
-    return null;
+    const path = value.slice("base.".length);
+    const section = path.match(/^[^.\[\]]+/)?.[0] ?? "";
+    return extractResumeCitationText(resolvePointer(material, path), section);
   }
-  if (value.startsWith("sot:")) {
-    const skill = normalize(value.slice(4));
-    return [...verifiedSkills, ...sourceOfTruthSkills].find((item) => normalize(item) === skill) ?? null;
+  if (value.startsWith("sot:") || value.startsWith("confirmed:")) {
+    const separator = value.indexOf(":");
+    const skill = normalize(value.slice(separator + 1));
+    return sourceOfTruthSkills.find((item) => normalize(item) === skill) ?? null;
+  }
+  if (value.startsWith("verified:")) {
+    const skill = normalize(value.slice("verified:".length));
+    return verifiedSkills.find((item) => normalize(item) === skill) ?? null;
   }
   if (value.startsWith("evidence:")) {
     const title = normalize(value.slice("evidence:".length));
@@ -151,6 +228,47 @@ function resolveCitationExcerpt(
     return item ? `${item.title ?? item.id ?? "Evidence"}: ${item.description ?? ""}`.slice(0, 280) : null;
   }
   return null;
+}
+
+function directRequirementEvidence(
+  entry: RequirementAnalysisEntry,
+  material: Record<string, any>,
+  verifiedSkills: string[],
+  sourceOfTruthSkills: string[],
+): Array<{ citation: string; excerpt: string }> {
+  const sections = entry.category === "skill" || entry.category === "tool"
+    ? ["skills"]
+    : entry.category === "cert" || entry.category === "credential"
+      ? ["certifications"]
+      : [];
+  if (sections.length === 0) return [];
+
+  const normalizedRequirement = normalizeJobTerms(entry.requirement);
+  if (!normalizedRequirement) return [];
+  const matches: Array<{ citation: string; excerpt: string }> = [];
+  const addIfExactPhrase = (citation: string, rawEvidence: unknown, section: string) => {
+    const excerpt = extractResumeCitationText(rawEvidence, section);
+    if (!excerpt) return;
+    const normalizedEvidence = normalizeJobTerms(excerpt);
+    if (!normalizedEvidence) return;
+    // This path is intentionally stricter than a semantic similarity check:
+    // a confirmed skill/credential must appear as a complete phrase in the
+    // requirement or vice versa before it can resolve a criterion by itself.
+    if (
+      ` ${normalizedRequirement} `.includes(` ${normalizedEvidence} `) ||
+      ` ${normalizedEvidence} `.includes(` ${normalizedRequirement} `)
+    ) matches.push({ citation, excerpt });
+  };
+
+  for (const section of sections) {
+    const values = Array.isArray(material[section]) ? material[section] : [];
+    values.forEach((item: unknown, index: number) => addIfExactPhrase(`base.${section}[${index}]`, item, section));
+  }
+  if (entry.category === "skill" || entry.category === "tool") {
+    verifiedSkills.forEach((skill, index) => addIfExactPhrase(`verified:${skill}`, skill, "skills"));
+    sourceOfTruthSkills.forEach((skill) => addIfExactPhrase(`sot:${skill}`, skill, "skills"));
+  }
+  return matches;
 }
 
 function weightFor(priority: QualificationFitCriterion["priority"]): number {
@@ -164,38 +282,38 @@ function meaningfulTokens(value: string): string[] {
 }
 
 function findJobEvidence(requirement: string, jobDescription: string): string | null {
-  const normalizedRequirement = normalize(requirement);
+  const normalizedRequirement = normalizeJobTerms(requirement);
   if (!normalizedRequirement) return null;
   const requiredWords = normalizedRequirement.split(" ");
   const sourceLines = jobDescription.split(/(?<=[.!?])\s+|[\r\n]+/).map((line) => line.trim()).filter(Boolean);
   const exactLine = sourceLines.find((line) => {
-    const lineWords = normalize(line).split(" ");
+    const lineWords = normalizeJobTerms(line).split(" ");
     return requiredWords.length <= lineWords.length && lineWords.some((_, start) =>
       requiredWords.every((word, offset) => lineWords[start + offset] === word),
     );
   });
   if (exactLine) return exactLine.slice(0, 500);
-  const tokens = meaningfulTokens(requirement);
-  if (tokens.length === 0) return null;
+  const canonicalTokens = meaningfulTokens(normalizedRequirement);
+  if (canonicalTokens.length === 0) return null;
   let best: { line: string; coverage: number } | null = null;
   for (const line of sourceLines) {
-    const lineWords = new Set(normalize(line).split(" "));
-    const coverage = tokens.filter((token) => lineWords.has(token)).length / tokens.length;
+    const lineWords = new Set(normalizeJobTerms(line).split(" "));
+    const coverage = canonicalTokens.filter((token) => lineWords.has(token)).length / canonicalTokens.length;
     if (!best || coverage > best.coverage) best = { line, coverage };
   }
-  // A loose half-token match can connect generic model summaries to an
-  // unrelated sentence. Require substantial lexical support before treating
-  // the source description as the provenance for an extracted criterion.
-  const minimumCoverage = tokens.length === 1 ? 1 : 0.75;
-  return best && best.coverage >= minimumCoverage ? best.line.slice(0, 500) : null;
+  // Permit ordinary paraphrase and approved aliases, while still requiring
+  // more than a broad topical overlap before a requirement is tied to the JD.
+  const tokenCount = canonicalTokens.length;
+  const minimumCoverage = tokenCount <= 2 ? 1 : 0.67;
+  return best && tokenCount > 0 && best.coverage >= minimumCoverage ? best.line.slice(0, 500) : null;
 }
 
 function citationSupportsRequirement(requirement: string, excerpt: string): boolean {
-  const normalizedRequirement = normalize(requirement);
-  const normalizedExcerpt = normalize(excerpt);
+  const normalizedRequirement = normalizeJobTerms(requirement);
+  const normalizedExcerpt = normalizeJobTerms(excerpt);
   if (!normalizedRequirement || !normalizedExcerpt) return false;
   if (normalizedExcerpt.includes(normalizedRequirement)) return true;
-  const tokens = meaningfulTokens(requirement);
+  const tokens = meaningfulTokens(normalizedRequirement);
   if (tokens.length === 0) return false;
   const excerptTokens = new Set(normalizedExcerpt.split(" "));
   const supportedTokens = tokens.filter((token) => excerptTokens.has(token)).length;
@@ -373,6 +491,7 @@ function experienceCriterion(
       category: "minimum_experience",
       priority,
       status: "experience_needs_verification",
+      jobGrounded: true,
       resolved: false,
       weight,
       points: 0,
@@ -388,6 +507,7 @@ function experienceCriterion(
       category: "minimum_experience",
       priority,
       status: "below_minimum_experience",
+      jobGrounded: true,
       resolved: true,
       weight,
       points: 0,
@@ -402,6 +522,7 @@ function experienceCriterion(
     category: "minimum_experience",
     priority,
     status: "meets",
+    jobGrounded: true,
     resolved: true,
     weight,
     points: weight,
@@ -419,13 +540,15 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
     ? analysis.requirementAnalysis as RequirementAnalysisEntry[]
     : [];
   const material = candidateMaterial(input);
-  const noScore = (summary: string): QualificationFitResult => ({
+  const noScore = (summary: string, jobGroundingCoverage: number | null = null, evidenceCoverage: number | null = null): QualificationFitResult => ({
     rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
     minimumEvidenceCoverage: MINIMUM_RESOLVED_WEIGHT_PERCENT,
     status: "insufficient_evidence",
     score: null,
+    scoreRange: null,
     rawScore: null,
-    evidenceCoverage: null,
+    evidenceCoverage,
+    jobGroundingCoverage,
     summary,
     criteria: [],
   });
@@ -444,6 +567,8 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
   const evidenceSources = input.evidence ?? [];
   const criteria: QualificationFitCriterion[] = [];
   let ungroundedRequirementCount = 0;
+  let requirementAnalysisWeight = 0;
+  let groundedRequirementAnalysisWeight = 0;
 
   for (const entry of requirementAnalysis) {
     const isExplicitExperienceCriterion = experienceRequirements.some((requirement) =>
@@ -452,12 +577,28 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
     );
     if (isExplicitExperienceCriterion) continue;
     const jobEvidence = findJobEvidence(entry.requirement, jobDescription);
+    const priority = priorityForRequirement(entry, jobEvidence ?? "");
+    const weight = weightFor(priority);
+    requirementAnalysisWeight += weight;
+    if (jobEvidence) groundedRequirementAnalysisWeight += weight;
     if (!jobEvidence) {
       ungroundedRequirementCount++;
+      criteria.push({
+        requirement: entry.requirement,
+        category: entry.category,
+        priority,
+        status: "job_unverified",
+        jobGrounded: false,
+        resolved: false,
+        weight,
+        points: 0,
+        jobEvidence: "",
+        evidence: [],
+        evidenceExcerpts: [],
+        explanation: "The extracted requirement could not be reliably anchored to the source job description, so it remains uncertain and widens the provisional range.",
+      });
       continue;
     }
-    const priority = priorityForRequirement(entry, jobEvidence);
-    const weight = weightFor(priority);
     const validatedCitations = (entry.sourceEvidence ?? [])
       .map((citation) => ({ citation, excerpt: resolveCitationExcerpt(citation, material, verifiedSkills, sourceOfTruthSkills, evidenceSources) }))
       .filter((item): item is { citation: string; excerpt: string } =>
@@ -465,19 +606,27 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
       );
     const validCitations = validatedCitations.map((item) => item.citation);
     const evidenceExcerpts = validatedCitations.map((item) => item.excerpt);
-    if ((entry.status === "supported_by_resume" || entry.status === "supported_but_not_surfaced" || entry.status === "nice_to_have") && validCitations.length > 0) {
+    const directEvidence = directRequirementEvidence(entry, material, verifiedSkills, sourceOfTruthSkills);
+    const hasDirectSourceEvidence = directEvidence.length > 0;
+    if (
+      hasDirectSourceEvidence ||
+      ((entry.status === "supported_by_resume" || entry.status === "supported_but_not_surfaced" || entry.status === "nice_to_have") && validCitations.length > 0)
+    ) {
       criteria.push({
         requirement: entry.requirement,
         category: entry.category,
         priority,
         status: "meets",
+        jobGrounded: true,
         resolved: true,
         weight,
         points: weight,
         jobEvidence,
-        evidence: validCitations,
-        evidenceExcerpts,
-        explanation: "Supported by a source citation in the frozen candidate evidence.",
+        evidence: hasDirectSourceEvidence ? directEvidence.map((item) => item.citation) : validCitations,
+        evidenceExcerpts: hasDirectSourceEvidence ? directEvidence.map((item) => item.excerpt) : evidenceExcerpts,
+        explanation: hasDirectSourceEvidence
+          ? "The exact skill or credential appears in the frozen base resume or confirmed candidate profile."
+          : "Supported by a validated source citation in the frozen candidate evidence.",
       });
     } else if (entry.status === "hard_blocker") {
       criteria.push({
@@ -485,6 +634,7 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
         category: entry.category,
         priority,
         status: "hard_requirement_not_evidenced",
+        jobGrounded: true,
         resolved: false,
         weight,
         points: 0,
@@ -499,6 +649,7 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
         category: entry.category,
         priority,
         status: "not_evidenced",
+        jobGrounded: true,
         resolved: false,
         weight,
         points: 0,
@@ -512,90 +663,85 @@ export function computeQualificationFit(input: QualificationFitInput): Qualifica
     }
   }
 
-  if (ungroundedRequirementCount > 0 || (criteria.length === 0 && experienceRequirements.length === 0)) {
-    return {
-      rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
-      minimumEvidenceCoverage: MINIMUM_RESOLVED_WEIGHT_PERCENT,
-      status: "needs_review",
-      score: null,
-      rawScore: null,
-      evidenceCoverage: null,
-      summary: criteria.length === 0
-        ? "The extracted requirements could not be matched to the source job description. Review the job analysis."
-        : `${ungroundedRequirementCount} extracted requirement(s) could not be verified against the source job description. Review before scoring.`,
-      criteria,
-    };
-  }
-
   const evaluationMonth = evaluatedMonth(input.evaluatedAt);
+  const explicitExperienceWeight = experienceRequirements.reduce((total, requirement) =>
+    total + weightFor(requirement.preferred ? "preferred" : requirement.hard ? "hard" : "required"), 0);
   for (const requirement of experienceRequirements) {
     criteria.push(experienceCriterion(requirement, input, material, evaluationMonth));
   }
 
-  const totalWeight = criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
-  const resolvedWeight = criteria.reduce((sum, criterion) => sum + (criterion.resolved ? criterion.weight : 0), 0);
-  if (totalWeight <= 0) return noScore("No requirements had enough evidence to calculate a fit score.");
-  const evidenceCoverage = Math.round((resolvedWeight / totalWeight) * 100);
-  const hardRequirementUnknown = criteria.some((criterion) =>
-    criterion.status === "hard_requirement_not_evidenced" ||
-      (criterion.priority === "hard" && criterion.status === "not_evidenced") ||
-      (criterion.priority === "hard" && criterion.status === "experience_needs_verification"),
-  );
+  const groundedJobWeight = criteria.reduce((sum, criterion) => sum + (criterion.jobGrounded ? criterion.weight : 0), 0);
+  const allRequirementWeight = criteria.reduce((sum, criterion) => sum + criterion.weight, 0);
+  const resolvedWeight = criteria.reduce((sum, criterion) => sum + (criterion.jobGrounded && criterion.resolved ? criterion.weight : 0), 0);
+  const jobGroundingCoverage = allRequirementWeight > 0
+    ? Math.round((groundedJobWeight / allRequirementWeight) * 100)
+    : requirementAnalysisWeight + explicitExperienceWeight > 0
+      ? Math.round(((groundedRequirementAnalysisWeight + explicitExperienceWeight) / (requirementAnalysisWeight + explicitExperienceWeight)) * 100)
+      : null;
+  if (groundedJobWeight <= 0) {
+    return noScore("No extracted requirement could be grounded in the source job description; review the job analysis.", jobGroundingCoverage, 0);
+  }
+  if (allRequirementWeight <= 0) return noScore("No usable requirements were available to calculate a fit result.", jobGroundingCoverage, 0);
+  const evidenceCoverage = Math.round((resolvedWeight / allRequirementWeight) * 100);
+  const hardRequirementUnknown = criteria.some((criterion) => criterion.jobGrounded && criterion.priority === "hard" && !criterion.resolved);
   const hardRequirementGap = criteria.some((criterion) =>
-    criterion.priority === "hard" && criterion.status === "below_minimum_experience",
+    criterion.jobGrounded && criterion.priority === "hard" && criterion.status === "below_minimum_experience",
   );
   const experienceBelowMinimum = criteria.some((criterion) => criterion.status === "below_minimum_experience");
-  const notEvidencedCount = criteria.filter((criterion) => !criterion.resolved).length;
-  if (hardRequirementUnknown) {
-    return {
-      rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
-      minimumEvidenceCoverage: MINIMUM_RESOLVED_WEIGHT_PERCENT,
-      status: "needs_review",
-      score: null,
-      rawScore: null,
-      evidenceCoverage,
-      summary: "A hard requirement is not verified in the available candidate evidence. Review it before assigning a definitive qualification-fit score.",
-      criteria,
-    };
+  const unresolvedWeight = criteria.reduce((sum, criterion) => sum + (criterion.resolved && criterion.jobGrounded ? 0 : criterion.weight), 0);
+  const earnedPoints = criteria.reduce((sum, criterion) => sum + (criterion.jobGrounded && criterion.resolved ? criterion.points : 0), 0);
+  const exactRawScore = allRequirementWeight > 0 ? (earnedPoints / allRequirementWeight) * 10 : 0;
+  const lowerBoundRaw = allRequirementWeight > 0 ? (earnedPoints / allRequirementWeight) * 10 : 0;
+  const upperBoundRaw = allRequirementWeight > 0 ? ((earnedPoints + unresolvedWeight) / allRequirementWeight) * 10 : 0;
+  const cap = hardRequirementGap ? 4 : 10;
+  const range: QualificationFitScoreRange = {
+    min: Math.round(Math.min(lowerBoundRaw, cap) * 10) / 10,
+    max: Math.round(Math.min(upperBoundRaw, cap) * 10) / 10,
+  };
+  const allJobGrounded = criteria.every((criterion) => criterion.jobGrounded);
+  const allCandidateResolved = criteria.every((criterion) => criterion.resolved);
+  const canShowExactScore = allJobGrounded && allCandidateResolved && evidenceCoverage >= MINIMUM_RESOLVED_WEIGHT_PERCENT;
+  const score = canShowExactScore ? range.min : null;
+  const rawScore = canShowExactScore ? exactRawScore : null;
+  const hasUnverifiedJobCriteria = criteria.some((criterion) => !criterion.jobGrounded);
+  const unknownCandidateCriteria = criteria.filter((criterion) => criterion.jobGrounded && !criterion.resolved).length;
+  const usefulRange = resolvedWeight > 0 && unresolvedWeight > 0;
+  const scoreRange = canShowExactScore || !usefulRange ? null : range;
+  const status: QualificationFitStatus = canShowExactScore
+    ? experienceBelowMinimum ? "needs_review" : "scored"
+    : hardRequirementUnknown || hasUnverifiedJobCriteria || experienceBelowMinimum
+      ? "needs_review"
+      : resolvedWeight === 0
+        ? "insufficient_evidence"
+        : "provisional";
+  const reasons: string[] = [];
+  if (ungroundedRequirementCount > 0) {
+    reasons.push(`${ungroundedRequirementCount} extracted requirement(s) could not be anchored to the job description`);
   }
-  if (resolvedWeight <= 0) return noScore("No requirements had enough evidence to calculate a fit score.");
-  const points = criteria.reduce((sum, criterion) => sum + (criterion.resolved ? criterion.points : 0), 0);
-  const rawScore = (points / resolvedWeight) * 10;
-  let score: number | null = Math.round(rawScore * 10) / 10;
-  if (hardRequirementGap && score !== null) score = Math.min(score, 4);
+  if (hardRequirementUnknown) reasons.push("one or more hard requirements lack confirmed candidate evidence");
+  if (unknownCandidateCriteria > 0) reasons.push(`${unknownCandidateCriteria} job-grounded requirement(s) have unknown candidate evidence`);
+  if (experienceBelowMinimum) reasons.push("dated experience is below a stated minimum; the result is capped at 4.0");
+  if (!canShowExactScore && reasons.length === 0) reasons.push("the evidence supports a range rather than a definitive point score");
   if (evidenceCoverage < MINIMUM_RESOLVED_WEIGHT_PERCENT) {
-    return {
-      rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
-      minimumEvidenceCoverage: MINIMUM_RESOLVED_WEIGHT_PERCENT,
-      status: "insufficient_evidence",
-      score: null,
-      rawScore: null,
-      evidenceCoverage,
-      summary: `Only ${evidenceCoverage}% of weighted requirements have verifiable evidence; at least ${MINIMUM_RESOLVED_WEIGHT_PERCENT}% is needed to show a score.`,
-      criteria,
-    };
+    reasons.push(`verified candidate evidence coverage is ${evidenceCoverage}%`);
   }
-  const needsReview = experienceBelowMinimum || notEvidencedCount > 0;
-  const experienceNeedsVerification = criteria.some((criterion) => criterion.status === "experience_needs_verification");
-  const summary = hardRequirementUnknown
-    ? "A hard requirement is not verified in the available candidate evidence. Review it before assigning a definitive qualification-fit score."
-    : hardRequirementGap
-      ? "Dated resume evidence is below an explicit minimum-experience requirement; the score is capped at 4.0/10. Review the cited timeline before deciding."
+  const summary = canShowExactScore
+    ? hardRequirementGap
+      ? "Dated evidence is below a hard minimum-experience requirement; the score is capped at 4.0/10 and needs review."
       : experienceBelowMinimum
-        ? "Dated resume evidence is below a stated experience requirement. Review the cited timeline before deciding."
-        : experienceNeedsVerification
-      ? "Experience dates need verification; treat this score as provisional."
-      : notEvidencedCount > 0
-        ? `${notEvidencedCount} requirement(s) remain unverified. The provisional score uses only requirements with verifiable evidence; unresolved items do not prove the candidate lacks those qualifications.`
-        : "All scored requirements have supporting candidate evidence.";
+        ? "Dated evidence is below a stated experience requirement; review the cited timeline before deciding."
+        : "All scored requirements are grounded in the source job description and supported by resolved candidate evidence."
+    : reasons.join("; ") + ". The range shows the confirmed floor through the possible score if unresolved requirements are verified.";
 
   return {
     rubricVersion: QUALIFICATION_FIT_RUBRIC_VERSION,
     minimumEvidenceCoverage: MINIMUM_RESOLVED_WEIGHT_PERCENT,
-    status: needsReview || notEvidencedCount > 0 ? "needs_review" : "scored",
+    status,
     score,
+    scoreRange,
     rawScore,
     evidenceCoverage,
+    jobGroundingCoverage,
     summary,
     criteria,
   };
