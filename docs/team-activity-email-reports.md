@@ -6,9 +6,9 @@ Time. Sunday therefore sends both the daily and weekly report. The daily report
 covers midnight through the send time in `America/New_York`; the weekly report
 covers the prior seven calendar days ending at the send time.
 
-Reports reuse the tracked extension activity event types shown in the Team
-Activity Reports page: jobs added, duplicate captures, candidates logged,
-reviews completed, and applications marked applied. Resume edit events are
+Reports include only active profiles whose role is `application_engineer` or
+`manager`. They count jobs added, candidates logged, reviews completed, and
+applications marked applied. Duplicate captures and resume edit events are
 excluded. The report query is read-only and does not create email log or report
 rows in the database. No database migration is required.
 

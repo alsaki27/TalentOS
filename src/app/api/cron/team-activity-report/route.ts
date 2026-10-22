@@ -13,6 +13,8 @@ import { query } from "@/server/db/neon";
 
 export const dynamic = "force-dynamic";
 
+const REPORTABLE_ROLES = new Set(["application_engineer", "manager"]);
+
 type ProfileRow = {
   user_id: string;
   display_name: string;
@@ -28,11 +30,14 @@ type EventAggregateRow = {
   role: string;
   is_active: boolean;
   jobs_added: number;
-  duplicate_captures: number;
   candidates_logged: number;
   applications_reviewed: number;
   applications_applied: number;
 };
+
+function isReportableMember(member: Pick<ProfileRow, "role" | "is_active">) {
+  return member.is_active && REPORTABLE_ROLES.has(member.role);
+}
 
 function isAuthorized(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -42,7 +47,6 @@ function isAuthorized(request: NextRequest) {
 function toCounts(row?: Partial<TeamActivityCounts>): TeamActivityCounts {
   return {
     jobs_added: Number(row?.jobs_added ?? 0),
-    duplicate_captures: Number(row?.duplicate_captures ?? 0),
     candidates_logged: Number(row?.candidates_logged ?? 0),
     applications_reviewed: Number(row?.applications_reviewed ?? 0),
     applications_applied: Number(row?.applications_applied ?? 0),
@@ -54,30 +58,31 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
     query<ProfileRow>(
       `SELECT user_id::text AS user_id, display_name, email, role, is_active
          FROM profiles
-        ORDER BY is_active DESC, display_name, email`,
+        WHERE is_active = true
+          AND role IN ('application_engineer', 'manager')
+        ORDER BY display_name, email`,
     ),
     query<EventAggregateRow>(
-      `SELECT COALESCE(e.actor_user_id::text,
-                       'deleted-member:' || COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), 'Unknown')) AS actor_user_id,
+      `SELECT e.actor_user_id::text AS actor_user_id,
               COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member') AS display_name,
               COALESCE(NULLIF(to_jsonb(e)->>'actor_email', ''), p.email) AS email,
-              COALESCE(p.role, 'deleted') AS role,
-              COALESCE(p.is_active, false) AS is_active,
+              p.role AS role,
+              p.is_active AS is_active,
               COUNT(*) FILTER (WHERE e.event_type = 'job_added')::int AS jobs_added,
-              COUNT(*) FILTER (WHERE e.event_type = 'job_duplicate')::int AS duplicate_captures,
               COUNT(*) FILTER (WHERE e.event_type = 'candidate_logged')::int AS candidates_logged,
               COUNT(*) FILTER (WHERE e.event_type = 'application_reviewed')::int AS applications_reviewed,
               COUNT(*) FILTER (WHERE e.event_type = 'application_applied')::int AS applications_applied
          FROM extension_activity_events e
-         LEFT JOIN profiles p ON p.user_id = e.actor_user_id
+         JOIN profiles p ON p.user_id = e.actor_user_id
+                       AND p.is_active = true
+                       AND p.role IN ('application_engineer', 'manager')
         WHERE e.occurred_at >= $1::timestamptz
           AND e.occurred_at <= $2::timestamptz
           AND e.event_type <> 'resume_edited'
-        GROUP BY COALESCE(e.actor_user_id::text,
-                          'deleted-member:' || COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), 'Unknown')),
+        GROUP BY e.actor_user_id::text,
                  COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member'),
                  COALESCE(NULLIF(to_jsonb(e)->>'actor_email', ''), p.email),
-                 COALESCE(p.role, 'deleted'), COALESCE(p.is_active, false)
+                 p.role, p.is_active
         ORDER BY display_name, email`,
       [startAt.toISOString(), endAt.toISOString()],
     ),
@@ -85,6 +90,7 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
 
   const members = new Map<string, TeamActivityMember>();
   for (const profile of profiles) {
+    if (!isReportableMember(profile)) continue;
     members.set(profile.user_id, {
       actor_user_id: profile.user_id,
       display_name: profile.display_name || profile.email || "Team member",
@@ -95,19 +101,11 @@ async function loadMembers(startAt: Date, endAt: Date): Promise<TeamActivityMemb
     });
   }
   for (const aggregate of aggregates) {
+    if (!isReportableMember(aggregate)) continue;
     const existing = members.get(aggregate.actor_user_id);
     if (existing) {
       Object.assign(existing, toCounts(aggregate));
-      continue;
     }
-    members.set(aggregate.actor_user_id, {
-      actor_user_id: aggregate.actor_user_id,
-      display_name: aggregate.display_name || "Deleted member",
-      email: aggregate.email,
-      role: aggregate.role,
-      is_active: aggregate.is_active,
-      ...toCounts(aggregate),
-    });
   }
   return Array.from(members.values());
 }

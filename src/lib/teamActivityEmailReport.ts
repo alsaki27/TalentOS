@@ -2,7 +2,6 @@ const REPORT_TIMEZONE = "America/New_York";
 
 export type TeamActivityCounts = {
   jobs_added: number;
-  duplicate_captures: number;
   candidates_logged: number;
   applications_reviewed: number;
   applications_applied: number;
@@ -116,12 +115,11 @@ export function getTeamActivityReportWindow(period: TeamActivityPeriod, now = ne
 export function summarizeTeamActivity(members: TeamActivityMember[]) {
   return members.reduce((totals, member) => {
     totals.jobs_added += member.jobs_added;
-    totals.duplicate_captures += member.duplicate_captures;
     totals.candidates_logged += member.candidates_logged;
     totals.applications_reviewed += member.applications_reviewed;
     totals.applications_applied += member.applications_applied;
     return totals;
-  }, { jobs_added: 0, duplicate_captures: 0, candidates_logged: 0, applications_reviewed: 0, applications_applied: 0 });
+  }, { jobs_added: 0, candidates_logged: 0, applications_reviewed: 0, applications_applied: 0 });
 }
 
 function escapeHtml(value: string) {
@@ -134,7 +132,6 @@ function escapeHtml(value: string) {
 const number = (value: number) => Number(value || 0).toLocaleString("en-US");
 const actionDefinitions: Array<{ key: keyof TeamActivityCounts; label: string }> = [
   { key: "jobs_added", label: "Jobs added" },
-  { key: "duplicate_captures", label: "Duplicate captures" },
   { key: "candidates_logged", label: "Candidates logged" },
   { key: "applications_reviewed", label: "Reviews completed" },
   { key: "applications_applied", label: "Marked as applied" },
@@ -161,9 +158,9 @@ export function renderTeamActivityEmail(options: {
   });
 
   const memberCards = visibleMembers.map((member) => {
-    const total = member.jobs_added + member.duplicate_captures + member.candidates_logged + member.applications_reviewed + member.applications_applied;
+    const total = member.jobs_added + member.candidates_logged + member.applications_reviewed + member.applications_applied;
     const cells = actionDefinitions.map(({ key, label }) => `
-      <td style="padding:10px 6px;vertical-align:top;width:20%;border-top:1px solid #e4e8f0;">
+      <td style="padding:10px 6px;vertical-align:top;width:25%;border-top:1px solid #e4e8f0;">
         <div style="font:600 11px/1.35 Arial,sans-serif;color:#65708a;">${label}</div>
         <div style="margin-top:4px;font:700 18px/1.1 Arial,sans-serif;color:#17213b;">${number(member[key])}</div>
       </td>`).join("");
@@ -172,7 +169,7 @@ export function renderTeamActivityEmail(options: {
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
           <td style="font:700 16px/1.3 Arial,sans-serif;color:#17213b;">${escapeHtml(member.display_name)}</td>
           <td align="right" style="white-space:nowrap;font:700 12px/1 Arial,sans-serif;color:${brandBlue};">${number(total)} ${total === 1 ? "action" : "actions"}</td>
-        </tr><tr><td colspan="2" style="padding-top:3px;font:12px/1.4 Arial,sans-serif;color:#65708a;">${escapeHtml(member.role.replaceAll("_", " "))}${member.is_active ? "" : " · inactive"}${member.email ? ` · ${escapeHtml(member.email)}` : ""}</td></tr></table>
+        </tr><tr><td colspan="2" style="padding-top:3px;font:12px/1.4 Arial,sans-serif;color:#65708a;">${escapeHtml(member.role.replaceAll("_", " "))}${member.email ? ` · ${escapeHtml(member.email)}` : ""}</td></tr></table>
       </td></tr>
       <tr><td style="padding:0 12px 10px;background:#ffffff;border:1px solid #e4e8f0;border-top:0;border-radius:0 0 12px 12px;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>${cells}</tr></table>
@@ -181,7 +178,7 @@ export function renderTeamActivityEmail(options: {
   }).join("");
 
   const totalCells = actionDefinitions.map(({ key, label }) => `
-      <td align="center" style="padding:12px 5px;width:20%;">
+      <td align="center" style="padding:12px 5px;width:25%;">
         <div style="font:600 10px/1.3 Arial,sans-serif;color:#d4ddf6;">${label}</div>
         <div style="margin-top:5px;font:700 21px/1 Arial,sans-serif;color:#ffffff;">${number(totals[key])}</div>
       </td>`).join("");
@@ -190,10 +187,10 @@ export function renderTeamActivityEmail(options: {
 <body style="margin:0;padding:0;background:#f2f4f8;color:#17213b;font-family:Arial,Helvetica,sans-serif;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#f2f4f8;"><tr><td align="center" style="padding:24px 12px;">
     <table role="presentation" width="680" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:680px;">
-      <tr><td style="padding:20px 22px;background:${brandBlue};border-radius:14px 14px 0 0;">
+      <tr><td style="padding:20px 22px;background:#f7f8fc;border:1px solid #e4e8f0;border-bottom:0;border-radius:14px 14px 0 0;">
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
           <td width="52" valign="middle"><img src="https://www.skarion.com/logo.svg" width="40" height="32" alt="Skarion" style="display:block;border:0;outline:none;text-decoration:none;"></td>
-          <td valign="middle"><div style="font:700 16px/1.1 Arial,sans-serif;letter-spacing:1.4px;color:#ffffff;">SKARION</div><div style="margin-top:5px;font:12px/1.2 Arial,sans-serif;color:#cbd5f2;">TalentOS · Team operations</div></td>
+          <td valign="middle"><div style="font:700 16px/1.1 Arial,sans-serif;letter-spacing:1.4px;color:${brandBlue};">SKARION</div><div style="margin-top:5px;font:12px/1.2 Arial,sans-serif;color:#58647c;">TalentOS · Team operations</div></td>
         </tr></table>
       </td></tr>
       <tr><td style="padding:24px 22px 20px;background:#ffffff;">

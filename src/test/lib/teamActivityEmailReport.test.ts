@@ -28,7 +28,6 @@ const member: TeamActivityMember = {
   role: "application_engineer",
   is_active: true,
   jobs_added: 2,
-  duplicate_captures: 1,
   candidates_logged: 3,
   applications_reviewed: 4,
   applications_applied: 1,
@@ -69,10 +68,13 @@ describe("team activity report email helpers", () => {
     });
 
     expect(html).toContain("https://www.skarion.com/logo.svg");
+    expect(html).toContain("background:#f7f8fc");
+    expect(html).toContain('color:#16275f;">SKARION</div>');
     expect(html).toContain("Daily team activity");
-    expect(html).toContain("11 actions");
+    expect(html).toContain("10 actions");
     expect(html).toContain("AE &lt;One&gt;");
     expect(html).not.toContain("AE <One>");
+    expect(html).not.toMatch(/duplicate/i);
     expect(html).toContain("Open TalentOS activity report");
   });
 });
@@ -92,15 +94,41 @@ describe("team activity report cron endpoint", () => {
 
   it("sends one report to the configured recipient using read-only activity queries", async () => {
     mocks.query
-      .mockResolvedValueOnce([{
-        user_id: "member-1", display_name: "AE One", email: "ae@example.com",
-        role: "application_engineer", is_active: true,
-      }])
-      .mockResolvedValueOnce([{
-        actor_user_id: "member-1", display_name: "AE One", email: "ae@example.com",
-        role: "application_engineer", is_active: true, jobs_added: 2, duplicate_captures: 1,
-        candidates_logged: 3, applications_reviewed: 4, applications_applied: 1,
-      }]);
+      .mockResolvedValueOnce([
+        {
+          user_id: "member-1", display_name: "AE One", email: "ae@example.com",
+          role: "application_engineer", is_active: true,
+        },
+        {
+          user_id: "member-2", display_name: "Manager One", email: "manager@example.com",
+          role: "manager", is_active: true,
+        },
+        {
+          user_id: "member-inactive", display_name: "Inactive AE", email: "inactive@example.com",
+          role: "application_engineer", is_active: false,
+        },
+        {
+          user_id: "member-admin", display_name: "Admin User", email: "admin@example.com",
+          role: "admin", is_active: true,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          actor_user_id: "member-1", display_name: "AE One", email: "ae@example.com",
+          role: "application_engineer", is_active: true,
+          jobs_added: 2, candidates_logged: 3, applications_reviewed: 4, applications_applied: 1,
+        },
+        {
+          actor_user_id: "member-inactive", display_name: "Inactive AE", email: "inactive@example.com",
+          role: "application_engineer", is_active: false,
+          jobs_added: 7, candidates_logged: 7, applications_reviewed: 7, applications_applied: 7,
+        },
+        {
+          actor_user_id: "member-admin", display_name: "Admin User", email: "admin@example.com",
+          role: "admin", is_active: true,
+          jobs_added: 9, candidates_logged: 9, applications_reviewed: 9, applications_applied: 9,
+        },
+      ]);
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
@@ -108,19 +136,24 @@ describe("team activity report cron endpoint", () => {
       ok: true,
       period: "daily",
       recipientCount: 1,
-      totals: {
-        jobs_added: 2,
-        duplicate_captures: 1,
-        candidates_logged: 3,
-        applications_reviewed: 4,
-        applications_applied: 1,
-      },
+      teamMemberCount: 2,
+      totals: { jobs_added: 2, candidates_logged: 3, applications_reviewed: 4, applications_applied: 1 },
     });
     expect(mocks.query).toHaveBeenCalledTimes(2);
     for (const [sql] of mocks.query.mock.calls) {
       expect(String(sql)).toMatch(/^\s*SELECT/i);
       expect(String(sql)).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/i);
     }
+    expect(String(mocks.query.mock.calls[0][0])).toContain("role IN ('application_engineer', 'manager')");
+    expect(String(mocks.query.mock.calls[0][0])).toContain("WHERE is_active = true");
+    expect(String(mocks.query.mock.calls[1][0])).toContain("p.is_active = true");
+    expect(String(mocks.query.mock.calls[1][0])).not.toContain("job_duplicate");
+    const emailHtml = mocks.sendGraphMail.mock.calls[0][0].html as string;
+    expect(emailHtml).toContain("AE One");
+    expect(emailHtml).toContain("Manager One");
+    expect(emailHtml).not.toContain("Inactive AE");
+    expect(emailHtml).not.toContain("Admin User");
+    expect(emailHtml).not.toMatch(/duplicate/i);
     expect(mocks.sendGraphMail).toHaveBeenCalledWith(expect.objectContaining({
       to: "shohanhyder@gmail.com",
       subject: expect.stringContaining("Daily Team Activity Report"),
