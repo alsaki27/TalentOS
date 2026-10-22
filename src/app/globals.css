@@ -787,6 +787,14 @@ body::before {
   padding-right: 16px;
 }
 
+/* Extension activity reports need a full-width canvas for team totals and the
+   paginated audit trail, while the page itself controls a readable max width. */
+.page:has(.extension-reports-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 .job-agent-page .job-agent-header-row {
   display: flex;
   align-items: center;
