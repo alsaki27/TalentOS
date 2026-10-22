@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      apply_team_member_permanent_delete:
+        description: "Apply only migration 122 for safe permanent team member deletion"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: talentos-production-deploy
@@ -132,7 +137,7 @@ jobs:
         # sslmode=require as "encrypt, do not verify", unlike node-postgres which
         # treats it as verify-full (see src/server/db/neon.ts).
         # Only an intentional manual dispatch may run SQL against TalentOS.
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.skip_schema_fixes != true || inputs.apply_resume_forge_qwen37_plus == true || inputs.apply_resume_pipeline_opencode_model_routes == true || inputs.apply_resume_forge_fallback_order == true) }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.skip_schema_fixes != true || inputs.apply_resume_forge_qwen37_plus == true || inputs.apply_resume_pipeline_opencode_model_routes == true || inputs.apply_resume_forge_fallback_order == true || inputs.apply_team_member_permanent_delete == true) }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
           # Fail loudly and specifically if the database is simply unreachable.
@@ -145,7 +150,7 @@ jobs:
           fi
           FAILED_FILES=""
           SELECTED_MIGRATIONS=0
-          for selected in "$APPLY_RESUME_FORGE_QWEN37_PLUS" "$APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES" "$APPLY_RESUME_FORGE_FALLBACK_ORDER"; do
+          for selected in "$APPLY_RESUME_FORGE_QWEN37_PLUS" "$APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES" "$APPLY_RESUME_FORGE_FALLBACK_ORDER" "$APPLY_TEAM_MEMBER_PERMANENT_DELETE"; do
             if [ "$selected" = "true" ]; then SELECTED_MIGRATIONS=$((SELECTED_MIGRATIONS + 1)); fi
           done
           if [ "$SELECTED_MIGRATIONS" -gt 1 ]; then
@@ -157,6 +162,8 @@ jobs:
             FILES="sql/neon_fixes/106_resume_pipeline_opencode_model_routes.sql"
           elif [ "$APPLY_RESUME_FORGE_FALLBACK_ORDER" = "true" ]; then
             FILES="sql/neon_fixes/107_resume_forge_fallback_order.sql"
+          elif [ "$APPLY_TEAM_MEMBER_PERMANENT_DELETE" = "true" ]; then
+            FILES="sql/neon_fixes/122_team_member_permanent_delete.sql"
           else
             FILES="sql/neon_fixes/*.sql"
           fi
@@ -179,6 +186,7 @@ jobs:
           APPLY_RESUME_FORGE_QWEN37_PLUS: ${{ inputs.apply_resume_forge_qwen37_plus }}
           APPLY_RESUME_PIPELINE_OPENCODE_MODEL_ROUTES: ${{ inputs.apply_resume_pipeline_opencode_model_routes }}
           APPLY_RESUME_FORGE_FALLBACK_ORDER: ${{ inputs.apply_resume_forge_fallback_order }}
+          APPLY_TEAM_MEMBER_PERMANENT_DELETE: ${{ inputs.apply_team_member_permanent_delete }}
 
       - name: Deploy Worker with secrets atomically
         # Wrangler 4 uploads the Worker code, Wrangler bindings, and this

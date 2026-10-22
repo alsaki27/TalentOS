@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-type TeamMember = { user_id: string; display_name: string | null; email: string; role: string; is_active: boolean };
+type TeamMember = { user_id: string; display_name: string | null; email: string | null; role: string; is_active: boolean };
 type Aggregate = {
-  actor_user_id: string; display_name: string | null; email: string; period: string;
+  actor_user_id: string; display_name: string | null; email: string | null; period: string;
   jobs_added: number; duplicate_captures: number; candidates_logged: number;
   resumes_edited: number; applications_reviewed: number; applications_applied: number;
 };
@@ -96,7 +96,7 @@ export default function ExtensionReportsPage() {
       for (const [field] of countFields) total[field] = Number(total[field] || 0) + Number(row[field] || 0) as never;
       map.set(row.actor_user_id, total);
     }
-    return Array.from(map.values()).sort((a, b) => a.display_name?.localeCompare(b.display_name || "") || a.email.localeCompare(b.email));
+    return Array.from(map.values()).sort((a, b) => a.display_name?.localeCompare(b.display_name || "") || (a.email ?? "").localeCompare(b.email ?? ""));
   }, [aggregates, teamMembers, memberId]);
 
   if (role && role !== "admin") return <p className="form-error" style={{ padding: 24 }}>This report is available to admins only.</p>;
@@ -115,7 +115,7 @@ export default function ExtensionReportsPage() {
         <select className="input" value={group} onChange={(e) => setGroup(e.target.value)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select>
       </label>
       <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Team member
-        <select className="input" value={memberId} onChange={(e) => setMemberId(e.target.value)}><option value="">All team members</option>{teamMembers.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name || member.email} · {member.role.replaceAll("_", " ")}{member.is_active ? "" : " (inactive)"}</option>)}</select>
+        <select className="input" value={memberId} onChange={(e) => setMemberId(e.target.value)}><option value="">All team members</option>{teamMembers.map((member) => <option key={member.user_id} value={member.user_id}>{member.user_id === "deleted-member" ? "Deleted member · historical activity" : `${member.display_name || member.email} · ${member.role.replaceAll("_", " ")}${member.is_active ? "" : " (inactive)"}`}</option>)}</select>
       </label>
       <span className="muted" style={{ fontSize: 11, marginLeft: "auto" }}>Times shown in Asia/Dhaka</span>
     </div>

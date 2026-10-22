@@ -3,10 +3,12 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   Briefcase,
   Code2,
   MoreHorizontal,
   Shield,
+  Trash2,
   Users,
   UserPlus,
   X,
@@ -72,6 +74,10 @@ export default function TeamPage() {
   const [formError, setFormError] = useState("");
   const [formSaving, setFormSaving] = useState(false);
   const [actionId, setActionId] = useState("");
+  const [memberToDelete, setMemberToDelete] = useState<TeamMember | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteSaving, setDeleteSaving] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
@@ -211,6 +217,27 @@ export default function TeamPage() {
     setOpenMenuId(null);
   }
 
+  async function permanentlyDeleteMember() {
+    if (!memberToDelete || deleteConfirmation !== "DELETE") return;
+
+    setDeleteSaving(true);
+    setDeleteError("");
+    try {
+      const res = await fetch(`/api/users/${memberToDelete.user_id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Could not delete team member.");
+
+      setMembers((current) => current.filter((member) => member.user_id !== memberToDelete.user_id));
+      setFeedback({ kind: "success", text: "User deleted. Past activity is preserved as Deleted member." });
+      setMemberToDelete(null);
+      setDeleteConfirmation("");
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "Could not delete team member.");
+    } finally {
+      setDeleteSaving(false);
+    }
+  }
+
   return (
     <>
       <div className="page-header">
@@ -334,6 +361,19 @@ export default function TeamPage() {
                             >
                               {member.is_active ? "Deactivate" : "Activate"}
                             </DropdownMenuItem>
+                            <DropdownMenuSeparator className="my-1 bg-border" />
+                            <DropdownMenuItem
+                              className="cursor-pointer gap-2 rounded-md px-2 py-1.5 text-sm text-danger focus:bg-danger focus:text-white"
+                              onSelect={() => {
+                                setDeleteError("");
+                                setDeleteConfirmation("");
+                                setMemberToDelete(member);
+                              }}
+                              disabled={me?.profile.user_id === member.user_id}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Permanently delete
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -435,6 +475,85 @@ export default function TeamPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {memberToDelete && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!deleteSaving) {
+              setMemberToDelete(null);
+              setDeleteConfirmation("");
+            }
+          }}
+        >
+          <section
+            className="modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-member-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="rounded-full p-2 text-danger" style={{ backgroundColor: "var(--danger-soft)" }}>
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h2 id="delete-member-title" className="text-base font-bold text-ink">Permanently delete team member?</h2>
+                <p className="muted mt-1 text-sm">{memberToDelete.display_name || memberToDelete.email || "This user"}{memberToDelete.email ? ` · ${memberToDelete.email}` : ""}</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-bg p-3 text-sm text-ink-soft">
+              <ul className="list-disc space-y-1 pl-5">
+                <li>The account will be removed, and extension keys owned or created by this member will be revoked.</li>
+                <li>Existing assignments to this member will be cleared.</li>
+                <li>Past activity and audit history will remain, attributed to “Deleted member.”</li>
+              </ul>
+              <p className="mt-2 font-semibold text-danger">This action cannot be undone.</p>
+            </div>
+
+            <div className="field-group mt-4">
+              <label htmlFor="delete-member-confirmation">Type DELETE to confirm</label>
+              <input
+                id="delete-member-confirmation"
+                value={deleteConfirmation}
+                onChange={(event) => {
+                  setDeleteConfirmation(event.target.value);
+                  setDeleteError("");
+                }}
+                autoComplete="off"
+                autoFocus
+                disabled={deleteSaving}
+              />
+            </div>
+
+            {deleteError && <p className="text-xs text-danger mt-1">{deleteError}</p>}
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setMemberToDelete(null);
+                  setDeleteConfirmation("");
+                }}
+                disabled={deleteSaving}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger flex items-center gap-2"
+                onClick={permanentlyDeleteMember}
+                disabled={deleteSaving || deleteConfirmation !== "DELETE"}
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleteSaving ? "Deleting…" : "Delete permanently"}
+              </button>
+            </div>
+          </section>
         </div>
       )}
     </>

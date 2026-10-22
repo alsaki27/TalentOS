@@ -25,11 +25,21 @@ export async function GET(request: NextRequest) {
 
   try {
     const [teamMembers, aggregates, events] = await Promise.all([
-      query(`SELECT user_id, display_name, email, role, is_active
+      query(`SELECT user_id::text AS user_id, display_name, email, role, is_active
                FROM profiles
+             UNION ALL
+             SELECT 'deleted-member' AS user_id, 'Deleted member' AS display_name,
+                    NULL AS email, 'deleted' AS role, false AS is_active
+              WHERE EXISTS (
+                SELECT 1 FROM extension_activity_events e
+                 WHERE e.actor_user_id IS NULL
+                   AND to_jsonb(e)->>'actor_display_name' = 'Deleted member'
+              )
               ORDER BY is_active DESC, display_name NULLS LAST, email`),
       query(
-        `SELECT e.actor_user_id, p.display_name, p.email,
+        `SELECT COALESCE(e.actor_user_id::text, 'deleted-member') AS actor_user_id,
+                COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member') AS display_name,
+                COALESCE(to_jsonb(e)->>'actor_email', p.email) AS email,
                 date_trunc($2, e.occurred_at AT TIME ZONE 'Asia/Dhaka')::text AS period,
                 COUNT(*) FILTER (WHERE e.event_type = 'job_added')::int AS jobs_added,
                 COUNT(*) FILTER (WHERE e.event_type = 'job_duplicate')::int AS duplicate_captures,
@@ -38,26 +48,38 @@ export async function GET(request: NextRequest) {
                 COUNT(*) FILTER (WHERE e.event_type = 'application_reviewed')::int AS applications_reviewed,
                 COUNT(*) FILTER (WHERE e.event_type = 'application_applied')::int AS applications_applied
            FROM extension_activity_events e
-           JOIN profiles p ON p.user_id = e.actor_user_id
+           LEFT JOIN profiles p ON p.user_id = e.actor_user_id
           WHERE e.occurred_at >= NOW() - ($1::int * INTERVAL '1 day')
-            AND ($3::uuid IS NULL OR e.actor_user_id = $3::uuid)
-          GROUP BY e.actor_user_id, p.display_name, p.email, date_trunc($2, e.occurred_at AT TIME ZONE 'Asia/Dhaka')
-          ORDER BY period DESC, p.display_name NULLS LAST, p.email`,
+            AND (
+              $3::text IS NULL
+              OR e.actor_user_id::text = $3::text
+              OR ($3::text = 'deleted-member' AND e.actor_user_id IS NULL AND to_jsonb(e)->>'actor_display_name' = 'Deleted member')
+            )
+          GROUP BY COALESCE(e.actor_user_id::text, 'deleted-member'),
+                   COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member'),
+                   COALESCE(to_jsonb(e)->>'actor_email', p.email),
+                   date_trunc($2, e.occurred_at AT TIME ZONE 'Asia/Dhaka')
+          ORDER BY period DESC, display_name NULLS LAST, email`,
         [days, group, memberId],
       ),
       query(
         `SELECT e.id, e.event_type, e.occurred_at, e.match_score, e.metadata,
-                p.user_id AS actor_user_id, p.display_name AS actor_name, p.email AS actor_email,
+                e.actor_user_id, COALESCE(NULLIF(to_jsonb(e)->>'actor_display_name', ''), p.display_name, 'Deleted member') AS actor_name,
+                COALESCE(to_jsonb(e)->>'actor_email', p.email) AS actor_email,
                 e.job_id, j.title AS job_title, j.company AS job_company, j.location AS job_location,
                 e.application_id, e.candidate_id, c.name AS candidate_name,
                 e.base_resume_id, br.name AS base_resume_name, e.resume_version_id
            FROM extension_activity_events e
-           JOIN profiles p ON p.user_id = e.actor_user_id
+           LEFT JOIN profiles p ON p.user_id = e.actor_user_id
            LEFT JOIN jobs j ON j.id = e.job_id
            LEFT JOIN candidates c ON c.id = e.candidate_id
            LEFT JOIN base_resumes br ON br.id = e.base_resume_id
           WHERE e.occurred_at >= NOW() - ($1::int * INTERVAL '1 day')
-            AND ($2::uuid IS NULL OR e.actor_user_id = $2::uuid)
+            AND (
+              $2::text IS NULL
+              OR e.actor_user_id::text = $2::text
+              OR ($2::text = 'deleted-member' AND e.actor_user_id IS NULL AND to_jsonb(e)->>'actor_display_name' = 'Deleted member')
+            )
           ORDER BY e.occurred_at DESC
           LIMIT 500`,
         [days, memberId],
