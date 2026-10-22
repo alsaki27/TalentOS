@@ -13,6 +13,7 @@ assets = { directory = ".open-next/assets", binding = "ASSETS" }
 
 [vars]
 TALENTOS_BASE_URL = "https://talent.skarion.com"
+TEAM_ACTIVITY_REPORT_RECIPIENTS = "shohanhyder@gmail.com"
 STAFF_GOOGLE_AUTH_ENABLED = "true"
 CANDIDATE_GOOGLE_AUTH_ENABLED = "true"
 CANDIDATE_MFA_ENABLED = "true"
