@@ -1,11 +1,13 @@
 # Team activity email reports
 
-The scheduled GitHub Actions workflow sends a daily team report at 5:00 PM
-Eastern Time and an additional weekly report on Sundays at 5:00 PM Eastern
-Time. Sunday therefore sends both the daily and weekly report. The daily report
-covers midnight through the send time in `America/New_York`; the weekly report
-covers the prior seven calendar days ending at the send time.
+The Cloudflare Worker Cron handler sends the daily report every day at 5:00 PM
+Eastern Time and the weekly report every Sunday at 6:00 PM Eastern Time. The
+handler evaluates Cloudflare's scheduled instant in `America/New_York`, so the
+schedule follows Eastern daylight and standard time automatically. On Sundays,
+the daily and weekly reports are sent at their separate scheduled times.
 
+The daily report covers midnight through the send time in `America/New_York`;
+the weekly report covers the prior seven calendar days ending at the send time.
 Reports include only active profiles whose role is `application_engineer` or
 `manager`. They count jobs added, candidates logged, reviews completed, and
 applications marked applied. Duplicate captures and resume edit events are
@@ -14,30 +16,29 @@ rows in the database. No database migration is required.
 
 ## Deployment configuration
 
-The current test recipient is configured as a Cloudflare Worker variable in
+Report recipients are configured as a Cloudflare Worker variable in
 `wrangler.toml`:
 
 ```text
-TEAM_ACTIVITY_REPORT_RECIPIENTS = "shohanhyder@gmail.com"
+TEAM_ACTIVITY_REPORT_RECIPIENTS = "info@skarion.com,shohanhyder@gmail.com"
 ```
 
-Multiple recipients can be separated by commas or semicolons. Update this
-deployment variable to add or remove recipients; the report recipient list is
-not stored in TalentOS or the database. The current address will receive the
-scheduled daily report and the additional weekly report on Sundays until the
-variable is changed.
+Multiple recipients can be separated by commas or semicolons. Change this
+deployment variable to add or remove recipients; recipient settings are not
+stored in TalentOS or the database.
 
 The route uses the existing configured email sender: Microsoft Graph when all
 `MS_GRAPH_*` settings are present, otherwise Resend when both `RESEND_API_KEY`
 and `EMAIL_FROM` are configured. It does not use the mock/log-only mail path,
-and it will fail clearly if no real sender is configured.
+and it fails clearly if no real sender is configured.
 
-GitHub Actions must have its existing `CRON_SECRET` secret and the
-`TALENTOS_BASE_URL` repository variable (optional; defaults to the live TalentOS
-URL). GitHub schedules run in UTC, so the workflow has a 21:00 and 22:00 UTC
-trigger and checks `America/New_York` at runtime. This handles Eastern daylight
-and standard time without changing the 5:00 PM local schedule.
+The Worker's existing `CRON_SECRET` is used for server-to-server calls. The
+GitHub Actions workflow named **Team activity email reports** has a manual
+`workflow_dispatch` option for intentionally sending a daily or weekly report
+to all currently configured recipients. The recurring schedule is owned by the
+Cloudflare Cron handler, which runs each minute alongside the existing AI
+pipeline dispatcher and only invokes a report at its configured Eastern time.
 
-No email is sent by editing or building this code. Sending starts only after
-the workflow and endpoint are deployed and the runtime sender/recipient
-settings are present.
+The automated schedule targets 5:00 PM and Sunday 6:00 PM Eastern. Cron starts
+the send at those scheduled instants; final inbox arrival can still vary with
+the configured email provider.

@@ -1,12 +1,19 @@
 name: Team activity email reports
 
 on:
-  # GitHub Actions cron is UTC-based. These two UTC triggers cover 5:00 PM ET
-  # in both daylight and standard time; the job checks America/New_York and
-  # only sends at 5 PM, so exactly one trigger sends on each day.
-  schedule:
-    - cron: "0 21 * * *"
-    - cron: "0 22 * * *"
+  # Recurring sends run from the Cloudflare Cron handler, which checks the
+  # scheduled instant in America/New_York and handles daylight-saving time.
+  # Keep this manual path for an intentional report send or delivery check.
+  workflow_dispatch:
+    inputs:
+      period:
+        description: "Report period to send to the configured recipients"
+        required: true
+        default: weekly
+        type: choice
+        options:
+          - daily
+          - weekly
 
 permissions:
   contents: read
@@ -19,61 +26,35 @@ env:
   TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
 
 jobs:
-  send-team-reports:
+  send-team-report:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Choose the report periods for 5 PM Eastern
-        id: periods
-        shell: bash
-        run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          from datetime import datetime
-          from zoneinfo import ZoneInfo
-
-          eastern_now = datetime.now(ZoneInfo("America/New_York"))
-          if eastern_now.hour != 17:
-              print("periods=")
-          else:
-              periods = ["daily"]
-              if eastern_now.weekday() == 6:
-                  periods.append("weekly")
-              print(f"periods={' '.join(periods)}")
-          PY
-
-      - name: Send scheduled reports
-        if: steps.periods.outputs.periods != ''
+      - name: Send the selected report
         shell: bash
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          REPORT_PERIODS: ${{ steps.periods.outputs.periods }}
+          REPORT_PERIOD: ${{ inputs.period }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "::error::CRON_SECRET is required to call TalentOS."
             exit 1
           fi
 
-          for period in $REPORT_PERIODS; do
-            echo "Sending $period team activity report."
-            response=$(curl --silent --show-error --max-time 180 --connect-timeout 20 \
-              --request POST \
-              --header "Authorization: Bearer $CRON_SECRET" \
-              --header "Accept: application/json" \
-              --output /tmp/team-activity-report-response.json \
-              --write-out "%{http_code}" \
-              "$TALENTOS_BASE_URL/api/cron/team-activity-report?period=$period") || {
-                echo "::error::Could not reach the TalentOS team activity report endpoint."
-                exit 1
-              }
-
-            cat /tmp/team-activity-report-response.json
-            echo
-            if [ "$response" -lt 200 ] || [ "$response" -ge 300 ]; then
-              echo "::error::The $period team activity report failed with HTTP $response."
+          response=$(curl --silent --show-error --max-time 180 --connect-timeout 20 \
+            --request POST \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            --header "Accept: application/json" \
+            --output /tmp/team-activity-report-response.json \
+            --write-out "%{http_code}" \
+            "$TALENTOS_BASE_URL/api/cron/team-activity-report?period=$REPORT_PERIOD") || {
+              echo "::error::Could not reach the TalentOS team activity report endpoint."
               exit 1
-            fi
-          done
+            }
 
-      - name: Skip the non-Eastern-time trigger
-        if: steps.periods.outputs.periods == ''
-        run: echo "This UTC trigger is outside 5 PM Eastern; the other daily trigger handles this date."
+          cat /tmp/team-activity-report-response.json
+          echo
+          if [ "$response" -lt 200 ] || [ "$response" -ge 300 ]; then
+            echo "::error::The $REPORT_PERIOD team activity report failed with HTTP $response."
+            exit 1
+          fi

@@ -1,4 +1,5 @@
 import worker from "./.open-next/worker.js";
+import { getDueTeamActivityReportPeriods } from "./src/lib/teamActivityEmailSchedule.ts";
 
 // TalentOS' Postgres moved from Neon (HTTP) to a self-hosted server, which a
 // Worker can only reach over TCP. A Worker cannot verify that server's
@@ -71,14 +72,38 @@ export default {
     }
 
     const baseUrl = env?.TALENTOS_BASE_URL || "https://talent.skarion.com";
-    const response = await fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${secret}` },
-    });
-    const body = await response.text();
-    if (!response.ok) {
-      throw new Error(`AI pipeline scheduled dispatch failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
+    const reportPeriods = getDueTeamActivityReportPeriods(new Date(controller.scheduledTime));
+    const tasks = [
+      (async () => {
+        const response = await fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${secret}` },
+        });
+        const body = await response.text();
+        if (!response.ok) {
+          throw new Error(`AI pipeline scheduled dispatch failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
+        }
+        console.log(`[scheduled pipeline dispatch] ${body.slice(0, 500)}`);
+      })(),
+      ...reportPeriods.map(async (period) => {
+        const response = await fetch(`${baseUrl}/api/cron/team-activity-report?period=${period}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${secret}`,
+            Accept: "application/json",
+          },
+        });
+        const body = await response.text();
+        if (!response.ok) {
+          throw new Error(`Scheduled ${period} team activity report failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
+        }
+        console.log(`[scheduled ${period} team activity report] ${body.slice(0, 500)}`);
+      }),
+    ];
+    const outcomes = await Promise.allSettled(tasks);
+    const errors = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
+    if (errors.length > 0) {
+      throw new Error(`One or more scheduled tasks failed: ${errors.map((error) => String(error)).join("; ")}`);
     }
-    console.log(`[scheduled pipeline dispatch] ${body.slice(0, 500)}`);
   },
 };
