@@ -4,15 +4,12 @@ import { sha256Hex } from "@/lib/sha256";
 
 export const SCHEDULED_LOGGING_COOKIE = "scheduled_candidate_logging_session";
 const SESSION_TTL_HOURS = 8;
-// Lowered from 310,000: this gate sits behind full TalentOS admin auth
-// already (requireCurrentUser(["admin"]) guards every route that calls
-// this), not an internet-facing login - 310k PBKDF2-SHA256 iterations is
-// heavy enough CPU work that a cold Cloudflare Workers invocation could
-// exceed its per-request CPU budget and throw, surfacing as a generic
-// "Could not verify feature access" on an otherwise-correct password.
-// 120,000 is still a legitimate, commonly-used PBKDF2-SHA256 iteration
-// count for a secondary admin-only gate.
-const PBKDF2_ITERATIONS = 120_000;
+// Confirmed live (2026-10-25): Cloudflare Workers' crypto.subtle hard-caps
+// PBKDF2 at 100,000 iterations - "Pbkdf2 failed: iteration counts above
+// 100000 are not supported" (requested 120000, and before that 310000;
+// both exceeded it). This is a platform ceiling, not a tunable trade-off -
+// 100,000 is the maximum value Workers will actually execute.
+const PBKDF2_ITERATIONS = 100_000;
 
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
