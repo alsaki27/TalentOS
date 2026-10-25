@@ -27,6 +27,7 @@ interface LoggingConfig {
   jobs_per_run: number;
   ai_calls_per_run: number;
   max_applications_per_run: number;
+  job_freshness_days: number;
   custom_prompt: string;
   include_inactive_candidates: boolean;
   assigned_by_user_id: string | null;
@@ -385,7 +386,7 @@ async function resolveDescription(job: IngestedJob): Promise<string> {
   return description.slice(0, 20_000);
 }
 
-function profileForResume(resume: ResumeRow, candidate: CandidateRow, description: string, job: IngestedJob, matchThreshold: number) {
+function profileForResume(resume: ResumeRow, candidate: CandidateRow, description: string, job: IngestedJob, matchThreshold: number, freshnessDays: number) {
   const terms = termsFromResume(resume);
   return evaluateCandidateJob(
     {
@@ -407,7 +408,9 @@ function profileForResume(resume: ResumeRow, candidate: CandidateRow, descriptio
     },
     // tierAMin is now the real Stage-1 gate (matchThreshold, default 85) -
     // this is the authoritative pass/fail screen, not a cheap pre-screen.
-    { freshnessDays: 7, tierAMin: matchThreshold, tierBMin: 0 },
+    // freshnessDays is config.job_freshness_days, an admin-editable setting
+    // (migration 125) - no longer a hardcoded value.
+    { freshnessDays, tierAMin: matchThreshold, tierBMin: 0 },
   );
 }
 
@@ -437,6 +440,7 @@ export async function runScheduledCandidateLogging(options: {
     [runKey, options.triggerType, JSON.stringify({
       threshold: config.match_threshold, jobsPerRun: config.jobs_per_run,
       aiCallsPerRun: config.ai_calls_per_run, maxApplicationsPerRun: config.max_applications_per_run,
+      jobFreshnessDays: config.job_freshness_days,
       // Stage 2 now resolves its own provider/model per pair via the shared
       // OpenCode pool (SCHEDULED_LOGGING_AUTOMATION_ID) rather than one fixed
       // per-run provider - record the automation id here instead of the now
@@ -543,7 +547,7 @@ export async function runScheduledCandidateLogging(options: {
         // fail screen, not a cheap pre-screen. Combined with the structured
         // citizenship/clearance layer below, additive to evaluateCandidateJob's
         // own free-text-regex gates (not a replacement).
-        const rankedResumes = resumes.map((resume) => ({ resume, evaluation: profileForResume(resume, candidate, description, job, config.match_threshold) }))
+        const rankedResumes = resumes.map((resume) => ({ resume, evaluation: profileForResume(resume, candidate, description, job, config.match_threshold, config.job_freshness_days) }))
           .sort((a, b) => b.evaluation.score - a.evaluation.score);
         const best = rankedResumes[0];
         const evaluation = best?.evaluation;

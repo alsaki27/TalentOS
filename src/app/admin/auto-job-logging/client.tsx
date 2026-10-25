@@ -36,7 +36,7 @@ interface Config {
   is_enabled: boolean; password_configured?: boolean; ai_provider: string | null; ai_model: string | null;
   ai_base_url: string | null; has_ai_key: boolean; ai_key_fingerprint: string | null;
   match_threshold: number; jobs_per_run: number; ai_calls_per_run: number;
-  max_applications_per_run: number; custom_prompt: string; include_inactive_candidates: boolean;
+  max_applications_per_run: number; job_freshness_days: number; custom_prompt: string; include_inactive_candidates: boolean;
   assigned_by_user_id: string | null; application_owner_user_id: string | null; updated_at: string | null;
 }
 interface PageData {
@@ -60,7 +60,7 @@ interface PageData {
 const DEFAULT_CONFIG: Config = {
   is_enabled: false, ai_provider: "openai", ai_model: "", ai_base_url: null, has_ai_key: false,
   ai_key_fingerprint: null, match_threshold: 85, jobs_per_run: 25, ai_calls_per_run: 25,
-  max_applications_per_run: 25, custom_prompt: "", include_inactive_candidates: false,
+  max_applications_per_run: 25, job_freshness_days: 1, custom_prompt: "", include_inactive_candidates: false,
   assigned_by_user_id: null, application_owner_user_id: null, updated_at: null,
 };
 
@@ -416,6 +416,7 @@ export default function AutoJobLoggingPage() {
             <label>Scheduled jobs per run <input type="number" min={1} max={100} value={config.jobs_per_run} onChange={(event) => updateConfig("jobs_per_run", Number(event.target.value))} /><small>Jobs are processed oldest first in small batches.</small></label>
             <label>Separate AI calls per run <input type="number" min={1} max={200} value={config.ai_calls_per_run} onChange={(event) => updateConfig("ai_calls_per_run", Number(event.target.value))} /><small>Caps this feature's matching-provider usage only.</small></label>
             <label>Applications per run <input type="number" min={1} max={100} value={config.max_applications_per_run} onChange={(event) => updateConfig("max_applications_per_run", Number(event.target.value))} /><small>Extra matches remain queued for later batches.</small></label>
+            <label>Job freshness window (days) <input type="number" min={1} max={30} value={config.job_freshness_days} onChange={(event) => updateConfig("job_freshness_days", Number(event.target.value))} /><small>A job older than this many days (since it entered TalentOS, not its original posting date) is rejected before any AI call runs.</small></label>
           </div>
           <div className={styles.assignmentGrid}>
             <label>Assigned by<select value={config.assigned_by_user_id ?? ""} onChange={(event) => updateConfig("assigned_by_user_id", event.target.value || null)}><option value="">Select team member…</option>{teamMembers.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name || "Team member"} · {member.role.replaceAll("_", " ")}</option>)}</select></label>
