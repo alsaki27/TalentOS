@@ -25,6 +25,7 @@ import { describe, test, expect } from "vitest";
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_resume_forge
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_hiring_panel
 //   src/server/services/applicationAiWorkflowService.ts:199 (via agentId) -> application_final_polish
+//   src/server/services/scheduledCandidateLoggingService.ts (evaluateEligibility) -> scheduled_candidate_logging_eligibility_check
 //
 // application_job_lens is deliberately absent from both lists below: its
 // work was folded into application_resume_forge (see resumeForge.ts's
@@ -57,6 +58,7 @@ const AUTOMATION_IDS_FROM_CODE = [
   "email_interview_extraction",
   "email_action_enrichment",
   "email_reply_draft",
+  "scheduled_candidate_logging_eligibility_check",
 ];
 
 // These must match exactly what's in ai_automations (06_ai_key_manager_v2.sql
@@ -83,6 +85,7 @@ const SEEDED_AUTOMATIONS = new Set([
   "email_interview_extraction",
   "email_action_enrichment",
   "email_reply_draft",
+  "scheduled_candidate_logging_eligibility_check",
 ]);
 
 describe("Automation coverage", () => {

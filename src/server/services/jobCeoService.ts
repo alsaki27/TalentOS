@@ -35,6 +35,7 @@ import {
 import { createProposal, supersedePendingFor } from "@/server/repositories/agentConfigProposalRepository";
 import { logActivity } from "@/lib/activity";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { query } from "@/server/db/neon";
 
 // Items per dispatch call for fast stages (QA, matchmaking).
 const BATCH_SIZE = 20;
@@ -57,7 +58,7 @@ const MIN_DESCRIPTION_LENGTH = 100;
 // Other sources keep the existing 100-character floor unchanged.
 const ADZUNA_MIN_DESCRIPTION_LENGTH = 1500;
 
-function getDescriptionMinimumForStagedRow(row: { raw?: unknown }): number {
+export function getDescriptionMinimumForStagedRow(row: { raw?: unknown }): number {
   let raw = row.raw;
   if (typeof raw === "string") {
     try { raw = JSON.parse(raw); } catch { raw = null; }
@@ -244,6 +245,30 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
 
   const results = await runConcurrent(batch, DEEP_FETCH_CONCURRENCY, async (row) => {
     const minimumDescriptionLength = getDescriptionMinimumForStagedRow(row);
+
+    // A row with no source_url and no raw.apply_url fallback has nothing for
+    // Deep Fetch to fetch at all (e.g. Adzuna's web-search-based employer-link
+    // resolution came up empty). deepFetch.ts's own resolveFetchUrl() already
+    // degrades gracefully for this case (returns the empty existing
+    // description rather than throwing), which would otherwise land here with
+    // the same generic "Description too short (0 chars...)" last_error used
+    // for a page that WAS fetched but came up short — conflating two recovery
+    // paths that need different fixes (a better link vs. better extraction).
+    // Short-circuit with a distinct, honest reason instead. See "Adzuna Job
+    // CEO Coverage and Description Recovery Plan" (2026-10-25), Phase 1.
+    const rawApplyUrl = row.raw && typeof row.raw === "object" ? (row.raw as Record<string, unknown>).apply_url : null;
+    const hasFetchableUrl = Boolean(row.source_url) || (typeof rawApplyUrl === "string" && rawApplyUrl.trim().length > 0);
+    if (!hasFetchableUrl) {
+      await updateStaged(row.id, {
+        stage: "no_description",
+        last_error: "No employer/ATS link found for this posting",
+        claimed_at: null as any,
+        claim_expires_at: null as any,
+      });
+      if (row.dedup_signature) await removeDedupSignature(row.dedup_signature).catch(function () {});
+      return { processed: 1, researched: 0, skipped: 1 };
+    }
+
     const ctx: JobCeoAgentContext = {
       runId,
       previousOutputs: { stagedJob: row },
@@ -306,6 +331,8 @@ export async function processDeepFetchBatch(runId: string): Promise<{ processed:
 export async function processMatchmakerBatch(runId: string): Promise<{ processed: number; matched: number; logged: number; skipped: number }> {
   const batch = await claimNextStagedBatch(runId, "qa_passed", BATCH_SIZE);
   if (batch.length === 0) return { processed: 0, matched: 0, logged: 0, skipped: 0 };
+  const runMetadata = await findRunById(runId);
+  const isScheduledRun = ["scheduled", "schedule"].includes(String(runMetadata?.trigger_type ?? "").toLowerCase());
 
   // The Matchmaker agent is also the manual control for candidate assignment.
   // When it is disabled in the AI Control Centre, keep ingesting/logging jobs but
@@ -412,6 +439,23 @@ export async function processMatchmakerBatch(runId: string): Promise<{ processed
 
       if (outcome.status === "created") {
         const created = outcome.job;
+        if (isScheduledRun) {
+          // This separate provenance ledger is the allowlist for scheduled
+          // candidate matching. Manual, extension, and CSV creation paths do
+          // not write here and therefore cannot enter that workflow.
+          try {
+            await query(
+              `INSERT INTO scheduled_job_ingestion_events (job_id, source, source_run_id)
+               VALUES ($1, $2, $3) ON CONFLICT (job_id) DO NOTHING`,
+              [created.id, String(parsedRaw.source ?? runMetadata?.source ?? "unknown").toLowerCase(), runId],
+            );
+          } catch (error) {
+            // The migration is installed separately from the application
+            // deploy. Keep Job CEO's existing ingestion healthy until then;
+            // jobs will enter this allowlist once the migration is present.
+            console.warn("[Job CEO] Scheduled-job provenance table is unavailable; skipped candidate-logging enrollment:", error instanceof Error ? error.message : String(error));
+          }
+        }
         await syncCompanyDirectoryFromJobs([created]);
 
         for (const m of highMatches) {
@@ -589,8 +633,37 @@ export async function dispatchNextJobCeoWork(runId?: string): Promise<DispatchRe
     // --- CEO Orchestrator Phase ---
     // If enough jobs were processed, let the Orchestrator analyze the drop rates and propose config changes.
     if (run.ingested_count >= 10) {
-      const qaDropRate = run.ingested_count > 0 ? (run.ingested_count - run.kept_count) / run.ingested_count : 0;
-      const deepFetchFailureRate = run.kept_count > 0 ? (run.kept_count - run.researched_count) / run.kept_count : 0;
+      // Both rates used to come from run.kept_count/researched_count, which
+      // are accumulated via many small +=N updates across a long-running
+      // run's many dispatch batches and do not reliably reconcile with
+      // row-level truth — confirmed live: Adzuna runs routinely show
+      // researched_count EXCEEDING kept_count, making the old
+      // deepFetchFailureRate negative and unable to ever cross its own 0.3
+      // trigger despite a real failure rate measured the same day at 66.5%.
+      // This silently disabled this entire self-tuning step for Adzuna.
+      // Computing both rates directly from job_ceo_staging's stage column —
+      // the same source countByStage() already feeds the run-detail UI from
+      // — removes that drift entirely. See "Adzuna Job CEO Coverage and
+      // Description Recovery Plan" (2026-10-25), Phase 4.
+      const stageRows = await countStagedByStage(run.id);
+      const stageCounts: Record<string, number> = {};
+      for (const row of stageRows) stageCounts[row.stage] = parseInt(row.count, 10) || 0;
+
+      const deepFetchAttempted =
+        (stageCounts.no_description ?? 0) +
+        (stageCounts.researched ?? 0) +
+        (stageCounts.qa_passed ?? 0) +
+        (stageCounts.qa_dropped ?? 0) +
+        (stageCounts.matched ?? 0) +
+        (stageCounts.logged ?? 0);
+      const deepFetchFailureRate = deepFetchAttempted > 0 ? (stageCounts.no_description ?? 0) / deepFetchAttempted : 0;
+
+      const qaAttempted =
+        (stageCounts.qa_passed ?? 0) +
+        (stageCounts.qa_dropped ?? 0) +
+        (stageCounts.matched ?? 0) +
+        (stageCounts.logged ?? 0);
+      const qaDropRate = qaAttempted > 0 ? (stageCounts.qa_dropped ?? 0) / qaAttempted : 0;
 
       // Ensure we have a high enough failure rate to bother the AI (e.g., > 60% QA drop or > 30% deep fetch failure)
       if (qaDropRate > 0.6 || deepFetchFailureRate > 0.3) {

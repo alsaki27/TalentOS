@@ -759,6 +759,16 @@ body::before {
   padding-right: 16px;
 }
 
+/* Scheduled Candidate Logging's tabbed settings (workflow controls, matching
+   pool, candidate preference cards, run history/decision tables) need the
+   same full-bleed canvas - the default 1100px shell left its 2-column grids
+   and run/decision tables cramped. */
+.page:has(.auto-job-logging-page) {
+  max-width: calc(100vw - 32px);
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
 /* Job Agent's Run Dashboard table has 11 columns of run/tier data - same
    full-bleed treatment as Application Queue, the AI Control Center, and the
    Inbox rather than the default 1100px content shell. */

@@ -1,0 +1,39 @@
+name: Scheduled Candidate Job Logging
+
+on:
+  schedule:
+    # 11:00 PM UTC is 5:00 AM in Bangladesh (Asia/Dhaka, UTC+6).
+    - cron: "0 23 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-candidate-logging
+  cancel-in-progress: false
+
+jobs:
+  log-matching-jobs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Run scheduled candidate logging batch
+        env:
+          TALENTOS_BASE_URL: ${{ vars.TALENTOS_BASE_URL || 'https://talent.skarion.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TRIGGER_TYPE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET is not configured."
+            exit 1
+          fi
+
+          BASE_URL="$(printf '%s' "$TALENTOS_BASE_URL" | tr -d '[:space:]')"
+          BASE_URL="${BASE_URL%/}"
+          echo "Calling TalentOS scheduled candidate logging ($TRIGGER_TYPE)."
+          curl --fail-with-body --silent --show-error \
+            --max-time 1200 \
+            -X POST \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "X-Scheduled-Logging-Trigger: $TRIGGER_TYPE" \
+            -H "Content-Type: application/json" \
+            "$BASE_URL/api/cron/scheduled-candidate-logging"
