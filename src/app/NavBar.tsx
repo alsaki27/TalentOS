@@ -164,6 +164,7 @@ export default function NavBar() {
     { href: "/admin/ai",              label: "AI Control Center",     show: isAdmin },
     { href: "/admin/extension-keys",  label: "Extension API Keys",    show: isAdmin },
     { href: "/admin/extension-reports", label: "Team Activity Reports", show: isAdmin },
+    { href: "/admin/auto-job-logging", label: "Scheduled Candidate Logging", show: isAdmin },
     { href: "/ats-score",             label: "ATS Score Analysis",    show: true },
     { href: "/resume-parsing-status", label: "Resume Parsing Status", show: true },
     { href: "/team",                  label: "Team",                  show: isAdmin },
