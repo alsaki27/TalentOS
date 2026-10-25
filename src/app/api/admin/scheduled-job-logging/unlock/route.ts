@@ -82,6 +82,12 @@ export async function POST(request: NextRequest) {
     return out;
   } catch (error) {
     console.error("[Scheduled candidate logging] Access gate request failed:", error);
-    return NextResponse.json({ error: "Could not verify feature access." }, { status: 500 });
+    // Matches this app's established pattern elsewhere (e.g.
+    // candidates/[id]/route.ts) of surfacing error.message rather than a
+    // generic string - this route is already gated by requireCurrentUser(["admin"])
+    // above, so only an authenticated TalentOS admin ever sees it.
+    return NextResponse.json({
+      error: error instanceof Error ? error.message : "Could not verify feature access.",
+    }, { status: 500 });
   }
 }
