@@ -24,6 +24,7 @@ interface LoggingConfig {
   ai_base_url: string | null;
   ai_encrypted_api_key: string | null;
   match_threshold: number;
+  ai_match_threshold: number;
   jobs_per_run: number;
   ai_calls_per_run: number;
   max_applications_per_run: number;
@@ -210,7 +211,7 @@ async function evaluateEligibility(
   runId: string,
 ): Promise<AiMatchResult> {
   const payload = {
-    threshold: config.match_threshold,
+    threshold: config.ai_match_threshold,
     job: {
       title: job.title, company: job.company, location: job.location, seniority: job.seniority_level,
       description: description.slice(0, 12_000),
@@ -445,7 +446,8 @@ export async function runScheduledCandidateLogging(options: {
      ON CONFLICT (run_key) DO NOTHING
      RETURNING *`,
     [runKey, options.triggerType, JSON.stringify({
-      threshold: config.match_threshold, jobsPerRun: config.jobs_per_run,
+      threshold: config.match_threshold, aiMatchThreshold: config.ai_match_threshold,
+      jobsPerRun: config.jobs_per_run,
       aiCallsPerRun: config.ai_calls_per_run, maxApplicationsPerRun: config.max_applications_per_run,
       jobFreshnessDays: config.job_freshness_days,
       // Stage 2 now resolves its own provider/model per pair via the shared
@@ -525,7 +527,7 @@ export async function runScheduledCandidateLogging(options: {
         if (prior && ["below_threshold", "ineligible", "existing_application", "no_approved_resume", "description_unavailable", "application_created"].includes(prior.status)) {
           continue;
         }
-        if (prior?.status === "matched" && prior.base_resume_id && Number(prior.match_score) >= config.match_threshold) {
+        if (prior?.status === "matched" && prior.base_resume_id && Number(prior.match_score) >= config.ai_match_threshold) {
           if (options.triggerType === "preview" || createdCount >= config.max_applications_per_run) { jobPending = true; continue; }
           const appId = await createApplication({ job, candidateId: candidate.id, resumeId: prior.base_resume_id,
             eventId: job.event_id, assignedBy: config.assigned_by_user_id, ownerId: config.application_owner_user_id,
@@ -611,7 +613,7 @@ export async function runScheduledCandidateLogging(options: {
 
         inputTokens += result.inputTokens;
         outputTokens += result.outputTokens;
-        const matched = result.score >= config.match_threshold && result.hardGates.length === 0;
+        const matched = result.score >= config.ai_match_threshold && result.hardGates.length === 0;
         const status = matched ? "matched" : "below_threshold";
         await saveDecision({ runId: run.id, job, candidateId: candidate.id, resumeId: result.baseResumeId,
           deterministicScore, score: result.score, priority: candidate.priority, status,

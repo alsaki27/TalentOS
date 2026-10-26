@@ -35,7 +35,7 @@ interface DecisionRow {
 interface Config {
   is_enabled: boolean; password_configured?: boolean; ai_provider: string | null; ai_model: string | null;
   ai_base_url: string | null; has_ai_key: boolean; ai_key_fingerprint: string | null;
-  match_threshold: number; jobs_per_run: number; ai_calls_per_run: number;
+  match_threshold: number; ai_match_threshold: number; jobs_per_run: number; ai_calls_per_run: number;
   max_applications_per_run: number; job_freshness_days: number; custom_prompt: string; include_inactive_candidates: boolean;
   assigned_by_user_id: string | null; application_owner_user_id: string | null; updated_at: string | null;
 }
@@ -59,7 +59,7 @@ interface PageData {
 
 const DEFAULT_CONFIG: Config = {
   is_enabled: false, ai_provider: "openai", ai_model: "", ai_base_url: null, has_ai_key: false,
-  ai_key_fingerprint: null, match_threshold: 85, jobs_per_run: 25, ai_calls_per_run: 25,
+  ai_key_fingerprint: null, match_threshold: 85, ai_match_threshold: 75, jobs_per_run: 25, ai_calls_per_run: 25,
   max_applications_per_run: 25, job_freshness_days: 1, custom_prompt: "", include_inactive_candidates: false,
   assigned_by_user_id: null, application_owner_user_id: null, updated_at: null,
 };
@@ -401,7 +401,7 @@ export default function AutoJobLoggingPage() {
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Clock3 size={18} /></span><div><small>Target schedule</small><strong>Daily · 5:00 AM BDT</strong><p>GitHub Actions · 23:00 UTC</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><BriefcaseBusiness size={18} /></span><div><small>Scheduled jobs waiting</small><strong>{pendingJobs}</strong><p>{pageData.scheduledSources.length} source group{pageData.scheduledSources.length === 1 ? "" : "s"}</p></div></article>
         <article className={styles.summaryCard}><span className={styles.summaryIcon}><Users size={18} /></span><div><small>Active applying candidates</small><strong>{configuredCount} / {applyingCandidateCount}</strong><p>Only active candidates in the applying stage</p></div></article>
-        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>{config.match_threshold}% minimum match</p></div></article>
+        <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>Stage 1 {config.match_threshold}% · Stage 2 {config.ai_match_threshold}%</p></div></article>
       </section>
 
       {runResult && <section className={styles.runResult} aria-live="polite"><div><strong>Latest run · {runResult.status ?? (runResult.skipped ? "skipped" : "complete")}</strong><p>{runResult.reason ?? `${runResult.jobsSeen ?? 0} jobs checked · ${runResult.candidatePairsScored ?? 0} sent to Stage 2 AI · ${runResult.applicationsCreated ?? 0} applications created · ${runResult.failedCount ?? 0} failed`}</p></div><span>{runResult.aiCalls ?? 0} separate AI calls</span></section>}
@@ -417,7 +417,8 @@ export default function AutoJobLoggingPage() {
         {activeTab === "workflow" && <section id="panel-workflow" role="tabpanel" aria-labelledby="tab-workflow" className={styles.panel}>
           <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><ShieldCheck size={18} /></span><div><h2>Workflow controls</h2><p>Only scheduled ingestion events qualify. Manual, extension, and spreadsheet jobs are excluded.</p></div></div><label className={styles.toggle}><input type="checkbox" checked={config.is_enabled} onChange={(event) => updateConfig("is_enabled", event.target.checked)} /><span />{config.is_enabled ? "Schedule enabled" : "Paused"}</label></div>
           <div className={styles.controlGrid}>
-            <label>Minimum keyword/ATS match score <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.match_threshold} onChange={(event) => updateConfig("match_threshold", Number(event.target.value))} /><b>%</b></span><small>A keyword/ATS score below this value is rejected before any AI call runs (Stage 1). The same value is reused as the Stage-2 AI eligibility score cutoff. Required eligibility gates always apply.</small></label>
+            <label>Stage 1 · minimum keyword/ATS match score <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.match_threshold} onChange={(event) => updateConfig("match_threshold", Number(event.target.value))} /><b>%</b></span><small>A keyword/ATS score below this value is rejected before any AI call runs. Free, no AI cost.</small></label>
+            <label>Stage 2 · minimum AI eligibility score <span className={styles.inlineControl}><input type="number" min={0} max={100} value={config.ai_match_threshold} onChange={(event) => updateConfig("ai_match_threshold", Number(event.target.value))} /><b>%</b></span><small>Independent from Stage 1. Only Stage-1 passers reach this AI check; a job is only logged (application created) when this score also clears this cutoff with no AI-reported hard gates.</small></label>
             <label>Scheduled jobs per run <input type="number" min={1} max={100} value={config.jobs_per_run} onChange={(event) => updateConfig("jobs_per_run", Number(event.target.value))} /><small>Jobs are processed oldest first in small batches.</small></label>
             <label>Separate AI calls per run <input type="number" min={1} max={200} value={config.ai_calls_per_run} onChange={(event) => updateConfig("ai_calls_per_run", Number(event.target.value))} /><small>Caps this feature's matching-provider usage only.</small></label>
             <label>Applications per run <input type="number" min={1} max={100} value={config.max_applications_per_run} onChange={(event) => updateConfig("max_applications_per_run", Number(event.target.value))} /><small>Extra matches remain queued for later batches.</small></label>

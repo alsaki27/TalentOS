@@ -27,7 +27,7 @@ export async function GET() {
     const config = await queryOne<any>(
       `SELECT id, is_enabled, (password_hash IS NOT NULL) AS password_configured,
               ai_provider, ai_model, ai_base_url, (ai_encrypted_api_key IS NOT NULL) AS has_ai_key,
-              ai_key_fingerprint, match_threshold, jobs_per_run, ai_calls_per_run,
+              ai_key_fingerprint, match_threshold, ai_match_threshold, jobs_per_run, ai_calls_per_run,
               max_applications_per_run, job_freshness_days, custom_prompt, include_inactive_candidates,
               assigned_by_user_id, application_owner_user_id, updated_at
          FROM scheduled_candidate_logging_config WHERE id = true`,
@@ -111,6 +111,7 @@ export async function PUT(request: NextRequest) {
     const model = String(body.ai_model ?? "").trim();
     const apiKey = typeof body.ai_api_key === "string" ? body.ai_api_key.trim() : "";
     const threshold = Number(body.match_threshold);
+    const aiThreshold = Number(body.ai_match_threshold);
     const jobsPerRun = Number(body.jobs_per_run);
     const aiCallsPerRun = Number(body.ai_calls_per_run);
     const maxApplications = Number(body.max_applications_per_run);
@@ -160,6 +161,7 @@ export async function PUT(request: NextRequest) {
     }
     // END commented out
     if (!Number.isInteger(threshold) || threshold < 0 || threshold > 100) return NextResponse.json({ error: "Match threshold must be 0–100." }, { status: 400 });
+    if (!Number.isInteger(aiThreshold) || aiThreshold < 0 || aiThreshold > 100) return NextResponse.json({ error: "Stage 2 AI eligibility threshold must be 0–100." }, { status: 400 });
     if (!Number.isInteger(jobsPerRun) || jobsPerRun < 1 || jobsPerRun > 100) return NextResponse.json({ error: "Jobs per run must be 1–100." }, { status: 400 });
     if (!Number.isInteger(aiCallsPerRun) || aiCallsPerRun < 1 || aiCallsPerRun > 200) return NextResponse.json({ error: "AI calls per run must be 1–200." }, { status: 400 });
     if (!Number.isInteger(maxApplications) || maxApplications < 1 || maxApplications > 100) return NextResponse.json({ error: "Applications per run must be 1–100." }, { status: 400 });
@@ -203,15 +205,15 @@ export async function PUT(request: NextRequest) {
       `UPDATE scheduled_candidate_logging_config
           SET is_enabled = $1, ai_provider = $2, ai_model = $3, ai_base_url = $4,
               ai_encrypted_api_key = $5, ai_key_fingerprint = COALESCE($6, ai_key_fingerprint),
-              match_threshold = $7, jobs_per_run = $8, ai_calls_per_run = $9,
-              max_applications_per_run = $10, job_freshness_days = $11, custom_prompt = $12,
-              include_inactive_candidates = $13, assigned_by_user_id = $14,
-              application_owner_user_id = $15, updated_by_user_id = $16, updated_at = NOW()
+              match_threshold = $7, ai_match_threshold = $8, jobs_per_run = $9, ai_calls_per_run = $10,
+              max_applications_per_run = $11, job_freshness_days = $12, custom_prompt = $13,
+              include_inactive_candidates = $14, assigned_by_user_id = $15,
+              application_owner_user_id = $16, updated_by_user_id = $17, updated_at = NOW()
         WHERE id = true
         RETURNING id, ai_key_fingerprint, updated_at,
                   (ai_encrypted_api_key IS NOT NULL) AS has_ai_key`,
       [isEnabled, provider || null, model || null, baseUrl, encryptedKey, fingerprint,
-        threshold, jobsPerRun, aiCallsPerRun, maxApplications, jobFreshnessDays,
+        threshold, aiThreshold, jobsPerRun, aiCallsPerRun, maxApplications, jobFreshnessDays,
         customPrompt, false,
         assignedBy, owner, userId],
     );
