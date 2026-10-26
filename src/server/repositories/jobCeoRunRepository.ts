@@ -182,6 +182,23 @@ export async function getRunStats(): Promise<JobCeoRunStats> {
 }
 
 export async function deleteRun(id: string): Promise<void> {
+  // Detach recoverable "no_description" rows FIRST, before anything else
+  // below runs. job_ceo_staging.run_id has an ON DELETE CASCADE foreign key
+  // to this table, so deleting the run row at step 5 would otherwise destroy
+  // these rows (and their embedded raw Adzuna/source payload) regardless of
+  // whether step 4's own explicit DELETE also targets them — detaching them
+  // (run_id = NULL) removes them from both deletion paths. These rows are
+  // the Adzuna recovery queue's whole reason to exist; a staff member
+  // tidying up old completed runs must not be able to silently erase it.
+  // See "Adzuna Job CEO Coverage and Description Recovery Plan" (2026-10-25),
+  // Phase 1. A later manual or automated recovery re-attaches a row to a
+  // fresh run when it actually resolves the job (see the recovery-queue
+  // resolve endpoint), so losing the run_id link here is not permanent.
+  await execute(
+    "UPDATE job_ceo_staging SET run_id = NULL WHERE run_id = $1 AND stage = 'no_description'",
+    [id]
+  );
+
   // 1. Collect all logged job IDs and dedup signatures BEFORE we delete staging rows
   const loggedJobIds = await query<{ logged_job_id: string }>(
     "SELECT logged_job_id FROM job_ceo_staging WHERE run_id = $1 AND logged_job_id IS NOT NULL",

@@ -28,6 +28,7 @@ interface StageCounts {
   matched?: number;
   logged?: number;
   error?: number;
+  no_description?: number;
 }
 
 const STAGE_COLORS: Record<string, string> = {
@@ -38,6 +39,10 @@ const STAGE_COLORS: Record<string, string> = {
   matched: "bg-amber-900 text-amber-200",
   logged: "bg-green-800 text-green-100",
   error: "bg-rose-950 text-rose-300",
+  // These rows are not failures of the pipeline — they're exactly the
+  // recovery-queue candidates the Adzuna plan's export/resolve flow targets,
+  // so they get their own distinct color rather than reusing the "error" red.
+  no_description: "bg-orange-900 text-orange-200",
 };
 
 const STAGE_LABELS: Record<string, string> = {
@@ -48,6 +53,7 @@ const STAGE_LABELS: Record<string, string> = {
   matched: "Matched",
   logged: "Logged",
   error: "Error",
+  no_description: "No Description",
 };
 
 function StageBadge({ stage }: { stage: string }) {
@@ -162,7 +168,7 @@ export default function JobCeoRunStagingPage() {
   }, [activeStage, fetchData]);
 
   const totalAll = Object.values(counts).reduce((a, b) => a + (b ?? 0), 0);
-  const stages = ["all", "ingested", "qa_passed", "qa_dropped", "researched", "matched", "logged", "error"];
+  const stages = ["all", "ingested", "qa_passed", "qa_dropped", "researched", "matched", "logged", "error", "no_description"];
   
   const isLive = run ? !["completed", "failed", "cancelled"].includes(run.status) : true;
 
@@ -209,7 +215,7 @@ export default function JobCeoRunStagingPage() {
       </div>
 
       {/* Stage Count Cards */}
-      <div className="grid grid-cols-4 md:grid-cols-7 gap-2 mb-5">
+      <div className="grid grid-cols-4 md:grid-cols-8 gap-2 mb-5">
         {stages.filter((s) => s !== "all").map((stage) => {
           const count = (counts as any)[stage] ?? 0;
           return (

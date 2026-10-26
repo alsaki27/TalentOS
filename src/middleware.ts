@@ -161,7 +161,11 @@ function isOpenJobDataIngestAuthorized(req: NextRequest, pathname: string) {
 }
 
 function isJobCeoAuthorized(req: NextRequest, pathname: string) {
-  if (pathname === "/api/job-ceo/dispatch" || pathname === "/api/job-ceo/enrich") {
+  if (
+    pathname === "/api/job-ceo/dispatch" ||
+    pathname === "/api/job-ceo/enrich" ||
+    pathname === "/api/job-ceo/recovery-queue/retry"
+  ) {
     const secret = process.env.CRON_SECRET;
     if (!secret) return false;
     return req.headers.get("authorization") === `Bearer ${secret}`;

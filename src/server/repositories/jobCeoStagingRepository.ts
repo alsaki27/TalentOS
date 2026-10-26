@@ -22,6 +22,8 @@ export interface StagedJobRow {
   claimed_at: string | null;
   claim_expires_at: string | null;
   last_error: string | null;
+  recovery_retry_count: number;
+  recovery_last_retried_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -239,6 +241,77 @@ export async function listStagedByRun(
   return query<StagedJobRow>(
     "SELECT * FROM job_ceo_staging WHERE run_id = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3",
     [runId, limit, offset]
+  );
+}
+
+/**
+ * The Adzuna (and, generically, any source's) description-recovery queue:
+ * every staging row currently flagged "no_description", across every run —
+ * including rows whose original run has since been deleted (deleteRun()
+ * detaches them to run_id = NULL rather than destroying them; see
+ * jobCeoRunRepository.ts). This is intentionally NOT scoped to a single run,
+ * unlike listStagedByRun — staff review this as one standing worklist.
+ */
+export async function findStagedById(id: string): Promise<StagedJobRow | null> {
+  return queryOne<StagedJobRow>("SELECT * FROM job_ceo_staging WHERE id = $1", [id]);
+}
+
+export async function listRecoveryQueue(limit = 500, offset = 0): Promise<StagedJobRow[]> {
+  return query<StagedJobRow>(
+    "SELECT * FROM job_ceo_staging WHERE stage = 'no_description' ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+}
+
+export async function countRecoveryQueue(): Promise<number> {
+  const row = await queryOne<{ count: string }>(
+    "SELECT COUNT(*)::text AS count FROM job_ceo_staging WHERE stage = 'no_description'"
+  );
+  return parseInt(row?.count ?? "0", 10) || 0;
+}
+
+/**
+ * Atomically claims up to `limit` recovery-queue rows that are due for an
+ * automated retry: they have a link to re-fetch, haven't exceeded
+ * maxAttempts, aren't old enough to be almost-certainly-expired, and have
+ * waited long enough since their last attempt (backoff: 12h before the 1st
+ * retry, 24h before the 2nd — see RECOVERY_RETRY_BACKOFF_HOURS in
+ * jobCeoRecoveryRetryService.ts, which this CASE expression must stay in
+ * sync with). Reuses claimed_at/claim_expires_at
+ * (the same columns the normal stage-claiming queries use) so a scheduled
+ * batch and a manual "Retry Now" click can never double-process the same row.
+ */
+export async function claimRecoveryRetryBatch(
+  maxAttempts: number,
+  eligibleWindowDays: number,
+  limit: number
+): Promise<StagedJobRow[]> {
+  return query<StagedJobRow>(
+    `WITH eligible AS (
+      SELECT id FROM job_ceo_staging
+      WHERE stage = 'no_description'
+        AND source_url IS NOT NULL
+        AND recovery_retry_count < $1
+        AND created_at > now() - ($2 * interval '1 day')
+        AND (claim_expires_at IS NULL OR claim_expires_at < now())
+        AND now() - COALESCE(recovery_last_retried_at, created_at) >= (
+          CASE recovery_retry_count
+            WHEN 0 THEN interval '12 hours'
+            ELSE interval '24 hours'
+          END
+        )
+      ORDER BY created_at ASC
+      LIMIT $3
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE job_ceo_staging s
+    SET claimed_at = NOW(),
+        claim_expires_at = NOW() + INTERVAL '5 minutes',
+        updated_at = NOW()
+    FROM eligible e
+    WHERE s.id = e.id
+    RETURNING s.*`,
+    [maxAttempts, eligibleWindowDays, limit]
   );
 }
 

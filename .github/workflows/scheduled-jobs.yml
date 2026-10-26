@@ -60,6 +60,7 @@ on:
           - run-all
           - job-ceo-dispatch
           - job-description-enrichment
+          - job-ceo-recovery-retry
           - retry-failed-since
           - job-agent-poll
           - gmail-sync
@@ -411,6 +412,44 @@ jobs:
       - name: Call description enrichment
         run: |
           HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 300 --connect-timeout 30 -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/enrich")
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+  # Re-attempts the fetch for jobs stuck at job_ceo_staging.stage =
+  # 'no_description', across every ingest source (Adzuna, OpenJobData,
+  # Actalent, Broadstaff, Job Agent). Reuses the same 15-minute cadence as
+  # job-description-enrichment above — most ticks find nothing eligible yet
+  # (each row backs off 12h/24h between its 2 attempts, and only rows under
+  # 2 days old are ever eligible; see jobCeoRecoveryRetryService.ts) and the
+  # call is a cheap no-op query in that case.
+  #
+  # On AI token cost specifically: batch size (10/tick, 960/day) bounds the
+  # number of fetch ATTEMPTS, not AI calls — the AI extraction step only
+  # runs when a fetch returns some text at all, and confirmed live (system-
+  # wide, last 4 days) that 99.6%+ of these failures return exactly 0
+  # characters, which short-circuits before ever reaching the AI step. Real
+  # expected AI spend from this job is therefore roughly 10-20 calls/day,
+  # not hundreds — the large attempt count is almost entirely free fetch
+  # checks, not token spend. See "Adzuna Job CEO Coverage and Description
+  # Recovery Plan" (2026-10-25) and its 2026-10-26 follow-up for the numbers.
+  job-ceo-recovery-retry:
+    if: >
+      (github.event_name == 'schedule' &&
+       github.event.schedule == '*/15 * * * *') ||
+      github.event.inputs.job == 'job-ceo-recovery-retry' ||
+      github.event.inputs.job == 'run-all'
+    runs-on: ubuntu-latest
+    name: JOB CEO recovery-queue retry
+    timeout-minutes: 10
+    steps:
+      - name: Call recovery-queue retry
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 300 --connect-timeout 30 -X POST -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ env.TALENTOS_BASE_URL }}/api/job-ceo/recovery-queue/retry")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n-1)
+          echo "$BODY"
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 400 ]; then
             echo "::error::Scheduled job failed with HTTP $HTTP_CODE"
             exit 1

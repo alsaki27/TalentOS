@@ -126,6 +126,48 @@ async function runConcurrent<T, R>(
   return results;
 }
 
+/**
+ * Rates the CEO Orchestrator step uses to decide whether a run's QA/Deep
+ * Fetch drop rate is bad enough to bother an AI config-tuning pass over.
+ *
+ * These used to be computed from run.kept_count/researched_count — counters
+ * accumulated via many small +=N updates across a long-running run's many
+ * small dispatch batches, which do not reliably reconcile with row-level
+ * truth. Confirmed live on 2026-10-25: Adzuna runs routinely show
+ * researched_count EXCEEDING kept_count (e.g. kept=7, researched=12),
+ * making the old deepFetchFailureRate formula negative and unable to ever
+ * cross its own 0.3 trigger threshold despite a real failure rate measured
+ * the same day, from row data, at 66.5% — silently disabling this entire
+ * self-tuning step for Adzuna. Computing both rates directly from
+ * job_ceo_staging's stage column (the same source countByStage() already
+ * feeds the run-detail UI from) removes that drift entirely. See "Adzuna
+ * Job CEO Coverage and Description Recovery Plan" (2026-10-25), Phase 4.
+ */
+export function computeOrchestratorTriggerRates(
+  stageRows: { stage: string; count: string }[]
+): { qaDropRate: number; deepFetchFailureRate: number } {
+  const stageCounts: Record<string, number> = {};
+  for (const row of stageRows) stageCounts[row.stage] = parseInt(row.count, 10) || 0;
+
+  const deepFetchAttempted =
+    (stageCounts.no_description ?? 0) +
+    (stageCounts.researched ?? 0) +
+    (stageCounts.qa_passed ?? 0) +
+    (stageCounts.qa_dropped ?? 0) +
+    (stageCounts.matched ?? 0) +
+    (stageCounts.logged ?? 0);
+  const deepFetchFailureRate = deepFetchAttempted > 0 ? (stageCounts.no_description ?? 0) / deepFetchAttempted : 0;
+
+  const qaAttempted =
+    (stageCounts.qa_passed ?? 0) +
+    (stageCounts.qa_dropped ?? 0) +
+    (stageCounts.matched ?? 0) +
+    (stageCounts.logged ?? 0);
+  const qaDropRate = qaAttempted > 0 ? (stageCounts.qa_dropped ?? 0) / qaAttempted : 0;
+
+  return { qaDropRate, deepFetchFailureRate };
+}
+
 function getRunnerFor(stage: string) {
   switch (stage) {
     case "qa": return runQaBouncer;
@@ -633,37 +675,10 @@ export async function dispatchNextJobCeoWork(runId?: string): Promise<DispatchRe
     // --- CEO Orchestrator Phase ---
     // If enough jobs were processed, let the Orchestrator analyze the drop rates and propose config changes.
     if (run.ingested_count >= 10) {
-      // Both rates used to come from run.kept_count/researched_count, which
-      // are accumulated via many small +=N updates across a long-running
-      // run's many dispatch batches and do not reliably reconcile with
-      // row-level truth — confirmed live: Adzuna runs routinely show
-      // researched_count EXCEEDING kept_count, making the old
-      // deepFetchFailureRate negative and unable to ever cross its own 0.3
-      // trigger despite a real failure rate measured the same day at 66.5%.
-      // This silently disabled this entire self-tuning step for Adzuna.
-      // Computing both rates directly from job_ceo_staging's stage column —
-      // the same source countByStage() already feeds the run-detail UI from
-      // — removes that drift entirely. See "Adzuna Job CEO Coverage and
-      // Description Recovery Plan" (2026-10-25), Phase 4.
+      // See computeOrchestratorTriggerRates's own doc comment for why these
+      // are no longer derived from run.kept_count/researched_count.
       const stageRows = await countStagedByStage(run.id);
-      const stageCounts: Record<string, number> = {};
-      for (const row of stageRows) stageCounts[row.stage] = parseInt(row.count, 10) || 0;
-
-      const deepFetchAttempted =
-        (stageCounts.no_description ?? 0) +
-        (stageCounts.researched ?? 0) +
-        (stageCounts.qa_passed ?? 0) +
-        (stageCounts.qa_dropped ?? 0) +
-        (stageCounts.matched ?? 0) +
-        (stageCounts.logged ?? 0);
-      const deepFetchFailureRate = deepFetchAttempted > 0 ? (stageCounts.no_description ?? 0) / deepFetchAttempted : 0;
-
-      const qaAttempted =
-        (stageCounts.qa_passed ?? 0) +
-        (stageCounts.qa_dropped ?? 0) +
-        (stageCounts.matched ?? 0) +
-        (stageCounts.logged ?? 0);
-      const qaDropRate = qaAttempted > 0 ? (stageCounts.qa_dropped ?? 0) / qaAttempted : 0;
+      const { qaDropRate, deepFetchFailureRate } = computeOrchestratorTriggerRates(stageRows);
 
       // Ensure we have a high enough failure rate to bother the AI (e.g., > 60% QA drop or > 30% deep fetch failure)
       if (qaDropRate > 0.6 || deepFetchFailureRate > 0.3) {

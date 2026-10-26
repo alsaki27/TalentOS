@@ -11,6 +11,15 @@ The Adzuna API excerpt is deliberately stored only as `snippet`, never as
 An Adzuna posting is allowed past that stage only when the fetched description
 meets the source-specific 1,500-character quality floor in jobCeoService.ts.
 
+A job whose employer/ATS page cannot be resolved (find_employer_job_url finds
+nothing) is still sent to Job CEO, with source_url left unset. It is never
+dropped here in-process: that used to be a completely invisible loss (no DB
+row, no retry candidate, nothing but a count in this script's console log).
+Job CEO's Deep Fetch stage now recognizes a link-less row and files it
+directly into the same `no_description` recovery queue used for thin/blocked
+pages, with its own distinct reason, so staff can see and retry it. See
+"Adzuna Job CEO Coverage and Description Recovery Plan" (2026-10-25).
+
 Credentials are read from ADZUNA_APP_ID / ADZUNA_APP_KEY and are never logged.
 For local runs this script loads the repository .env/.env.local with dotenv;
 CI should inject the same values as repository secrets.
@@ -331,7 +340,7 @@ def _number(value: Any) -> Optional[float]:
     return number if number > 0 else None
 
 
-def build_job_payload(result: Dict[str, Any], source_url: str, matched_terms: List[str]) -> Dict[str, Any]:
+def build_job_payload(result: Dict[str, Any], source_url: Optional[str], matched_terms: List[str]) -> Dict[str, Any]:
     company_obj = result.get("company") or {}
     location_obj = result.get("location") or {}
     category_obj = result.get("category") or {}
@@ -454,7 +463,15 @@ def run(args: argparse.Namespace) -> int:
 
     # The Adzuna API's redirect is not treated as a job page. Resolve a direct
     # employer/ATS page before staging so Job CEO Deep Fetch has a real source.
+    #
+    # A job whose page cannot be resolved is still appended below (with
+    # source_url=None), not discarded. Dropping it here used to be a total,
+    # invisible loss - no row, no retry candidate, nothing but this run's own
+    # ephemeral console log. Job CEO's Deep Fetch now recognizes the missing
+    # link and stages it straight into the no_description recovery queue with
+    # its own distinct reason, so it is at least visible and exportable.
     resolved: List[Dict[str, Any]] = []
+    resolved_links = 0
     unresolved_links = 0
     link_lookups = 0
     for result, matched_terms in jobs_by_id.values():
@@ -464,18 +481,20 @@ def run(args: argparse.Namespace) -> int:
         company = str((result.get("company") or {}).get("display_name") or "").strip()
         link_lookups += 1
         source_url = find_employer_job_url(title, company)
-        if not source_url:
+        if source_url:
+            resolved_links += 1
+        else:
             unresolved_links += 1
-            continue
         resolved.append(build_job_payload(result, source_url, matched_terms))
 
     print(
-        f"Employer link recovery: checked={link_lookups}, resolved={len(resolved)}, "
-        f"unresolved={unresolved_links}; max_jobs={args.max_jobs}"
+        f"Employer link recovery: checked={link_lookups}, resolved={resolved_links}, "
+        f"unresolved={unresolved_links} (sent to Job CEO anyway, flagged for manual recovery); "
+        f"max_jobs={args.max_jobs}"
     )
 
     if not resolved:
-        print("No direct employer/ATS job pages were found; nothing was sent to Job CEO.")
+        print("No candidate postings to send to Job CEO.")
         return 0
 
     result = post_jobs_in_batches(

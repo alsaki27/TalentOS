@@ -468,6 +468,13 @@ export default function JobCeoPage() {
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
           <Link
+            href="/job-ceo/recovery-queue"
+            title="Jobs where a description could not be found or fetched — export or manually resolve them here"
+            className="w-full sm:w-auto text-center px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors"
+          >
+            Recovery Queue
+          </Link>
+          <Link
             href="/job-ceo/proposals"
             className="w-full sm:w-auto text-center px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors"
           >
