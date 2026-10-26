@@ -176,18 +176,36 @@
 .sourceItem strong { color: var(--accent); font-size: 20px; }
 .sourceItem small { grid-column: span 2; line-height: 1.4; }
 .runList, .decisionList { display: grid; gap: 8px; }
-.runRow { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(72px, .7fr)); align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid #293550; border-radius: 12px; background: #0d1525; }
+.runRow { display: grid; grid-template-columns: minmax(180px, 2fr) repeat(5, minmax(72px, .7fr)); align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid #293550; border-radius: 12px; background: #0d1525; transition: border-color .15s ease, background .15s ease; }
 .runRow > div:not(:first-child) { display: grid; gap: 3px; text-align: right; }
 .runRow strong { display: block; color: #e9effb; font-size: 12px; }
 .runRow small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .runError { color: #ff8f94 !important; }
-.decisionRow { display: grid; grid-template-columns: minmax(180px, 1.7fr) minmax(130px, 1fr) minmax(150px, 1.2fr) 76px auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid #293550; border-radius: 12px; background: #0d1525; }
+.runRowActive { border-color: var(--accent); background: #10202b; }
+.viewDecisionsButton {
+  margin-top: 7px; border: 1px solid #2c4962; border-radius: 8px; padding: 5px 9px;
+  color: #91d9e6; background: #132737; font: inherit; font-size: 10px; font-weight: 750; cursor: pointer;
+  justify-self: start; transition: border-color .15s ease, color .15s ease;
+}
+.viewDecisionsButton:hover { border-color: var(--accent); color: var(--accent); }
+.filterBanner {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 8px; padding: 10px 13px; border: 1px solid #384472; border-radius: 10px;
+  color: #c0c4ff; background: #151c33; font-size: 11px; line-height: 1.5;
+}
+.filterBanner strong { color: #e9effb; text-transform: capitalize; }
+.filterBanner button {
+  flex: 0 0 auto; border: 1px solid #384472; border-radius: 8px; padding: 6px 10px;
+  color: #c0c4ff; background: #1c2544; font: inherit; font-size: 10px; font-weight: 750; cursor: pointer;
+}
+.filterBanner button:hover { border-color: var(--accent); color: var(--accent); }
+.decisionRow { display: grid; grid-template-columns: minmax(180px, 1.7fr) minmax(130px, 1fr) minmax(150px, 1.2fr) 108px auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid #293550; border-radius: 12px; background: #0d1525; }
 .decisionJob, .decisionCandidate, .decisionResume, .decisionScore { min-width: 0; }
 .decisionJob a { color: #aabaff; font-size: 12px; font-weight: 750; text-decoration: none; }
 .decisionRow small { display: block; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .decisionCandidate strong, .decisionResume strong { display: block; overflow: hidden; color: #dfe7f7; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.decisionScore { text-align: right; }
-.decisionScore strong { color: var(--accent); font-size: 17px; }
+.decisionScore { display: grid; gap: 6px; text-align: right; }
+.decisionScore strong { color: var(--accent); font-size: 15px; }
 .decisionStatus { padding: 6px 8px; border: 1px solid #34415b; border-radius: 8px; color: #c4cde0; background: #171f31; text-align: center; text-transform: capitalize; font-size: 10px; font-weight: 750; }
 .status_application_created { border-color: #286148; color: #92e8b9; background: #13271f; }
 .status_matched { border-color: #286148; color: #9be5c1; background: #13271f; }
@@ -210,7 +228,7 @@
   .candidateList { grid-template-columns: 1fr; }
   .preferenceGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .preferenceWide { grid-column: span 2; }
-  .decisionRow { grid-template-columns: minmax(150px, 1.4fr) minmax(110px, 1fr) minmax(130px, 1fr) 70px; }
+  .decisionRow { grid-template-columns: minmax(150px, 1.4fr) minmax(110px, 1fr) minmax(130px, 1fr) 108px; }
   .decisionStatus { grid-column: 1 / 2; justify-self: start; }
   .decisionReason { grid-column: 2 / -1; }
 }

@@ -27,7 +27,7 @@ interface RunRow {
   config_snapshot: { provider?: string; model?: string } | null;
 }
 interface DecisionRow {
-  id: string; job_id: string; job_title: string; company: string | null; source: string;
+  id: string; run_id: string; job_id: string; job_title: string; company: string | null; source: string;
   candidate_id: string; candidate_name: string; base_resume_id: string | null;
   base_resume_name: string | null; deterministic_score: number | null; match_score: number | null;
   priority: Priority; status: string; reason: string | null; application_id: string | null; updated_at: string;
@@ -100,6 +100,7 @@ export default function AutoJobLoggingPage() {
   const [pageError, setPageError] = useState("");
   const [notice, setNotice] = useState("");
   const [runResult, setRunResult] = useState<any>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   const markDirty = () => {
     revisionRef.current += 1;
@@ -369,6 +370,10 @@ export default function AutoJobLoggingPage() {
   const teamMembers = pageData.teamMembers;
   const ownerMissing = !config.assigned_by_user_id || !config.application_owner_user_id;
   // const providerNeedsBaseUrl = ["openai_compatible", "google_vertex_proxy", "groq", "openrouter"].includes(config.ai_provider ?? ""); // commented out with the matching block below
+  const selectedRun = selectedRunId ? pageData.recentRuns.find((run) => run.id === selectedRunId) ?? null : null;
+  const visibleDecisions = selectedRunId
+    ? pageData.recentDecisions.filter((decision) => decision.run_id === selectedRunId)
+    : pageData.recentDecisions;
 
   return (
     <main className={`${styles.page} auto-job-logging-page`}>
@@ -399,7 +404,7 @@ export default function AutoJobLoggingPage() {
         <article className={`${styles.summaryCard} ${config.is_enabled ? styles.enabledCard : styles.pausedCard}`}><span className={styles.summaryIcon}><Activity size={18} /></span><div><small>Automatic logging</small><strong>{config.is_enabled ? "Enabled" : "Paused"}</strong><p>{config.match_threshold}% minimum match</p></div></article>
       </section>
 
-      {runResult && <section className={styles.runResult} aria-live="polite"><div><strong>Latest run · {runResult.status ?? (runResult.skipped ? "skipped" : "complete")}</strong><p>{runResult.reason ?? `${runResult.jobsSeen ?? 0} jobs checked · ${runResult.candidatePairsScored ?? 0} AI matches · ${runResult.applicationsCreated ?? 0} applications created · ${runResult.failedCount ?? 0} failed`}</p></div><span>{runResult.aiCalls ?? 0} separate AI calls</span></section>}
+      {runResult && <section className={styles.runResult} aria-live="polite"><div><strong>Latest run · {runResult.status ?? (runResult.skipped ? "skipped" : "complete")}</strong><p>{runResult.reason ?? `${runResult.jobsSeen ?? 0} jobs checked · ${runResult.candidatePairsScored ?? 0} sent to Stage 2 AI · ${runResult.applicationsCreated ?? 0} applications created · ${runResult.failedCount ?? 0} failed`}</p></div><span>{runResult.aiCalls ?? 0} separate AI calls</span></section>}
 
       <nav className={styles.tabs} role="tablist" aria-label="Scheduled logging settings">
         <button id="tab-workflow" type="button" role="tab" aria-selected={activeTab === "workflow"} aria-controls="panel-workflow" className={activeTab === "workflow" ? styles.activeTab : styles.tab} onClick={() => setActiveTab("workflow")}><Settings2 size={16} />Workflow</button>
@@ -515,26 +520,41 @@ export default function AutoJobLoggingPage() {
       <section className={styles.panel}>
         <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><Activity size={18} /></span><div><h2>Run history</h2><p>Decision counts, independent model usage, and failures for recent batches.</p></div></div></div>
         <div className={styles.runList}>
-          {pageData.recentRuns.map((run) => <article className={styles.runRow} key={run.id}>
-            <div className={styles.runMain}><strong>{run.trigger_type.replaceAll("_", " ")} · {run.status}</strong><small>{run.config_snapshot?.provider ?? "unknown provider"} · {run.config_snapshot?.model ?? "unknown model"} · {displayDate(run.started_at)}{run.finished_at ? ` · finished ${displayDate(run.finished_at)}` : " · still running"}</small>{run.error_message && <small className={styles.runError}>{run.error_message}</small>}</div>
-            <div><strong>{run.jobs_seen}</strong><small>jobs</small></div><div><strong>{run.candidate_pairs_scored}</strong><small>AI matches</small></div><div><strong>{run.applications_created}</strong><small>applications</small></div><div><strong>{run.ai_calls}</strong><small>separate calls · {run.ai_failure_count} failed</small></div><div><strong>{(run.input_tokens + run.output_tokens).toLocaleString()}</strong><small>tokens · {run.input_tokens.toLocaleString()} in / {run.output_tokens.toLocaleString()} out{run.avg_latency_ms != null ? ` · ${run.avg_latency_ms} ms avg` : ""}</small></div>
+          {pageData.recentRuns.map((run) => <article className={run.id === selectedRunId ? `${styles.runRow} ${styles.runRowActive}` : styles.runRow} key={run.id}>
+            <div className={styles.runMain}>
+              <strong>{run.trigger_type.replaceAll("_", " ")} · {run.status}</strong>
+              <small>{run.config_snapshot?.provider ?? "unknown provider"} · {run.config_snapshot?.model ?? "unknown model"} · {displayDate(run.started_at)}{run.finished_at ? ` · finished ${displayDate(run.finished_at)}` : " · still running"}</small>
+              {run.error_message && <small className={styles.runError}>{run.error_message}</small>}
+              <button type="button" className={styles.viewDecisionsButton} onClick={() => setSelectedRunId(run.id === selectedRunId ? null : run.id)}>
+                {run.id === selectedRunId ? "Showing this run's decisions ↓" : "View this run's decisions"}
+              </button>
+            </div>
+            <div><strong>{run.jobs_seen}</strong><small>jobs</small></div><div><strong>{run.candidate_pairs_scored}</strong><small>sent to Stage 2 AI</small></div><div><strong>{run.applications_created}</strong><small>applications</small></div><div><strong>{run.ai_calls}</strong><small>separate calls · {run.ai_failure_count} failed</small></div><div><strong>{(run.input_tokens + run.output_tokens).toLocaleString()}</strong><small>tokens · {run.input_tokens.toLocaleString()} in / {run.output_tokens.toLocaleString()} out{run.avg_latency_ms != null ? ` · ${run.avg_latency_ms} ms avg` : ""}</small></div>
           </article>)}
           {pageData.recentRuns.length === 0 && <div className={styles.empty}>No runs have been recorded.</div>}
         </div>
       </section>
 
       <section className={styles.panel}>
-        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>See the score, selected base resume (draft or approved), and application created for each scheduled job.</p></div></div><strong className={styles.countTag}>{pageData.recentDecisions.length} recent</strong></div>
+        <div className={styles.panelHeading}><div><span className={styles.sectionIcon}><BriefcaseBusiness size={18} /></span><div><h2>Recent candidate decisions</h2><p>Stage 1 is the keyword/ATS gate; Stage 2 is the AI eligibility check that only runs for Stage-1 passers. A low Stage 2 score with a high Stage 1 score is normal — it means the AI caught something the keyword match missed.</p></div></div><strong className={styles.countTag}>{visibleDecisions.length} {selectedRunId ? "for this run" : "recent"}</strong></div>
+        {selectedRun && <div className={styles.filterBanner}>
+          <span>Showing decisions from the <strong>{selectedRun.trigger_type.replaceAll("_", " ")} · {selectedRun.status}</strong> run started {displayDate(selectedRun.started_at)}.</span>
+          <button type="button" onClick={() => setSelectedRunId(null)}>Show all recent decisions</button>
+        </div>}
         <div className={styles.decisionList}>
-          {pageData.recentDecisions.map((decision) => <article className={styles.decisionRow} key={decision.id}>
-            <div className={styles.decisionJob}><Link href={`/jobs/${decision.job_id}`}>{decision.job_title || "Untitled job"}</Link><small>{decision.company || "Company not listed"} · {decision.source}</small></div>
+          {visibleDecisions.map((decision) => <article className={styles.decisionRow} key={decision.id}>
+            <div className={styles.decisionJob}><Link href={`/jobs/${decision.job_id}`}>{decision.job_title || "Untitled job"}</Link><small>{decision.company || "Company not listed"} · {decision.source}</small><small>{displayDate(decision.updated_at)}</small></div>
             <div className={styles.decisionCandidate}><strong>{decision.candidate_name}</strong><small>{decision.priority} priority</small></div>
             <div className={styles.decisionResume}><strong>{decision.base_resume_name || "No approved resume selected"}</strong><small>{decision.base_resume_id ? "Selected base resume" : "Resume unavailable"}</small></div>
-            <div className={styles.decisionScore}><strong>{decision.match_score == null ? "—" : `${decision.match_score}%`}</strong><small>match score</small></div>
+            <div className={styles.decisionScore}>
+              <div><strong>{decision.deterministic_score == null ? "—" : `${decision.deterministic_score}%`}</strong><small>Stage 1 · keyword/ATS</small></div>
+              <div><strong>{decision.match_score == null ? "—" : `${decision.match_score}%`}</strong><small>Stage 2 · AI score</small></div>
+            </div>
             <span className={`${styles.decisionStatus} ${styles[`status_${decision.status}`] ?? ""}`}>{decision.status.replaceAll("_", " ")}</span>
             <p className={styles.decisionReason}>{decision.reason || "No additional reason recorded."}</p>
           </article>)}
-          {pageData.recentDecisions.length === 0 && <div className={styles.empty}>No candidate match decisions recorded yet.</div>}
+          {visibleDecisions.length === 0 && selectedRunId && <div className={styles.empty}>No decisions found for this run. Either it did not reach any candidate, or its decisions have aged out of the most recent 100 shown here — use "Show all recent decisions" to check.</div>}
+          {visibleDecisions.length === 0 && !selectedRunId && <div className={styles.empty}>No candidate match decisions recorded yet.</div>}
         </div>
       </section>
 

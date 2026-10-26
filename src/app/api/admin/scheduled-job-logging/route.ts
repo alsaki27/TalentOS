@@ -73,7 +73,7 @@ export async function GET() {
            GROUP BY source ORDER BY source`,
       ),
       query<any>(
-        `SELECT d.id, d.job_id, j.title AS job_title, j.company, e.source,
+        `SELECT d.id, d.run_id, d.job_id, j.title AS job_title, j.company, e.source,
                 d.candidate_id, c.name AS candidate_name, d.base_resume_id,
                 br.name AS base_resume_name, d.deterministic_score, d.match_score,
                 d.priority, d.status, d.reason, d.application_id, d.updated_at
