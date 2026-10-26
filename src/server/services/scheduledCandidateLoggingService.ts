@@ -319,7 +319,7 @@ async function createApplication(input: {
               $4, $5, 'Scheduled candidate-job match',
               CASE $6 WHEN 'high' THEN 'urgent' WHEN 'low' THEN 'low' ELSE 'normal' END,
               'not_required', 'in_ai_pipeline', 'in_ai_pipeline', NOW(), $4,
-              'queued', 'AI tailoring in progress', $7, $4::text, $8
+              'queued', 'AI tailoring in progress', $7, $9::text, $8
         WHERE NOT EXISTS (SELECT 1 FROM applications WHERE candidate_id = $1 AND job_id = $2)
        ON CONFLICT DO NOTHING
        RETURNING id
@@ -330,8 +330,15 @@ async function createApplication(input: {
      )
      SELECT id FROM inserted
      LIMIT 1`,
+    // $4 (assignedBy) is bound twice already as a bare uuid parameter
+    // (assigned_by_user_id, ae_stage_updated_by_user_id) - reusing it a
+    // third time with an explicit ::text cast for created_by made Postgres
+    // unable to deduce one consistent type for $4 ("inconsistent types
+    // deduced for parameter $4"). $9 below is the same value, bound as its
+    // own independent parameter so each cast context is unambiguous.
     [input.candidateId, input.job.job_id, input.resumeId, input.assignedBy, input.ownerId,
-      input.priority, `Scheduled match score ${input.score}/100. ${input.reason}`, idempotencyKey],
+      input.priority, `Scheduled match score ${input.score}/100. ${input.reason}`, idempotencyKey,
+      input.assignedBy],
   );
   return created?.id ?? null;
 }
