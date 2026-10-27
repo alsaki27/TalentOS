@@ -1,9 +1,11 @@
 // Regression coverage for the system-wide (all-source) recovery-retry
 // feature added 2026-10-26: jobs stuck at stage='no_description' with a
-// source_url are re-fetched on a backoff schedule (6h/24h/72h) instead of
+// source_url are re-fetched on a backoff schedule (12h/24h) instead of
 // being abandoned after the first failure — confirmed live that the exact
 // same URL, re-fetched later with the exact same tooling, frequently
-// succeeds where the first attempt failed.
+// succeeds where the first attempt failed. Also covers the 2026-10-27
+// staff-picked bulk retry (retryManyRowsByIds) added for selecting and
+// retrying several jobs together, e.g. all of one source at once.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +45,7 @@ vi.mock("@/server/lib/waitUntil", () => ({ backgroundDispatch: mocks.backgroundD
 import {
   retryOneRow,
   retryRecoveryQueueRowById,
+  retryManyRowsByIds,
   processRecoveryRetryBatch,
   RECOVERY_RETRY_MAX_ATTEMPTS,
   RECOVERY_RETRY_ELIGIBLE_WINDOW_DAYS,
@@ -197,5 +200,53 @@ describe("processRecoveryRetryBatch", () => {
     const result = await processRecoveryRetryBatch();
 
     expect(result).toEqual({ processed: 2, recovered: 1, stillFailing: 1 });
+  });
+});
+
+describe("retryManyRowsByIds (staff-picked bulk retry)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getDescriptionMinimumForStagedRow.mockReturnValue(1500);
+    mocks.createRun.mockResolvedValue({ id: "new-run-1" });
+  });
+
+  it("retries each id, summarizing recovered / still-failing / ineligible", async () => {
+    mocks.findStagedById.mockImplementation(async (id: string) => {
+      if (id === "missing") return null;
+      if (id === "no-link") return { ...baseRow, id, source_url: null };
+      return { ...baseRow, id };
+    });
+    mocks.fetchJobPageText
+      .mockResolvedValueOnce("x".repeat(3000)) // "recovers" -> recovered
+      .mockResolvedValueOnce(""); // "fails" -> still_failing
+    mocks.callAgent.mockResolvedValue({ result: { descriptionText: "x".repeat(2000), requirements: {} } });
+
+    const summary = await retryManyRowsByIds(["recovers", "fails", "no-link", "missing"]);
+
+    expect(summary.recovered).toBe(1);
+    expect(summary.stillFailing).toBe(1);
+    expect(summary.ineligible).toBe(2);
+    expect(summary.results).toHaveLength(4);
+    expect(summary.results.find((r) => r.id === "missing")).toMatchObject({ outcome: "ineligible" });
+  });
+
+  it("de-duplicates repeated ids so the same row is never retried twice in one call", async () => {
+    mocks.findStagedById.mockResolvedValue({ ...baseRow, id: "dup" });
+    mocks.fetchJobPageText.mockResolvedValue("");
+
+    const summary = await retryManyRowsByIds(["dup", "dup", "dup"]);
+
+    expect(summary.results).toHaveLength(1);
+    expect(mocks.findStagedById).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps a very large selection instead of retrying an unbounded number at once", async () => {
+    mocks.findStagedById.mockImplementation(async (id: string) => ({ ...baseRow, id }));
+    mocks.fetchJobPageText.mockResolvedValue("");
+
+    const manyIds = Array.from({ length: 200 }, (_, i) => `id-${i}`);
+    const summary = await retryManyRowsByIds(manyIds);
+
+    expect(summary.results.length).toBeLessThanOrEqual(50);
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import { toCsv, downloadCsv } from "@/lib/csv";
 
@@ -26,6 +26,7 @@ interface RecoveryRow {
 // real timer; this is display-only and must stay informational, not
 // authoritative).
 const BACKOFF_HOURS = [12, 24];
+const ALL_SOURCES = "__all__";
 
 function nextAutoRetryLabel(row: RecoveryRow): string {
   if (row.recovery_retry_count >= BACKOFF_HOURS.length) return "No more automatic retries — use Retry Now or Resolve";
@@ -36,6 +37,10 @@ function nextAutoRetryLabel(row: RecoveryRow): string {
   if (dueAt <= now) return "Due for automatic retry on the next scheduled run";
   const hoursLeft = Math.ceil((dueAt.getTime() - now.getTime()) / 3600000);
   return `Next automatic retry in ~${hoursLeft}h`;
+}
+
+function sourceLabel(row: RecoveryRow): string {
+  return row.raw?.source?.trim() || "(unknown source)";
 }
 
 function ResolveForm({ row, onDone }: { row: RecoveryRow; onDone: (runId: string) => void }) {
@@ -113,6 +118,10 @@ export default function RecoveryQueuePage() {
   const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set());
   const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
   const [retryMessage, setRetryMessage] = useState<Record<string, string>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [sourceFilter, setSourceFilter] = useState<string>(ALL_SOURCES);
+  const [bulkRetrying, setBulkRetrying] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async (opts?: { silent?: boolean }) => {
@@ -143,6 +152,56 @@ export default function RecoveryQueuePage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchData]);
 
+  // Built from whatever sources actually appear in the data right now — not
+  // a hardcoded list, so a new source automatically shows up here too.
+  const availableSources = useMemo(() => {
+    const set = new Set(rows.map((r) => sourceLabel(r)));
+    return Array.from(set).sort();
+  }, [rows]);
+
+  const visibleRows = useMemo(() => {
+    if (sourceFilter === ALL_SOURCES) return rows;
+    return rows.filter((r) => sourceLabel(r) === sourceFilter);
+  }, [rows, sourceFilter]);
+
+  const retryableVisibleIds = useMemo(
+    () => visibleRows.filter((r) => Boolean(r.source_url) && !resolvedIds.has(r.id)).map((r) => r.id),
+    [visibleRows, resolvedIds]
+  );
+  const allVisibleSelected = retryableVisibleIds.length > 0 && retryableVisibleIds.every((id) => selectedIds.has(id));
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        retryableVisibleIds.forEach((id) => next.delete(id));
+      } else {
+        retryableVisibleIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function applyOutcome(id: string, data: { outcome: string; runId?: string; reason?: string }) {
+    if (data.outcome === "recovered") {
+      setResolvedIds((prev) => new Set(prev).add(id));
+      setRetryMessage((prev) => ({ ...prev, [id]: `✓ Recovered — sent to QA as run ${String(data.runId).slice(0, 8)}` }));
+    } else if (data.outcome === "still_failing") {
+      setRetryMessage((prev) => ({ ...prev, [id]: `Still failing: ${data.reason}` }));
+    } else {
+      setRetryMessage((prev) => ({ ...prev, [id]: data.reason ?? "Not eligible for retry" }));
+    }
+  }
+
   async function retryNow(row: RecoveryRow) {
     setRetryingIds((prev) => new Set(prev).add(row.id));
     setRetryMessage((prev) => { const n = { ...prev }; delete n[row.id]; return n; });
@@ -153,15 +212,8 @@ export default function RecoveryQueuePage() {
         setRetryMessage((prev) => ({ ...prev, [row.id]: data.error ?? "Retry failed" }));
         return;
       }
-      if (data.outcome === "recovered") {
-        setResolvedIds((prev) => new Set(prev).add(row.id));
-        setRetryMessage((prev) => ({ ...prev, [row.id]: `✓ Recovered — sent to QA as run ${String(data.runId).slice(0, 8)}` }));
-      } else if (data.outcome === "still_failing") {
-        setRetryMessage((prev) => ({ ...prev, [row.id]: `Still failing: ${data.reason}` }));
-        await fetchData({ silent: true }); // pulls the updated retry_count/last_error for this row
-      } else {
-        setRetryMessage((prev) => ({ ...prev, [row.id]: data.reason ?? "Not eligible for retry" }));
-      }
+      applyOutcome(row.id, data);
+      if (data.outcome === "still_failing") await fetchData({ silent: true });
     } catch (err: any) {
       setRetryMessage((prev) => ({ ...prev, [row.id]: err.message ?? "Retry failed" }));
     } finally {
@@ -169,8 +221,47 @@ export default function RecoveryQueuePage() {
     }
   }
 
+  async function runBulkRetry(ids: string[], label: string) {
+    if (ids.length === 0) return;
+    setBulkRetrying(true);
+    setBulkMessage(null);
+    setRetryingIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.add(id)); return n; });
+    try {
+      const res = await fetch("/api/job-ceo/recovery-queue/retry-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setBulkMessage(data.error ?? "Bulk retry failed");
+        return;
+      }
+      for (const result of data.results ?? []) {
+        applyOutcome(result.id, result);
+      }
+      setBulkMessage(`${label}: ${data.recovered} recovered, ${data.stillFailing} still failing, ${data.ineligible} not eligible.`);
+      setSelectedIds(new Set());
+      await fetchData({ silent: true });
+    } catch (err: any) {
+      setBulkMessage(err.message ?? "Bulk retry failed");
+    } finally {
+      setRetryingIds((prev) => { const n = new Set(prev); ids.forEach((id) => n.delete(id)); return n; });
+      setBulkRetrying(false);
+    }
+  }
+
+  function retrySelected() {
+    return runBulkRetry(Array.from(selectedIds), "Selected");
+  }
+
+  function retryAllInSource() {
+    const label = sourceFilter === ALL_SOURCES ? "All sources" : sourceFilter;
+    return runBulkRetry(retryableVisibleIds, label);
+  }
+
   function exportCsv() {
-    const flat = rows.map((r) => ({
+    const flat = visibleRows.map((r) => ({
       title: r.title ?? "",
       company: r.company ?? "",
       location: r.location ?? "",
@@ -188,7 +279,8 @@ export default function RecoveryQueuePage() {
       "title", "company", "location", "source", "why_stuck", "source_url",
       "external_job_id", "matched_keywords", "retry_count", "last_retried_at", "discovered_at", "staging_id",
     ]);
-    downloadCsv(`job-ceo-recovery-queue-${new Date().toISOString().slice(0, 10)}.csv`, csv);
+    const suffix = sourceFilter === ALL_SOURCES ? "all" : sourceFilter.replace(/[^a-z0-9]+/gi, "-");
+    downloadCsv(`job-ceo-recovery-queue-${suffix}-${new Date().toISOString().slice(0, 10)}.csv`, csv);
   }
 
   return (
@@ -199,8 +291,9 @@ export default function RecoveryQueuePage() {
           <p className="text-sm text-ink-soft mt-1">
             Jobs discovered by any Job CEO source (Adzuna, OpenJobData, Actalent, Broadstaff, Job Agent) whose
             description could not be found or fetched. Jobs with a link are automatically retried on a backoff
-            schedule (6h, 24h, 72h) — many recover on their own. Export the list to research further, retry one
-            right now, or paste a recovered description to send it back through QA.
+            schedule (12h, 24h) — many recover on their own. Filter by source, select one or several, and retry
+            them together right now — or export the list to research further, or paste a recovered description
+            to send it back through QA.
           </p>
         </div>
         <div className="flex gap-2">
@@ -212,7 +305,7 @@ export default function RecoveryQueuePage() {
           </Link>
           <button
             onClick={exportCsv}
-            disabled={rows.length === 0}
+            disabled={visibleRows.length === 0}
             className="px-3 py-1.5 text-sm font-medium rounded-md border border-border bg-surface text-ink-soft hover:text-ink hover:border-ink-soft transition-colors disabled:opacity-50"
           >
             Export CSV
@@ -226,8 +319,59 @@ export default function RecoveryQueuePage() {
         </div>
       </div>
 
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-3 p-3 rounded-lg border border-border bg-surface">
+        <div className="flex items-center gap-2 flex-wrap">
+          <label className="text-xs font-medium text-ink-soft">Source:</label>
+          <select
+            value={sourceFilter}
+            onChange={(e) => { setSourceFilter(e.target.value); setSelectedIds(new Set()); }}
+            className="px-2 py-1.5 text-xs rounded border border-border bg-bg text-ink focus:outline-none focus:border-accent"
+          >
+            <option value={ALL_SOURCES}>All sources ({rows.length})</option>
+            {availableSources.map((s) => (
+              <option key={s} value={s}>
+                {s} ({rows.filter((r) => sourceLabel(r) === s).length})
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-1.5 text-xs text-ink-soft cursor-pointer ml-2">
+            <input
+              type="checkbox"
+              checked={allVisibleSelected}
+              onChange={toggleSelectAllVisible}
+              disabled={retryableVisibleIds.length === 0}
+              className="w-3.5 h-3.5 accent-accent"
+            />
+            Select all retryable in view ({retryableVisibleIds.length})
+          </label>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={retrySelected}
+            disabled={bulkRetrying || selectedIds.size === 0}
+            title="Retry every selected job right now, together"
+            className="px-3 py-1.5 text-xs font-medium rounded bg-accent text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {bulkRetrying ? "Retrying..." : `Retry Selected (${selectedIds.size})`}
+          </button>
+          <button
+            onClick={retryAllInSource}
+            disabled={bulkRetrying || retryableVisibleIds.length === 0}
+            title={sourceFilter === ALL_SOURCES ? "Retry every retryable job currently in view" : `Retry every retryable ${sourceFilter} job right now`}
+            className="px-3 py-1.5 text-xs font-medium rounded border border-accent text-accent hover:bg-accent/10 disabled:opacity-50 transition-colors"
+          >
+            {bulkRetrying ? "Retrying..." : `Retry All in View (${retryableVisibleIds.length})`}
+          </button>
+        </div>
+      </div>
+
+      {bulkMessage && (
+        <p className="text-xs text-ink-soft mb-3">{bulkMessage}</p>
+      )}
+
       <p className="text-xs text-ink-soft mb-4">
         {total} job{total !== 1 ? "s" : ""} in the queue{rows.length < total ? ` (showing first ${rows.length})` : ""}
+        {sourceFilter !== ALL_SOURCES ? ` · filtered to ${visibleRows.length} in "${sourceFilter}"` : ""}
         &nbsp;· auto-refreshes every 25s
       </p>
 
@@ -237,42 +381,54 @@ export default function RecoveryQueuePage() {
 
       {loading && <p className="text-sm text-ink-soft py-8 text-center">Loading...</p>}
 
-      {!loading && rows.length === 0 && !error && (
+      {!loading && visibleRows.length === 0 && !error && (
         <p className="text-sm text-ink-soft py-8 text-center">
-          Nothing in the recovery queue right now — every discovered job either got a full description or is still
-          being processed.
+          {rows.length === 0
+            ? "Nothing in the recovery queue right now — every discovered job either got a full description or is still being processed."
+            : `No jobs from "${sourceFilter}" in the current page.`}
         </p>
       )}
 
       {!loading &&
-        rows.map((row) => {
+        visibleRows.map((row) => {
           const isResolved = resolvedIds.has(row.id);
           const isRetrying = retryingIds.has(row.id);
           const canRetry = Boolean(row.source_url) && !isResolved;
           return (
             <div key={row.id} className={`p-3 rounded-lg border bg-bg mb-3 ${isResolved ? "border-emerald-700 opacity-60" : "border-border"}`}>
               <div className="flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink">{row.title ?? "—"}</p>
-                  <p className="text-xs text-ink-soft">
-                    {row.company ?? "—"} &middot; {row.location ?? "—"} &middot; {row.raw?.source ?? "—"}
-                  </p>
-                  <p className="text-xs text-rose-400 mt-1">⚠ {row.last_error ?? "Unknown reason"}</p>
-                  {(row.raw?.matched_keywords ?? []).length > 0 && (
-                    <p className="text-xs text-ink-soft mt-1">
-                      Matched: {(row.raw?.matched_keywords ?? []).join(", ")}
-                    </p>
+                <div className="flex items-start gap-2 min-w-0">
+                  {canRetry && (
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(row.id)}
+                      onChange={() => toggleSelect(row.id)}
+                      className="mt-1 w-3.5 h-3.5 accent-accent flex-shrink-0"
+                      title="Select for bulk retry"
+                    />
                   )}
-                  {row.source_url && !isResolved && (
-                    <p className="text-xs text-ink-soft mt-1">
-                      Retried {row.recovery_retry_count}× &middot; {nextAutoRetryLabel(row)}
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-ink">{row.title ?? "—"}</p>
+                    <p className="text-xs text-ink-soft">
+                      {row.company ?? "—"} &middot; {row.location ?? "—"} &middot; {sourceLabel(row)}
                     </p>
-                  )}
-                  {retryMessage[row.id] && (
-                    <p className={`text-xs mt-1 ${retryMessage[row.id].startsWith("✓") ? "text-emerald-400" : "text-amber-400"}`}>
-                      {retryMessage[row.id]}
-                    </p>
-                  )}
+                    <p className="text-xs text-rose-400 mt-1">⚠ {row.last_error ?? "Unknown reason"}</p>
+                    {(row.raw?.matched_keywords ?? []).length > 0 && (
+                      <p className="text-xs text-ink-soft mt-1">
+                        Matched: {(row.raw?.matched_keywords ?? []).join(", ")}
+                      </p>
+                    )}
+                    {row.source_url && !isResolved && (
+                      <p className="text-xs text-ink-soft mt-1">
+                        Retried {row.recovery_retry_count}× &middot; {nextAutoRetryLabel(row)}
+                      </p>
+                    )}
+                    {retryMessage[row.id] && (
+                      <p className={`text-xs mt-1 ${retryMessage[row.id].startsWith("✓") ? "text-emerald-400" : "text-amber-400"}`}>
+                        {retryMessage[row.id]}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap text-right">
                   <span className="text-xs text-ink-soft whitespace-nowrap">

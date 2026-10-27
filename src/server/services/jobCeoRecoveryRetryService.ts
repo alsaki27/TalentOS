@@ -162,6 +162,48 @@ export async function retryRecoveryQueueRowById(id: string): Promise<RecoveryRet
   return retryOneRow(row);
 }
 
+// Staff-picked bulk retry — one or several rows selected by hand on the
+// Recovery Queue page (checkboxes, or "select all" within a source filter),
+// retried together in one click instead of one at a time. Same backoff
+// override as the single-row "Retry Now" button (a deliberate selection
+// bypasses the wait), same per-row recording. Capped at 50/request and run
+// with the same bounded concurrency as the scheduled batch so a large
+// selection can't spike Jina/AI load any harder than the automatic retry
+// already does.
+const RECOVERY_RETRY_BULK_MAX_IDS = 50;
+
+export async function retryManyRowsByIds(ids: string[]): Promise<{
+  results: RecoveryRetryOutcome[];
+  recovered: number;
+  stillFailing: number;
+  ineligible: number;
+}> {
+  const uniqueIds = Array.from(new Set(ids)).slice(0, RECOVERY_RETRY_BULK_MAX_IDS);
+  const rows = await Promise.all(uniqueIds.map((id) => findStagedById(id)));
+
+  const results: RecoveryRetryOutcome[] = new Array(uniqueIds.length);
+  let idx = 0;
+  async function worker(): Promise<void> {
+    while (idx < uniqueIds.length) {
+      const i = idx++;
+      const row = rows[i];
+      results[i] = row
+        ? await retryOneRow(row)
+        : { id: uniqueIds[i], outcome: "ineligible", reason: "Staging row not found." };
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(RECOVERY_RETRY_CONCURRENCY, uniqueIds.length) }, () => worker())
+  );
+
+  return {
+    results,
+    recovered: results.filter((r) => r.outcome === "recovered").length,
+    stillFailing: results.filter((r) => r.outcome === "still_failing").length,
+    ineligible: results.filter((r) => r.outcome === "ineligible").length,
+  };
+}
+
 export async function processRecoveryRetryBatch(): Promise<{
   processed: number;
   recovered: number;
