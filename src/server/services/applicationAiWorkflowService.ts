@@ -13,6 +13,7 @@ import { classifyWorkflowFailure } from "@/lib/ai/application-agents/workflowFai
 import { runResumeForge, JOB_ANALYSIS_CHECKPOINT_ID } from "@/lib/ai/application-agents/resumeForge";
 import { runHiringPanel } from "@/lib/ai/application-agents/hiringPanel";
 import { runFinalPolish } from "@/lib/ai/application-agents/finalPolish";
+import { RESUME_WRITING_POLICY_VERSION } from "@/lib/ai/application-agents/resumeWritingPolicy";
 import { finalizeWorkflow } from "@/lib/ai/application-agents/finalizationService";
 import type { AgentOptions } from "@/lib/ai/application-agents/types";
 import { findAgentConfigByAutomationId } from "@/server/repositories/aiAgentConfigRepository";
@@ -1155,7 +1156,10 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
       input_tokens: resolvedInputTokens,
       output_tokens: resolvedOutputTokens,
       estimated_cost_usd: resolvedCostUsd,
-      prompt_version: agentConfig?.prompt_version ?? null,
+      prompt_version: agentConfig?.prompt_version ?? (
+        ["application_resume_forge", "application_hiring_panel", "application_final_polish"].includes(agentId)
+          ? RESUME_WRITING_POLICY_VERSION : null
+      ),
       completed_at: new Date().toISOString(),
     });
 

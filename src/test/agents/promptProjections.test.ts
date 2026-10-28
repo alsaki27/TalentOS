@@ -86,7 +86,8 @@ describe("projectDraftForReview", () => {
     // Resume-Forge-internal bookkeeping must not be forwarded.
     expect(JSON.stringify(projected)).not.toContain("z".repeat(100));
     expect((projected as any).changeLog).toBeUndefined();
-    expect((projected as any).missingRequirements).toBeUndefined();
+    expect(projected.missingRequirements).toEqual(draft.missingRequirements);
+    expect(projected.truthRisks).toEqual(draft.truthRisks);
   });
 });
 
@@ -130,7 +131,7 @@ describe("projectJobAnalysisForDraft", () => {
     expect(serialized).not.toContain("METHODOLOGIES-MARKER");
     expect(serialized).not.toContain("CERTIFICATIONS-MARKER");
     expect(serialized).not.toContain("EVIDENCE-REQUIREMENTS-MARKER");
-    expect(serialized).not.toContain("AMBIGUITIES-MARKER");
+    expect(projected.ambiguities).toEqual(["AMBIGUITIES-MARKER"]);
   });
 
   it("degrades gracefully when responsibilities is missing or malformed", () => {
