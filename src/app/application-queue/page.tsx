@@ -258,6 +258,11 @@ function CopyableId({ label, value }: { label: string; value: string | null | un
 export default function ApplicationQueuePage() {
   const loadRequestRef = useRef(0);
   const [items, setItems] = useState<QueueItem[]>([]);
+  // Mirrors `items` for the page-fit poller below, which needs the current
+  // list of resume-bearing ids inside a long-lived setInterval closure
+  // without re-registering the interval on every items change.
+  const itemsRef = useRef<QueueItem[]>([]);
+  useEffect(() => { itemsRef.current = items; }, [items]);
   const [users, setUsers] = useState<TeamUser[]>([]);
   const [me, setMe] = useState<{ profile: { user_id: string; role: string } } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -551,6 +556,40 @@ export default function ApplicationQueuePage() {
             })
             .catch(() => {});
         }
+      } catch {}
+    }, 6000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Lightweight live-update for resume page-fit: a manual edit saved from
+  // Falood Studio recomputes page_fit_metrics server-side immediately (see
+  // resumePageFitMeasurement.ts), but nothing told an already-open Queue
+  // page about it - the poller above only ever patches workflow-status
+  // fields. Same "poll a small endpoint, patch rows in place" shape as that
+  // poller, so this stays live without resetting scroll/selection.
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const ids = itemsRef.current
+        .filter((it) => it.workflow_resume_version_id)
+        .map((it) => it.id);
+      if (ids.length === 0) return;
+      try {
+        const res = await fetch(`/api/application-queue/page-fit?ids=${ids.join(",")}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const byId = new Map((data.items ?? []).map((row: any) => [row.id, row]));
+        setItems((prev) =>
+          prev.map((item) => {
+            const fresh: any = byId.get(item.id);
+            if (!fresh) return item;
+            if (fresh.one_page_fit_score === item.one_page_fit_score &&
+                JSON.stringify(fresh.page_fit_metrics) === JSON.stringify(item.page_fit_metrics)) {
+              return item;
+            }
+            return { ...item, one_page_fit_score: fresh.one_page_fit_score, page_fit_metrics: fresh.page_fit_metrics };
+          })
+        );
       } catch {}
     }, 6000);
 

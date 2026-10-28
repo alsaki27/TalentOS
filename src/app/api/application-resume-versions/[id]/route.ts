@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { queryOne, execute } from "@/server/db/neon";
+import { measureResumePageFitMetrics } from "@/lib/falood/resumePageFitMeasurement";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -83,6 +84,18 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
+  }
+
+  // Re-measure page fit from the content actually being saved, rather than
+  // trusting whatever (if anything) the client sent for page_fit_metrics -
+  // this is the Falood Studio save path, and a stale value here is exactly
+  // what left the Application Queue showing "2 pages, overflow" after an
+  // AE had already edited a resume down to one page. Deterministic, no AI
+  // tokens: same renderResumePdfWithMetrics pipeline the Studio toolbar badge
+  // already uses client-side.
+  if ("content" in updates) {
+    const measured = measureResumePageFitMetrics(updates.content);
+    if (measured !== undefined) updates.page_fit_metrics = measured;
   }
 
   let data: any;

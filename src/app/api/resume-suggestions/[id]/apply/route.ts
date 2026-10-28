@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { APPLICATION_WORKER_ROLES, requireCurrentUser } from "@/lib/auth";
 import { logActivity } from "@/lib/activity";
 import { queryOne, execute } from "@/server/db/neon";
+import { measureResumePageFitMetrics } from "@/lib/falood/resumePageFitMeasurement";
 
 function findAndReplaceInContent(
   content: any,
@@ -134,12 +135,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     updatedContent = JSON.parse(updatedJsonStr);
   }
 
-  // Update the application resume content
+  // Update the application resume content. Re-measure page fit from the
+  // content that's actually being saved - leaving the old value in place
+  // here is exactly the kind of stale-metrics gap that showed a false
+  // "overflow" badge in the Application Queue after an edit. COALESCE keeps
+  // whatever was already stored when measurement can't run (e.g. legacy
+  // content shapes), rather than erasing a previously-good value.
   let updateResumeError: any;
 
+  const measuredPageFit = measureResumePageFitMetrics(updatedContent) ?? null;
   const res = await execute(
-    `UPDATE application_resume_versions SET content = $1, updated_at = $2 WHERE id = $3`,
-    [updatedContent, now, suggestion.application_resume_id]
+    `UPDATE application_resume_versions SET content = $1, page_fit_metrics = COALESCE($2::jsonb, page_fit_metrics), updated_at = $3 WHERE id = $4`,
+    [updatedContent, measuredPageFit, now, suggestion.application_resume_id]
   );
   updateResumeError = res.rowCount === 0 ? { message: "Update failed" } : null;
 

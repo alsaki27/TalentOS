@@ -2,6 +2,7 @@
 // Data-access abstraction for application_resume_versions table.
 
 import { query, queryOne, execute } from "@/server/db/neon";
+import { measureResumePageFitMetrics } from "@/lib/falood/resumePageFitMeasurement";
 
 export type ResumeVersionStatus = "draft" | "in_review" | "approved" | "archived";
 export type ResumeVersionSourceType = "base_resume" | "original_resume" | "blank" | "manual";
@@ -134,6 +135,17 @@ export async function updateApplicationResumeVersion(
   const values: (string | number | boolean | object | Date | null)[] = [];
   let paramIndex = 1;
 
+  // Whenever content changes here, re-measure page fit instead of trusting a
+  // caller-supplied value (there isn't one today) or leaving the old one in
+  // place - a stale page_fit_metrics is exactly what showed a false "2-page
+  // overflow" badge in the Application Queue after a resume had already been
+  // edited down to one page.
+  let pageFitMetrics = input.page_fit_metrics;
+  if (input.content !== undefined) {
+    const measured = measureResumePageFitMetrics(input.content);
+    if (measured !== undefined) pageFitMetrics = measured;
+  }
+
   if (input.content !== undefined) {
     fields.push(`content = $${paramIndex++}`);
     values.push(input.content);
@@ -158,9 +170,9 @@ export async function updateApplicationResumeVersion(
     fields.push(`one_page_fit_score = $${paramIndex++}`);
     values.push(input.one_page_fit_score);
   }
-  if (input.page_fit_metrics !== undefined) {
+  if (pageFitMetrics !== undefined) {
     fields.push(`page_fit_metrics = $${paramIndex++}`);
-    values.push(input.page_fit_metrics);
+    values.push(pageFitMetrics);
   }
   if (input.title !== undefined) {
     fields.push(`title = $${paramIndex++}`);
