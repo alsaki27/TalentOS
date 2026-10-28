@@ -10,8 +10,9 @@ import { Download, Eye, EyeOff, Palette, Settings, AlertTriangle, Upload, FileDo
 import { AiSuggestions } from '@/components/falood/resumify/components/preview/AiSuggestions';
 import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
-import { getPageSizePx, PAGE_OVERFLOW_TOLERANCE_PX } from '@/components/falood/resumify/types/resume';
+import { getPageSizePx, PAGE_OVERFLOW_TOLERANCE_PX, ResumeData } from '@/components/falood/resumify/types/resume';
 import { readResumePresentation } from '@/lib/falood/resumePresentation';
+import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 
@@ -124,7 +125,7 @@ function convertOldFormatToNew(old: any): any {
     // rendering a blank page. Matches what studioDocumentToResumeData already
     // does for the same shape, so both editors agree on any given resume.
     if (old.personalInfo) return { ...old, ...readResumePresentation(old) };
-    
+
     // It's the old ResumeDocument format (has header, experience, education, etc)
     return {
         personalInfo: {
@@ -184,6 +185,10 @@ function convertOldFormatToNew(old: any): any {
     };
 }
 
+interface BaseResumeSnapshot {
+    content: ResumeData;
+}
+
 /* ── Resume Content (inner component) ── */
 const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => {
     const [showPreview, setShowPreview] = useState(true);
@@ -194,64 +199,79 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     const { state, exportResumeData, importResumeData } = useResume();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const router = useRouter();
-    const [isSaving, setIsSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
     const isNew = baseResumeId === 'new';
-    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(isNew);
-    const lastSavedSnapshotRef = useRef<string | null>(null);
-    // Synchronous mutual-exclusion for saves (a ref, not state, since it must
-    // be readable/settable instantly - see persistBaseResume). Root cause of
-    // deleted custom sections reappearing: the PATCH route used to await a
-    // multi-second AI keyword-generation call before responding, and with a
-    // 1s autosave debounce plus the explicit Save button, two saves could
-    // easily be in flight at once. Since each PATCH fully overwrites
-    // `content`, their responses could arrive out of order and let an
-    // older, in-flight save silently clobber a newer one (e.g. one made
-    // right after deleting a section). This guard ensures only one save is
-    // ever in flight; the debounce effect below retries with the freshest
-    // state once it clears.
-    const isSavingRef = useRef(false);
-    // Mirrors state.resumeData so the unload/unmount safety net below (which
-    // must never depend on state directly - that would re-attach a global
-    // listener on every keystroke) always reads the latest edits instead of
-    // whatever was current when the effect first ran.
-    const resumeDataRef = useRef(state.resumeData);
-    useEffect(() => {
-        resumeDataRef.current = state.resumeData;
-    }, [state.resumeData]);
+    // Only the isNew -> "save as standalone application" path needs its own
+    // saving/status state; every other save in this page goes through the
+    // shared studio-persistence hook below.
+    const [isCreatingStandalone, setIsCreatingStandalone] = useState(false);
 
     const showToast = (msg: string) => {
         setToastMsg(msg);
         setTimeout(() => setToastMsg(null), 3000);
     };
 
-    // Load existing Base Resume
-    useEffect(() => {
-        if (!isNew) {
-            const fetchBaseResume = async () => {
-                setIsLoading(true);
-                try {
-                    const response = await fetch(`/api/base-resumes/${baseResumeId}`);
-                    const json = await response.json();
-                    if (json && json.content) {
-                        const convertedData = convertOldFormatToNew(json.content);
-                        importResumeData(convertedData);
-                        lastSavedSnapshotRef.current = JSON.stringify(convertedData);
-                        setCandidateId(json.candidate_id || null);
-                        setHasLoadedInitialData(true);
-                        showToast('Base Resume loaded.');
-                    }
-                } catch (error) {
-                    console.error('Error loading base resume:', error);
-                } finally {
-                    setIsLoading(false);
-                }
-            };
-            fetchBaseResume();
+    const studio = useStudioPersistence<BaseResumeSnapshot>({
+        enabled: !isNew,
+        snapshot: { content: state.resumeData },
+        getResumeData: (snapshot) => snapshot.content,
+        save: async (snapshot) => {
+            const response = await fetch(`/api/base-resumes/${baseResumeId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(snapshot),
+            });
+            return response.ok;
+        },
+        flush: (snapshot) => {
+            const body = JSON.stringify(snapshot);
+            // keepalive bodies are capped at 64KB in flight; over that the
+            // browser rejects the request outright, so only use it when it fits.
+            fetch(`/api/base-resumes/${baseResumeId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body,
+                keepalive: new Blob([body]).size < 60_000,
+            }).catch(() => {});
+        },
+    });
+
+    // Load existing Base Resume. Never falls through to the normal editable
+    // UI on a failed or invalid load (see the loadError screen below) - that
+    // UI would start from the blank placeholder resume, and the studio
+    // hook's exit-flush could then persist that placeholder over whatever's
+    // really saved the moment the page is left, before a real load ever
+    // completed.
+    const load = useCallback(async () => {
+        if (isNew) return;
+        setIsLoading(true);
+        setLoadError(null);
+        try {
+            const response = await fetch(`/api/base-resumes/${baseResumeId}`);
+            const json = await response.json();
+            if (!response.ok || !json || typeof json.content !== 'object' || json.content === null) {
+                throw new Error(typeof json?.error === 'string' ? json.error : 'This base resume could not be found.');
+            }
+            const convertedData = convertOldFormatToNew(json.content);
+            importResumeData(convertedData);
+            studio.markLoaded({ content: convertedData });
+            setCandidateId(json.candidate_id || null);
+            showToast('Base Resume loaded.');
+        } catch (error) {
+            console.error('Error loading base resume:', error);
+            setLoadError(error instanceof Error ? error.message : 'Failed to load this base resume.');
+        } finally {
+            setIsLoading(false);
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [baseResumeId, isNew]);
+
+    useEffect(() => {
+        void load();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [baseResumeId, isNew]);
 
     // Page overflow detection. Measured against the same derived page
@@ -279,57 +299,9 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
         else showToast('Export failed.');
     };
 
-    const persistBaseResume = useCallback(async (showSuccessToast = false) => {
-        if (isNew) return false;
-
-        // Never let two PATCHes race - see isSavingRef's declaration for why.
-        // The debounce effect below re-checks and retries once this clears,
-        // so a save that's skipped here is never silently lost.
-        if (isSavingRef.current) return false;
-
-        const snapshot = JSON.stringify(state.resumeData);
-        if (!showSuccessToast && snapshot === lastSavedSnapshotRef.current) {
-            return true;
-        }
-
-        isSavingRef.current = true;
-        setIsSaving(true);
-        setSaveStatus('saving');
-        try {
-            const saveResponse = await fetch(`/api/base-resumes/${baseResumeId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    content: state.resumeData,
-                }),
-            });
-            if (saveResponse.ok) {
-                lastSavedSnapshotRef.current = snapshot;
-                setSaveStatus('saved');
-                if (showSuccessToast) {
-                    showToast('Base Resume saved!');
-                }
-                return true;
-            } else {
-                throw new Error("Failed to save");
-            }
-        } catch (error) {
-            console.error('Error saving:', error);
-            setSaveStatus('error');
-            if (showSuccessToast) {
-                showToast('Save failed.');
-            }
-            return false;
-        } finally {
-            isSavingRef.current = false;
-            setIsSaving(false);
-        }
-    }, [baseResumeId, isNew, state.resumeData]);
-
     const handleSave = async () => {
         if (isNew) {
-            setIsSaving(true);
-            setSaveStatus('saving');
+            setIsCreatingStandalone(true);
             try {
                 const saveResponse = await fetch('/api/falood/applications', {
                     method: 'POST',
@@ -343,90 +315,38 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
                     }),
                 });
                 if (saveResponse.ok) {
-                    setSaveStatus('saved');
                     showToast('Saved as standalone application!');
                 } else {
                     throw new Error('Failed to save');
                 }
             } catch (error) {
                 console.error('Error saving:', error);
-                setSaveStatus('error');
                 showToast('Save failed.');
             } finally {
-                setIsSaving(false);
+                setIsCreatingStandalone(false);
             }
             return;
         }
 
-        await persistBaseResume(true);
+        const ok = await studio.persist();
+        if (ok) {
+            showToast('Base Resume saved!');
+        } else if (studio.lastBlockReason === 'not_loaded') {
+            showToast('Still loading this resume - please wait a moment and try again.');
+        } else if (studio.lastBlockReason === 'would_erase_content') {
+            showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
+        } else {
+            showToast('Save failed.');
+        }
     };
-
-    useEffect(() => {
-        // isSaving re-runs this effect the instant a save finishes, so a
-        // change that arrived while one was in flight (skipped by
-        // persistBaseResume's isSavingRef guard) always gets a follow-up
-        // attempt with the freshest state - it's never silently dropped.
-        if (isNew || isLoading || !hasLoadedInitialData || isSaving) return;
-
-        const snapshot = JSON.stringify(state.resumeData);
-        if (snapshot === lastSavedSnapshotRef.current) return;
-
-        const timeoutId = window.setTimeout(() => {
-            void persistBaseResume(false);
-        }, 1000);
-
-        return () => window.clearTimeout(timeoutId);
-    }, [hasLoadedInitialData, isLoading, isNew, isSaving, persistBaseResume, state.resumeData]);
-
-    // Autosave is debounced by 1s, and even the explicit Save button's PATCH
-    // is a real network round trip - closing the tab or navigating away
-    // inside that window has always silently discarded the edit, but that
-    // window got much easier to lose the moment the database moved off
-    // Neon's fast HTTP driver onto a TCP connection through Hyperdrive (a
-    // real per-save round trip instead of a near-instant stateless request).
-    // This is exactly the "saved with no error, but reopening shows the old
-    // content unless I wait a few seconds first" report. `beforeunload`
-    // covers a real tab close/refresh; the cleanup below covers a same-tab
-    // client-side navigation away from this route, which never fires
-    // beforeunload at all. Both flush with `keepalive` - the same guarantee
-    // sendBeacon relies on to survive page unload - since sendBeacon itself
-    // can only send POST, not PATCH.
-    useEffect(() => {
-        if (isNew) return;
-
-        const isDirty = () => JSON.stringify(resumeDataRef.current) !== lastSavedSnapshotRef.current;
-        const flushBeacon = () => {
-            const body = JSON.stringify({ content: resumeDataRef.current });
-            // keepalive bodies are capped at 64KB in flight; over that the
-            // browser rejects the request outright, so only use it when it fits.
-            fetch(`/api/base-resumes/${baseResumeId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body,
-                keepalive: new Blob([body]).size < 60_000,
-            }).catch(() => {});
-        };
-        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-            if (!isDirty()) return;
-            flushBeacon();
-            event.preventDefault();
-            event.returnValue = '';
-        };
-
-        window.addEventListener('beforeunload', handleBeforeUnload);
-        return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-            if (isDirty()) flushBeacon();
-        };
-    }, [baseResumeId, isNew]);
 
     const handleTailorSubmit = async (data: { jobTitle: string; company: string; jobDescription: string }) => {
         setShowTailorModal(false);
         // Save current base resume first - routed through the same guarded
-        // persistBaseResume as everything else, so this can't race an
+        // studio.persist() as everything else, so this can't race an
         // in-flight autosave with its own separate, un-tracked PATCH.
         if (!isNew) {
-            await persistBaseResume(false);
+            await studio.persist();
         }
 
         // Then create a NEW application for tailoring
@@ -473,6 +393,32 @@ const ResumeContent: React.FC<{ baseResumeId: string }> = ({ baseResumeId }) => 
     if (isLoading) {
         return <div className="flex items-center justify-center h-[600px]"><p className="muted">Loading base resume…</p></div>;
     }
+
+    // Never render the editable form/preview on a failed load - that UI
+    // starts from the blank placeholder resume, and every save path on this
+    // page (autosave, explicit Save, exit-flush) would then be one click or
+    // one tab-switch away from persisting that placeholder over whatever's
+    // actually saved. This mirrors the tailored-resume studio page's
+    // equivalent screen.
+    if (loadError) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[600px] gap-4 text-center px-4">
+                <AlertTriangle className="w-10 h-10 text-amber-500" />
+                <div>
+                    <h2 className="text-lg font-semibold mb-1">Couldn&apos;t load this resume</h2>
+                    <p className="muted text-sm max-w-md">{loadError}</p>
+                    <p className="muted text-xs mt-2">Nothing was changed - it&apos;s safe to retry.</p>
+                </div>
+                <div className="flex gap-2">
+                    <Button size="sm" onClick={() => void load()}>Retry</Button>
+                    <Link href="/falood"><Button size="sm" variant="outline">Back to Falood</Button></Link>
+                </div>
+            </div>
+        );
+    }
+
+    const isSaving = isNew ? isCreatingStandalone : studio.isSaving;
+    const saveStatus = isNew ? 'idle' : studio.saveStatus;
 
     return (
         <div style={{ minHeight: '100vh' }}>

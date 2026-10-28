@@ -7,7 +7,7 @@
 // src/lib/falood/resumeEmptyCheck.ts for the full writeup.
 
 import { describe, it, expect } from "vitest";
-import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
+import { isResumeDataEffectivelyEmpty, shouldPersistResumeSnapshot } from "@/lib/falood/resumeEmptyCheck";
 
 const BLANK = {
   personalInfo: { fullName: "", jobTitle: "", email: "", phone: "", location: "", website: "", linkedin: "", github: "", profileImage: "", birthDate: "" },
@@ -88,5 +88,92 @@ describe("isResumeDataEffectivelyEmpty", () => {
       ...BLANK,
       skills: { mode: "categorized" as const, simple: [], categorized: [{ id: "c1", title: "Design", skills: [] }] },
     })).toBe(true);
+  });
+
+  // base_resumes.content also stores an older "canonical" shape (confirmed
+  // live: ~88% of rows) - header.fullName instead of personalInfo.fullName,
+  // summary as {id, text} instead of a plain string, and skills as a bare
+  // array of {title, skills[]} groups. This check is reused against
+  // base_resumes.content (see src/app/api/base-resumes/[id]/route.ts), so it
+  // must recognize real content in that shape too, not just the
+  // Resumify-native one.
+  describe("canonical (older) content shape", () => {
+    it("is NOT empty when only header.fullName is present", () => {
+      expect(isResumeDataEffectivelyEmpty({ header: { fullName: "MD MAHBUBUL ALAM" } } as any)).toBe(false);
+    });
+
+    it("is NOT empty when only header.email is present", () => {
+      expect(isResumeDataEffectivelyEmpty({ header: { email: "person@example.com" } } as any)).toBe(false);
+    });
+
+    it("is NOT empty when summary is the {id, text} object shape with real text", () => {
+      expect(isResumeDataEffectivelyEmpty({ summary: { id: "summary", text: "Experienced engineer." } } as any)).toBe(false);
+    });
+
+    it("does not throw, and is empty, when summary is the {id, text} object shape with blank text", () => {
+      expect(() => isResumeDataEffectivelyEmpty({ summary: { id: "summary", text: "   " } } as any)).not.toThrow();
+      expect(isResumeDataEffectivelyEmpty({ summary: { id: "summary", text: "   " } } as any)).toBe(true);
+    });
+
+    it("is NOT empty when skills is a bare array of groups with real skills", () => {
+      expect(isResumeDataEffectivelyEmpty({
+        skills: [{ id: "g1", title: "Networking", skills: ["BGP", "MPLS"] }],
+      } as any)).toBe(false);
+    });
+
+    it("IS empty when skills is a bare array of groups whose skills arrays are all empty", () => {
+      expect(isResumeDataEffectivelyEmpty({
+        skills: [{ id: "g1", title: "Networking", skills: [] }],
+      } as any)).toBe(true);
+    });
+
+    it("is NOT empty for a fully-populated canonical resume with no personalInfo/summary string at all", () => {
+      expect(isResumeDataEffectivelyEmpty({
+        header: { fullName: "MD MAHBUBUL ALAM", email: "mahbub@example.com" },
+        skills: [{ id: "g1", title: "Networking", skills: ["BGP"] }],
+        experience: [{ id: "e1", title: "Senior Network Engineer", bullets: [] }],
+      } as any)).toBe(false);
+    });
+  });
+});
+
+describe("shouldPersistResumeSnapshot", () => {
+  const POPULATED = { ...BLANK, summary: "Experienced designer." };
+
+  it("blocks when the initial load has not completed yet, even with real content", () => {
+    expect(shouldPersistResumeSnapshot({
+      hasLoadedInitialData: false,
+      nextResumeData: POPULATED,
+      lastSavedResumeData: POPULATED,
+    })).toEqual({ allow: false, reason: "not_loaded" });
+  });
+
+  it("allows a normal save of real content once loaded", () => {
+    expect(shouldPersistResumeSnapshot({
+      hasLoadedInitialData: true,
+      nextResumeData: POPULATED,
+      lastSavedResumeData: POPULATED,
+    })).toEqual({ allow: true });
+  });
+
+  it("blocks an empty snapshot from replacing a previously-saved non-empty one - the exact Oct 15 incident condition", () => {
+    expect(shouldPersistResumeSnapshot({
+      hasLoadedInitialData: true,
+      nextResumeData: BLANK,
+      lastSavedResumeData: POPULATED,
+    })).toEqual({ allow: false, reason: "would_erase_content" });
+  });
+
+  it("allows an empty snapshot when the last-saved version was also empty (a brand-new, never-saved session's first save)", () => {
+    expect(shouldPersistResumeSnapshot({
+      hasLoadedInitialData: true,
+      nextResumeData: BLANK,
+      lastSavedResumeData: null,
+    })).toEqual({ allow: true });
+    expect(shouldPersistResumeSnapshot({
+      hasLoadedInitialData: true,
+      nextResumeData: BLANK,
+      lastSavedResumeData: BLANK,
+    })).toEqual({ allow: true });
   });
 });

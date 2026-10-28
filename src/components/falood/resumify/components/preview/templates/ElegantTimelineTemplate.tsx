@@ -33,9 +33,10 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed `}
-      style={{ fontSize: getFontSizePx(), color: colors.text, 
+      className={`w-full h-full`}
+      style={{ fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Lato, sans-serif',
+        lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
       }}
     >
@@ -108,7 +109,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                 >
                   PROFESSIONAL SUMMARY
                 </h3>
-                <p className={` leading-relaxed text-center max-w-4xl mx-auto`}>{summary}</p>
+                <p className={`text-center max-w-4xl mx-auto`}>{summary}</p>
               </div>
             )}
 
@@ -297,7 +298,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                     </h3>
                     <div className="text-center">
                       {customSection.type === 'paragraph' ? (
-                        <p className={` leading-relaxed`}>{customSection.content}</p>
+                        <p>{customSection.content}</p>
                       ) : (
                         <ul className="space-y-1 inline-block text-left">
                           {formatBulletPoints(customSection.content).map((point, idx) => (

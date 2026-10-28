@@ -96,6 +96,7 @@ export interface ResumeData {
   fontSize: number;
   fontFamily: string;
   pagePadding: number;
+  lineSpacing: number;
 }
 
 export type TemplateType = 'tech-sidebar' | 'business-professional' | 'business-professional-2' | 'business-professional-3' | 'business-professional-4' | 'modern-minimal' | 'elegant-timeline' | 'creative-modern' | 'bjet-professional';
@@ -120,6 +121,16 @@ export const DEFAULT_COLORS: ResumeColors = {
 };
 
 export const DEFAULT_PAGE_PADDING = 0.75;
+
+// Matches Tailwind's `leading-relaxed` (1.625), which every template already
+// rendered its body text at via a hardcoded class before this field existed
+// (bjet-professional was the one exception, hardcoded to 1.4). Using that
+// exact number as the default - rather than the unrelated 1.15 the separate
+// old-format PDF export pipeline defaults to in resumeDocumentAdapters.ts -
+// keeps every existing resume's live-preview rendering unchanged the moment
+// this field starts being read, since ResumeContext's IMPORT_RESUME_DATA
+// stamps this default into any already-saved resume that predates the field.
+export const DEFAULT_LINE_SPACING = 1.625;
 
 // Single source of truth for the initial/fallback font size (points), used
 // by ResumeContext's initial state, the old-format-resume conversion in the

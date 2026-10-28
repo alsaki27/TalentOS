@@ -33,9 +33,10 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed `}
-      style={{ fontSize: getFontSizePx(), color: colors.text, 
+      className={`w-full h-full`}
+      style={{ fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Source Sans Pro, sans-serif',
+        lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
       }}
     >
@@ -187,7 +188,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                 {customSection.title.toUpperCase()}
               </h3>
               {customSection.type === 'paragraph' ? (
-                <p className={` leading-relaxed`}>{customSection.content}</p>
+                <p>{customSection.content}</p>
               ) : (
                 <ul className="space-y-1">
                   {formatBulletPoints(customSection.content).map((point, idx) => (
@@ -208,7 +209,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                   <h3 className={`${getHeadingSize()} font-bold mb-3`} style={{ color: colors.primary }}>
                     ABOUT ME
                   </h3>
-                  <p className={` leading-relaxed`}>{summary}</p>
+                  <p>{summary}</p>
                 </div>
               )}
 
@@ -280,7 +281,7 @@ export const CreativeModernTemplate: React.FC<TemplateProps> = ({ data }) => {
                 {customSection.title.toUpperCase()}
               </h3>
               {customSection.type === 'paragraph' ? (
-                <p className={` leading-relaxed`}>{customSection.content}</p>
+                <p>{customSection.content}</p>
               ) : (
                 <ul className="space-y-1">
                   {formatBulletPoints(customSection.content).map((point, idx) => (

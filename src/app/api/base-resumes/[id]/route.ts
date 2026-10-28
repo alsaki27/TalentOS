@@ -11,6 +11,7 @@ import { APPLICATION_WORKER_ROLES, DESTRUCTIVE_MANAGER_ROLES, requireCurrentUser
 import { queryOne, execute } from "@/server/db/neon";
 import { generateBaseResumeJobSearchProfile } from "@/server/services/baseResumeJobSearchKeywordService";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
+import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
 
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   const { response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
@@ -25,10 +26,36 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const { context, response } = await requireCurrentUser(APPLICATION_WORKER_ROLES);
   if (response) return response;
 
+  try {
   const body = await req.json();
   if ("status" in body && !DESTRUCTIVE_MANAGER_ROLES.includes(context!.profile.role)) {
     return NextResponse.json({ error: "Only admin/manager can change base resume status." }, { status: 403 });
   }
+
+  if ("content" in body) {
+    // Structural backstop against the exit-flush race (see
+    // src/lib/falood/resumeEmptyCheck.ts for the full incident writeup and
+    // src/app/api/falood/applications/route.ts for the matching guard on
+    // the sibling tailored-resume save path): refuse any write that would
+    // replace existing real content with the blank-placeholder shape,
+    // regardless of what client-side bug (this one or a future one)
+    // produced it. A brand-new row's first content save is still allowed -
+    // this only blocks a non-empty -> empty regression.
+    if (isResumeDataEffectivelyEmpty(body.content)) {
+      const existingRow = await queryOne<{ content: unknown }>(
+        "SELECT content FROM base_resumes WHERE id = $1",
+        [params.id],
+      );
+      if (existingRow && !isResumeDataEffectivelyEmpty(existingRow.content as any)) {
+        console.error(`[Base Resume PATCH] Refused to overwrite non-empty content with an empty one for id=${params.id}`);
+        return NextResponse.json(
+          { error: "Refusing to save: this would replace existing resume content with a blank resume. Reload the page and try again - if the problem persists, the page may not have finished loading before you tried to save." },
+          { status: 409 },
+        );
+      }
+    }
+  }
+
   const allowedFields = ["name", "target_industry", "target_roles", "status", "content", "style_id"];
   const updates: Record<string, unknown> = { updated_by: context!.profile.user_id, updated_at: new Date().toISOString() };
   for (const f of allowedFields) {
@@ -37,7 +64,6 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (body.status === "approved") updates.approved_by = context!.profile.user_id;
 
   let data: any;
-  let error: any;
 
   const keys = Object.keys(updates);
   if (keys.length === 0) {
@@ -84,6 +110,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   }
 
   return NextResponse.json(data);
+  } catch (err: any) {
+    console.error("PATCH /api/base-resumes/[id] error:", err);
+    return NextResponse.json({ error: err?.message ?? "Could not save this base resume." }, { status: 500 });
+  }
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {

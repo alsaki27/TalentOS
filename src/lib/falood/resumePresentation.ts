@@ -1,7 +1,8 @@
 // src/lib/falood/resumePresentation.ts
 // The Resumify editor's presentation settings - everything the Customize and
 // Settings panels edit (template, colors, typography, page format/padding,
-// and section visibility/order) as opposed to the resume's actual content.
+// line spacing, and section visibility/order) as opposed to the resume's
+// actual content.
 //
 // Why this exists: base_resumes.content is stored in two different shapes in
 // production (confirmed live - 66 of 75 rows are the canonical
@@ -32,13 +33,14 @@ import {
   TEMPLATE_CONFIGS,
   DEFAULT_COLORS,
   DEFAULT_PAGE_PADDING,
+  DEFAULT_LINE_SPACING,
   DEFAULT_SECTIONS,
   DEFAULT_FONT_SIZE,
 } from "@/components/falood/resumify/types/resume";
 
 export type ResumePresentation = Pick<
   ResumeData,
-  "template" | "colors" | "fontSize" | "fontFamily" | "pageFormat" | "pagePadding" | "sections"
+  "template" | "colors" | "fontSize" | "fontFamily" | "pageFormat" | "pagePadding" | "lineSpacing" | "sections"
 >;
 
 /** The exact keys that make up a presentation, so callers never restate them. */
@@ -49,6 +51,7 @@ export const RESUME_PRESENTATION_KEYS = [
   "fontFamily",
   "pageFormat",
   "pagePadding",
+  "lineSpacing",
   "sections",
 ] as const satisfies readonly (keyof ResumePresentation)[];
 
@@ -60,6 +63,12 @@ export const DEFAULT_PAGE_FORMAT: ResumeData["pageFormat"] = "a4";
 // would leave that Select with nothing to show.
 const MIN_FONT_SIZE = 6;
 const MAX_FONT_SIZE = 16;
+
+// Matches the ColorCustomizer Line Spacing slider's range (min also matches
+// autoFit.ts's FLOORS.lineHeight, the same concept's floor in the separate
+// old-format auto-shrink pipeline).
+const MIN_LINE_SPACING = 1.0;
+const MAX_LINE_SPACING = 1.8;
 
 // Font size used to be a named size before it became a point value. Kept so
 // documents written back then still open with a sensible size instead of
@@ -86,6 +95,13 @@ function readFontSize(value: unknown): number {
 
 function readPageFormat(value: unknown): ResumeData["pageFormat"] {
   return value === "letter" || value === "a4" ? value : DEFAULT_PAGE_FORMAT;
+}
+
+function readLineSpacing(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.min(MAX_LINE_SPACING, Math.max(MIN_LINE_SPACING, value));
+  }
+  return DEFAULT_LINE_SPACING;
 }
 
 function readColors(value: unknown): ResumeColors {
@@ -136,6 +152,7 @@ export function readResumePresentation(content: unknown): ResumePresentation {
     pagePadding: typeof raw.pagePadding === "number" && Number.isFinite(raw.pagePadding)
       ? raw.pagePadding
       : DEFAULT_PAGE_PADDING,
+    lineSpacing: readLineSpacing(raw.lineSpacing),
     sections: readSections(raw.sections),
   };
 }

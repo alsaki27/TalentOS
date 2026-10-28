@@ -32,10 +32,10 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
   return (
     <div 
       className={`w-full h-full `}
-      style={{ 
+      style={{
         fontFamily: fontFamily || 'Arial, sans-serif',
         color: colors.text,
-        lineHeight: '1.4'
+        lineHeight: data.lineSpacing
       }}
     >
       {/* Header Logo */}

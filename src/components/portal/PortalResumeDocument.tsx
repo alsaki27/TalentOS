@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ResumeTemplateSwitch } from "@/components/falood/resumify/components/preview/ResumeTemplateSwitch";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
-import { DEFAULT_PAGE_PADDING } from "@/components/falood/resumify/types/resume";
+import { DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING } from "@/components/falood/resumify/types/resume";
 
 // Renders a tailored resume with the exact same templates the TalentOS studio
 // uses, by running the stored content through the same studioDocumentToResumeData
@@ -26,6 +26,7 @@ export default function PortalResumeDocument({ content }: { content: unknown }) 
   const isA4 = resumeData.pageFormat === "a4";
   const pageWidth = isA4 ? 794 : 816;
   const pagePadding = resumeData.pagePadding ?? DEFAULT_PAGE_PADDING;
+  const lineSpacing = resumeData.lineSpacing ?? DEFAULT_LINE_SPACING;
 
   // Scale to fit the available width, never upscaling past 1:1 and never
   // shrinking below MIN_SCALE - fitting a full letter page into a ~390px
@@ -76,6 +77,15 @@ export default function PortalResumeDocument({ content }: { content: unknown }) 
             width: isA4 ? "210mm" : "8.5in",
             padding: `${pagePadding}in`,
             fontFamily: "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            lineHeight: lineSpacing,
+            // See the matching comment in ResumePreview.tsx and the
+            // `.portal-resume-doc-inner *` rule in globals.css: Tailwind's
+            // text-xs/text-sm/... utilities each set their own line-height
+            // directly, which overrides plain inheritance from this
+            // wrapper for any text using one of those classes. The CSS
+            // variable is what actually makes every descendant defer to
+            // this value.
+            ['--resume-line-height' as string]: String(lineSpacing),
             color: "#050505",
             boxSizing: "border-box",
             transform: `scale(${scale})`,

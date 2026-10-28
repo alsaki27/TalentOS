@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useMemo, useReducer, ReactNode } from 'react';
-import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
+import { ResumeData, DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_SECTIONS, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
 
 export interface ResumeVersion {
   id: string;
@@ -34,6 +34,7 @@ type ResumeAction =
   | { type: 'UPDATE_FONT_SIZE'; payload: ResumeData['fontSize'] }
   | { type: 'UPDATE_FONT_FAMILY'; payload: ResumeData['fontFamily'] }
   | { type: 'UPDATE_PAGE_PADDING'; payload: ResumeData['pagePadding'] }
+  | { type: 'UPDATE_LINE_SPACING'; payload: ResumeData['lineSpacing'] }
   | { type: 'SET_EDITING'; payload: boolean }
   | { type: 'SET_SELECTED_SECTION'; payload: string | null }
   | { type: 'RESET_RESUME' }
@@ -73,7 +74,8 @@ const initialResumeData: ResumeData = {
   pageFormat: 'a4',
   fontSize: DEFAULT_FONT_SIZE,
   fontFamily: 'Inter',
-  pagePadding: DEFAULT_PAGE_PADDING
+  pagePadding: DEFAULT_PAGE_PADDING,
+  lineSpacing: DEFAULT_LINE_SPACING
 };
 
 const initialState: ResumeState = {
@@ -167,6 +169,11 @@ function resumeReducer(state: ResumeState, action: ResumeAction): ResumeState {
         ...state,
         resumeData: { ...state.resumeData, pagePadding: action.payload }
       };
+    case 'UPDATE_LINE_SPACING':
+      return {
+        ...state,
+        resumeData: { ...state.resumeData, lineSpacing: action.payload }
+      };
     case 'SET_EDITING':
       return { ...state, isEditing: action.payload };
     case 'SET_SELECTED_SECTION':
@@ -236,6 +243,7 @@ interface ResumeContextType {
   updateFontSize: (fontSize: ResumeData['fontSize']) => void;
   updateFontFamily: (fontFamily: ResumeData['fontFamily']) => void;
   updatePagePadding: (pagePadding: ResumeData['pagePadding']) => void;
+  updateLineSpacing: (lineSpacing: ResumeData['lineSpacing']) => void;
   setEditing: (editing: boolean) => void;
   setSelectedSection: (section: string | null) => void;
   resetResume: () => void;
@@ -309,6 +317,10 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     dispatch({ type: 'UPDATE_PAGE_PADDING', payload: pagePadding });
   }, []);
 
+  const updateLineSpacing = useCallback((lineSpacing: ResumeData['lineSpacing']) => {
+    dispatch({ type: 'UPDATE_LINE_SPACING', payload: lineSpacing });
+  }, []);
+
   const setEditing = useCallback((editing: boolean) => {
     dispatch({ type: 'SET_EDITING', payload: editing });
   }, []);
@@ -366,6 +378,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     updateFontSize,
     updateFontFamily,
     updatePagePadding,
+    updateLineSpacing,
     setEditing,
     setSelectedSection,
     resetResume,
@@ -392,6 +405,7 @@ export const ResumeProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     updateFontSize,
     updateFontFamily,
     updatePagePadding,
+    updateLineSpacing,
     setEditing,
     setSelectedSection,
     resetResume,

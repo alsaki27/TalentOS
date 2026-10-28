@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { mergeResumifyEditorIntoBaseResume } from "@/lib/falood/resumeDocumentAdapters";
 import { studioDocumentToResumeData } from "@/lib/falood/studioDocumentToResumeData";
 import { readResumePresentation, pickResumePresentation } from "@/lib/falood/resumePresentation";
-import { DEFAULT_COLORS, DEFAULT_FONT_SIZE, DEFAULT_PAGE_PADDING } from "@/components/falood/resumify/types/resume";
+import { DEFAULT_COLORS, DEFAULT_FONT_SIZE, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING } from "@/components/falood/resumify/types/resume";
 
 /** A real canonical base_resumes.content row: no editor presentation fields. */
 const canonicalRow = () => ({
@@ -34,6 +34,7 @@ const editedPresentation = {
   fontFamily: "Poppins",
   pageFormat: "letter",
   pagePadding: 0.4,
+  lineSpacing: 1.3,
   colors: { ...DEFAULT_COLORS, primary: "#ff0000" },
   sections: [
     { id: "summary", title: "Professional Summary", visible: true, order: 1 },
@@ -54,6 +55,7 @@ describe("base resume presentation persistence", () => {
     expect(reopened.fontFamily).toBe("Poppins");
     expect(reopened.pageFormat).toBe("letter");
     expect(reopened.pagePadding).toBe(0.4);
+    expect(reopened.lineSpacing).toBe(1.3);
     expect(reopened.colors.primary).toBe("#ff0000");
     expect(reopened.sections.find((s) => s.id === "projects")?.visible).toBe(false);
   });
@@ -77,6 +79,7 @@ describe("base resume presentation persistence", () => {
     expect(reopened.fontSize).toBe(14);
     expect(reopened.colors.primary).toBe("#ff0000");
     expect(reopened.pageFormat).toBe("letter");
+    expect(reopened.lineSpacing).toBe(1.3);
   });
 
   it("still applies defaults to a row that has never had presentation saved", () => {
@@ -86,6 +89,7 @@ describe("base resume presentation persistence", () => {
     expect(opened.fontSize).toBe(DEFAULT_FONT_SIZE);
     expect(opened.fontFamily).toBe("Inter");
     expect(opened.pagePadding).toBe(DEFAULT_PAGE_PADDING);
+    expect(opened.lineSpacing).toBe(DEFAULT_LINE_SPACING);
     expect(opened.colors).toEqual(DEFAULT_COLORS);
   });
 
@@ -135,6 +139,17 @@ describe("readResumePresentation", () => {
   it("clamps a font size outside the editor's own dropdown range", () => {
     expect(readResumePresentation({ fontSize: 200 }).fontSize).toBe(16);
     expect(readResumePresentation({ fontSize: 1 }).fontSize).toBe(6);
+  });
+
+  it("clamps a line spacing outside the editor's own slider range", () => {
+    expect(readResumePresentation({ lineSpacing: 0.2 }).lineSpacing).toBe(1.0);
+    expect(readResumePresentation({ lineSpacing: 5 }).lineSpacing).toBe(1.8);
+    expect(readResumePresentation({ lineSpacing: 1.45 }).lineSpacing).toBe(1.45);
+  });
+
+  it("defaults line spacing when missing or not a number", () => {
+    expect(readResumePresentation({}).lineSpacing).toBe(DEFAULT_LINE_SPACING);
+    expect(readResumePresentation({ lineSpacing: "relaxed" }).lineSpacing).toBe(DEFAULT_LINE_SPACING);
   });
 
   it("rejects a template id that no longer exists", () => {

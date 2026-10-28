@@ -122,7 +122,7 @@ export function resumifyResumeDataToExportDocument(data: any): ResumeDocument {
       styleId: "resumify-version",
       sectionSpacing: 5,
       bulletSpacing: 1,
-      lineHeight: 1.15,
+      lineHeight: typeof data?.lineSpacing === "number" ? data.lineSpacing : 1.15,
     },
   });
 }

@@ -35,9 +35,10 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed `}
-      style={{ fontSize: getFontSizePx(), color: colors.text, 
+      className={`w-full h-full`}
+      style={{ fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Inter, sans-serif',
+        lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
       }}
     >
@@ -231,7 +232,7 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
                   >
                     PROFESSIONAL SUMMARY
                   </h3>
-                  <p className="text-xs leading-relaxed">{summary}</p>
+                  <p className="text-xs">{summary}</p>
                 </div>
               )}
 

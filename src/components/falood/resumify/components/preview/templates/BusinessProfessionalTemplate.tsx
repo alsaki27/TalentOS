@@ -47,9 +47,10 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
 
   return (
     <div
-      className={`w-full h-full leading-relaxed ${isEditorial ? 'pl-4 border-l-4' : ''}`}
+      className={`w-full h-full ${isEditorial ? 'pl-4 border-l-4' : ''}`}
       style={{ fontSize: getFontSizePx(), color: displayColors.text,
         fontFamily: fontFamily || 'Georgia, serif',
+        lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid',
         ...(isEditorial ? { borderColor: displayColors.primary } : {})
       }}
@@ -141,7 +142,7 @@ export const BusinessProfessionalTemplate: React.FC<TemplateProps> = ({ data, va
                 >
                   Professional Summary
                 </h3>
-                <p className="text-xs leading-relaxed text-justify">{summary}</p>
+                <p className="text-xs text-justify">{summary}</p>
               </div>
             )}
 

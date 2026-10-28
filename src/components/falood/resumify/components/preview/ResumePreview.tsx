@@ -2,6 +2,7 @@ import React, { useMemo, useLayoutEffect } from 'react';
 import { useResume } from '@/components/falood/resumify/contexts/ResumeContext';
 import {
   DEFAULT_PAGE_PADDING,
+  DEFAULT_LINE_SPACING,
   getPageSizePx,
   getPageSizeCss,
   PAGE_OVERFLOW_TOLERANCE_PX,
@@ -21,6 +22,7 @@ export const ResumePreview: React.FC = () => {
   }, [resumeData, previewSuggestion]);
 
   const pagePadding = previewData.pagePadding ?? DEFAULT_PAGE_PADDING;
+  const lineSpacing = previewData.lineSpacing ?? DEFAULT_LINE_SPACING;
 
   const renderTemplate = () => <ResumeTemplateSwitch data={previewData} />;
 
@@ -217,6 +219,19 @@ export const ResumePreview: React.FC = () => {
               minHeight: pageSizeCss.height,
               fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
               padding: `${pagePadding}in`,
+              lineHeight: lineSpacing,
+              // Tailwind's own text-xs/text-sm/... utility classes each bake
+              // in their own line-height, which - being set directly on the
+              // element, not just inherited - always wins over the plain
+              // lineHeight above for any text using one of those classes
+              // (nearly all resume text, in every template). The
+              // --resume-line-height custom property plus the matching
+              // `.resume-paper *` rule in globals.css is what actually makes
+              // every descendant defer to this control; see that rule for
+              // the full explanation. Keep both: this plain property is the
+              // sane default for anything with no Tailwind size class at
+              // all, the variable is what overrides everything else.
+              ['--resume-line-height' as string]: String(lineSpacing),
               color: '#050505ff',
               boxSizing: 'border-box',
               transform: `scale(${scale})`,

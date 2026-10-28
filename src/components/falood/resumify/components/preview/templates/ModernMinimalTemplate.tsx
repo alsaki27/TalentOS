@@ -35,9 +35,10 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full leading-relaxed `}
-      style={{ fontSize: getFontSizePx(), color: colors.text, 
+      className={`w-full h-full`}
+      style={{ fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Poppins, sans-serif',
+        lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
       }}
     >
@@ -219,7 +220,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                   ))}
                 </div>
               ) : (
-                <p className="text-xs leading-relaxed">{customSection.content}</p>
+                <p className="text-xs">{customSection.content}</p>
               )}
             </div>
           ))}
@@ -237,7 +238,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                   >
                     Profile
                   </h3>
-                  <p className="text-sm leading-relaxed">{summary}</p>
+                  <p className="text-sm">{summary}</p>
                 </div>
               )}
 
@@ -273,7 +274,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                           </div>
                         </div>
                         {exp.description && (
-                          <p className="text-xs mb-3 leading-relaxed">{exp.description}</p>
+                          <p className="text-xs mb-3">{exp.description}</p>
                         )}
                         {exp.bulletPoints.filter(point => point.trim()).length > 0 && (
                           <div className="space-y-2">
@@ -319,7 +320,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                             </div>
                           )}
                         </div>
-                        <p className="text-xs mb-3 leading-relaxed">{project.description}</p>
+                        <p className="text-xs mb-3">{project.description}</p>
                         {project.technologies.length > 0 && (
                           <div className="flex flex-wrap gap-2 mb-2">
                             {project.technologies.map((tech) => (
@@ -382,7 +383,7 @@ export const ModernMinimalTemplate: React.FC<TemplateProps> = ({ data }) => {
                   ))}
                 </div>
               ) : (
-                <p className="text-xs leading-relaxed">{customSection.content}</p>
+                <p className="text-xs">{customSection.content}</p>
               )}
             </div>
           ))}

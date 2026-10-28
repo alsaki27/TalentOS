@@ -12,8 +12,18 @@ import { cn } from '@/lib/utils';
 import { exportResumeAsJSON, importResumeFromJSON } from '@/components/falood/resumify/utils/resumeImportExport';
 import { generateResumePdfBlob, resumifyResumeDataToExportDocument, uploadResumeExport } from '@/lib/falood/clientExport';
 import { isResumeDataEffectivelyEmpty } from '@/lib/falood/resumeEmptyCheck';
+import { useStudioPersistence } from '@/components/falood/resumify/hooks/useStudioPersistence';
+import type { ResumeData } from '@/components/falood/resumify/types/resume';
+import type { ResumeVersion } from '@/components/falood/resumify/contexts/ResumeContext';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+
+interface TailorSnapshot {
+    resumeData: ResumeData;
+    chatHistory: any[];
+    jobDescription: string;
+    versions: ResumeVersion[];
+}
 
 const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) => {
     const router = useRouter();
@@ -22,45 +32,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     const company = searchParams.get('company') || '';
     const { state, dispatch } = useResume();
     const [isLoading, setIsLoading] = useState(true);
-    const [isSaving, setIsSaving] = useState(false);
-    const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+    const [isSavingVersion, setIsSavingVersion] = useState(false);
     const [toastMsg, setToastMsg] = useState<string | null>(null);
     const [showEditor, setShowEditor] = useState(false);
     const [activePanel, setActivePanel] = useState<'form' | 'customize' | 'settings'>('form');
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const lastSavedSnapshotRef = useRef<string | null>(null);
-    // Synchronous mutual-exclusion for saves, mirroring the base resume
-    // builder's persistBaseResume (see src/app/falood/studio/base/[baseResumeId]/page.tsx
-    // for the full history: an unguarded PATCH there once let two overlapping
-    // saves race and clobber each other, since each PATCH fully overwrites
-    // the row and out-of-order responses let an older save win). This save
-    // path has the same shape and was missing the same guard. A save this
-    // skips is never lost - the debounce effect below re-runs the instant
-    // isSaving clears and retries with the freshest state.
-    const isSavingRef = useRef(false);
-    const pendingSaveRef = useRef(false);
-    // An explicit Save click that lands while an autosave is in flight is
-    // queued, not dropped, and still gets its confirmation toast.
-    const pendingToastRef = useRef(false);
-    // Mirrors the fields persistTailoredApplication snapshots, so the
-    // unload/unmount safety net below always reads the latest edits without
-    // depending on state directly (which would re-attach a global listener
-    // on every keystroke).
-    const latestStateRef = useRef({ resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions });
-    useEffect(() => {
-        latestStateRef.current = { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions };
-    }, [state.resumeData, state.chatHistory, state.jobDescription, state.versions]);
-    const [hasLoadedInitialData, setHasLoadedInitialData] = useState(false);
-    // Mirrors hasLoadedInitialData for synchronous reads from callbacks/
-    // closures (isDirty, persistTailoredApplication) that intentionally use
-    // refs rather than depending on React state directly - see
-    // latestStateRef above for the same pattern. This is THE fix for the
-    // data-loss incident: nothing may be considered "safe to persist" until
-    // this ref is true, i.e. until a real load has actually succeeded.
-    const hasLoadedInitialDataRef = useRef(false);
-    useEffect(() => {
-        hasLoadedInitialDataRef.current = hasLoadedInitialData;
-    }, [hasLoadedInitialData]);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [candidateId, setCandidateId] = useState<string | null>(null);
     const [archiveContext, setArchiveContext] = useState<{ applicationId: string; resumeVersionId: string } | null>(null);
@@ -69,6 +45,44 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         setToastMsg(msg);
         setTimeout(() => setToastMsg(null), 3000);
     };
+
+    const studio = useStudioPersistence<TailorSnapshot>({
+        enabled: true,
+        snapshot: { resumeData: state.resumeData, chatHistory: state.chatHistory, jobDescription: state.jobDescription, versions: state.versions },
+        getResumeData: (snapshot) => snapshot.resumeData,
+        save: async (snapshot) => {
+            const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    jobDescription: snapshot.jobDescription,
+                    companyName: company || null,
+                    resumeData: snapshot.resumeData,
+                    chatHistory: snapshot.chatHistory,
+                }),
+            });
+            const json = await res.json().catch(() => ({}));
+            return res.ok && !!json?.success;
+        },
+        flush: (snapshot) => {
+            const body = JSON.stringify({
+                jobDescription: snapshot.jobDescription,
+                companyName: company || null,
+                resumeData: snapshot.resumeData,
+                chatHistory: snapshot.chatHistory,
+            });
+            // Browsers cap in-flight keepalive bodies at 64KB total and reject
+            // anything over it outright. Use keepalive only when it fits;
+            // otherwise a plain fetch (still completes on in-app navigation,
+            // and beforeunload's own confirm prompt covers a real close/refresh).
+            fetch(`/api/falood/applications?id=${applicationId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body,
+                keepalive: new Blob([body]).size < 60_000,
+            }).catch(() => {});
+        },
+    });
 
     // Load the saved application and pre-populate the AI with job context.
     // `load` is a useCallback (not a plain function inside the effect) so
@@ -112,16 +126,17 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
                     };
                     const existingHistory = Array.isArray(json.data.chatHistory) ? json.data.chatHistory : [];
                     const hasContextAlready = existingHistory.some((m: any) => m?.id === 'tailor-context');
-                    dispatch({ type: 'SET_CHAT_HISTORY', payload: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory] });
-                    dispatch({ type: 'SET_VERSIONS', payload: json.data.versions || [] });
+                    const seededHistory = hasContextAlready ? existingHistory : [systemMsg, ...existingHistory];
+                    dispatch({ type: 'SET_CHAT_HISTORY', payload: seededHistory });
+                    const loadedVersions = json.data.versions || [];
+                    dispatch({ type: 'SET_VERSIONS', payload: loadedVersions });
 
-                    lastSavedSnapshotRef.current = JSON.stringify({
+                    studio.markLoaded({
                         resumeData: json.data.resumeData,
-                        chatHistory: hasContextAlready ? existingHistory : [systemMsg, ...existingHistory],
+                        chatHistory: seededHistory,
                         jobDescription: json.data.jobDescription || '',
-                        versions: json.data.versions || [],
+                        versions: loadedVersions,
                     });
-                    setHasLoadedInitialData(true);
                 }
             } catch (error) {
                 console.error("Error loading application for tailoring", error);
@@ -137,7 +152,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             } finally {
                 setIsLoading(false);
             }
-    }, [applicationId, company, jobTitle, dispatch]);
+    }, [applicationId, company, jobTitle, dispatch, studio]);
 
     useEffect(() => {
         void load();
@@ -147,115 +162,27 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [applicationId]);
 
-    const persistTailoredApplication = useCallback(async (showSuccessToast = false) => {
-        // THE fix for the data-loss incident: nothing may be persisted until
-        // a real load has actually completed. Before this guard, every
-        // caller of this function (autosave, the explicit Save button, the
-        // exit-flush safety net) could fire while the page still held the
-        // blank placeholder resume - e.g. the load was still in flight, or
-        // had failed - and would happily PATCH that placeholder over real
-        // saved content. See resumeEmptyCheck.ts for the full writeup.
-        if (!hasLoadedInitialDataRef.current) {
-            if (showSuccessToast) showToast('Still loading this resume - please wait a moment and try again.');
-            return false;
-        }
-
-        // Never let two PATCHes race - see isSavingRef's declaration for why.
-        // The debounce effect below re-checks and retries once this clears,
-        // so a save that's skipped here is never silently lost.
-        if (isSavingRef.current) {
-            pendingSaveRef.current = true;
-            if (showSuccessToast) pendingToastRef.current = true;
-            return false;
-        }
-
-        const latestState = latestStateRef.current;
-        const snapshot = JSON.stringify({
-            resumeData: latestState.resumeData,
-            chatHistory: latestState.chatHistory,
-            jobDescription: latestState.jobDescription,
-            versions: latestState.versions,
-        });
-
-        // Independent, structural backstop (same check the server now also
-        // enforces): never send a save that would regress real content down
-        // to the blank shape. This catches any future bug that gets state
-        // into that condition in some other way, not just the one race this
-        // incident was caused by.
-        if (isResumeDataEffectivelyEmpty(latestState.resumeData)) {
-            let lastSavedWasEmpty = true;
-            try {
-                const parsed = lastSavedSnapshotRef.current ? JSON.parse(lastSavedSnapshotRef.current) : null;
-                lastSavedWasEmpty = isResumeDataEffectivelyEmpty(parsed?.resumeData);
-            } catch { /* malformed snapshot - treat as empty, allow nothing through on the empty side either */ }
-            if (!lastSavedWasEmpty) {
-                console.error('[Tailor Studio] Refused to save: resume content is empty but the last loaded/saved version was not. This page may not have loaded correctly - reload before editing.');
-                setSaveStatus('error');
-                if (showSuccessToast) showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
-                return false;
-            }
-        }
-
-        if (snapshot === lastSavedSnapshotRef.current) {
-            // Autosave already persisted exactly this content - confirm
-            // instantly instead of re-sending the whole document.
-            if (showSuccessToast) { setSaveStatus('saved'); showToast('Tailored resume saved!'); }
-            return true;
-        }
-
-        isSavingRef.current = true;
-        setIsSaving(true);
-        setSaveStatus('saving');
-        try {
-            const res = await fetch(`/api/falood/applications?id=${applicationId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    jobDescription: latestState.jobDescription,
-                    companyName: company || null,
-                    resumeData: latestState.resumeData,
-                    chatHistory: latestState.chatHistory,
-                }),
-            });
-
-            const json = await res.json().catch(() => ({}));
-            if (!res.ok || !json?.success) {
-                throw new Error(json?.error || 'Save failed');
-            }
-
-            lastSavedSnapshotRef.current = snapshot;
-            setSaveStatus('saved');
-            if (showSuccessToast) showToast('Tailored resume saved!');
-            return true;
-        } catch {
-            setSaveStatus('error');
-            if (showSuccessToast) showToast('Save failed.');
-            return false;
-        } finally {
-            isSavingRef.current = false;
-            setIsSaving(false);
-            if (pendingSaveRef.current) {
-                pendingSaveRef.current = false;
-                const withToast = pendingToastRef.current;
-                pendingToastRef.current = false;
-                window.setTimeout(() => void persistTailoredApplication(withToast), 0);
-            }
-        }
-    }, [applicationId, company]);
-
-    const persistRef = useRef(persistTailoredApplication);
-    persistRef.current = persistTailoredApplication;
-
     const handleSave = async () => {
-        await persistTailoredApplication(true);
+        const ok = await studio.persist();
+        if (ok) {
+            showToast('Tailored resume saved!');
+        } else if (studio.lastBlockReason === 'not_loaded') {
+            showToast('Still loading this resume - please wait a moment and try again.');
+        } else if (studio.lastBlockReason === 'would_erase_content') {
+            showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
+        } else {
+            showToast('Save failed.');
+        }
     };
 
     const handleSaveVersion = async () => {
-        // Same guard as persistTailoredApplication, and for the same reason
-        // - this function does its own independent PATCH (including
-        // overwriting `versions`), so it needs its own copy of the check
-        // rather than relying on that function's guard.
-        if (!hasLoadedInitialDataRef.current) {
+        // Same guard shouldPersistResumeSnapshot encodes for the shared
+        // studio hook, applied directly here since this is its own
+        // independent PATCH (including overwriting `versions`, which the
+        // hook's regular save/flush deliberately never sends - see the save/
+        // flush functions above) and so needs its own check rather than
+        // relying on the hook's guard, which only wraps its own persist().
+        if (!studio.hasLoadedInitialData) {
             showToast('Still loading this resume - please wait a moment and try again.');
             return;
         }
@@ -263,10 +190,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             showToast('Refusing to save: resume appears empty. Reload the page before trying again.');
             return;
         }
-        if (isSavingRef.current) {
-            pendingSaveRef.current = true;
-            return;
-        }
+        if (studio.isSaving || isSavingVersion) return;
         if (state.versions && state.versions.length > 0) {
             const lastVersion = state.versions[0];
             if (JSON.stringify(lastVersion.resumeData) === JSON.stringify(state.resumeData)) {
@@ -285,9 +209,8 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         };
         const updatedVersions = [newVersion, ...(state.versions || [])];
         dispatch({ type: 'SET_VERSIONS', payload: updatedVersions });
-        
-        isSavingRef.current = true;
-        setIsSaving(true);
+
+        setIsSavingVersion(true);
         try {
             const saveRes = await fetch(`/api/falood/applications?id=${applicationId}`, {
                 method: 'PATCH',
@@ -317,7 +240,11 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             } else {
                 showToast(`Saved version: ${versionName} (no linked application archive)`);
             }
-            lastSavedSnapshotRef.current = JSON.stringify({
+            // Fast-forward the shared hook's notion of "last known saved
+            // snapshot" to include the versions this just persisted out of
+            // band, so the regular autosave/exit-flush paths don't treat the
+            // version bump alone as still-dirty content to re-send.
+            studio.markLoaded({
                 resumeData: state.resumeData,
                 chatHistory: state.chatHistory,
                 jobDescription: state.jobDescription,
@@ -326,106 +253,9 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
         } catch (error) {
             showToast(error instanceof Error ? error.message : 'Failed to save version');
         } finally {
-            isSavingRef.current = false;
-            setIsSaving(false);
-            if (pendingSaveRef.current) {
-                pendingSaveRef.current = false;
-                window.setTimeout(() => void persistTailoredApplication(false), 0);
-            }
+            setIsSavingVersion(false);
         }
     };
-
-    useEffect(() => {
-        if (isLoading || !hasLoadedInitialData) return;
-
-        const snapshot = JSON.stringify({
-            resumeData: state.resumeData,
-            chatHistory: state.chatHistory,
-            jobDescription: state.jobDescription,
-            versions: state.versions,
-        });
-        if (snapshot === lastSavedSnapshotRef.current) return;
-
-        const timeoutId = window.setTimeout(() => {
-            void persistTailoredApplication(false);
-        }, 800);
-
-        return () => window.clearTimeout(timeoutId);
-    }, [hasLoadedInitialData, isLoading, isSaving, persistTailoredApplication, state.chatHistory, state.jobDescription, state.resumeData, state.versions]);
-
-    // Autosave is debounced by 1s, and even the explicit Save button's PATCH
-    // is a real network round trip - closing the tab or navigating away
-    // inside that window has always silently discarded the edit, but that
-    // window got much easier to lose the moment the database moved off
-    // Neon's fast HTTP driver onto a TCP connection through Hyperdrive (a
-    // real per-save round trip instead of a near-instant stateless request) -
-    // and this endpoint additionally chains a base-resume sync write server
-    // side (see the PATCH handler), making its round trip longer still. This
-    // is exactly the "saved with no error, but reopening shows the old
-    // content unless I wait a few seconds first" report. `beforeunload`
-    // covers a real tab close/refresh; the cleanup below covers a same-tab
-    // client-side navigation away from this route, which never fires
-    // beforeunload at all. Both flush with `keepalive` - the same guarantee
-    // sendBeacon relies on to survive page unload - since sendBeacon itself
-    // can only send POST, not PATCH.
-    useEffect(() => {
-        // THE root cause of the data-loss incident lived here: this used to
-        // read `JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current`
-        // with no check that a real load had ever completed.
-        // lastSavedSnapshotRef.current is null until load() succeeds, so
-        // stringify(anything) !== null is always true - meaning leaving the
-        // page (tab close, tab switch, in-app navigation) before the load
-        // finished made this unconditionally report "dirty" and flush the
-        // still-blank placeholder resume to the server, overwriting real
-        // saved content. Requiring hasLoadedInitialDataRef first closes that
-        // off entirely: nothing here can fire until a load has genuinely
-        // succeeded.
-        const isDirty = () =>
-            hasLoadedInitialDataRef.current && JSON.stringify(latestStateRef.current) !== lastSavedSnapshotRef.current;
-        const flushBeacon = () => {
-            const { resumeData, chatHistory, jobDescription } = latestStateRef.current;
-            // Belt-and-suspenders, same check as persistTailoredApplication:
-            // isDirty() already requires a completed load, but this is the
-            // one save path with no server round-trip to report an error
-            // back (keepalive/unload requests can't be awaited or shown to
-            // the user), so it gets its own independent check rather than
-            // relying solely on the server-side guard to catch it silently.
-            if (isResumeDataEffectivelyEmpty(resumeData)) {
-                console.error('[Tailor Studio] Skipped exit-flush: resume content is empty.');
-                return;
-            }
-            const body = JSON.stringify({ jobDescription, companyName: company || null, resumeData, chatHistory });
-            // Browsers cap in-flight keepalive bodies at 64KB total and reject
-            // anything over it outright. Use keepalive only when it fits;
-            // otherwise a plain fetch (still completes on in-app navigation,
-            // and beforeunload below warns before a real close/refresh).
-            fetch(`/api/falood/applications?id=${applicationId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body,
-                keepalive: new Blob([body]).size < 60_000,
-            }).catch(() => {});
-        };
-        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-            if (!isDirty()) return;
-            flushBeacon();
-            event.preventDefault();
-            event.returnValue = '';
-        };
-
-        window.addEventListener('beforeunload', handleBeforeUnload);
-        const handleVisibilityChange = () => {
-            // Switching tabs doesn't unload the page, so a normal guarded
-            // save is enough - no need to race a second request.
-            if (document.visibilityState === 'hidden' && isDirty()) void persistRef.current(false);
-        };
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-            if (isDirty()) flushBeacon();
-        };
-    }, [applicationId, company]);
 
     const handleDownloadPDF = () => window.print();
 
@@ -458,9 +288,7 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
     // Never render the editable form/preview on a failed load - that UI
     // starts from the blank placeholder resume, and every save path on this
     // page would then be one click or one tab-switch away from persisting
-    // that placeholder over whatever's actually saved. See isDirty() above
-    // and persistTailoredApplication's guard for the matching halves of this
-    // fix - this screen is what makes the failure visible instead of silent.
+    // that placeholder over whatever's actually saved.
     if (loadError) {
         return (
             <div className="flex flex-col items-center justify-center h-[600px] gap-4 text-center px-4">
@@ -477,6 +305,8 @@ const TailorContent: React.FC<{ applicationId: string }> = ({ applicationId }) =
             </div>
         );
     }
+
+    const isSaving = studio.isSaving || isSavingVersion;
 
     return (
         <div style={{ minHeight: '100vh' }}>

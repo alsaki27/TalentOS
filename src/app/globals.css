@@ -2808,14 +2808,51 @@ label {
   }
 }
 
-/* Override Tailwind text sizing for resume templates to use ems for proportional scaling */
-.resume-paper .text-xs { font-size: 0.75em !important; line-height: 1.33 !important; }
-.resume-paper .text-sm { font-size: 0.875em !important; line-height: 1.42 !important; }
-.resume-paper .text-base { font-size: 1em !important; line-height: 1.5 !important; }
-.resume-paper .text-lg { font-size: 1.125em !important; line-height: 1.55 !important; }
-.resume-paper .text-xl { font-size: 1.25em !important; line-height: 1.4 !important; }
-.resume-paper .text-2xl { font-size: 1.5em !important; line-height: 1.33 !important; }
-.resume-paper .text-3xl { font-size: 1.875em !important; line-height: 1.2 !important; }
+/* Override Tailwind text sizing for resume templates to use ems for
+   proportional scaling against the template's base font size. */
+.resume-paper .text-xs { font-size: 0.75em !important; }
+.resume-paper .text-sm { font-size: 0.875em !important; }
+.resume-paper .text-base { font-size: 1em !important; }
+.resume-paper .text-lg { font-size: 1.125em !important; }
+.resume-paper .text-xl { font-size: 1.25em !important; }
+.resume-paper .text-2xl { font-size: 1.5em !important; }
+.resume-paper .text-3xl { font-size: 1.875em !important; }
+
+/* Line Spacing control (Customize panel): a real fix, not the first attempt.
+   First attempt (2026-10-27) assumed line-height would simply inherit from
+   the template root once nothing in this file fought it - wrong. Every
+   Tailwind text-size utility (text-xs, text-sm, ...) bakes in its OWN
+   line-height as part of that utility's definition (e.g. text-sm is
+   `font-size: 0.875rem; line-height: 1.25rem` by Tailwind's own default
+   theme - confirmed: this repo's tailwind.config.ts does not override it).
+   A property set DIRECTLY on an element always wins over one only set on an
+   ancestor, regardless of specificity or !important on the ancestor's own
+   rule - inheritance is the fallback CSS uses when NOTHING targets the
+   property on that element, and these utilities always do. So no amount of
+   setting line-height only on the resume root (inline style, !important or
+   not) can ever reach text carrying its own text-xs/text-sm/etc class - every
+   template uses these on nearly all of its text, which is why the slider
+   visibly moved but nothing on screen or in the printed/PDF export changed.
+   The only way for ONE control to govern EVERY current and future text
+   element, in every template, without enumerating Tailwind's size classes
+   here (which breaks the moment a template uses one this list doesn't have,
+   or Tailwind's own defaults change) is to target every descendant directly
+   and win on !important, deferring to a CSS variable the resume root sets
+   from the live, admin-chosen value - never a number restated here. See
+   --resume-line-height set via inline style in ResumePreview.tsx (the Studio
+   live preview and its window.print()/PDF export, which renders the same
+   DOM) and PortalResumeDocument.tsx (the candidate portal view) - both
+   consumers of the same ResumeTemplateSwitch/template components. The 1.625
+   fallback only applies on the rare chance this renders somewhere that never
+   set the variable; it mirrors DEFAULT_LINE_SPACING in types/resume.ts but
+   is not read from it, since CSS cannot import a TS constant - if that
+   default ever changes, update both call sites. */
+.resume-paper,
+.resume-paper *,
+.portal-resume-doc-inner,
+.portal-resume-doc-inner * {
+  line-height: var(--resume-line-height, 1.625) !important;
+}
 
 /* ── Global utility animations ── */
 @keyframes spin {

@@ -7,11 +7,11 @@ import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Palette, RotateCcw, Type, Settings } from 'lucide-react';
-import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
 
 export const ColorCustomizer: React.FC = () => {
-  const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding } = useResume();
-  const { colors, fontSize, fontFamily, pagePadding } = state.resumeData;
+  const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding, updateLineSpacing } = useResume();
+  const { colors, fontSize, fontFamily, pagePadding, lineSpacing } = state.resumeData;
 
   const updateColor = (colorKey: keyof typeof colors, value: string) => {
     updateColors({ ...colors, [colorKey]: value });
@@ -23,6 +23,10 @@ export const ColorCustomizer: React.FC = () => {
 
   const resetSpacing = () => {
     updatePagePadding(DEFAULT_PAGE_PADDING);
+  };
+
+  const resetLineSpacing = () => {
+    updateLineSpacing(DEFAULT_LINE_SPACING);
   };
 
   const colorPresets = [
@@ -196,6 +200,46 @@ export const ColorCustomizer: React.FC = () => {
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>Narrow</span>
               <span>Wide</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="w-5 h-5" />
+            Line Spacing
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Body Line Height</Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Controls the spacing between lines of text throughout the resume.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={resetLineSpacing}>
+              Reset
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Line height</span>
+              <span className="font-medium">{lineSpacing.toFixed(2)}×</span>
+            </div>
+            <Slider
+              value={[lineSpacing]}
+              min={1.0}
+              max={1.8}
+              step={0.05}
+              onValueChange={(value) => updateLineSpacing(value[0] ?? DEFAULT_LINE_SPACING)}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Compact</span>
+              <span>Relaxed</span>
             </div>
           </div>
         </CardContent>
