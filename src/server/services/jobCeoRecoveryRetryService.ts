@@ -30,7 +30,7 @@ import {
   updateStaged,
   type StagedJobRow,
 } from "@/server/repositories/jobCeoStagingRepository";
-import { createRun, updateRunStatus } from "@/server/repositories/jobCeoRunRepository";
+import { createRun, updateRunStatus, bumpRunCounts } from "@/server/repositories/jobCeoRunRepository";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 
 // A job posting realistically doesn't outlive this on the employer's own
@@ -129,6 +129,16 @@ export async function retryOneRow(row: StagedJobRow): Promise<RecoveryRetryOutco
         claimed_at: null,
         claim_expires_at: null,
       });
+      // Without this, the run's counters stay at their all-zero defaults
+      // forever — createRun() never sets them, and the normal QA/Matchmaker
+      // steps that run next only bump the counters THEY own (kept_count,
+      // matched_count, logged_count), never ingested_count/researched_count,
+      // because a normal (non-retry) run already has those set by the
+      // ingest route and processDeepFetchBatch before QA ever runs. This row
+      // skipped both of those — it's already past Deep Fetch — so this run
+      // must set the same two counters itself or Run History shows "0" for
+      // a run that actually processed a real job.
+      await bumpRunCounts(newRun.id, { ingested_count: 1, researched_count: 1 });
       await updateRunStatus(newRun.id, "qa");
       await triggerDispatch(newRun.id);
       return { id: row.id, outcome: "recovered", runId: newRun.id };

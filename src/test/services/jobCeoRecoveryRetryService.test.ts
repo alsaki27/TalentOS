@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   updateStaged: vi.fn().mockResolvedValue(undefined),
   createRun: vi.fn(),
   updateRunStatus: vi.fn().mockResolvedValue(undefined),
+  bumpRunCounts: vi.fn().mockResolvedValue(undefined),
   backgroundDispatch: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -39,6 +40,7 @@ vi.mock("@/server/repositories/jobCeoStagingRepository", () => ({
 vi.mock("@/server/repositories/jobCeoRunRepository", () => ({
   createRun: mocks.createRun,
   updateRunStatus: mocks.updateRunStatus,
+  bumpRunCounts: mocks.bumpRunCounts,
 }));
 vi.mock("@/server/lib/waitUntil", () => ({ backgroundDispatch: mocks.backgroundDispatch }));
 
@@ -102,6 +104,12 @@ describe("retryOneRow", () => {
       })
     );
     expect(mocks.updateRunStatus).toHaveBeenCalledWith("new-run-1", "qa");
+    // Regression guard for the 2026-10-27 fix: a recovered row's run must
+    // show real counts in Run History, not the all-zero defaults createRun()
+    // leaves it with — confirmed live in production before this fix (every
+    // recovery_retry run showed ingested=0, logged=0 even after a real,
+    // successful recovery).
+    expect(mocks.bumpRunCounts).toHaveBeenCalledWith("new-run-1", { ingested_count: 1, researched_count: 1 });
     expect(global.fetch).toBeDefined(); // dispatch self-fetch path exercised via backgroundDispatch
   });
 

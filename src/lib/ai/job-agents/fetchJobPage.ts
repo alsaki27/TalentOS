@@ -104,18 +104,51 @@ export function looksLikeLoginWall(text: string): boolean {
 // so without this check a long garbage page looks "complete" and is saved verbatim as
 // description_text, never revisited. Deliberately no length ceiling here (unlike
 // looksLikeLoginWall's <8000 check) — long garbage is exactly the shape this catches.
+//
+// "switch to a supported browser" and "showAllLocations" added 2026-10-27: this
+// module's own comment in fetchJobPageText already documented "ADP, UKG/UltiPro
+// serve an immediate 'unsupported browser' page" as a KNOWN issue, but no pattern
+// here ever actually caught it - confirmed live via the recovery-retry feature,
+// whose first 9 "successful" recoveries were ALL this exact failure (3x ADP's
+// literal "Please switch to a supported browser..." notice, verbatim and
+// byte-identical across different job postings; 4x UltiPro's JS widget snippet,
+// also byte-identical across postings - "showAllLocations()" is from that
+// snippet). Both were long enough (873-2094 chars) to clear every length floor in
+// the system and got treated as real descriptions - one was already live on the
+// jobs page with this exact garbage as its "description" before this fix.
 var KNOWN_ERROR_PAGE_PATTERNS =
-  /application\s*(has\s*)?expired|no\s*longer\s*(accepting|available|active)|position\s*(has\s*been\s*|is\s*)?(filled|closed)|job\s*(posting\s*)?(is\s*)?(no\s*longer|not)\s*available|page\s*not\s*found|\b404\b|access\s*denied|\bforbidden\b|verify\s*(that\s*)?you(?:'re|\s*are)\s*(a\s*)?human|\bcaptcha\b|something\s*went\s*wrong|unexpected\s*error\s*(has\s*)?occurred/i;
+  /application\s*(has\s*)?expired|no\s*longer\s*(accepting|available|active)|position\s*(has\s*been\s*|is\s*)?(filled|closed)|job\s*(posting\s*)?(is\s*)?(no\s*longer|not)\s*available|page\s*not\s*found|\b404\b|access\s*denied|\bforbidden\b|verify\s*(that\s*)?you(?:'re|\s*are)\s*(a\s*)?human|\bcaptcha\b|something\s*went\s*wrong|unexpected\s*error\s*(has\s*)?occurred|switch\s*to\s*a\s*supported\s*browser|showAllLocations/i;
 
 export function looksLikeErrorPage(text: string): boolean {
   var prefix = text.substring(0, 3000);
   return KNOWN_ERROR_PAGE_PATTERNS.test(prefix);
 }
 
+// Confirmed live 2026-10-27, same incident as above: an iCIMS career page's
+// generic EEO/accessibility footer plus navigation links - no job-specific
+// content at all - passed every other check (not a login wall, no matched
+// error phrase, 1,400+ chars). Two different job postings on the same
+// employer's iCIMS site returned byte-identical text, confirming it's a
+// page-template chunk, not a real per-job description. Real postings, even
+// very short ones, consistently use at least one of these common words
+// somewhere; long text using NONE of them is a strong signal there's no
+// actual posting here. This is a judgment call, not a proven-safe exact
+// match like the patterns above: a genuinely short, unusually-worded real
+// posting could in principle be rejected too. Given the alternative already
+// observed in production - garbage silently published as a real
+// description - that tradeoff is accepted deliberately, not by accident.
+var JOB_CONTENT_KEYWORDS =
+  /responsibilit|responsible\s*for|qualificat|requirement|experience|duties|essential function|what you.ll do|who you are|about (the|this) role|skills?\b|benefits?\b|salary|compensation/i;
+
+export function looksLikeMissingJobContent(text: string): boolean {
+  return text.length < 3000 && !JOB_CONTENT_KEYWORDS.test(text);
+}
+
 export function isContentUseless(text: string): boolean {
   if (text.length < 200) return true;
   if (looksLikeLoginWall(text)) return true;
   if (looksLikeErrorPage(text)) return true;
+  if (looksLikeMissingJobContent(text)) return true;
   return false;
 }
 
@@ -217,6 +250,11 @@ async function tryDirectFetch(url: string): Promise<string | null> {
 
     if (looksLikeErrorPage(text)) {
       console.warn(`[Deep Fetch] Direct fetch returned an error/expired/unavailable page for: ${url.substring(0, 100)}`);
+      return null;
+    }
+
+    if (looksLikeMissingJobContent(text)) {
+      console.warn(`[Deep Fetch] Direct fetch returned content with no actual job posting for: ${url.substring(0, 100)}`);
       return null;
     }
 

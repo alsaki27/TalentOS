@@ -6,7 +6,13 @@
 // looksLikeErrorPage()/isContentUseless() close that gap — see fetchJobPage.ts.
 
 import { describe, it, expect } from "vitest";
-import { isContentUseless, looksLikeErrorPage, looksLikeLoginWall, normalizeJobDetailUrl } from "@/lib/ai/job-agents/fetchJobPage";
+import {
+  isContentUseless,
+  looksLikeErrorPage,
+  looksLikeLoginWall,
+  looksLikeMissingJobContent,
+  normalizeJobDetailUrl,
+} from "@/lib/ai/job-agents/fetchJobPage";
 
 function padTo(text: string, minLength: number): string {
   if (text.length >= minLength) return text;
@@ -47,6 +53,60 @@ describe("looksLikeErrorPage", () => {
     );
     expect(looksLikeErrorPage(realDescription)).toBe(false);
   });
+
+  // Found live 2026-10-27 via the recovery-retry feature: this module's own
+  // comment in fetchJobPageText already documented "ADP, UKG/UltiPro serve an
+  // immediate 'unsupported browser' page" as known — but nothing here ever
+  // actually caught it. All 9 of the retry feature's first "successful"
+  // recoveries turned out to be exactly this. One was already live on the
+  // jobs page with this text as its description before the fix.
+  it("flags ADP Workforce Now's browser-compatibility notice (verbatim text captured from a real production incident)", () => {
+    const adpNotice = padTo(
+      "Please switch to a supported browser listed here, or some features may not work correctly. We use our own and third-party cookies to improve your experience.",
+      2094
+    );
+    expect(looksLikeErrorPage(adpNotice)).toBe(true);
+  });
+
+  it("flags UltiPro's job-board widget JS (verbatim text captured from a real production incident)", () => {
+    const ultiProWidget = padTo(
+      "Post : : : : : : : : 0 --> 1 && showAllLocations() == false, text: $.t('Opportunity.Opportunities.MoreJobLocations', { count : Locations().length - 1 }), click: function(){showAllLocations(true)}",
+      873
+    );
+    expect(looksLikeErrorPage(ultiProWidget)).toBe(true);
+  });
+});
+
+describe("looksLikeMissingJobContent", () => {
+  // Found live 2026-10-27, same incident: an iCIMS career page's generic
+  // EEO/accessibility footer plus navigation links - no job-specific content
+  // at all - passed every other check (not a login wall, no matched error
+  // phrase, 1,400+ chars long). Two different job postings on the same
+  // employer's iCIMS site returned byte-identical text, confirming it's a
+  // page template, not a real per-job description.
+  it("flags iCIMS's EEO/accessibility footer (verbatim text captured from a real production incident, no error-page phrase present)", () => {
+    const icimsFooter =
+      "[Skip Branding](https://careers-example.icims.com/jobs/1/some-job/job)\n\n# Example Corporation\n\n" +
+      "Example Corporation is an equal employment opportunity employer. We are dedicated to equal opportunity in employment without regard to race, religion, gender, sexual orientation, national origin, age, veteran or disabled status, or any other protected class.\n\n" +
+      "ACCESSIBILITY NOTICE: If you need a reasonable accommodation for any part of the employment process due to a physical or mental disability, please call 1-855-266-8325.";
+    expect(looksLikeErrorPage(icimsFooter)).toBe(false); // confirms this is NOT caught by the error-page patterns
+    expect(looksLikeMissingJobContent(icimsFooter)).toBe(true);
+  });
+
+  it("does not flag a real, if terse, job description that mentions responsibilities", () => {
+    const text = "Outside Plant Engineer responsible for fiber route design, make-ready engineering, and construction coordination across the Southeast region.";
+    expect(looksLikeMissingJobContent(text)).toBe(false);
+  });
+
+  it("does not flag a real job description using 'qualifications' or 'experience' instead", () => {
+    expect(looksLikeMissingJobContent("Minimum qualifications: associate degree and 2 years of relevant experience.")).toBe(false);
+  });
+
+  it("does not flag very long content regardless of keywords (the 3000-char ceiling exists so a real, lengthy posting is never rejected on this check alone)", () => {
+    const longPadding = padTo("No job keywords here at all, just filler text.", 3500);
+    expect(longPadding.length).toBeGreaterThan(3000);
+    expect(looksLikeMissingJobContent(longPadding)).toBe(false);
+  });
 });
 
 describe("isContentUseless", () => {
@@ -70,6 +130,22 @@ describe("isContentUseless", () => {
       500
     );
     expect(isContentUseless(realDescription)).toBe(false);
+  });
+
+  // Integration-level regression for the 2026-10-27 incident: isContentUseless
+  // is the actual gate tryJinaFetch calls — these three sub-checks passing
+  // individually (tested above) isn't the same guarantee as the composite
+  // function rejecting all three real production payloads.
+  it("rejects all three real garbage payloads found live via the recovery-retry feature", () => {
+    const adpNotice = padTo("Please switch to a supported browser listed here, or some features may not work correctly.", 2094);
+    const ultiProWidget = padTo("Post : : : : : : : : 0 --> 1 && showAllLocations() == false, text: $.t('Opportunity.Opportunities.MoreJobLocations'", 873);
+    const icimsFooter =
+      "[Skip Branding](https://careers-example.icims.com/jobs/1/some-job/job)\n\n# Example Corporation\n\n" +
+      "Example Corporation is an equal employment opportunity employer, dedicated to equal opportunity without regard to race, religion, gender, or any other protected class.\n\n" +
+      "ACCESSIBILITY NOTICE: If you need a reasonable accommodation, please call 1-855-266-8325.";
+    expect(isContentUseless(adpNotice)).toBe(true);
+    expect(isContentUseless(ultiProWidget)).toBe(true);
+    expect(isContentUseless(icimsFooter)).toBe(true);
   });
 });
 
