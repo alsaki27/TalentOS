@@ -139,13 +139,13 @@ describe("runDeterministicQa", () => {
   });
 
   it("warns (not hard-fails) on a bullet count outside the min-max range for that role position", () => {
-    expect(bulletCountRuleForIndex(0)).toEqual({ min: 6, max: 7 });
+    expect(bulletCountRuleForIndex(0)).toEqual({ min: 1, max: 5 });
     const result = runDeterministicQa({
       draft: cleanDraft({
         experience: [
           {
             title: "GIS Analyst", company: "Acme Corp", location: "Remote", startDate: "2022-01", endDate: null,
-            bullets: ["only", "two"], evidenceIds: [],
+            bullets: ["one", "two", "three", "four", "five", "six"], evidenceIds: [],
           },
         ],
       }),

@@ -8,9 +8,8 @@
 // checks that genuinely didn't exist before: a bullet-count MAXIMUM (only a
 // minimum was ever enforced), cross-group duplicate-skill detection (the
 // existing dedup only ran within one group, only when the page overflowed),
-// skills-pool membership (didn't exist at all - v1 flags, does not enforce,
-// since prompts/resumeForge.ts's rule (d) explicitly permits JD-inferred
-// skills), and a cheap pre-render character/word screen (advisory only -
+// skills-pool membership (flags rather than removes because exact matching
+// cannot resolve every valid synonym), and a pre-render word screen (advisory -
 // measured page fit, passed in as `pageFit`, is always the real authority).
 //
 // Severity follows the project's existing convention everywhere else in this
@@ -28,26 +27,20 @@ import {
   flagDuplicateRoleIdentity,
   validateEmploymentChronology,
   normalizeResumeText,
+  normalizeResumeBullet,
 } from "./resumeIntegrity";
 import { buildRequirementCoverage, listMissedSupported } from "./requirementCoverage";
 import { validateEvidenceCitations } from "./evidenceAudit";
+import { bulletBudgetForIndex, RESUME_SKILL_TARGET, RESUME_WORD_WARNING_THRESHOLD } from "./resumeWritingPolicy";
 
 export interface QaFinding {
   check: string;
   detail: string;
 }
 
-// role index -> { min, max }. The single source of truth this plan calls
-// for: three prompts previously stated three different maxima (Resume
-// Forge 7/6/6, Final Polish 6-7/4-6/3-4, Hiring Panel a flat 3-7). These
-// numbers match Final Polish's own prompt AND the minimum already enforced
-// in code (resumeForge.ts's getMinBullets: idx 0 -> 6, idx 1 -> 4, idx >=2
-// -> 3) - the only one of the three that code already partially agreed with.
-export const BULLET_COUNT_RULES: { min: number; max: number }[] = [
-  { min: 6, max: 7 },
-  { min: 4, max: 6 },
-];
-export const BULLET_COUNT_RULES_OLDER = { min: 3, max: 4 };
+// Advisory writing budgets shared with the prompts, never padding quotas.
+export const BULLET_COUNT_RULES = [bulletBudgetForIndex(0), bulletBudgetForIndex(1)];
+export const BULLET_COUNT_RULES_OLDER = bulletBudgetForIndex(2);
 
 export function bulletCountRuleForIndex(index: number): { min: number; max: number } {
   return BULLET_COUNT_RULES[index] ?? BULLET_COUNT_RULES_OLDER;
@@ -112,10 +105,8 @@ function checkDuplicateSkills(skills: ResumeDraftV1["skills"]): { facts: string[
 /**
  * The allowed-skills pool: base resume skills, skills appearing in base
  * experience bullets, Source-of-Truth confirmed skills, recruiter-verified
- * skills, and evidence-bank related skills. v1 flags only - never removes a
- * skill - because prompts/resumeForge.ts's rule (d) explicitly permits
- * skills "inferred with >=90% confidence from the job description +
- * candidate background," which a strict filter would silently override.
+ * skills, and evidence-bank related skills. Flags rather than removes:
+ * exact string matching cannot adjudicate every genuine skill synonym.
  */
 function buildSkillPool(input: {
   baseSkills: unknown;
@@ -129,6 +120,7 @@ function buildSkillPool(input: {
     if (!Array.isArray(values)) return;
     for (const v of values) {
       if (typeof v === "string" && v.trim()) pool.add(normalizeSkillText(v));
+      else if (v && typeof v === "object" && Array.isArray(v.skills)) addAll(v.skills);
     }
   };
   addAll(input.baseSkills);
@@ -139,7 +131,8 @@ function buildSkillPool(input: {
   // bullet but never listed in the skills section) still count as evidenced.
   const bulletsText = normalizeSkillText(
     (input.baseExperience ?? [])
-      .map((entry: any) => (Array.isArray(entry?.bullets) ? entry.bullets.join(" ") : ""))
+      .map((entry: any) => (Array.isArray(entry?.bullets) ? entry.bullets : Array.isArray(entry?.bulletPoints) ? entry.bulletPoints : [])
+        .map(normalizeResumeBullet).filter(Boolean).join(" "))
       .join(" ")
   );
   if (bulletsText) pool.add(`__bullets__${bulletsText}`);
@@ -177,7 +170,7 @@ function checkSkillsInPool(
 // a substitute for it. ~600 words is a generous approximation of what
 // comfortably fills one page at typical resume formatting; this exists to
 // catch an obviously-oversized draft early, not to make export decisions.
-const WORD_BUDGET_WARNING_THRESHOLD = 900;
+const WORD_BUDGET_WARNING_THRESHOLD = RESUME_WORD_WARNING_THRESHOLD;
 
 function countWords(draft: Pick<ResumeDraftV1, "summary" | "experience" | "skills">): number {
   const parts: string[] = [];
@@ -324,6 +317,10 @@ export function runDeterministicQa(rawInput: DeterministicQaInput): Deterministi
   // ── 8: no duplicate skills (NEW - cross-group, always-on) ──
   const duplicateSkills = checkDuplicateSkills(input.draft.skills);
   warnings.push(...duplicateSkills.warnings);
+  const skillCount = input.draft.skills.reduce((n, g) => n + (Array.isArray(g?.skills) ? g.skills.length : 0), 0);
+  if (skillCount > RESUME_SKILL_TARGET) {
+    warnings.push({ check: "skill_budget", detail: `${skillCount} skills exceed the ${RESUME_SKILL_TARGET}-skill total writing target; keep extras only for distinct supported requirements that fit legibly.` });
+  }
 
   // ── 9: skills belong to the allowed evidence pool (NEW - flags only) ──
   const pool = buildSkillPool({
