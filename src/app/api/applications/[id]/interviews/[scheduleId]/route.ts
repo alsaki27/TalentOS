@@ -69,3 +69,21 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   );
   return NextResponse.json({ stage, rescheduled });
 }
+
+// DELETE -> remove one interview stage entirely, freeing its round number
+// to be scheduled again from scratch. interview_panel_members and
+// interview_scorecards both reference this row with ON DELETE CASCADE
+// (sql/03_analytics_interviews_email.sql), so any panel assignment or
+// submitted feedback for this specific stage is removed with it — the
+// client confirms this explicitly before calling DELETE.
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string; scheduleId: string } }) {
+  const currentUser = await getCurrentUserContext();
+  if (!currentUser) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+
+  const deleted = await queryOne<{ id: string }>(
+    `DELETE FROM interview_schedules WHERE id = $1 AND application_id = $2 RETURNING id`,
+    [params.scheduleId, params.id]
+  );
+  if (!deleted) return NextResponse.json({ error: "Interview stage not found." }, { status: 404 });
+  return NextResponse.json({ success: true });
+}

@@ -45,6 +45,7 @@ export default function ManageInterviewStagesModal({
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   function applyStage(round: number, rows: InterviewStage[]) {
     setSelected(round);
@@ -84,6 +85,35 @@ export default function ManageInterviewStagesModal({
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applicationId]);
+
+  async function handleRemove() {
+    if (!existingForSelected) return;
+    const confirmed = window.confirm(
+      `Remove Stage ${selected}? This also removes any panel members assigned and any feedback already submitted for this stage. This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setError(null);
+    setRemoving(true);
+    try {
+      const res = await fetch(`/api/applications/${applicationId}/interviews/${existingForSelected.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to remove this interview stage.");
+        return;
+      }
+      // Refetch so the stage picker's checkmarks and this round's form both
+      // reflect the slot being empty again — ready to schedule from scratch.
+      const refreshed = await fetch(`/api/applications/${applicationId}/interviews`, { cache: "no-store" });
+      const data = refreshed.ok ? await refreshed.json() : { stages: [] };
+      const rows: InterviewStage[] = data.stages || [];
+      setStages(rows);
+      applyStage(selected, rows);
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   const existingForSelected = stages.find((s) => s.round_number === selected);
 
@@ -196,8 +226,19 @@ export default function ManageInterviewStagesModal({
         {error && <div style={{ color: "var(--danger, #ef4444)", fontSize: 12, marginTop: 4 }}>{error}</div>}
 
         <div className="modal-actions">
-          <button className="btn" onClick={onCancel} disabled={saving}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving || loading}>
+          {existingForSelected && (
+            <button
+              className="btn"
+              onClick={handleRemove}
+              disabled={saving || removing || loading}
+              style={{ color: "var(--danger, #ef4444)", borderColor: "var(--danger, #ef4444)", marginRight: "auto" }}
+              title="Remove this stage entirely so you can schedule it again from scratch"
+            >
+              {removing ? "Removing…" : `Remove Stage ${selected}`}
+            </button>
+          )}
+          <button className="btn" onClick={onCancel} disabled={saving || removing}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving || removing || loading}>
             {saving ? "Saving…" : existingForSelected ? `Save Stage ${selected}` : `Schedule Stage ${selected}`}
           </button>
         </div>
