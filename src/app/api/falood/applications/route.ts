@@ -9,6 +9,7 @@ import {
 } from "@/lib/falood/resumeDocumentAdapters";
 import { backgroundDispatch } from "@/server/lib/waitUntil";
 import { isResumeDataEffectivelyEmpty } from "@/lib/falood/resumeEmptyCheck";
+import { updateApplicationResumeVersion } from "@/server/repositories/applicationResumeVersionsRepository";
 
 export const runtime = "nodejs";
 
@@ -240,9 +241,12 @@ export async function PATCH(req: NextRequest) {
     // Best-effort: a sync failure must never fail the Tailor Studio's own
     // save, which has already succeeded by this point.
     if ("resumeData" in body && typeof row.name === "string") {
-      const match = /^base_resume:([0-9a-f-]{36})$/i.exec(row.name.trim());
-      if (match) {
-        const baseResumeId = match[1];
+      const trimmedName = row.name.trim();
+      const baseResumeMatch = /^base_resume:([0-9a-f-]{36})$/i.exec(trimmedName);
+      const applicationResumeMatch = /^application_resume_version:([0-9a-f-]{36})$/i.exec(trimmedName);
+
+      if (baseResumeMatch) {
+        const baseResumeId = baseResumeMatch[1];
 
         // The saved application is the authoritative write for this endpoint.
         // Mirroring the editor content into base_resumes is a derived sync and
@@ -267,6 +271,42 @@ export async function PATCH(req: NextRequest) {
             } catch (syncErr: any) {
               console.error(
                 "[Falood Applications PATCH] Base resume sync failed (non-critical):",
+                syncErr?.message || syncErr
+              );
+            }
+          })()
+        );
+      } else if (applicationResumeMatch) {
+        const resumeVersionId = applicationResumeMatch[1];
+
+        // Tailor Studio ("Open in Studio" from the Application Queue) edits
+        // this bridge row, not application_resume_versions directly - without
+        // this sync, nothing an AE does here ever reaches the record the
+        // Queue actually reads from, so a resume fixed down to one page here
+        // kept showing its original (now stale) page count there forever.
+        // Mirrors the base_resume sync above: best-effort, non-blocking,
+        // never fails the Tailor Studio's own save. updateApplicationResumeVersion
+        // re-measures page_fit_metrics itself whenever content changes (see
+        // resumePageFitMeasurement.ts), so this one write keeps both the
+        // content and the Queue's page-fit badge in sync.
+        await backgroundDispatch(
+          (async () => {
+            try {
+              const existingRow = await queryOne<{ content: any }>(
+                "SELECT content FROM application_resume_versions WHERE id = $1",
+                [resumeVersionId]
+              );
+              if (!existingRow) return;
+
+              const existingContent = safeParseJson(existingRow.content);
+              const mergedContent = mergeResumifyEditorIntoBaseResume(
+                existingContent,
+                body.resumeData,
+              );
+              await updateApplicationResumeVersion(resumeVersionId, { content: mergedContent });
+            } catch (syncErr: any) {
+              console.error(
+                "[Falood Applications PATCH] Application resume version sync failed (non-critical):",
                 syncErr?.message || syncErr
               );
             }
