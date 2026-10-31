@@ -21,8 +21,6 @@ export interface ProjectedRequirement {
   category: string;
   status: string;
   safeToAdd: boolean;
-  sourceEvidence: string[];
-  notes: string | null;
 }
 
 export interface ProjectedJobAnalysis {
@@ -48,21 +46,18 @@ export function projectJobAnalysisForReview(jobAnalysis: any): ProjectedJobAnaly
     prohibitedUnsupportedClaims: Array.isArray(jobAnalysis?.prohibitedUnsupportedClaims)
       ? jobAnalysis.prohibitedUnsupportedClaims.filter((k: unknown) => typeof k === "string")
       : [],
-    requirementAnalysis: requirementAnalysis.filter((r: any) => r && typeof r === "object" && !Array.isArray(r)).map((r: any, i: number) => ({
+    requirementAnalysis: requirementAnalysis.map((r: any, i: number) => ({
       id: `r${i}`,
       text: typeof r?.requirement === "string" ? r.requirement : "",
       category: typeof r?.category === "string" ? r.category : "other",
       status: typeof r?.status === "string" ? r.status : "unsupported",
-      safeToAdd: r?.safeToAdd === true,
-      sourceEvidence: Array.isArray(r?.sourceEvidence) ? r.sourceEvidence.filter((s: unknown): s is string => typeof s === "string") : [],
-      notes: typeof r?.notes === "string" ? r.notes : null,
+      safeToAdd: Boolean(r?.safeToAdd),
     })),
   };
 }
 
 export interface ProjectedJobAnalysisForDraft extends ProjectedJobAnalysis {
   responsibilities: string[];
-  ambiguities: string[];
 }
 
 /**
@@ -73,18 +68,15 @@ export interface ProjectedJobAnalysisForDraft extends ProjectedJobAnalysis {
  * requiredSkills, preferredSkills, tools, methodologies, and certifications -
  * every one of those is already re-encoded as its own requirementAnalysis
  * entry (see buildRequirementAnalysisPrompt's requirementSources), so
- * resending them here is pure duplication. Drop rawSummary and
- * evidenceRequirements, which guide classification. Source pointers, notes and
- * ambiguities are retained so the writer can verify and flag conflicts.
+ * resending them here is pure duplication - and drops rawSummary/
+ * evidenceRequirements/ambiguities, which exist only to help the
+ * classification step reason about support, not to help write bullets.
  */
 export function projectJobAnalysisForDraft(jobAnalysis: any): ProjectedJobAnalysisForDraft {
   return {
     ...projectJobAnalysisForReview(jobAnalysis),
     responsibilities: Array.isArray(jobAnalysis?.responsibilities)
       ? jobAnalysis.responsibilities.filter((r: unknown): r is string => typeof r === "string")
-      : [],
-    ambiguities: Array.isArray(jobAnalysis?.ambiguities)
-      ? jobAnalysis.ambiguities.filter((r: unknown): r is string => typeof r === "string")
       : [],
   };
 }
@@ -96,8 +88,6 @@ export interface ProjectedDraft {
   education: unknown;
   certifications: unknown;
   projects: unknown;
-  missingRequirements: unknown;
-  truthRisks: unknown;
 }
 
 /**
@@ -107,8 +97,8 @@ export interface ProjectedDraft {
  * restoration step for them the way identity fields do, so the model must
  * see the originals or it cannot reproduce them). Drops Resume Forge's own
  * internal bookkeeping fields that neither Hiring Panel nor Final Polish's
- * prompts reference: changeLog and excludedKeywords. Retain missingRequirements
- * and truthRisks so reviewers see unresolved gaps. changeLog can be large (an
+ * prompts reference: changeLog, missingRequirements, excludedKeywords,
+ * truthRisks - these are the largest single contributor to draft size (an
  * 8-role resume's changeLog alone can exceed the old 8,000-char Final
  * Polish slice on its own).
  */
@@ -126,28 +116,5 @@ export function projectDraftForReview(draft: any): ProjectedDraft {
     education: draft?.education ?? [],
     certifications: draft?.certifications ?? [],
     projects: draft?.projects ?? [],
-    missingRequirements: Array.isArray(draft?.missingRequirements) ? draft.missingRequirements : [],
-    truthRisks: Array.isArray(draft?.truthRisks) ? draft.truthRisks : [],
   };
-}
-
-/** Preserve complete factual material for reviewers without contact/private storage fields.
- * Never slice serialized JSON: the tail may contain the only evidence for a claim.
- */
-export function projectBaseResumeForReview(content: any): Record<string, unknown> {
-  return {
-    summary: content?.summary ?? null,
-    skills: content?.skills ?? [],
-    experience: content?.experience ?? [],
-    education: content?.education ?? [],
-    certifications: content?.certifications ?? [],
-    projects: content?.projects ?? [],
-    customSections: content?.customSections ?? [],
-  };
-}
-
-export function projectEvidenceForReview(evidence: unknown): unknown[] {
-  return (Array.isArray(evidence) ? evidence : [])
-    .filter((e) => e && typeof e === "object" && !Array.isArray(e))
-    .map((e) => ({ id: e.id, title: e.title, description: e.description, relatedSkills: e.relatedSkills }));
 }

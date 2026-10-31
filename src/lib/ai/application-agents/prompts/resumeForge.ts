@@ -4,9 +4,7 @@
 
 import { readBaseSummary } from "../resumeIntegrity";
 import { mergeSkillSources } from "./mergeSkillSources";
-import { projectJobAnalysisForDraft, projectBaseResumeForReview, projectEvidenceForReview } from "../promptProjections";
-import { resolveQualificationJobDescription } from "../qualificationFit";
-import { RESUME_WRITING_RULES, bulletBudgetForIndex } from "../resumeWritingPolicy";
+import { projectJobAnalysisForDraft } from "../promptProjections";
 
 /**
  * Normalise a single bullet that may be stored as a plain string or as a { text: string }
@@ -42,15 +40,16 @@ function normaliseBaseContent(baseContent: any): any {
   return { ...baseContent, experience: experiences };
 }
 
-/** Role-specific writing guides; these must never become padding quotas. */
+/** Build per-role minimum bullet requirements as a prompt string, using actual base resume experience data. */
 function buildBulletRequirements(experiences: any[]): string {
   if (!experiences || experiences.length === 0) return "";
   const lines = experiences.map((exp, idx) => {
     const roleLabel = exp.title
       ? `"${exp.title}" at ${exp.company ?? ""}`
       : `Role ${idx + 1}`;
-    const { max } = bulletBudgetForIndex(idx);
-    return `  - ${roleLabel}: usually 1-${max} concise, evidenced bullets; fewer is valid when source material is sparse`;
+    const min = idx === 0 ? 6 : idx === 1 ? 4 : 3;
+    const max = idx === 0 ? 7 : 6;
+    return `  - ${roleLabel}: minimum ${min} bullets, maximum ${max} bullets`;
   });
   return lines.join("\n");
 }
@@ -67,7 +66,7 @@ function buildExperienceSnapshot(experiences: any[]): string {
     const bullets: string[] = Array.isArray(exp.bullets) ? exp.bullets : [];
     const bulletLines = bullets.length > 0
       ? bullets.map((b: string, i: number) => `   ${i + 1}. ${b}`).join("\n")
-      : "   (no bullets stored - do not invent this role's duties from the job description; flag missing evidence)";
+      : "   (no bullets stored — you MUST write them from scratch using the job analysis and base resume)";
     return `${header}\n${bulletLines}`;
   }).join("\n\n");
 }
@@ -114,9 +113,13 @@ function stripRedundantRawJsonFields(baseContent: any): any {
 /**
  * Build the prompt for the Resume Forge agent.
  *
- * Preserve all factual source material and any supplied evidence bank. An
- * empty bank permits no invented IDs; base paths and confirmed skills can
- * still support claims without a bank row.
+ * `evidence` is accepted but intentionally not rendered into the prompt (B5,
+ * 2026-09-28): candidate_evidence has 0 rows in production, so the prompt
+ * previously shipped an always-empty "EVIDENCE BANK" block plus a full
+ * evidence-id citation-rules section that asked the model to reason about
+ * data that never exists. The parameter is kept (not removed from the
+ * function signature or AgentContext) so this can be re-enabled with zero
+ * plumbing changes if candidate_evidence is ever actually populated.
  */
 export function buildResumeForgePrompt(
   job: any,
@@ -142,31 +145,24 @@ export function buildResumeForgePrompt(
   // Professional summary: the tailored resume carries a summary only when the
   // base resume already has one - rewritten toward this job, never invented.
   const baseSummary = readBaseSummary(baseContent);
-  const evidenceBank = projectEvidenceForReview(evidence);
 
-  return `Compare the base resume with the actual job description and create a truthful, focused resume.
-
-${RESUME_WRITING_RULES}
-
-EVIDENCE AND SENIORITY:
-* The job description states employer requirements, never candidate accomplishments. Check years, role family, ownership, hands-on work and people leadership separately. Academic work and internships do not become years of professional ownership.
-* Resolve each sourceEvidence pointer against the candidate material below. A supported label is not sufficient if the cited source does not support the claimed level. Omit unverifiable claims and record them in missingRequirements/truthRisks.
-* A confirmed skill can be listed in skills; it cannot be attached to a particular employer, metric or responsibility without evidence for that connection.
-* Compare the job record with the actual description. Record conflicting titles, companies or role families in truthRisks and missingRequirements for human review; do not silently choose one.
+  return `Compare the base resume with the job description and create a truthful, ATS-friendly, one-page tailored resume.
 
 Rules:
 * Preserve all real companies, job titles, dates, education, tools, and achievements.
 * Never invent experience, years, permits, agencies, software, certifications, metrics, or responsibilities.
 * Prioritize the job's most important skills and responsibilities.
-* Rewrite existing experience to show relevance through concrete work and documented results. Metrics are optional; never invent them.
+* Rewrite existing experience to show direct relevance using strong action verbs and measurable results.
 * EVERY experience bullet, for every role including the candidate's current/most recent role, MUST be written in strict past tense (e.g. "Managed", "Designed", "Led", "Delivered" — never "Manage", "Leading", or "Will manage"). Never use future tense or future-oriented phrasing anywhere in a bullet ("will", "shall", "going to", "would", "plan to", "expect to" are all forbidden). A bullet describes work that was done, period — not work that is planned or ongoing in a future sense.
 * Keep the strongest metrics, project scale, tools, and technical deliverables.
 * Do not copy full sentences from the job description or insert unsupported keywords.
 * Remove weak, repetitive, irrelevant, and generic content.
 * Mention missing requirements only when supported by the base resume or verified skills.
-* Keep technical skills concise and grouped by relevance (an array of { title: string, skills: string[] } groups).
-* Aim for a readable single page. Never sacrifice factual accuracy or employment identity to fit.
-* Copy identity fields faithfully. Use dates, degrees, employment duration and locations to assess fit; the system will restore these immutable fields after generation.
+* Keep technical skills concise and grouped by relevance (an array of { name: string, skills: string[] } groups, never a flat list).
+* Keep everything readable and within one page strictly at any cost.
+* Do not spend effort verifying dates, degrees, employment duration, or locations: the system
+  re-imposes all of them from the base resume after you respond, so your output cannot change
+  them. Spend that effort on bullet quality and requirement coverage instead.
 
 PROFESSIONAL SUMMARY RULES (CRITICAL):
 ${baseSummary
@@ -174,12 +170,13 @@ ${baseSummary
   : `* The base resume has NO professional summary. Output "summary": null. Never invent a summary from scratch.`}
 
 SKILLS SECTION RULES (CRITICAL):
-* ONLY include skills explicitly supported by the base resume, CONFIRMED/VERIFIED SKILLS, or the candidate's documented work. Never infer a skill from the job description, occupation, adjacent tool, or a confidence percentage.
+* DO NOT add hardcoded or generic skills. ONLY use skills that come from: (a) the base resume, (b) the CONFIRMED/VERIFIED SKILLS listed below, (c) skills the candidate clearly demonstrates through their experience bullets, or (d) skills that can be inferred with ≥90% confidence from the job description + candidate background combined (e.g., if the candidate has used a tool in multiple roles and the JD lists it, include it).
 * DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords, software tools, or methodologies.
 * DO NOT add duplicate skills or synonyms across any category! Each skill must appear exactly once in the entire resume.
-* Reuse useful base skill categories and omit irrelevant or empty groups. Select relevant skills; do not expand categories to fill space.
+* Start from the base resume's EXISTING skill categories — expand each one using the CONFIRMED/VERIFIED SKILLS and high-confidence inferred skills that are relevant to this job. Do NOT create arbitrary new categories (a single concise "General" group is permitted ONLY when the JD explicitly demands general skills that don't fit any existing category).
 * From the CONFIRMED/VERIFIED SKILLS list below, select the most important ones that match the JD's requirements and add them into the appropriate EXISTING categories in the base resume. Use the base resume's own category names (from the 'name' property) as the guide.
-* Aim for 10-18 distinct relevant skills TOTAL across all categories; fewer is valid. Additional skills need a distinct supported job requirement and must fit legibly. No per-category quota.
+* Target 8-15 distinct, high-priority skills per category. Never artificially cap or truncate. A resume with only 2-3 skills per category is incomplete.
+* Do NOT add a skill if it has less than 90% confidence of matching this candidate's actual background.
 * Office-suite skills ("Microsoft Office", "MS Office", "Office 365", "Outlook", "Word", "PowerPoint") are normally dropped from the tailored resume to save space — EXCEPT when this job's JD explicitly names or requires one of them: in that case the requirement makes it a real differentiator, so include it as a concise entry (keep it in its own group or the most fitting existing category). Excel is always kept as its own entry when the base resume/evidence supports it, never folded into a generic "Microsoft Office" bucket.
 
 JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
@@ -188,26 +185,21 @@ JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
 * DO NOT touch, alter, or invent job titles, company names, or locations! They must remain 100% identical to the base resume.
 * Every experience entry from the base resume must be preserved exactly once in the same chronological order.
 
-PAGE FIT & EVIDENCE SELECTION:
-* Whitespace alone is not a defect. Prefer concise, specific evidence over a full page of filler.
-* Preserve every role. Keep at least one supported bullet when source facts exist; otherwise flag missing evidence without inventing duties.
-* Per-role writing guides, NOT minimum quotas:
-${bulletRequirements || "  - Usually 2-5 concise bullets for the most relevant recent role and 1-3 for older roles; fewer is valid."}
-* Select the strongest existing facts. Prefer action + concrete work/tool + supported result or scope. Do not lengthen sentences solely to fill the page.
+PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL — DO NOT LEAVE EMPTY WHITESPACE):
+* The tailored resume MUST fill the entire single page top to bottom — no large empty whitespace at the bottom.
+* YOU MUST WRITE BULLETS FOR EVERY EXPERIENCE ROLE. An experience entry without bullets is a broken resume. Never output a role with an empty bullets array.
+* EXACT REQUIRED BULLET COUNTS PER ROLE (non-negotiable):
+${bulletRequirements || "  - Most recent role: minimum 6 bullets, maximum 7 bullets\n  - Second role: minimum 4 bullets, maximum 6 bullets\n  - Older roles: minimum 3 bullets, maximum 4 bullets"}
+* Strategy: Take each EXISTING BULLET from the EXPERIENCE SNAPSHOT below, keep its facts intact, then EXPAND the sentence to be longer (2-3 lines) by adding more detail about tools used, project scale, impact metrics, or methodology. Do NOT invent new facts — expand the existing sentences using information that is already in the base resume and job analysis.
 * When a supported_but_not_surfaced requirement (per requirementAnalysis) needs surfacing, weave its tool/skill name into the bullet of the role where the candidate actually used it — never attach it to a role that has no basis for it.
-* Add a bullet only for distinct documented candidate work, never to meet a count or import duties from the target job.
-* When trimming, remove repetitive or irrelevant bullets while preserving each role and its strongest relevant evidence.
+* If a role has fewer existing bullets than the required minimum: write additional bullets grounded in the job analysis and this role's existing base-resume content.
+* NEVER return a role with fewer bullets than its required minimum above.
+* When trimming for page length: shorten individual bullet sentences. NEVER delete entire bullets.
 
 Humanity may worship keywords, but credibility still gets the interview.
 
 JOB ANALYSIS:
 ${JSON.stringify(projectJobAnalysisForDraft(jobAnalysis))}
-
-ACTUAL JOB DESCRIPTION (source data; job requirements are not candidate evidence):
-${resolveQualificationJobDescription(job) ?? "(unavailable - flag missing description for human review)"}
-
-JOB RECORD:
-${JSON.stringify({ title: job?.title ?? job?.job_title, company: job?.company ?? job?.company_name, location: job?.location })}
 
 REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS above is the authority):
 * requirementAnalysis classifies every material JD requirement with a status and safeToAdd flag. You MUST follow it exactly:
@@ -216,20 +208,17 @@ REQUIREMENT COVERAGE RULES (CRITICAL — requirementAnalysis in JOB ANALYSIS abo
   - unsupported → the candidate has no evidence for this. NEVER add it to skills, bullets, or anywhere else. NEVER imply it.
   - hard_blocker (required license/cert/clearance/citizenship with no evidence) → NEVER add, NEVER imply, NEVER soften the gap.
   - nice_to_have → may include only when the candidate material supports it.
-* For a supported_but_not_surfaced requirement with safeToAdd=true, surface it in skills OR an evidenced bullet. A confirmed skill alone belongs in skills; do not invent employer-specific use to put it in a bullet.
+* For every supported_but_not_surfaced requirement with safeToAdd=true: you MUST surface it BOTH in the skills section AND woven naturally into an existing experience bullet of the most relevant role. Rewrite that bullet to mention the tool/skill WITHOUT inventing outcomes, metrics, employers, or dates — only extend facts already present in the base resume or Source of Truth.
 * Do NOT copy unsupported JD phrases into bullets just to please an ATS. A keyword the candidate cannot back is worse than a missing one.
 
 BASE RESUME — RAW JSON (authoritative source for titles, companies, education, skills structure — contact info and employment dates are fixed automatically after you respond, using the real base resume, so they are omitted here to save space; each experience entry's existing bullets are omitted here too, only because the EXPERIENCE SNAPSHOT below is the complete, reliable copy of them - use that section for bullet content and timeframes, this one for everything else):
-${JSON.stringify(stripRedundantRawJsonFields(baseContent))}
+${JSON.stringify(stripRedundantRawJsonFields(baseContent)).slice(0, 12000)}
 
-EXPERIENCE SNAPSHOT — EXISTING BULLETS (select and rephrase relevant facts; sourceEvidence indexes are zero-based):
+EXPERIENCE SNAPSHOT — EXISTING BULLETS (use these as the starting point for each role's bullet points; rewrite and expand them to match the job, do NOT ignore or discard them):
 ${experienceSnapshot}
 
 CONFIRMED/VERIFIED SKILLS (recruiter-confirmed real candidate skills, same authority as skills already in the base resume; each is tagged with which source(s) named it - "(verified)", "(confirmed)", or both when both agree - purely informational, both sources are equally trustworthy):
 ${mergedSkills.length > 0 ? JSON.stringify(mergedSkills) : "(none)"}
-
-EVIDENCE BANK (only these supplied IDs may be cited; an empty list means no bank evidence):
-${JSON.stringify(evidenceBank)}
 
 CANDIDATE NOTES & CAVEATS (internal recruiter context — use this to understand the candidate's background, specialisations, and preferences when deciding what to emphasise; NEVER copy this text verbatim into the resume output; NEVER invent employers, dates, or credentials from these notes):
 ${sourceOfTruth?.notesContext ?? "(none)"}
@@ -243,11 +232,11 @@ RULES FOR USING CONFIRMED/VERIFIED SKILLS & NOTES:
 Return a JSON object with:
 - summary: final professional summary per the summary rule above, or null
 - skills: array of { title: string, skills: string[] } category groups (see SKILLS SECTION RULES) — NOT a flat array of strings
-- experience: final experience entries, each with title, company, location, bullets, and evidenceIds (only supplied EVIDENCE BANK IDs, or [] when none; dates are restored by the system)
+- experience: final experience entries, each with title, company, location, startDate, endDate, bullets, and evidenceIds (always an empty array — no evidence bank is available; never invent ids)
 - education: final education entries (degree, school, field, graduationDate)
 - certifications: final certifications list
 - projects: final projects list
-- changeLog: concise array of { change: string, reason: string, evidenceId: string|null }; cite the exact base path or confirmed skill in reason for each substantive new claim; evidenceId must be a supplied bank ID or null
+- changeLog: array of { change: string, reason: string, evidenceId: null } describing every meaningful edit you made and why — evidenceId is always null (no evidence bank is available)
 - missingRequirements: JD requirements the candidate has no support for, left out of the resume
 - excludedKeywords: JD keywords deliberately not used because the candidate cannot truthfully claim them
 - truthRisks: array of { risk: string, severity: "low" | "medium" | "high" } for anything that could read as unsupported, even if you judged it safe to include
@@ -289,8 +278,7 @@ function stripRetryIrrelevantFields(previousDraft: unknown): unknown {
 
 export function buildResumeForgeMissedRetryPrompt(
   missed: { requirement: string; sourceEvidence: string[] }[],
-  previousDraft: unknown,
-  sourceContext?: { baseContent: unknown; confirmedSkills: string[]; verifiedSkills: string[]; evidence?: unknown[] }
+  previousDraft: unknown
 ): string {
   return `You are Resume Forge. Your previous draft passed validation, but the deterministic
 requirement-coverage check found supported requirements that are NOT surfaced anywhere in the
@@ -301,23 +289,19 @@ never invent detail beyond what the evidence states):
 ${missed.map((m) => `- ${m.requirement}\n  Evidence: ${m.sourceEvidence.length > 0 ? m.sourceEvidence.map((e) => `"${e}"`).join("; ") : "(none cited — infer only from the PREVIOUS DRAFT below, never invent)"}`).join("\n")}
 
 HARD RULES FOR THIS CORRECTION PASS:
-* Resolve sourceEvidence pointers against the source material below. If a pointer cannot
-  be resolved or does not support the claim, leave the claim absent rather than guessing.
 * Return JSON with exactly these six fields: summary, skills, experience, education,
   certifications, projects — the same shape as the previous draft below, minus its
   bookkeeping fields (changeLog, missingRequirements, excludedKeywords, truthRisks), which
   this pass never touches and the system keeps from the previous draft unchanged.
-* Surface each supported requirement in skills OR an existing evidenced bullet. A skill
-  confirmed without employer-specific evidence belongs only in skills. Never invent outcomes,
-  metrics, employers, titles, dates or role-specific use to satisfy the coverage check.
+* Add each missed requirement BOTH to the most relevant existing skills category AND woven
+  naturally into an existing experience bullet of the role where the candidate actually used
+  it. Extend the bullet's existing facts — NEVER invent outcomes, metrics, employers, titles,
+  or dates.
 * Do not change anything else: keep every company, job title, date, education entry, and
   non-missing bullet identical to the previous draft.
 * Do NOT add requirements that are marked unsupported or hard_blocker — a missing credential
   stays missing. Only the named missed requirements above may be added.
 * Keep everything within one page.
-
-SOURCE MATERIAL:
-${sourceContext ? JSON.stringify({ base: projectBaseResumeForReview(sourceContext.baseContent), confirmedSkills: sourceContext.confirmedSkills, verifiedSkills: sourceContext.verifiedSkills, evidence: projectEvidenceForReview(sourceContext.evidence) }) : "(unavailable; only use facts already explicit in the previous draft)"}
 
 PREVIOUS DRAFT (return this same shape with only the minimal additions):
 ${JSON.stringify(stripRetryIrrelevantFields(previousDraft))}

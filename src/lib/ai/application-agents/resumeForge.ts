@@ -257,9 +257,13 @@ function applyForgeGuards(
   validated.experience = enforceExperienceIntegrity(validated.experience, baseExperience);
 
   // ── BULLET SAFETY NET ─────────────────────────────────────────────────────
-  // Rescue an accidentally empty role, never pad concise nonempty roles
-  // back to the old 6/4/3 quotas after the writer has selected evidence.
-  const getMinBullets = (_idx: number) => 1;
+  // Defense in depth: if the AI returned fewer than the required minimum bullets
+  // for any role, force-restore from the base resume. Fires silently — no throw,
+  // no retry — so the resume always has content.
+  //
+  // Per-role minimum (must match buildBulletRequirements in prompts/resumeForge.ts):
+  //   idx 0 (most recent) → 6   idx 1 → 4   idx ≥2 → 3
+  const getMinBullets = (idx: number) => idx === 0 ? 6 : idx === 1 ? 4 : 3;
 
   if (Array.isArray(validated.experience) && Array.isArray(baseExperience)) {
     validated.experience.forEach((exp: any, i: number) => {
@@ -495,12 +499,7 @@ export async function runResumeForge(
               content: [
                 {
                   type: "text",
-                  text: buildResumeForgeMissedRetryPrompt(missedWithEvidence, validated, {
-                    baseContent,
-                    confirmedSkills: ctx.sourceOfTruth?.confirmedSkills ?? [],
-                    verifiedSkills: ctx.verifiedSkills ?? [],
-                    evidence: ctx.evidence,
-                  }),
+                  text: buildResumeForgeMissedRetryPrompt(missedWithEvidence, validated),
                 },
               ],
             },

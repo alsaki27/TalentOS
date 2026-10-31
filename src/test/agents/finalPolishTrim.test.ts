@@ -42,8 +42,8 @@ function makeResume(overrides: Partial<FinalResumeV1> = {}): FinalResumeV1 {
 describe("applyDeterministicTrim", () => {
   it("removes exactly one low-value bullet (no digit, no keyword match) from a role above its floor", () => {
     const resume = makeResume();
-    const before = resume.experience[0].bullets.length;
-    // Trimming remains bounded to one removal per role per pass.
+    const before = resume.experience[0].bullets.length; // 6, floor for role 0 is 6 -> no slack actually
+    // Give it slack: 7 bullets so there's 1 above the floor of 6.
     resume.experience[0].bullets.push("Participated in general team activities without a clear outcome.");
     expect(resume.experience[0].bullets.length).toBe(before + 1);
 
@@ -66,14 +66,16 @@ describe("applyDeterministicTrim", () => {
           endDate: "2022",
           bullets: [
             "Helped with general tasks.",
-          ], // Preserve the role's last factual bullet.
+            "Assisted various teams.",
+            "Supported miscellaneous initiatives.",
+          ], // exactly at the floor for role index 0? no - role 0 floor is 6, this is below it already
           evidenceIds: [],
         },
       ],
     });
     const before = resume.experience[0].bullets.length;
     applyDeterministicTrim(resume, JOB_ANALYSIS);
-    // A role may be concise, but the trim must not empty it.
+    // Already at/under the floor (3 < 6) - nothing should be removed since there's no slack.
     expect(resume.experience[0].bullets.length).toBe(before);
   });
 

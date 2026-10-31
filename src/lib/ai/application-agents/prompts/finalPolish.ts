@@ -1,8 +1,7 @@
 import type { ResumePageMetrics } from "@/lib/falood/skarionPdfDocument";
 
 import { readBaseSummary } from "../resumeIntegrity";
-import { projectJobAnalysisForReview, projectDraftForReview, projectBaseResumeForReview, projectEvidenceForReview } from "../promptProjections";
-import { RESUME_WRITING_RULES } from "../resumeWritingPolicy";
+import { projectJobAnalysisForReview, projectDraftForReview } from "../promptProjections";
 
 export function buildFinalPolishPrompt(
   job: any,
@@ -12,9 +11,7 @@ export function buildFinalPolishPrompt(
   jobAnalysis: any,
   sourceOfTruth: { confirmedSkills: string[] } | null = null,
   pageMetrics: ResumePageMetrics | null = null,
-  qaFactsBlock: string | null = null,
-  evidence: unknown[] = [],
-  verifiedSkills: string[] = []
+  qaFactsBlock: string | null = null
 ): string {
   const pageMetricsBlock = pageMetrics
     ? `PAGE QA METRICS (measured from an actual rendered PDF of the draft you are polishing — trust these over any word-count guess):
@@ -42,8 +39,6 @@ apply the reviewer's edits without losing any of what makes the draft win: verba
 coverage, quantified achievements, and a top third that sells the candidate in 6 seconds.
 
 Given the job analysis, base resume, tailored draft, and reviewer scores:
-${RESUME_WRITING_RULES}
-
 1. Apply ALL required edits from the reviewer — critical-severity edits (especially any
    flagging a fabricated or unsupported license/certification/degree) are non-negotiable;
    never leave one unresolved or add it to rejectedIssueIds.
@@ -64,24 +59,27 @@ ${RESUME_WRITING_RULES}
    no filler ("passionate", "results-driven", "dynamic"). If a bullet you're editing is in present
    or future tense, rewrite it to past tense as part of this pass — do not leave it as-is.
    Keep tense and punctuation consistent within each role.
-5. Aim for a readable single page without sacrificing factual accuracy — use the PAGE QA METRICS below
+5. The final output MUST fit on a single page strictly at any cost — use the PAGE QA METRICS below
    (measured from an actual rendered PDF, not a word-count guess) as the real signal for this, not an
    estimate. Do not shrink font/spacing conceptually or pad whitespace to "cheat" the limit; the content
    itself must be concise. Only set exportReady to true once the result genuinely fits one page.
 6b. ${pageMetricsBlock}
    - If overflow is true or content utilization is above 97%: shorten redundant bullets and remove
      duplicate or low-value skills FIRST, before touching quantified achievements or JD keywords.
-     Never remove an entire role. Deleting redundant bullets is allowed; retain one factual bullet when source material supports it.
+     Never remove an entire role and never drop a role below its per-role bullet minimum (rule 6 below).
    - If content utilization is below 82% (and overflow is false): expand ONLY with evidence-backed
      detail already present in the base resume or Source of Truth — never invent facts
      merely to fill whitespace. If there is no more truthful detail to add, leave the whitespace and
      note it in unresolvedWarnings rather than padding.
-   - Preserve the strongest SUPPORTED quantified achievements and job-specific keywords. Remove unsupported claims even if they contain a desirable keyword or number.
-6. PAGE FIT & EVIDENCE SELECTION:
-   * Keep the page readable and balanced. Whitespace alone is not a defect; do not add filler.
+   - Preserve every quantified achievement and every job-specific keyword already present.
+6. PAGE FULLNESS & EXPERIENCE BULLET COUNT RULES (CRITICAL - DO NOT LEAVE EMPTY WHITESPACE BELOW):
+   * Do NOT over-shrink the resume! The tailored resume must look visually full, balanced, and complete, filling out the single page from top to bottom without leaving large empty whitespace at the bottom (which happens when roles are condensed too much).
    * NEVER drop or vanish an entire experience role, and NEVER remove all bullet points from any role.
-   * Bullet budgets in DETERMINISTIC QA FACTS are advisory. Short roles with strong evidence are valid. Never pad a role to a count or expand bullets solely to fill space.
-   * For page fit, remove redundant or irrelevant bullets, then shorten wording while preserving the strongest evidence. Keep each employment entry and at least one supported bullet when available.
+   * Per-role bullet targets (most recent 6-7, second 4-6, older 3-4) are measured for you in
+     DETERMINISTIC QA FACTS below, per role, with any out-of-range role called out — write rich,
+     substantive, multi-line bullets (2-3 lines where appropriate) to land inside those ranges
+     rather than counting them yourself.
+   * IF YOU ARE TRIMMING FOR ONE-PAGE FIT: trim bullets from WITHIN roles (shorten text), NOT by removing entire bullets. A page with fewer but longer bullets is better than a page with many roles having only 1-2 bullets and huge blank space at the bottom.
    * An empty experience array, or vanishing any experience role that existed in the base resume, is a broken resume, and exportReady must never be true if that happens.
 7. JOB TITLE & DATE INTEGRITY RULES (CRITICAL):
    * Each employment position from the base resume must appear EXACTLY ONCE. Any duplicate role or
@@ -98,8 +96,8 @@ ${RESUME_WRITING_RULES}
    ${summaryDirective}
    * The skills
      output MUST stay in the same categorized-group structure the draft used — an array of
-     { title: string, skills: string[] } groups, never flattened into one generic bucket.
-   * SKILLS CLEANUP: use short supported skill names, deduplicated across groups. Aim for 10-18 relevant skills TOTAL, not per category. Fewer is valid. Only exceed this for distinct supported job requirements that fit legibly. Remove irrelevant skills and empty groups. Never infer a new skill from the JD or attach a confirmed skill to an employer without source evidence.
+     { name: string, skills: string[] } groups, never flattened into one list or one generic "Skills" bucket.
+   * SKILLS CLEANUP: DO NOT dump full sentences, requirements, or long JD phrases into the skills section! Skills must be short, 1-4 word technical keywords. DO NOT add duplicate skills or synonyms across any category! Expand each relevant category to include all important, high-impact technical keywords and tools from the base resume, Source of Truth, and JD match (approx. 8 to 15 distinct skills per category). Do not artificially truncate skills. Drop "Microsoft Office", "MS Office", "Office 365", and bare "Word"/"PowerPoint" to save space — EXCEPT when this job's JD explicitly names or requires one of them, in which case the JD demand makes it a real differentiator and it stays. (This matches the rule the drafting stage was given, so a JD-required office skill it deliberately included is not stripped back out here.) Excel is always kept as its own entry when genuinely supported, just never folded into a generic "Microsoft Office" bucket.
 9. Pre-export checklist — verify ALL of these before setting exportReady to true:
    * every reviewer requiredEdit is applied (or, for non-critical ones only, rejected with a
      real reason);
@@ -113,14 +111,14 @@ ${RESUME_WRITING_RULES}
      the resume — they stay absent and are reported to the AE as candidate evidence gaps,
      never as something you should "try harder" to add;
    * the top third (skills + first role's first two bullets) hits the JD's top selection
-     criteria through documented work; include quantified achievements only when the source actually provides them;
-   * rules 5-7 above (readable one-page fit and preserved employment identity) still hold; bullet budgets are advisory, not quotas;
+     criteria and contains at least one quantified achievement;
+   * rules 5-7 above (one-page fit, per-role bullet counts, no duplicate titles/dates) still hold — re-check the result against them here, don't relax any of them for export;
    If any check fails and cannot be fixed within these rules, set exportReady to false and
    record why in unresolvedWarnings.
 
 Return a JSON object with:
 - summary: the final professional summary per the summary rule above (a non-empty string), or null when the base resume has no summary and the draft has none
-- skills: final array of { title: string, skills: string[] } category groups —
+- skills: final array of { name: string, skills: string[] } category groups (see rule 7) —
   NOT a flat array of strings
 - experience: final experience entries with evidenceIds
 - education: final education entries
@@ -142,17 +140,11 @@ JOB ANALYSIS:
 ${JSON.stringify(projectJobAnalysisForReview(jobAnalysis))}
 
 BASE RESUME:
-${JSON.stringify(projectBaseResumeForReview(baseResume?.content ?? {}))}
+${JSON.stringify(baseResume?.content ?? {}).slice(0, 4000)}
 
 SOURCE OF TRUTH CONTEXT (recruiter-confirmed eligible skills — treat as legitimate,
 do NOT suggest removing or flagging them as unsupported):
-${JSON.stringify(sourceOfTruth?.confirmedSkills ?? [])}
-
-RECRUITER-VERIFIED SKILLS:
-${JSON.stringify(verifiedSkills)}
-
-EVIDENCE BANK:
-${JSON.stringify(projectEvidenceForReview(evidence))}
+${JSON.stringify((sourceOfTruth?.confirmedSkills ?? []).slice(0, 30))}
 
 TAILORED DRAFT:
 ${JSON.stringify(projectDraftForReview(draft))}

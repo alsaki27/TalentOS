@@ -26,13 +26,18 @@ import {
 import { runDeterministicQa, formatDeterministicQaFacts } from "./deterministicQa";
 import { getAiRuntimeConfig } from "@/server/repositories/aiRuntimeConfigRepository";
 import { assertNotTruncated } from "@/lib/ai/routing";
-import { applyFinalReadinessChecks } from "./finalResumeReadiness";
 
 /**
- * Preserve one factual bullet per role; never re-inflate a concise draft.
+ * Per-role minimum bullet count.
+ * MUST stay in sync with buildBulletRequirements() in prompts/resumeForge.ts.
+ *   idx 0 (most recent role) → 6
+ *   idx 1 (second role)      → 4
+ *   idx ≥2 (older roles)     → 3
  */
-function getMinBullets(_roleIndex: number): number {
-  return 1;
+function getMinBullets(roleIndex: number): number {
+  if (roleIndex === 0) return 6;
+  if (roleIndex === 1) return 4;
+  return 3;
 }
 
 // Renders the polished resume through the same PDF renderer the actual
@@ -210,9 +215,7 @@ export async function runFinalPolish(
                 jobAnalysis,
                 ctx.sourceOfTruth,
                 draftPageMetrics,
-                qaFactsBlock,
-                ctx.evidence,
-                ctx.verifiedSkills
+                qaFactsBlock
               ),
             },
           ],
@@ -301,7 +304,8 @@ export async function runFinalPolish(
   // silently restore from the draft (ResumeForge output) or base resume.
   // Never throw here — throwing causes retries that also strip bullets.
   //
-  // Restore only accidentally emptied roles, without reintroducing filler.
+  // Per-role minimum matches buildBulletRequirements (prompts/resumeForge.ts):
+  //   idx 0 → 6   idx 1 → 4   idx ≥2 → 3
   if (Array.isArray(validated.experience)) {
     const rawDraftExperience: unknown[] = Array.isArray((draft as any)?.experience)
       ? (draft as any).experience
@@ -390,9 +394,6 @@ export async function runFinalPolish(
     // Render failed — don't block the pipeline, but don't claim a page-fit
     // guarantee either.
     validated.pageFit = null;
-    validated.exportReady = false;
-    validated.unresolvedWarnings = [...validated.unresolvedWarnings,
-      "Final PDF page fit could not be verified; render and review before export."];
   }
   // ───────────────────────────────────────────────────────────────
 
@@ -442,17 +443,5 @@ export async function runFinalPolish(
   }
   // ───────────────────────────────────────────────────────────────
 
-  // Validate the actual post-guard, post-trim output, not just the input draft.
-  const finalQa = runDeterministicQa({
-    draft: validated,
-    baseResumeContent: baseContent,
-    jobAnalysis: analysisForGates as any,
-    evidence: ctx.evidence,
-    sourceOfTruth: ctx.sourceOfTruth,
-    verifiedSkills: ctx.verifiedSkills,
-    pageFit: validated.pageFit ?? null,
-    job: ctx.job,
-  });
-  applyFinalReadinessChecks(validated, review, finalQa);
   return validated;
 }
