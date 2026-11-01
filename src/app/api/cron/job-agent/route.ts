@@ -67,6 +67,12 @@ export async function POST(req: NextRequest) {
     if (input.businessDate !== undefined && typeof input.businessDate !== "string") {
       return NextResponse.json({ error: "businessDate must be a YYYY-MM-DD string" }, { status: 400 });
     }
+    if (
+      input.roleGroups !== undefined &&
+      (!Array.isArray(input.roleGroups) || input.roleGroups.some((group) => typeof group !== "string"))
+    ) {
+      return NextResponse.json({ error: "roleGroups must be an array of role-group IDs" }, { status: 400 });
+    }
 
     const invocationHeader = req.headers.get("x-job-agent-invocation")?.trim().toLowerCase();
     if (invocationHeader && !["scheduled", "manual", "recovery"].includes(invocationHeader)) {
@@ -81,6 +87,7 @@ export async function POST(req: NextRequest) {
       businessDate: input.businessDate as string | undefined,
       invocationType,
       requestId: req.headers.get("x-job-agent-request-id") ?? undefined,
+      roleGroups: input.roleGroups as string[] | undefined,
     });
 
     const summary = {

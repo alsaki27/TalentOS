@@ -77,6 +77,26 @@ describe("jobAgentService Apify calls — timeout handling", () => {
     expect(status).toBe("SUCCEEDED");
   });
 
+  it("uses the immediate Apify actor-run abort endpoint with bearer authentication", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { status: "ABORTING" } }),
+    }) as unknown as typeof fetch;
+    global.fetch = fetchMock;
+
+    const { abortApifyRun } = await import("@/server/services/jobAgentService");
+    await expect(abortApifyRun("run-123", "token-abc")).resolves.toMatchObject({ status: "ABORTING" });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.apify.com/v2/actor-runs/run-123/abort?gracefully=false",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "Bearer token-abc" }),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
   it("validates a token through Apify's authenticated /users/me resource", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -88,8 +108,32 @@ describe("jobAgentService Apify calls — timeout handling", () => {
     await expect(testApifyToken("token-abc")).resolves.toEqual({ ok: true });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.apify.com/v2/users/me?token=token-abc",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      "https://api.apify.com/v2/users/me",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        headers: expect.objectContaining({ Authorization: "Bearer token-abc" }),
+      }),
     );
+  });
+
+  it("keeps the identity-check HTTP status so run-level 401s do not mislabel another account's key", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: { type: "user-or-token-not-found" } }),
+    }) as unknown as typeof fetch;
+
+    const { checkApifyTokenIdentity } = await import("@/server/services/jobAgentService");
+    await expect(checkApifyTokenIdentity("token-abc")).resolves.toMatchObject({
+      ok: false,
+      status: 401,
+    });
+  });
+
+  it("recognizes auth rejection separately from quota and network errors", async () => {
+    const { isApifyAuthorizationError } = await import("@/server/services/jobAgentService");
+    expect(isApifyAuthorizationError(new Error("Apify status check failed (401): user-or-token-not-found"))).toBe(true);
+    expect(isApifyAuthorizationError(new Error("Apify start run failed (403): monthly usage hard limit exceeded"))).toBe(false);
+    expect(isApifyAuthorizationError(new Error("Apify status check timed out after 20000ms"))).toBe(false);
   });
 });

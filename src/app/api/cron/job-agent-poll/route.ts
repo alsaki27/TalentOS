@@ -4,20 +4,33 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import {
-  cleanupStuckRuns,
+  getRunById,
   listRunningRuns,
+  recordRunPollFailure,
+  recordRunPollSuccess,
+  requestRunCancellation,
   transitionRunStatus,
+  updateRunStatus,
   type JobAgentRunRow,
 } from "@/server/repositories/jobAgentRunRepository";
-import { getTokenById } from "@/server/repositories/jobAgentTokenRepository";
 import {
-  checkApifyRunStatus,
+  deactivateToken,
+  getTokenById,
+  markTokenError,
+  settleTokenReservation,
+} from "@/server/repositories/jobAgentTokenRepository";
+import {
+  abortApifyRun,
+  checkApifyTokenIdentity,
+  getApifyRunDetails,
+  isApifyAuthorizationError,
   processApifyRunData,
   type ProcessApifyRunOptions,
 } from "@/server/services/jobAgentService";
 import {
   advanceActiveNightlyBatches,
   markNightlyRunFailed,
+  markNightlyRunUnrecoverable,
   markNightlyRunProcessing,
   markNightlyRunSucceeded,
   isJobAgentNightlyEnabled,
@@ -26,6 +39,7 @@ import {
 export const dynamic = "force-dynamic";
 
 const METADATA_GRACE_MS = 5 * 60 * 1000;
+const ACTOR_TIMEOUT_GRACE_MS = 5 * 60 * 1000;
 // Dataset processing is now bounded by the Apify fetch timeouts and the
 // indexed historical-dedupe path. Keep a generous lease so a second poller
 // cannot reclaim a legitimately slow request while the first one is still
@@ -46,6 +60,7 @@ function runAgeMs(run: JobAgentRunRow): number {
 }
 
 async function failClaimedRun(run: JobAgentRunRow, message: string): Promise<boolean> {
+  if (!["running", "pending", "processing"].includes(run.status)) return false;
   const won = await transitionRunStatus(run.id, run.status, {
     status: "failed",
     error: message,
@@ -65,36 +80,39 @@ function processingOptions(run: JobAgentRunRow): ProcessApifyRunOptions {
     roleGroups: run.role_groups_ran ?? undefined,
   };
 
-  if (!run.batch_id) return base;
-  if (!run.window_start || !run.window_end) {
+  if (run.batch_id && (!run.window_start || !run.window_end)) {
     throw new Error("Nightly run is missing its immutable posting-date window");
   }
 
-  base.windowStart = run.window_start;
-  base.windowEnd = run.window_end;
-  // Relative labels (for example "1 hour ago") are relative to when this
-  // actor attempt actually scraped, which can be later than midnight if cron
-  // was delayed. The immutable window still rejects anything after windowEnd.
-  base.dateReferenceStartTime = run.started_at;
-  base.dateReferenceTime = new Date().toISOString();
-  // The service uses this to exclude historical jobs while preserving candidates
-  // produced by other shards in this same batch until deterministic finalization.
-  base.batchId = run.batch_id;
+  if (run.window_start && run.window_end) {
+    base.windowStart = run.window_start;
+    base.windowEnd = run.window_end;
+    // Relative labels (for example "1 hour ago") are relative to when this
+    // actor attempt actually scraped. Keep the recorded request window immutable.
+    base.dateReferenceStartTime = run.started_at;
+    base.dateReferenceTime = new Date().toISOString();
+  }
+  if (run.batch_id) base.batchId = run.batch_id;
   return base;
 }
 
-async function handlePoll(req: NextRequest) {
-  if (!isAuthorized(req)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+async function disableTokenIfIdentityIsRejected(run: JobAgentRunRow, message: string): Promise<void> {
+  if (!run.token_id) return;
+  const token = await getTokenById(run.token_id);
+  if (!token) return;
+  const identity = await checkApifyTokenIdentity(token);
+  if (identity.status === 401) {
+    await markTokenError(run.token_id, `Apify /users/me rejected token while polling run ${run.id}: ${message}`);
+    await deactivateToken(run.token_id);
+    console.error(`[job-agent-poll] Apify confirmed token ${run.token_id} is invalid; disabled it for future starts.`);
+    return;
   }
+  console.warn(
+    `[job-agent-poll] Run resource returned 401 for ${run.id}, but /users/me did not confirm an invalid token (status=${identity.status ?? "unavailable"}); keeping the key active.`,
+  );
+}
 
-  // Repository cleanup intentionally covers only legacy/manual attempts. Batch
-  // attempt recovery is coordinated through shard retries below.
-  const cleanedUp = await cleanupStuckRuns(180).catch((error) => {
-    console.error("[job-agent-poll] cleanupStuckRuns error:", error);
-    return 0;
-  });
-
+async function runJobAgentPoll() {
   const runningRuns = await listRunningRuns();
   const results: Array<Record<string, unknown>> = [];
   let processed = 0;
@@ -173,12 +191,17 @@ async function handlePoll(req: NextRequest) {
         continue;
       }
 
-      const apifyStatus = await checkApifyRunStatus(run.apify_run_id, token);
+      const apifyRun = await getApifyRunDetails(run.apify_run_id, token);
+      const apifyStatus = apifyRun.status;
+      await recordRunPollSuccess(run.id);
 
       if (apifyStatus === "SUCCEEDED") {
         const claimed = await transitionRunStatus(run.id, "running", {
           status: "processing",
           processing_started_at: new Date().toISOString(),
+          cancel_requested_at: null,
+          cancellation_kind: null,
+          cancel_reason: null,
         });
         if (!claimed) {
           results.push({ runId: run.id, status: "already_claimed" });
@@ -209,6 +232,13 @@ async function handlePoll(req: NextRequest) {
             token,
             processingOptions(run)
           );
+          if (run.token_reservation_id && !run.batch_id) {
+            const configuredCost = Number(process.env.JOB_AGENT_PROJECTED_COST_PER_RESULT_USD ?? "0.001");
+            const costPerResult = Number.isFinite(configuredCost) && configuredCost >= 0 ? configuredCost : 0.001;
+            await settleTokenReservation(run.token_reservation_id, outcome.rawCount * costPerResult).catch((error) => {
+              console.error(`[job-agent-poll] Could not settle token reservation for ${run.id}:`, error);
+            });
+          }
           if (run.batch_id) await markNightlyRunSucceeded(run, outcome);
           results.push({ runId: run.id, status: "processed", outcome });
           processed++;
@@ -220,21 +250,123 @@ async function handlePoll(req: NextRequest) {
             completed_at: new Date().toISOString(),
             processing_started_at: null,
           }).catch(() => false);
-          if (run.batch_id) await markNightlyRunFailed(run, message);
-          results.push({ runId: run.id, status: "processing_failed", error: message });
-          console.error(`[job-agent-poll] Processing run ${run.id} failed:`, error);
+          if (isApifyAuthorizationError(error)) {
+            await disableTokenIfIdentityIsRejected(run, message).catch((healthError) => {
+              console.error(`[job-agent-poll] Could not validate token health for ${run.id}:`, healthError);
+            });
+            const actionableError = `Apify authorization was rejected while fetching this dataset (${message}). The local run is marked failed; verify and stop the remote actor in Apify if it is still active.`;
+            await updateRunStatus(run.id, {
+              status: "failed",
+              error: actionableError,
+              completed_at: new Date().toISOString(),
+              processing_started_at: null,
+            }).catch(() => undefined);
+            if (run.batch_id) await markNightlyRunUnrecoverable(run, actionableError);
+            results.push({ runId: run.id, status: "authorization_failed_remote_unverified", error: actionableError });
+            console.error(`[job-agent-poll] Dataset authorization failed for run ${run.id}; nightly retry suppressed to avoid a duplicate actor.`);
+          } else {
+            if (run.batch_id) await markNightlyRunFailed(run, message);
+            results.push({ runId: run.id, status: "processing_failed", error: message });
+            console.error(`[job-agent-poll] Processing run ${run.id} failed:`, error);
+          }
         }
       } else if (["FAILED", "ABORTED", "TIMED-OUT"].includes(apifyStatus)) {
-        const message = `Apify run ended with status ${apifyStatus}`;
-        const won = await failClaimedRun(run, message);
-        results.push({ runId: run.id, status: won ? "failed_on_apify" : "already_claimed", apifyStatus });
+        // Re-read the cancellation marker because an operator may have clicked
+        // Cancel while this poll request was already in flight.
+        const latestRun = await getRunById(run.id);
+        const operatorCancelled = apifyStatus === "ABORTED" && latestRun?.cancellation_kind === "operator";
+        const detail = [
+          apifyRun.statusMessage,
+          apifyRun.exitCode === null ? null : `exit code ${apifyRun.exitCode}`,
+        ].filter(Boolean).join(" · ");
+        const message = operatorCancelled
+          ? "Apify run cancelled by operator."
+          : `${latestRun?.cancellation_kind === "timeout" ? "Apify run exceeded its configured time limit and was stopped" : `Apify run ended with status ${apifyStatus}`}${detail ? `: ${detail}` : ""}`;
+        if (operatorCancelled) {
+          const won = await transitionRunStatus(run.id, run.status, {
+            status: "cancelled",
+            error: message,
+            completed_at: new Date().toISOString(),
+            processing_started_at: null,
+          });
+          results.push({ runId: run.id, status: won ? "cancelled" : "already_claimed", apifyStatus, message });
+        } else {
+          const won = await failClaimedRun(latestRun ?? run, message);
+          results.push({ runId: run.id, status: won ? "failed_on_apify" : "already_claimed", apifyStatus, message });
+        }
       } else {
-        results.push({ runId: run.id, status: "still_running", apifyStatus });
+        const actorTimeoutMs = run.actor_source === "google" ? 30 * 60_000 : 60 * 60_000;
+        const actorStartedAtMs = apifyRun.startedAt ? new Date(apifyRun.startedAt).getTime() : new Date(run.started_at).getTime();
+        const actorAgeMs = Number.isFinite(actorStartedAtMs) ? Date.now() - actorStartedAtMs : 0;
+
+        if (run.cancellation_kind === "operator" && ["READY", "RUNNING", "ABORTING"].includes(apifyStatus)) {
+          const aborted = await abortApifyRun(run.apify_run_id, token);
+          if (aborted.status === "ABORTED") {
+            const latestRun = await getRunById(run.id);
+            const won = latestRun?.cancellation_kind === "operator"
+              ? await transitionRunStatus(run.id, "running", {
+                  status: "cancelled",
+                  cancel_reason: "Cancelled by operator.",
+                  error: "Apify run cancelled by operator.",
+                  completed_at: new Date().toISOString(),
+                })
+              : false;
+            results.push({ runId: run.id, status: won ? "cancelled" : "already_claimed", apifyStatus: aborted.status });
+          } else {
+            results.push({ runId: run.id, status: "operator_abort_pending", apifyStatus: aborted.status });
+          }
+          continue;
+        }
+
+        if (["RUNNING", "READY", "TIMING-OUT"].includes(apifyStatus) && actorAgeMs > actorTimeoutMs + ACTOR_TIMEOUT_GRACE_MS) {
+          const reason = `Apify actor exceeded its configured ${Math.round(actorTimeoutMs / 60_000)}-minute time limit; automatic abort requested.`;
+          const alreadyTimedOut = run.cancellation_kind === "timeout";
+          const claimedTimeout = alreadyTimedOut || await requestRunCancellation(run.id, "timeout", reason);
+          if (!claimedTimeout) {
+            results.push({ runId: run.id, status: "abort_already_requested", cancellationKind: run.cancellation_kind });
+            continue;
+          }
+          const aborted = await abortApifyRun(run.apify_run_id, token);
+          if (["ABORTED", "FAILED", "TIMED-OUT"].includes(aborted.status)) {
+            const latestRun = await getRunById(run.id);
+            const won = await failClaimedRun(latestRun ?? run, reason);
+            results.push({ runId: run.id, status: won ? "failed_actor_timeout" : "already_claimed", apifyStatus: aborted.status, error: reason });
+          } else {
+            results.push({ runId: run.id, status: "actor_timeout_abort_requested", apifyStatus: aborted.status, error: reason });
+          }
+        } else {
+          results.push({ runId: run.id, status: "still_running", apifyStatus });
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const failureCount = await recordRunPollFailure(run.id, message).catch(() => 0);
+      if (run.token_id && isApifyAuthorizationError(error)) {
+        // A run-scoped 401 can mean a valid key belongs to another account.
+        // Disable it only if Apify's account endpoint also rejects the key.
+        await disableTokenIfIdentityIsRejected(run, message).catch((healthError) => {
+          console.error(`[job-agent-poll] Could not validate token health for ${run.id}:`, healthError);
+        });
+        const actionableError = `Apify authorization was rejected while checking this run (${message}). The local run is marked failed; verify and stop the remote actor in Apify if it is still active.`;
+        await transitionRunStatus(run.id, run.status, {
+          status: "failed",
+          error: actionableError,
+          completed_at: new Date().toISOString(),
+          processing_started_at: null,
+        }).catch((statusError) => {
+          console.error(`[job-agent-poll] Could not close unauthorized run ${run.id}:`, statusError);
+        });
+        if (run.batch_id) {
+          await markNightlyRunUnrecoverable(run, actionableError).catch((batchError) => {
+            console.error(`[job-agent-poll] Could not close unauthorized nightly shard ${run.id}:`, batchError);
+          });
+        }
+        results.push({ runId: run.id, status: "authorization_failed_remote_unverified", error: actionableError, consecutiveFailures: failureCount });
+        console.error(`[job-agent-poll] Apify authorization failed for run ${run.id}; token disabled and remote actor state is unverified.`);
+        continue;
+      }
       results.push({ runId: run.id, status: "poll_error", error: message });
-      console.error(`[job-agent-poll] Error polling run ${run.id}:`, error);
+      console.error(`[job-agent-poll] Error polling run ${run.id} (consecutive failures: ${failureCount}):`, error);
     }
   }
 
@@ -248,14 +380,22 @@ async function handlePoll(req: NextRequest) {
     console.error("[job-agent-poll] Nightly batch recovery failed:", error);
   }
 
+  const pollErrors = results.filter((result) => result.status === "poll_error").length;
   return NextResponse.json({
     ok: advanceError === null,
-    cleanedUp,
     polled: runningRuns.length,
     processed,
+    pollErrors,
     results,
     advanceError,
   }, { status: advanceError === null ? 200 : 500 });
+}
+
+async function handlePoll(req: NextRequest) {
+  if (!isAuthorized(req)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return runJobAgentPoll();
 }
 
 export async function GET(req: NextRequest) {

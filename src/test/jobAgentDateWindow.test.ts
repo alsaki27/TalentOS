@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   filterItemsToDateWindow,
+  getPostingDateWindow,
   parsePostingDateStrict,
 } from "@/lib/jobAgentDateWindow";
 
@@ -8,6 +9,15 @@ const WINDOW_START = "2026-08-04T18:00:00.000Z";
 const WINDOW_END = "2026-08-06T18:00:00.000Z";
 
 describe("strict Job Agent posting-date parsing", () => {
+  test("creates an exact rolling window and leaves Any Time unbounded", () => {
+    expect(getPostingDateWindow("2 days", WINDOW_END)).toEqual({
+      windowStart: WINDOW_START,
+      windowEnd: WINDOW_END,
+    });
+    expect(getPostingDateWindow("any", WINDOW_END)).toBeNull();
+    expect(() => getPostingDateWindow("tomorrow", WINDOW_END)).toThrow(/Unsupported Job Agent date interval/);
+  });
+
   test("accepts timezone-qualified ISO timestamps and rejects date-only values", () => {
     expect(parsePostingDateStrict("2026-08-05T01:02:03-04:00", WINDOW_END)).toMatchObject({
       ok: true,

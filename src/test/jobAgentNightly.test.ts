@@ -8,6 +8,7 @@ import {
   buildActorInput,
   buildGoogleBooleanQuery,
   normalizeActorItem,
+  toGooglePostedWithin,
 } from "@/lib/jobAgentActorContracts";
 import { buildNightlyShardMatrix } from "@/lib/jobAgentNightlyPlan";
 import { classifyWithRegex } from "@/lib/ai/jobAgentClassifier";
@@ -58,6 +59,20 @@ describe("nightly Job Agent role and shard plan", () => {
       expect(shard.googleQuery?.split(" OR ").every((title) => /^"[^"\r\n]+"$/.test(title))).toBe(true);
     }
   });
+
+  test("builds a two-day A/B dry-run matrix without expanding to other nightly groups", () => {
+    const shards = buildNightlyShardMatrix(["A", "B"]);
+    expect(shards).toHaveLength(6);
+    expect(shards.every((shard) => shard.dateInterval === "2 days")).toBe(true);
+    expect(shards.every((shard) => ["A", "B"].includes(shard.roleGroups[0]))).toBe(true);
+    expect(shards.map((shard) => shard.actorSource).sort()).toEqual([
+      "google", "google", "indeed", "indeed", "linkedin", "linkedin",
+    ]);
+    expect(shards.map((shard) => shard.maxResults)).toEqual([100, 150, 28, 100, 150, 28]);
+    expect(() => buildNightlyShardMatrix(["UNKNOWN"])).toThrow(
+      "Role group UNKNOWN is not enabled for nightly Job Agent searches.",
+    );
+  });
 });
 
 describe("Apify actor contracts", () => {
@@ -76,6 +91,23 @@ describe("Apify actor contracts", () => {
       hoursOld: 48,
       enforceAnnual: true,
     });
+  });
+
+  test("Any Time omits provider-only date limits instead of silently narrowing search", () => {
+    const indeed = buildActorInput({ actorSource: "indeed", queries: ["GIS Analyst"], dateInterval: "any", maxResults: 50 });
+    const linkedin = buildActorInput({ actorSource: "linkedin", queries: ["GIS Analyst"], dateInterval: "any", maxResults: 150 });
+    const google = buildActorInput({ actorSource: "google", queries: ["GIS Analyst"], dateInterval: "any", maxResults: 50 });
+
+    expect(indeed).not.toHaveProperty("hoursOld");
+    expect(linkedin).not.toHaveProperty("publishedAt");
+    expect(google).toHaveProperty("posted_within", "any");
+  });
+
+  test("Google requests a provider window broad enough for strict 48-hour filtering", () => {
+    expect(toGooglePostedWithin("today")).toBe("24h");
+    expect(toGooglePostedWithin("2 days")).toBe("3d");
+    expect(toGooglePostedWithin("7 days")).toBe("7d");
+    expect(toGooglePostedWithin("30 days")).toBe("30d");
   });
 
   test("LinkedIn uses current maxItems contract and fetches a week for strict post-filtering", () => {
@@ -116,6 +148,7 @@ describe("Apify actor contracts", () => {
       language: "en",
       num_results: 28,
       max_pagination: 2,
+      posted_within: "24h",
     });
     for (const staleField of ["gl", "hl", "maxItems", "numJobs"]) {
       expect(input).not.toHaveProperty(staleField);

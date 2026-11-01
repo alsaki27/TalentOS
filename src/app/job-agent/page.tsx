@@ -3,9 +3,18 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { TableSkeleton } from "../Skeleton";
-import { LiveFeedBoard } from "./LiveFeedBoard";
 
-interface Run { id: string; config_id: string; status: string; raw_count: number; deduped_count: number; imported_count: number; skipped_count: number; classified_count: number; estimated_cost_usd: number; error: string | null; role_groups_ran: string[] | null; started_at: string; completed_at: string | null; best_count: number; medium_count: number; worthy_count: number; skip_count: number; staged_count: number; }
+interface Run {
+  id: string; config_id: string; status: string; actor_source: string; trigger_type: string;
+  batch_id: string | null; date_interval: string | null; window_start: string | null; window_end: string | null;
+  search_queries_ran: string[] | null; cancel_requested_at: string | null;
+  poll_failure_count: number; consecutive_poll_failure_count: number; last_poll_error: string | null;
+  last_poll_error_at: string | null; last_polled_at: string | null;
+  raw_count: number; deduped_count: number; imported_count: number; skipped_count: number;
+  classified_count: number; estimated_cost_usd: number; error: string | null;
+  role_groups_ran: string[] | null; started_at: string; completed_at: string | null;
+  best_count: number; medium_count: number; worthy_count: number; skip_count: number; staged_count: number;
+}
 interface RoleGroup { id: string; label: string; resumeFamily: string; titles: string[]; }
 interface KeywordGroup { id: string; label: string; keywords: string[]; }
 interface NightlyActorProgress { total: number; terminal: number; succeeded: number; failed: number; retrying: number; active: number; attempts: number; }
@@ -35,6 +44,90 @@ interface NightlyBatch {
   tier_counts: { best: number; medium: number; worthy: number; skip: number };
   actor_progress: Record<"indeed" | "linkedin" | "google", NightlyActorProgress>;
   shards: NightlyBatchShard[];
+}
+
+const JOB_AGENT_PAGE_SIZE = 10;
+
+function JobAgentPagination({
+  page,
+  totalItems,
+  pageSize = JOB_AGENT_PAGE_SIZE,
+  disabled = false,
+  label,
+  onPageChange,
+}: {
+  page: number;
+  totalItems: number;
+  pageSize?: number;
+  disabled?: boolean;
+  label: string;
+  onPageChange: (page: number) => void;
+}) {
+  const [pageInput, setPageInput] = useState("");
+  const [pageError, setPageError] = useState("");
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+
+  useEffect(() => {
+    setPageInput("");
+    setPageError("");
+  }, [page]);
+
+  if (totalItems === 0) return null;
+
+  const pages: Array<number | string> = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, index) => index + 1)
+    : page <= 4
+      ? [1, 2, 3, 4, 5, "…", totalPages]
+      : page >= totalPages - 3
+        ? [1, "…", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+        : [1, "…", page - 1, page, page + 1, "…", totalPages];
+
+  function goToPage() {
+    const nextPage = Number(pageInput);
+    if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > totalPages) {
+      setPageError(`Choose a page from 1 to ${totalPages}.`);
+      return;
+    }
+    setPageError("");
+    onPageChange(nextPage);
+  }
+
+  const firstItem = (page - 1) * pageSize + 1;
+  const lastItem = Math.min(page * pageSize, totalItems);
+
+  return (
+    <div className="job-agent-pagination">
+      <span className="job-agent-pagination-summary">Showing {firstItem}–{lastItem} of {totalItems} {label}</span>
+      <div className="job-agent-pagination-controls">
+        <button type="button" onClick={() => onPageChange(page - 1)} disabled={disabled || page <= 1}>Prev</button>
+        {pages.map((entry, index) => (
+          <button
+            type="button"
+            key={`${entry}-${index}`}
+            className={entry === page ? "btn-primary" : ""}
+            onClick={() => typeof entry === "number" && onPageChange(entry)}
+            disabled={disabled || entry === "…" || entry === page}
+            aria-current={entry === page ? "page" : undefined}
+          >{entry}</button>
+        ))}
+        <button type="button" onClick={() => onPageChange(page + 1)} disabled={disabled || page >= totalPages}>Next</button>
+        <label className="job-agent-page-jump">
+          <span>Page</span>
+          <input
+            type="number"
+            min={1}
+            max={totalPages}
+            value={pageInput}
+            onChange={(event) => { setPageInput(event.target.value); setPageError(""); }}
+            onKeyDown={(event) => { if (event.key === "Enter") goToPage(); }}
+            aria-label={`Go to ${label} page`}
+          />
+          <button type="button" onClick={goToPage} disabled={disabled}>Go</button>
+        </label>
+      </div>
+      {pageError && <span className="form-error job-agent-pagination-error">{pageError}</span>}
+    </div>
+  );
 }
 
 const NIGHTLY_ACTORS = [
@@ -78,7 +171,10 @@ export default function JobAgentPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  const [cleaningUp, setCleaningUp] = useState(false);
+  const [stoppingRunId, setStoppingRunId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"controls" | "nightly" | "runs">("controls");
+  const [nightlyPage, setNightlyPage] = useState(1);
+  const [runPage, setRunPage] = useState(1);
 
   const [selectedRoleGroups, setSelectedRoleGroups] = useState<Set<string>>(new Set());
   const [selectedKeywordGroups, setSelectedKeywordGroups] = useState<Set<string>>(new Set());
@@ -93,18 +189,8 @@ export default function JobAgentPage() {
   const [showKgForm, setShowKgForm] = useState(false);
 
   async function load() {
-    // ARCHIVED 2026-09-13 — Nightly Automation is paused pending a rework
-    // (see the matching JSX block below). Commented out, not deleted, along
-    // with its render block so this whole call/fetch/render chain can be
-    // restored together. To restore: uncomment the batchesRes fetch below,
-    // the [runsRes, libRes, kgRes, batchesRes] destructure, and the JSX
-    // block marked "Nightly batch visibility" further down this file.
-    //
-    // const [runsRes, libRes, kgRes, batchesRes] = await Promise.allSettled([
-    //   fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"), fetch("/api/job-agent/batches?limit=10"),
-    // ]);
     const [runsRes, libRes, kgRes] = await Promise.allSettled([
-      fetch("/api/job-agent/runs"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"),
+      fetch("/api/job-agent/runs?limit=100"), fetch("/api/job-agent/role-library"), fetch("/api/job-agent/keyword-groups"),
     ]);
     if (runsRes.status === "fulfilled" && runsRes.value.ok) setRuns((await runsRes.value.json().catch(() => [])) ?? []);
     if (libRes.status === "fulfilled" && libRes.value.ok) {
@@ -112,19 +198,27 @@ export default function JobAgentPage() {
       setRoleGroups(d.groups ?? []);
     }
     if (kgRes.status === "fulfilled" && kgRes.value.ok) setKeywordGroups((await kgRes.value.json().catch(() => [])) ?? []);
-    // if (batchesRes.status === "fulfilled" && batchesRes.value.ok) {
-    //   const data = await batchesRes.value.json().catch(() => ({ batches: [] }));
-    //   setNightlyBatches(data.batches ?? []);
-    //   setNightlyBatchError("");
-    // } else if (batchesRes.status === "fulfilled") {
-    //   const data = await batchesRes.value.json().catch(() => ({}));
-    //   setNightlyBatchError(data.error ?? "Could not load nightly batches");
-    // } else {
-    //   setNightlyBatchError("Could not load nightly batches");
-    // }
+  }
+
+  async function loadNightlyBatches() {
+    try {
+      const response = await fetch("/api/job-agent/batches?limit=25");
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not load nightly batches");
+      setNightlyBatches(data.batches ?? []);
+      setNightlyBatchError("");
+    } catch (error) {
+      setNightlyBatchError(error instanceof Error ? error.message : "Could not load nightly batches");
+    }
   }
 
   useEffect(() => { load().then(() => setLoading(false)); }, []);
+
+  useEffect(() => {
+    loadNightlyBatches();
+    const interval = setInterval(loadNightlyBatches, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Real-time polling every 7 seconds
   useEffect(() => {
@@ -152,29 +246,48 @@ export default function JobAgentPage() {
       return;
     }
     try {
+      let runStarted = false;
       const res = await fetch("/api/job-agent/runs", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ roleGroups: groups, customKeywords, dateInterval, actorSources })  });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "Run failed");
-      const msg = d.runs
-        ? `${d.runs.length} run(s) started: ${d.runs.map((r: any) => `${r.actorSource}:${r.runId.slice(0,8)}`).join(", ")}`
-        : `Run started: ${d.runId}`;
-      setMessage(msg);
+      if (Array.isArray(d.runs)) {
+        const started = d.runs.filter((run: any) => run.status === "running" || run.status === "pending");
+        const failed = d.runs.filter((run: any) => run.status === "failed");
+        if (started.length === 0 && failed.length > 0) {
+          throw new Error(failed.map((run: any) => `${run.actorSource}: ${run.error || "failed to start"}`).join("; "));
+        }
+        runStarted = started.length > 0;
+        setMessage(`${started.length} run(s) started: ${started.map((run: any) => `${run.actorSource}:${String(run.runId).slice(0, 8)}`).join(", ")}`);
+        setError(failed.length > 0
+          ? failed.map((run: any) => `${run.actorSource}: ${run.error || "failed to start"}`).join("; ")
+          : "");
+      } else {
+        runStarted = Boolean(d.runId);
+        setMessage(`Run started: ${d.runId}`);
+      }
+      if (runStarted) {
+        setSelectedRoleGroups(new Set());
+        setSelectedKeywordGroups(new Set());
+        setSelectedActorSources(new Set(["indeed"]));
+        setMessage((current) => `${current}. Selections reset to defaults.`);
+      }
       load();
     } catch (err: any) { setError(err.message); }
     finally { setRunning(false); }
   }
 
-  async function clearStuckRuns() {
-    setCleaningUp(true); setError(""); setMessage("");
+  async function cancelRun(run: Run) {
+    if (!confirm(`Stop the ${run.actor_source} Apify run ${run.id.slice(0, 8)} now? The actor will be aborted immediately.`)) return;
+    setStoppingRunId(run.id); setError(""); setMessage("");
     try {
-      const res = await fetch("/api/job-agent/runs/cleanup", { method: "POST" });
+      const res = await fetch(`/api/job-agent/runs/${run.id}/cancel`, { method: "POST" });
       const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.error || "Cleanup failed");
-      setMessage(d.cleanedUp > 0 ? `Cleared ${d.cleanedUp} stuck run(s).` : "No stuck runs found.");
-      load();
+      if (!res.ok) throw new Error(d.error || "Could not stop run");
+      setMessage(d.status === "cancelled" ? "Apify run stopped." : "Stop requested. Apify is confirming the cancellation; status will refresh automatically.");
+      await load();
     } catch (err: any) { setError(err.message); }
-    finally { setCleaningUp(false); }
+    finally { setStoppingRunId(null); }
   }
 
   // Keyword group CRUD
@@ -200,8 +313,20 @@ export default function JobAgentPage() {
 
   const activeCount = runs.filter((r) => r.status === "running" || r.status === "pending" || r.status === "processing").length;
   const succeededCount = runs.filter((r) => r.status === "succeeded").length;
-  const failedCount = runs.filter((r) => r.status !== "succeeded" && r.status !== "running" && r.status !== "pending" && r.status !== "processing").length;
+  const failedCount = runs.filter((r) => r.status === "failed").length;
   const bestTotal = runs.reduce((sum, r) => sum + (r.best_count || 0), 0);
+  const nightlyPageCount = Math.max(1, Math.ceil(nightlyBatches.length / JOB_AGENT_PAGE_SIZE));
+  const runPageCount = Math.max(1, Math.ceil(runs.length / JOB_AGENT_PAGE_SIZE));
+  const visibleNightlyBatches = nightlyBatches.slice((nightlyPage - 1) * JOB_AGENT_PAGE_SIZE, nightlyPage * JOB_AGENT_PAGE_SIZE);
+  const visibleRuns = runs.slice((runPage - 1) * JOB_AGENT_PAGE_SIZE, runPage * JOB_AGENT_PAGE_SIZE);
+
+  useEffect(() => {
+    setNightlyPage((page) => Math.min(page, nightlyPageCount));
+  }, [nightlyPageCount]);
+
+  useEffect(() => {
+    setRunPage((page) => Math.min(page, runPageCount));
+  }, [runPageCount]);
 
   return (
     <div className="job-agent-page">
@@ -224,7 +349,20 @@ export default function JobAgentPage() {
       <div className="stat-card"><span className="stat-label">Best-tier jobs</span><span className="stat-value">{bestTotal}</span></div>
     </div>
 
+    <div className="job-agent-tabs" role="tablist" aria-label="Job Agent sections">
+      <button type="button" role="tab" id="job-agent-tab-controls" aria-controls="job-agent-panel-controls" aria-selected={activeTab === "controls"} className={activeTab === "controls" ? "active" : ""} onClick={() => setActiveTab("controls")}>
+        Agent Controls
+      </button>
+      <button type="button" role="tab" id="job-agent-tab-nightly" aria-controls="job-agent-panel-nightly" aria-selected={activeTab === "nightly"} className={activeTab === "nightly" ? "active" : ""} onClick={() => setActiveTab("nightly")}>
+        Nightly Automation <span className="job-agent-tab-count">{nightlyBatches.length}</span>
+      </button>
+      <button type="button" role="tab" id="job-agent-tab-runs" aria-controls="job-agent-panel-runs" aria-selected={activeTab === "runs"} className={activeTab === "runs" ? "active" : ""} onClick={() => setActiveTab("runs")}>
+        Run Dashboard <span className="job-agent-tab-count">{activeCount ? `${activeCount} active` : runs.length}</span>
+      </button>
+    </div>
+
     {/* ── Agent Controls ── */}
+    <div id="job-agent-panel-controls" role="tabpanel" aria-labelledby="job-agent-tab-controls" hidden={activeTab !== "controls"}>
     <div className="card" style={{ marginBottom: 16 }}>
       <h2 className="section-title" style={{ fontSize: 17 }}>Agent Controls</h2>
 
@@ -350,18 +488,10 @@ export default function JobAgentPage() {
         </div>
       )}
     </div>
+    </div>
 
-    {/*
-      ARCHIVED 2026-09-13 — Nightly Automation section, paused on request
-      pending a rework of this feature. Commented out, not deleted, along
-      with its data-fetching in load() above (the batchesRes fetch and
-      nightlyBatches/nightlyBatchError state updates). The state
-      declarations (nightlyBatches, nightlyBatchError), the NightlyBatch/
-      NightlyBatchShard/NightlyActorProgress types, and the NIGHTLY_ACTORS/
-      dateExclusionSummary/nightlyShardTitle helpers above are all left
-      exactly as they were, so restoring is just: uncomment this block,
-      uncomment the load() fetch, done.
-
+    {/* Nightly batch progress stays visible so retries, filters, and handoff errors are auditable. */}
+    <div id="job-agent-panel-nightly" role="tabpanel" aria-labelledby="job-agent-tab-nightly" hidden={activeTab !== "nightly"}>
     <div className="card" style={{ marginBottom: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <h2 className="section-title" style={{ margin: 0 }}>Nightly Automation</h2>
@@ -374,8 +504,10 @@ export default function JobAgentPage() {
       ) : nightlyBatches.length === 0 ? (
         <p className="muted">No nightly batches yet.</p>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table className="table">
+        <>
+          <JobAgentPagination page={nightlyPage} totalItems={nightlyBatches.length} label="nightly batches" disabled={loading} onPageChange={setNightlyPage} />
+          <div className="table-shell job-agent-table-shell">
+          <table className="table job-agent-table job-agent-nightly-table">
             <thead>
               <tr>
                 <th>Business Date</th>
@@ -389,17 +521,17 @@ export default function JobAgentPage() {
               </tr>
             </thead>
             <tbody>
-              {nightlyBatches.map((batch) => {
+          {visibleNightlyBatches.map((batch) => {
                 const isActive = ["creating", "launching", "running", "finalizing", "finalization_failed"].includes(batch.status);
                 const isFailure = ["failed", "cancelled", "finalization_failed"].includes(batch.status);
                 const windowTitle = `${new Date(batch.window_start).toLocaleString()} → ${new Date(batch.window_end).toLocaleString()}`;
                 return (
                   <tr key={batch.id}>
-                    <td title={`Immutable window: ${windowTitle}`}>
+                    <td data-label="Business date" title={`Immutable window: ${windowTitle}`}>
                       <div style={{ fontWeight: 600 }}>{String(batch.business_date).slice(0, 10)}</div>
                       <div className="muted" style={{ fontSize: 10 }}>{batch.timezone}</div>
                     </td>
-                    <td>
+                    <td data-label="Status">
                       <span
                         className={`badge ${isFailure ? "badge-danger" : isActive ? "badge-warning" : ""}`}
                         style={isActive && !isFailure ? { animation: "pulse 1.5s infinite" } : undefined}
@@ -416,7 +548,7 @@ export default function JobAgentPage() {
                         </div>
                       )}
                     </td>
-                    <td>
+                    <td data-label="Actor / shards">
                       {NIGHTLY_ACTORS.map((actor) => {
                         const progress = batch.actor_progress[actor.id];
                         if (!progress) return null;
@@ -431,24 +563,24 @@ export default function JobAgentPage() {
                         );
                       })}
                     </td>
-                    <td>
+                    <td data-label="Results">
                       <strong>{batch.raw_count}</strong> / {batch.accepted_count}
                       <div className="muted" style={{ fontSize: 10 }}>{batch.classified_count} classified</div>
                     </td>
-                    <td>
+                    <td data-label="Date excluded">
                       <strong>{batch.date_excluded_count}</strong>
                       <div className="muted" style={{ fontSize: 10, maxWidth: 190 }}>
                         {dateExclusionSummary(batch.date_exclusion_reasons)}
                       </div>
                     </td>
-                    <td>{batch.duplicate_count}</td>
-                    <td style={{ fontSize: 11, whiteSpace: "nowrap" }}>
+                    <td data-label="Duplicates">{batch.duplicate_count}</td>
+                    <td data-label="Tiers" style={{ fontSize: 11, whiteSpace: "nowrap" }}>
                       <span style={{ color: "#166534" }}>B {batch.tier_counts.best}</span> ·{" "}
                       <span style={{ color: "#854d0e" }}>M {batch.tier_counts.medium}</span> ·{" "}
                       <span style={{ color: "#1e40af" }}>W {batch.tier_counts.worthy}</span> ·{" "}
                       <span style={{ color: "#991b1b" }}>S {batch.tier_counts.skip}</span>
                     </td>
-                    <td>
+                    <td data-label="Imported / Job CEO">
                       <strong>{batch.imported_count}</strong>
                       {batch.job_ceo_run_id && (
                         <div style={{ marginTop: 3 }}>
@@ -463,78 +595,96 @@ export default function JobAgentPage() {
               })}
             </tbody>
           </table>
-        </div>
+          </div>
+          <JobAgentPagination page={nightlyPage} totalItems={nightlyBatches.length} label="nightly batches" disabled={loading} onPageChange={setNightlyPage} />
+        </>
       )}
     </div>
-    */}
+    </div>
 
     {/* ── Run Dashboard ── */}
+    <div id="job-agent-panel-runs" role="tabpanel" aria-labelledby="job-agent-tab-runs" hidden={activeTab !== "runs"}>
     <div className="card" style={{ marginBottom: 16 }}>
       <div className="run-dashboard-header">
         <h2 className="section-title" style={{ margin: 0, fontSize: 17 }}>Run Dashboard</h2>
-        <button
-          onClick={clearStuckRuns}
-          disabled={cleaningUp}
-          className="btn-compact"
-          title="Mark all stuck running/pending/processing runs as failed"
-        >
-          {cleaningUp ? "Clearing…" : "🧹 Clear Stuck Runs"}
-        </button>
+        <span className="muted" style={{ fontSize: 12 }}>Apify status refreshes automatically; failures stay visible here.</span>
       </div>
-
-      {/* Only show the live feed board for runs started within the last 30 minutes.
-          Old stuck runs should NOT trigger the spinner forever. */}
-      {runs.find((r) => {
-        if (!(r.status === "running" || r.status === "pending" || r.status === "processing")) return false;
-        const ageMs = Date.now() - new Date(r.started_at).getTime();
-        return ageMs < 30 * 60 * 1000; // 30 minutes
-      }) && (
-        <LiveFeedBoard
-          runId={runs.find((r) => {
-            if (!(r.status === "running" || r.status === "pending" || r.status === "processing")) return false;
-            const ageMs = Date.now() - new Date(r.started_at).getTime();
-            return ageMs < 30 * 60 * 1000;
-          })!.id}
-          onComplete={() => load()}
-        />
-      )}
 
       {loading ? <TableSkeleton cols={10} /> : runs.length === 0 ? (
         <p className="muted">No runs yet. Select groups and click Run Now.</p>
       ) : (
-        <div className="table-shell" style={{ marginTop: runs.find(r => r.status === "running" || r.status === "pending" || r.status === "processing") ? 20 : 0 }}>
-          <table className="table">
-            <thead><tr><th>Date</th><th>Source</th><th>Groups</th><th>Raw</th><th>Deduped</th><th>Classified</th><th>Best</th><th>Medium</th><th>Worthy</th><th>Skip</th><th>Status</th></tr></thead>
+        <>
+          <JobAgentPagination page={runPage} totalItems={runs.length} label="runs" disabled={loading} onPageChange={setRunPage} />
+          <div className="table-shell job-agent-table-shell">
+          <table className="table job-agent-table job-agent-run-table">
+            <thead><tr><th>Started</th><th>Source</th><th>Groups / search</th><th>Window</th><th>Results</th><th>Tiers</th><th>Status / actions</th></tr></thead>
             <tbody>
-              {runs.map((run) => (
+              {visibleRuns.map((run) => (
                 <tr key={run.id}>
-                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{new Date(run.started_at).toLocaleString()}</td>
-                  <td>
+                  <td data-label="Started" className="muted" style={{ whiteSpace: "nowrap" }}>{new Date(run.started_at).toLocaleString()}</td>
+                  <td data-label="Source">
                     <span className="badge" style={{ textTransform: "uppercase" }}>
-                      {(run as any).actor_source === "google" ? "🌐 Google" : (run as any).actor_source === "linkedin" ? "💼 LinkedIn" : "🔍 Indeed"}
+                      {run.actor_source === "google" ? "🌐 Google" : run.actor_source === "linkedin" ? "💼 LinkedIn" : "🔍 Indeed"}
                     </span>
+                    <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{run.batch_id ? "Nightly" : "Manual"}</div>
                   </td>
-                  <td title={groupLabel(run.role_groups_ran).full}>{groupLabel(run.role_groups_ran).short}</td>
-                  <td>{run.raw_count}</td>
-                  <td>{run.deduped_count}</td>
-                  <td>{run.classified_count}</td>
-                  <td style={{ color: "var(--accent)", fontWeight: 600 }}>{run.best_count}</td>
-                  <td style={{ color: "var(--warn)", fontWeight: 600 }}>{run.medium_count}</td>
-                  <td style={{ color: "var(--info)", fontWeight: 600 }}>{run.worthy_count}</td>
-                  <td style={{ color: "var(--danger)", fontWeight: 600 }}>{run.skip_count}</td>
-                  <td>
-                    <span className={`badge ${run.status === "succeeded" ? "" : run.status === "running" || run.status === "pending" || run.status === "processing" ? "badge-warning" : "badge-danger"}`}
+                  <td data-label="Groups / search" title={run.search_queries_ran?.join(", ") || groupLabel(run.role_groups_ran).full}>
+                    {groupLabel(run.role_groups_ran).short}
+                    {run.search_queries_ran?.length ? <div className="muted" style={{ fontSize: 10, maxWidth: 230, whiteSpace: "normal" }}>{run.search_queries_ran.slice(0, 3).join(", ")}{run.search_queries_ran.length > 3 ? ` +${run.search_queries_ran.length - 3} more` : ""}</div> : null}
+                  </td>
+                  <td data-label="Window" className="muted" style={{ whiteSpace: "nowrap", fontSize: 11 }}>
+                    {run.date_interval === "any" ? "Any time" : run.window_start && run.window_end
+                      ? <span title={`${new Date(run.window_start).toLocaleString()} to ${new Date(run.window_end).toLocaleString()}`}>
+                          {run.date_interval ?? "Window"} · {new Date(run.window_start).toLocaleString()} – {new Date(run.window_end).toLocaleTimeString()}
+                        </span>
+                      : run.date_interval ?? "Historical"}
+                  </td>
+                  <td data-label="Results">
+                    <div className="job-agent-metric-list">
+                      <span><strong>{run.raw_count}</strong> raw</span>
+                      <span><strong>{run.deduped_count}</strong> deduped</span>
+                      <span><strong>{run.classified_count}</strong> classified</span>
+                    </div>
+                  </td>
+                  <td data-label="Tiers">
+                    <div className="job-agent-tier-list">
+                      <span className="job-agent-tier-best">Best {run.best_count}</span>
+                      <span className="job-agent-tier-medium">Medium {run.medium_count}</span>
+                      <span className="job-agent-tier-worthy">Worthy {run.worthy_count}</span>
+                      <span className="job-agent-tier-skip">Skip {run.skip_count}</span>
+                    </div>
+                  </td>
+                  <td data-label="Status / actions" className="job-agent-run-status-cell">
+                    <span className={`badge ${run.status === "succeeded" || run.status === "cancelled" ? "" : run.status === "running" || run.status === "pending" || run.status === "processing" ? "badge-warning" : "badge-danger"}`}
                       style={{ whiteSpace: "nowrap", ...(run.status === "running" || run.status === "processing" ? { animation: "pulse 1.5s infinite" } : undefined) }}>
-                      {run.status === "running" ? "⏳ scraping..." : run.status === "pending" ? "⏳ pending..." : run.status === "processing" ? "⚙ classifying..." : run.status}
+                      {run.cancel_requested_at && run.status === "running" ? "⏹ stopping..." : run.status === "running" ? "⏳ scraping..." : run.status === "pending" ? "⏳ pending..." : run.status === "processing" ? "⚙ classifying..." : run.status}
                     </span>
                     {run.error && <div className="form-error" style={{ fontSize: 11.5, marginTop: 4, maxWidth: 240, whiteSpace: "normal" }}>{run.error}</div>}
+                    {run.last_poll_error && <div title={run.last_poll_error} className="form-error" style={{ fontSize: 10.5, marginTop: 4, maxWidth: 260, whiteSpace: "normal" }}>
+                      Apify error {run.poll_failure_count}×{run.last_poll_error_at ? ` · ${new Date(run.last_poll_error_at).toLocaleString()}` : ""}
+                      {run.consecutive_poll_failure_count > 0 ? ` · ${run.consecutive_poll_failure_count} consecutive` : run.last_polled_at ? ` · recovered ${new Date(run.last_polled_at).toLocaleTimeString()}` : ""}: {run.last_poll_error}
+                    </div>}
+                    {run.trigger_type === "manual" && !run.batch_id && (run.status === "running" || run.status === "pending") && (
+                      <button
+                        className="btn-compact"
+                        style={{ marginTop: 6, color: "var(--danger)" }}
+                        disabled={Boolean(run.cancel_requested_at) || stoppingRunId === run.id}
+                        onClick={() => cancelRun(run)}
+                        title="Immediately abort this Apify actor run"
+                      >
+                        {stoppingRunId === run.id || run.cancel_requested_at ? "Stopping…" : "Stop run"}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-        </div>
+          </div>
+          <JobAgentPagination page={runPage} totalItems={runs.length} label="runs" disabled={loading} onPageChange={setRunPage} />
+        </>
       )}
+    </div>
     </div>
     </div>
   );

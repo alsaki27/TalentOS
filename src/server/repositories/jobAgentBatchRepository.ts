@@ -1,4 +1,5 @@
 import { execute, query, queryOne } from "@/server/db/neon";
+import { normalizeJobAgentBusinessDate } from "@/lib/jobAgentBusinessDate";
 
 export type JobAgentBatchStatus =
   | "creating"
@@ -180,9 +181,10 @@ export async function createOrGetBatch(input: CreateJobAgentBatchInput): Promise
     ]
   );
   if (!row) throw new Error("Failed to create or load Job Agent batch");
+  const businessDate = normalizeJobAgentBusinessDate(row.business_date, input.timezone);
 
   if (
-    row.business_date !== input.businessDate ||
+    businessDate !== input.businessDate ||
     row.timezone !== input.timezone ||
     !sameInstant(row.window_start, input.windowStart) ||
     !sameInstant(row.window_end, input.windowEnd) ||
@@ -197,11 +199,14 @@ export async function createOrGetBatch(input: CreateJobAgentBatchInput): Promise
     throw new Error(`Batch key ${input.batchKey} already exists with a different immutable definition`);
   }
 
-  return row;
+  return { ...row, business_date: businessDate };
 }
 
 export async function getBatchById(id: string): Promise<JobAgentBatchRow | null> {
-  return queryOne<JobAgentBatchRow>("SELECT * FROM job_agent_batches WHERE id = $1", [id]);
+  const row = await queryOne<JobAgentBatchRow>("SELECT * FROM job_agent_batches WHERE id = $1", [id]);
+  return row
+    ? { ...row, business_date: normalizeJobAgentBusinessDate(row.business_date, row.timezone) }
+    : null;
 }
 
 export async function getBatchByKey(batchKey: string): Promise<JobAgentBatchRow | null> {
@@ -531,9 +536,9 @@ export async function scheduleShardRetry(input: {
          END,
          launch_claim_token = NULL,
          launch_claimed_at = NULL,
-         last_error = $3,
+         last_error = $3::text,
          errors = errors || jsonb_build_array(jsonb_build_object(
-           'at', NOW(), 'attempt', attempt_count, 'runId', $2::uuid, 'message', $3
+           'at', NOW(), 'attempt', attempt_count, 'runId', $2::uuid, 'message', $3::text
          )),
          completed_at = CASE WHEN attempt_count >= max_attempts THEN NOW() ELSE NULL END,
          updated_at = NOW()

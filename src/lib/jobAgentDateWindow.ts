@@ -133,6 +133,33 @@ export interface DateWindowFilterOptions {
   referenceStartTime?: string | Date;
 }
 
+/** Convert a UI interval into an immutable rolling UTC window. `any` has no bound. */
+export function getPostingDateWindow(
+  interval: string | undefined | null,
+  referenceTime: string | Date = new Date(),
+): { windowStart: string; windowEnd: string } | null {
+  const normalized = (interval ?? "today").toLowerCase().trim();
+  const hoursByInterval: Record<string, number> = {
+    today: 24,
+    "2 days": 48,
+    "3 days": 72,
+    "3days": 72,
+    "7 days": 168,
+    week: 168,
+    "30 days": 720,
+    month: 720,
+  };
+  if (normalized === "any") return null;
+  const hours = hoursByInterval[normalized];
+  if (!hours) throw new Error(`Unsupported Job Agent date interval: ${normalized || "(empty)"}`);
+  const end = referenceTime instanceof Date ? new Date(referenceTime.getTime()) : new Date(referenceTime);
+  if (!Number.isFinite(end.getTime())) throw new Error("Invalid Job Agent date-window reference time.");
+  return {
+    windowStart: new Date(end.getTime() - hours * 3_600_000).toISOString(),
+    windowEnd: end.toISOString(),
+  };
+}
+
 function emptyReasonCounts(): Record<DateExclusionReason, number> {
   return {
     missing_date: 0,

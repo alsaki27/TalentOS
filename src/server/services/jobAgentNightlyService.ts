@@ -1,4 +1,5 @@
 import { buildNightlyShardMatrix } from "@/lib/jobAgentNightlyPlan";
+import { normalizeJobAgentBusinessDate } from "@/lib/jobAgentBusinessDate";
 import { getNightlyDefaultGroups } from "@/lib/jobAgentRoleLibrary";
 import { importApprovedBatch } from "@/lib/jobAgentImporter";
 import { getBatchBridgeStats } from "@/server/repositories/jobAgentBridgeRepository";
@@ -71,6 +72,8 @@ export interface StartNightlyBatchOptions {
   businessDate?: string;
   invocationType?: "scheduled" | "manual" | "recovery";
   requestId?: string;
+  /** Optional scoped groups for an ad-hoc dry-run batch. Scheduled/recovery batches always use the complete nightly defaults. */
+  roleGroups?: string[];
   now?: Date;
 }
 
@@ -172,7 +175,7 @@ async function launchClaimedShard(
 
   const reservation = await reserveNightlyToken({
     reservationKey: `${batch.batch_key}:${shard.shard_key}:attempt-${shard.attempt_count}`,
-    businessDate: String(batch.business_date).slice(0, 10),
+    businessDate: normalizeJobAgentBusinessDate(batch.business_date, batch.timezone),
     amountUsd: projectedShardCost(shard.allocated_result_limit),
     batchShardId: shard.id,
     timezone: batch.timezone,
@@ -208,6 +211,7 @@ async function launchClaimedShard(
         batchShardId: shard.id,
         attemptNumber: shard.attempt_count,
         triggerType: "nightly",
+        dateInterval: "2 days",
         windowStart: batch.window_start,
         windowEnd: batch.window_end,
         allocatedResultLimit: shard.allocated_result_limit,
@@ -255,6 +259,7 @@ async function launchClaimedShard(
         explicitQueries: shard.search_queries,
         explicitGoogleQuery: shard.search_query ?? undefined,
         allowTokenRotation: false,
+        tokenReservationId: reservation.reservation.id,
       }
     );
     await consumeTokenReservation(reservation.reservation.id, run.id);
@@ -312,8 +317,14 @@ export async function startOrResumeNightlyBatch(
     throw new Error("Nightly Job Agent automation is disabled");
   }
   const window = getDhakaNightlyWindow(options.now ?? new Date(), options.businessDate);
-  const matrix = buildNightlyShardMatrix();
   const invocationType = options.invocationType ?? "manual";
+  if (options.roleGroups?.length && invocationType !== "manual") {
+    throw new Error("Role-group selection is only supported for ad-hoc manual nightly dry runs.");
+  }
+  const selectedGroups = options.roleGroups?.length
+    ? [...new Set(options.roleGroups.map((group) => group.trim().toUpperCase()).filter(Boolean))]
+    : undefined;
+  const matrix = buildNightlyShardMatrix(selectedGroups);
   const requestId = (options.requestId ?? "manual")
     .trim()
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
@@ -325,7 +336,7 @@ export async function startOrResumeNightlyBatch(
   if (invocationType === "recovery" && !existing) {
     throw new Error(`No scheduled nightly batch exists for ${window.businessDate}`);
   }
-  const defaultGroups = getNightlyDefaultGroups().map((group) => group.id);
+  const defaultGroups = selectedGroups ?? getNightlyDefaultGroups().map((group) => group.id);
 
   const batch = existing ?? await createOrGetBatch({
     batchKey,
@@ -415,6 +426,23 @@ export async function markNightlyRunFailed(run: JobAgentRunRow, error: string): 
     runId: run.id,
     error,
     fromStatuses: ["launching", "running", "processing"],
+  });
+  await refreshBatchAggregates(run.batch_id);
+  await finalizeReadyBatch(run.batch_id);
+}
+
+/**
+ * A 401 means the poller cannot verify or abort the already-started actor.
+ * Close the local shard without retrying it, so recovery never launches a
+ * duplicate while that remote actor may still be running.
+ */
+export async function markNightlyRunUnrecoverable(run: JobAgentRunRow, error: string): Promise<void> {
+  if (!run.batch_id || !run.batch_shard_id) return;
+  await transitionShardStatus(run.batch_shard_id, ["running", "processing"], "failed", {
+    activeRunId: null,
+    lastRunId: run.id,
+    lastError: error,
+    completedAt: new Date().toISOString(),
   });
   await refreshBatchAggregates(run.batch_id);
   await finalizeReadyBatch(run.batch_id);

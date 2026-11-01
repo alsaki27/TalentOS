@@ -37,13 +37,13 @@ export async function POST(req: NextRequest) {
   const customKeywords: string[] = Array.isArray(body.customKeywords) ? body.customKeywords.filter(Boolean) : [];
   // actorSources: array of actor keys ("indeed", "google", "linkedin"). Default to ["indeed"].
   const actorSources: string[] = Array.isArray(body.actorSources) && body.actorSources.length > 0
-    ? body.actorSources.filter((s: unknown) => typeof s === "string" && ["indeed", "google", "linkedin"].includes(s as string))
+    ? [...new Set<string>((body.actorSources as unknown[]).filter((s): s is string => typeof s === "string" && ["indeed", "google", "linkedin"].includes(s)))]
     : ["indeed"];
 
   const results: { runId: string; actorSource: string; status: string; error?: string }[] = [];
 
   for (const actorSource of actorSources) {
-    let result: { runId: string; config: any; roleGroups: string[]; token: any };
+    let result: { runId: string; config: any; roleGroups: string[]; token: any; tokenReservationId: string };
     try {
       result = await createPendingRun({ testMode, useAi, roleGroups, customKeywords, dateInterval, actorSource: actorSource as any });
     } catch (err: any) {
@@ -62,7 +62,14 @@ export async function POST(req: NextRequest) {
         result.config,
         result.roleGroups,
         result.token,
-        { testMode, useAi, customKeywords, dateInterval, actorSource: actorSource as any }
+        {
+          testMode,
+          useAi,
+          customKeywords,
+          dateInterval,
+          actorSource: actorSource as any,
+          tokenReservationId: result.tokenReservationId,
+        }
       );
       results.push({ runId: result.runId, actorSource, status: "running" });
     } catch (err: any) {
@@ -72,9 +79,24 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // If only one actor, return in legacy shape for backward compatibility
+  // Keep the legacy single-run response shape, but never turn an actor launch
+  // failure into a successful-looking `pending` response. In particular,
+  // createPendingRun can fail before a run row exists (runId = "n/a").
   if (results.length === 1) {
-    return NextResponse.json({ runId: results[0].runId, status: "pending" });
+    const result = results[0];
+    if (result.status === "failed") {
+      return NextResponse.json(
+        { ...result, error: result.error ?? "The actor run could not be started." },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({ runId: result.runId, actorSource: result.actorSource, status: result.status });
   }
-  return NextResponse.json({ runs: results });
+  const failedRuns = results.filter((result) => result.status === "failed");
+  return NextResponse.json({
+    runs: results,
+    ...(failedRuns.length > 0
+      ? { error: `${failedRuns.length} of ${results.length} actor run(s) failed to start.` }
+      : {}),
+  }, { status: failedRuns.length === results.length ? 502 : 200 });
 }

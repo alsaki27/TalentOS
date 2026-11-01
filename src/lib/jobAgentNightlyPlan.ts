@@ -24,7 +24,47 @@ export interface NightlyJobAgentShard {
  * Build the immutable logical work matrix for one nightly batch:
  * 5 Indeed role bundles + 5 LinkedIn role bundles + 18 Google role groups.
  */
-export function buildNightlyShardMatrix(): NightlyJobAgentShard[] {
+export function buildNightlyShardMatrix(roleGroupIds?: string[]): NightlyJobAgentShard[] {
+  if (roleGroupIds?.length) {
+    const requestedIds = [...new Set(roleGroupIds.map((id) => id.trim().toUpperCase()).filter(Boolean))];
+    const available = new Map(getNightlyDefaultGroups().map((group) => [group.id, group]));
+    const selected = requestedIds.map((id) => {
+      const group = available.get(id);
+      if (!group) throw new Error(`Role group ${id} is not enabled for nightly Job Agent searches.`);
+      return group;
+    });
+    if (selected.length === 0) throw new Error("Select at least one role group for the nightly Job Agent run.");
+
+    const scoped: NightlyJobAgentShard[] = selected.flatMap((group) => [
+      {
+        shardKey: `indeed:${group.id}`,
+        actorSource: "indeed",
+        roleGroups: [group.id],
+        queries: [...group.titles],
+        maxResults: 100,
+        dateInterval: NIGHTLY_DATE_INTERVAL,
+      },
+      {
+        shardKey: `linkedin:${group.id}`,
+        actorSource: "linkedin",
+        roleGroups: [group.id],
+        queries: [...group.titles],
+        maxResults: 150,
+        dateInterval: NIGHTLY_DATE_INTERVAL,
+      },
+      {
+        shardKey: `google:${group.id}`,
+        actorSource: "google",
+        roleGroups: [group.id],
+        queries: [...group.titles],
+        maxResults: 28,
+        dateInterval: NIGHTLY_DATE_INTERVAL,
+        googleQuery: buildGoogleBooleanQuery(group.titles),
+      },
+    ]);
+    return scoped;
+  }
+
   assertNightlyCombinedGroupPartition();
 
   const combinedGroups = getCombinedGroups();

@@ -16,6 +16,7 @@ export interface JobAgentRunRow {
   batch_shard_id: string | null;
   attempt_number: number;
   trigger_type: string;
+  date_interval: string | null;
   window_start: string | null;
   window_end: string | null;
   allocated_result_limit: number | null;
@@ -26,6 +27,14 @@ export interface JobAgentRunRow {
   date_excluded_count: number;
   date_exclusion_reasons: Record<string, number>;
   processing_started_at: string | null;
+  last_polled_at: string | null;
+  poll_failure_count: number;
+  consecutive_poll_failure_count: number;
+  last_poll_error: string | null;
+  last_poll_error_at: string | null;
+  cancel_requested_at: string | null;
+  cancellation_kind: "operator" | "timeout" | null;
+  cancel_reason: string | null;
   raw_count: number;
   deduped_count: number;
   imported_count: number;
@@ -101,9 +110,12 @@ export interface JobAgentStagedJobRow {
 const RUN_COLUMNS = `
   id, config_id, token_id, token_reservation_id, apify_run_id, apify_dataset_id,
   status, actor_source, batch_id, batch_shard_id, attempt_number, trigger_type,
+  date_interval,
   window_start, window_end, allocated_result_limit, auto_import, auto_import_status,
   auto_import_error, auto_import_completed_at, date_excluded_count,
   date_exclusion_reasons, processing_started_at, raw_count,
+  last_polled_at, poll_failure_count, consecutive_poll_failure_count,
+  last_poll_error, last_poll_error_at, cancel_requested_at, cancellation_kind, cancel_reason,
   deduped_count, imported_count, skipped_count, classified_count,
   estimated_cost_usd, error, role_groups_ran, search_queries_ran,
   started_at, completed_at, created_at
@@ -114,6 +126,7 @@ export interface CreateJobAgentRunMetadata {
   batchShardId?: string | null;
   attemptNumber?: number;
   triggerType?: string;
+  dateInterval?: string | null;
   windowStart?: string | null;
   windowEnd?: string | null;
   allocatedResultLimit?: number | null;
@@ -143,13 +156,13 @@ export async function createRun(
   const row = await queryOne<JobAgentRunRow>(
     `INSERT INTO job_agent_runs (
        config_id, token_id, status, role_groups_ran, search_queries_ran, actor_source,
-       batch_id, batch_shard_id, attempt_number, trigger_type,
+       batch_id, batch_shard_id, attempt_number, trigger_type, date_interval,
        window_start, window_end, allocated_result_limit, auto_import,
        auto_import_status, token_reservation_id
      ) VALUES (
        $1, $2, 'pending', $3, $4, $5,
-       $6, $7, $8, $9, $10, $11, $12, $13,
-       CASE WHEN $13 THEN 'pending' ELSE 'not_requested' END, $14
+       $6, $7, $8, $9, $10, $11, $12, $13, $14,
+       CASE WHEN $14 THEN 'pending' ELSE 'not_requested' END, $15
      ) RETURNING ${RUN_COLUMNS}`,
     [
       configId,
@@ -161,6 +174,7 @@ export async function createRun(
       metadata.batchShardId ?? null,
       metadata.attemptNumber ?? 1,
       metadata.triggerType ?? "manual",
+      metadata.dateInterval ?? null,
       metadata.windowStart ?? null,
       metadata.windowEnd ?? null,
       metadata.allocatedResultLimit ?? null,
@@ -243,24 +257,143 @@ export async function listRunningRuns(): Promise<JobAgentRunRow[]> {
   return rows;
 }
 
-/**
- * Mark any run stuck in running/pending/processing for more than the given
- * threshold as failed. This prevents the dashboard from showing the live-feed
- * spinner forever when a run dies mid-flight (e.g. Cloudflare timeout).
- * Returns the number of runs cleaned up.
- */
-export async function cleanupStuckRuns(thresholdMinutes = 30): Promise<number> {
-  const res = await execute(
+/** Record a successful check while retaining the last transient error for audit. */
+export async function recordRunPollSuccess(id: string): Promise<void> {
+  await execute(
     `UPDATE job_agent_runs
-     SET status = 'failed',
-         error = 'Run timed out — automatically marked failed after ${thresholdMinutes} minutes',
-         completed_at = NOW()
-     WHERE status IN ('running', 'pending', 'processing')
-       AND batch_id IS NULL
-       AND started_at < NOW() - INTERVAL '${thresholdMinutes} minutes'
-     RETURNING id`
+     SET last_polled_at = NOW(), consecutive_poll_failure_count = 0
+     WHERE id = $1 AND status IN ('running', 'pending')`,
+    [id]
   );
-  return res.rowCount ?? 0;
+}
+
+/** Keep transient Apify/API/DB errors visible while leaving the run pollable. */
+export async function recordRunPollFailure(id: string, message: string): Promise<number> {
+  const row = await queryOne<{ consecutive_poll_failure_count: number }>(
+    `UPDATE job_agent_runs
+     SET last_polled_at = NOW(), poll_failure_count = poll_failure_count + 1,
+         consecutive_poll_failure_count = consecutive_poll_failure_count + 1,
+         last_poll_error = $2, last_poll_error_at = NOW()
+     WHERE id = $1 AND status IN ('running', 'pending')
+     RETURNING consecutive_poll_failure_count`,
+    [id, message.slice(0, 1000)]
+  );
+  return Number(row?.consecutive_poll_failure_count ?? 0);
+}
+
+/** First-writer-wins cancellation reason so an operator request cannot be
+ * overwritten by the automatic timeout guard (or the reverse). */
+export async function requestRunCancellation(
+  id: string,
+  kind: "operator" | "timeout",
+  message: string,
+): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `UPDATE job_agent_runs
+     SET cancel_requested_at = NOW(), cancellation_kind = $2, cancel_reason = $3
+     WHERE id = $1 AND status = 'running' AND cancellation_kind IS NULL
+     RETURNING id`,
+    [id, kind, message.slice(0, 1000)]
+  );
+  return Boolean(row);
+}
+
+/**
+ * Remove only expired Apify-run operational history. The permanent `jobs` and
+ * Job CEO staging tables are intentionally outside this retention boundary.
+ * Active runs, active batches and active token reservations are always kept.
+ */
+export async function pruneJobAgentHistory(retentionDays = 15): Promise<{
+  stagedJobs: number;
+  runs: number;
+  batches: number;
+  tokenReservations: number;
+}> {
+  const days = Math.max(1, Math.min(3650, Math.floor(retentionDays)));
+  const cutoffSql = "NOW() - ($1::int * INTERVAL '1 day')";
+
+  const reservations = await query<{ id: string }>(
+    `DELETE FROM job_agent_apify_token_reservations reservation
+     WHERE reservation.created_at < ${cutoffSql}
+       AND reservation.status IN ('settled', 'released', 'expired', 'consumed')
+       AND NOT EXISTS (
+         SELECT 1 FROM job_agent_runs active_run
+         WHERE active_run.token_reservation_id = reservation.id
+           AND active_run.status IN ('pending', 'running', 'processing')
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM job_agent_batch_shards active_shard
+         WHERE active_shard.id = reservation.batch_shard_id
+           AND active_shard.status IN ('pending', 'launching', 'running', 'processing', 'retry_wait')
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM job_agent_runs recent_run
+         WHERE recent_run.token_reservation_id = reservation.id
+           AND COALESCE(recent_run.completed_at, recent_run.started_at, recent_run.created_at) >= ${cutoffSql}
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM job_agent_batch_shards recent_shard
+         JOIN job_agent_batches recent_batch ON recent_batch.id = recent_shard.batch_id
+         WHERE recent_shard.id = reservation.batch_shard_id
+           AND COALESCE(recent_batch.completed_at, recent_batch.created_at) >= ${cutoffSql}
+       )
+     RETURNING id`,
+    [days]
+  );
+
+  const staged = await query<{ id: string }>(
+    `DELETE FROM job_agent_staged_jobs staged
+     USING job_agent_runs run
+     WHERE staged.run_id = run.id
+       AND run.status NOT IN ('pending', 'running', 'processing')
+       AND COALESCE(run.completed_at, run.started_at, run.created_at) < ${cutoffSql}
+       AND (
+         run.batch_id IS NULL OR NOT EXISTS (
+           SELECT 1 FROM job_agent_batches active_batch
+           WHERE active_batch.id = run.batch_id
+             AND active_batch.status NOT IN ('succeeded', 'partial_success', 'failed', 'cancelled')
+         )
+       )
+     RETURNING staged.id`,
+    [days]
+  );
+
+  const runs = await query<{ id: string }>(
+    `DELETE FROM job_agent_runs run
+     WHERE run.status NOT IN ('pending', 'running', 'processing')
+       AND COALESCE(run.completed_at, run.started_at, run.created_at) < ${cutoffSql}
+       AND (
+         run.batch_id IS NULL OR NOT EXISTS (
+           SELECT 1 FROM job_agent_batches active_batch
+           WHERE active_batch.id = run.batch_id
+             AND active_batch.status NOT IN ('succeeded', 'partial_success', 'failed', 'cancelled')
+         )
+       )
+     RETURNING run.id`,
+    [days]
+  );
+
+  const batches = await query<{ id: string }>(
+    `DELETE FROM job_agent_batches batch
+     WHERE batch.status IN ('succeeded', 'partial_success', 'failed', 'cancelled')
+       AND COALESCE(batch.completed_at, batch.created_at) < ${cutoffSql}
+       AND NOT EXISTS (
+         SELECT 1 FROM job_agent_batch_shards shard
+         WHERE shard.batch_id = batch.id
+           AND shard.status IN ('pending', 'launching', 'running', 'processing', 'retry_wait')
+       )
+     RETURNING batch.id`,
+    [days]
+  );
+
+  return {
+    stagedJobs: staged.length,
+    runs: runs.length,
+    batches: batches.length,
+    tokenReservations: reservations.length,
+  };
 }
 
 /**

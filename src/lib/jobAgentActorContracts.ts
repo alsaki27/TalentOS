@@ -55,17 +55,28 @@ const LINKEDIN_PERIOD_BY_INTERVAL: Record<string, string> = {
   week: "r604800",
   "30 days": "r2592000",
   month: "r2592000",
-  any: "r2592000",
 };
 
-export function toIndeedHoursOld(interval: string | undefined | null): number {
+export function toIndeedHoursOld(interval: string | undefined | null): number | undefined {
   const normalized = (interval ?? "today").toLowerCase().trim();
+  if (normalized === "any") return undefined;
   return INDEED_HOURS_BY_INTERVAL[normalized] ?? 24;
 }
 
-export function toLinkedInPublishedAt(interval: string | undefined | null): string {
+export function toLinkedInPublishedAt(interval: string | undefined | null): string | undefined {
   const normalized = (interval ?? "today").toLowerCase().trim();
+  if (normalized === "any") return undefined;
   return LINKEDIN_PERIOD_BY_INTERVAL[normalized] ?? "r86400";
+}
+
+export function toGooglePostedWithin(interval: string | undefined | null): string {
+  const normalized = (interval ?? "today").toLowerCase().trim();
+  if (normalized === "any") return "any";
+  if (normalized === "2 days") return "3d";
+  if (normalized === "today") return "24h";
+  if (normalized === "7 days" || normalized === "week") return "7d";
+  if (normalized === "30 days" || normalized === "month") return "30d";
+  return "24h";
 }
 
 export function buildGoogleBooleanQuery(titles: string[]): string {
@@ -94,12 +105,13 @@ export function buildIndeedInput(
   // Indeed limits per query, not per actor run. Flooring keeps the configured
   // shard ceiling intact for the current role bundles (all have <= 100 titles).
   const resultsPerQuery = Math.max(1, Math.floor(totalLimit / queries.length));
+  const hoursOld = toIndeedHoursOld(dateInterval);
   return {
     queries,
     location: "United States",
     countryIndeed: "USA",
     resultsPerQuery,
-    hoursOld: toIndeedHoursOld(dateInterval),
+    ...(hoursOld === undefined ? {} : { hoursOld }),
     enforceAnnual: true,
   };
 }
@@ -112,11 +124,12 @@ export function buildLinkedInInput(
   if (queries.length === 0) throw new Error("LinkedIn requires at least one query.");
   // This actor's current schema requires maxItems >= 150.
   const maxItems = Math.max(150, Math.min(1000, Math.floor(maxResults)));
+  const publishedAt = toLinkedInPublishedAt(dateInterval);
   return {
     keyword: queries,
     locations: ["United States"],
     maxItems,
-    publishedAt: toLinkedInPublishedAt(dateInterval),
+    ...(publishedAt === undefined ? {} : { publishedAt }),
     saveOnlyUniqueItems: true,
   };
 }
@@ -124,6 +137,7 @@ export function buildLinkedInInput(
 export function buildGoogleInput(
   query: string,
   maxResults: number,
+  dateInterval?: string,
 ): Record<string, unknown> {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) throw new Error("Google Jobs requires a non-empty query.");
@@ -135,6 +149,7 @@ export function buildGoogleInput(
     language: "en",
     num_results: numResults,
     max_pagination: Math.min(100, Math.max(0, Math.ceil(numResults / 10) - 1)),
+    posted_within: toGooglePostedWithin(dateInterval),
   };
 }
 
@@ -154,7 +169,7 @@ export function buildActorInput(options: BuildActorInputOptions): Record<string,
     return buildLinkedInInput(options.queries, options.dateInterval, options.maxResults);
   }
   const query = options.explicitGoogleQuery?.trim() || buildGoogleBooleanQuery(options.queries);
-  return buildGoogleInput(query, options.maxResults);
+  return buildGoogleInput(query, options.maxResults, options.dateInterval);
 }
 
 /** Translate one actor result into the Job Agent's canonical field shape. */

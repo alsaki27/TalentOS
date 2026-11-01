@@ -5,9 +5,17 @@
 
 import { getDefaultConfig, type JobAgentConfigRow } from "@/server/repositories/jobAgentConfigRepository";
 import { createRun, updateRunStatus, transitionRunStatus, insertStagedJobs, getDedupHashes, getSourceUrlHashes, type JobAgentStagedJobRow } from "@/server/repositories/jobAgentRunRepository";
-import { rotateToken, markTokenError, deactivateToken } from "@/server/repositories/jobAgentTokenRepository";
+import {
+  consumeTokenReservation,
+  deactivateToken,
+  getTokenReservation,
+  markTokenError,
+  releaseTokenReservation,
+  reserveTokenAtomically,
+} from "@/server/repositories/jobAgentTokenRepository";
 import { findJobsByExactMatchKeys } from "@/server/repositories/jobsRepository";
 import { normalizeUrlFingerprint } from "@/lib/jobUrlFingerprint";
+import { normalizeJobAgentBusinessDate } from "@/lib/jobAgentBusinessDate";
 import { getTitlesForGroups, getGroupForSearchQuery, getGroupById, getGroupLabel, inferRoleGroupForTitle, validateRoleGroups } from "@/lib/jobAgentRoleLibrary";
 import { classifyJob } from "@/lib/ai/jobAgentClassifier";
 import {
@@ -16,6 +24,7 @@ import {
 } from "@/lib/jobAgentActorContracts";
 import {
   filterItemsToDateWindow,
+  getPostingDateWindow,
   type DateExclusionReason,
   type ExcludedDateWindowItem,
 } from "@/lib/jobAgentDateWindow";
@@ -121,6 +130,8 @@ export interface ExecuteRunOptions {
   explicitQueries?: string[];
   /** Nightly shards reserve token budget up front and must not rotate outside that reservation. */
   allowTokenRotation?: boolean;
+  /** The exclusive Apify token lease assigned to this run. */
+  tokenReservationId?: string | null;
 }
 
 export interface ExecuteRunResult {
@@ -135,6 +146,19 @@ export interface ExecuteRunResult {
   error?: string;
 }
 
+export interface ApifyRunDetails {
+  status: string;
+  statusMessage: string | null;
+  exitCode: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export function isApifyAuthorizationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /(?:\b401\b|user-or-token-not-found|authentication required|unauthorized)/i.test(message);
+}
+
 // ─── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -143,12 +167,15 @@ export interface ExecuteRunResult {
  */
 export async function createPendingRun(
   options: ExecuteRunOptions = {}
-): Promise<{ runId: string; config: JobAgentConfigRow; roleGroups: string[]; token: { id: string; token: string; label: string | null } }> {
+): Promise<{
+  runId: string;
+  config: JobAgentConfigRow;
+  roleGroups: string[];
+  token: { id: string; token: string; label: string | null };
+  tokenReservationId: string;
+}> {
   const config = await getDefaultConfig();
   if (!config.is_active) throw new Error("Job Agent config is inactive.");
-
-  const token = await rotateToken();
-  if (!token) throw new Error("No Apify tokens available — all exhausted or errored.");
 
   const roleGroups = validateRoleGroups(options.roleGroups ?? []);
   const customKw = options.customKeywords ?? [];
@@ -161,8 +188,47 @@ export async function createPendingRun(
   if (searchQueries.length === 0) throw new Error("No search queries built.");
 
   const actorSource: ActorSource = options.actorSource ?? "indeed";
-  const run = await createRun(config.id, roleGroups, token.id, actorSource);
-  return { runId: run.id, config, roleGroups, token };
+  const requestedMax = options.maxResults ?? (options.testMode ? 50 : 500);
+  const maxResults = Math.max(
+    1,
+    options.maxResults === undefined ? Math.min(requestedMax, config.max_results) : requestedMax,
+  );
+  const projectedCostUsd = Number((maxResults * COST_PER_RESULT_USD).toFixed(4));
+  const dateParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Dhaka",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const datePart = (type: Intl.DateTimeFormatPartTypes) => dateParts.find((part) => part.type === type)?.value;
+  const businessDate = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
+  const reservation = await reserveTokenAtomically({
+    reservationKey: `manual:${crypto.randomUUID()}`,
+    businessDate,
+    amountUsd: projectedCostUsd,
+    timezone: "Asia/Dhaka",
+    ttlMinutes: 180,
+  });
+  if (!reservation) {
+    throw new Error(
+      "No unreserved healthy Apify token has enough daily budget. Wait for an active actor to finish or activate another healthy token.",
+    );
+  }
+
+  try {
+    const dateWindow = getPostingDateWindow(options.dateInterval ?? "today");
+    const run = await createRun(config.id, roleGroups, reservation.id, actorSource, {
+      searchQueries,
+      dateInterval: options.dateInterval ?? "today",
+      windowStart: dateWindow?.windowStart ?? null,
+      windowEnd: dateWindow?.windowEnd ?? null,
+      tokenReservationId: reservation.reservation.id,
+    });
+    return { runId: run.id, config, roleGroups, token: reservation, tokenReservationId: reservation.reservation.id };
+  } catch (error) {
+    await releaseTokenReservation(reservation.reservation.id, "manual_run_create_failed").catch(() => false);
+    throw error;
+  }
 }
 
 /**
@@ -178,11 +244,18 @@ export async function executeRunFromRecord(
   options: ExecuteRunOptions = {}
 ): Promise<ExecuteRunResult> {
   let currentToken = initialToken;
+  let currentReservationId = options.tokenReservationId ?? null;
+  let rotationAttempt = 0;
   const actorSource: ActorSource = options.actorSource ?? "indeed";
+  let claimedForStart = false;
 
   while (true) {
     try {
-      await updateRunStatus(runId, { status: "running" });
+      if (!claimedForStart) {
+        const claimed = await transitionRunStatus(runId, "pending", { status: "running" });
+        if (!claimed) throw new Error("Run is no longer pending; it may have been cancelled or already started.");
+        claimedForStart = true;
+      }
 
       const searchQueries = options.explicitQueries?.length
         ? [...options.explicitQueries]
@@ -210,15 +283,29 @@ export async function executeRunFromRecord(
       // Google shards are small enough for 30 minutes; Indeed/LinkedIn get 1 hour.
       const apifyTimeout = actorSource === "google" ? 1800 : 3600;
       const { runId: apifyRunId, datasetId } = await startApifyRun(actorId, currentToken.token, apifyInput, apifyTimeout);
-      await updateRunStatus(runId, { apify_run_id: apifyRunId, apify_dataset_id: datasetId, token_id: currentToken.id });
+      await updateRunStatus(runId, {
+        apify_run_id: apifyRunId,
+        apify_dataset_id: datasetId,
+        token_id: currentToken.id,
+        token_reservation_id: currentReservationId,
+      });
+      if (currentReservationId) {
+        const consumed = await consumeTokenReservation(currentReservationId, runId);
+        if (!consumed) {
+          console.error(`[job-agent] Apify run ${runId} started but its token reservation could not be marked in-use.`);
+        }
+      }
 
       // Run successfully started! Exit now — cron will poll and call processApifyRunData.
       return { runId, status: "running", rawCount: 0, dedupedCount: 0, classifiedCount: 0, duplicateCount: 0, estimatedCostUsd: 0, tokenLabel: currentToken.label };
     } catch (err: any) {
       const message = err.message ?? "Run failed";
+      // A cancellation or competing starter can win the pending -> running
+      // compare-and-set. Never overwrite that terminal state with a late error.
+      if (!claimedForStart) throw err;
       const msgLower = message.toLowerCase();
       const isQuotaError = msgLower.includes("rate limit") || msgLower.includes("quota") || msgLower.includes("hard limit") || msgLower.includes("exceeded") || msgLower.includes("platform-feature-disabled");
-      const isInvalidToken = msgLower.includes("401") || msgLower.includes("user-or-token-not-found") || msgLower.includes("unauthorized");
+      const isInvalidToken = isApifyAuthorizationError(message);
 
       if (isQuotaError || isInvalidToken) {
         if (isInvalidToken) {
@@ -236,12 +323,35 @@ export async function executeRunFromRecord(
           throw err;
         }
 
-        const next = await rotateToken();
-        if (!next) {
-          await updateRunStatus(runId, { status: "failed", error: "All tokens exhausted — no working Apify accounts available.", completed_at: new Date().toISOString() });
-          throw new Error("All tokens exhausted.");
+        if (!currentReservationId) {
+          const errorMessage = "Cannot safely rotate this Apify token because the run has no token reservation.";
+          await updateRunStatus(runId, { status: "failed", error: errorMessage, completed_at: new Date().toISOString() });
+          throw new Error(errorMessage);
         }
-        currentToken = next;
+
+        const previousReservation = await getTokenReservation(currentReservationId);
+        if (!previousReservation) {
+          const errorMessage = "The current Apify token reservation is missing; automatic rotation stopped to prevent key overlap.";
+          await updateRunStatus(runId, { status: "failed", error: errorMessage, completed_at: new Date().toISOString() });
+          throw new Error(errorMessage);
+        }
+        await releaseTokenReservation(currentReservationId, isInvalidToken ? "invalid_token" : "token_rate_or_budget_error");
+        rotationAttempt += 1;
+        const nextReservation = await reserveTokenAtomically({
+          reservationKey: `manual:${runId}:retry-${rotationAttempt}`,
+          businessDate: normalizeJobAgentBusinessDate(previousReservation.business_date, "Asia/Dhaka"),
+          amountUsd: Number(previousReservation.reserved_amount_usd),
+          timezone: "Asia/Dhaka",
+          ttlMinutes: 180,
+        });
+        if (!nextReservation) {
+          const errorMessage = "No other unreserved healthy Apify token has enough daily budget; this actor run could not be retried.";
+          await updateRunStatus(runId, { status: "failed", error: errorMessage, completed_at: new Date().toISOString() });
+          throw new Error(errorMessage);
+        }
+        currentToken = nextReservation;
+        currentReservationId = nextReservation.reservation.id;
+        await updateRunStatus(runId, { token_id: currentToken.id, token_reservation_id: currentReservationId });
         continue; // retry with next token
       }
 
@@ -416,25 +526,81 @@ export async function processApifyRunData(
   }
 }
 
+export async function getApifyRunDetails(apifyRunId: string, token: string): Promise<ApifyRunDetails> {
+  const url = `${APIFY_BASE_URL}/actor-runs/${encodeURIComponent(apifyRunId)}`;
+  const res = await fetchApify(
+    url,
+    { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+    APIFY_STATUS_TIMEOUT_MS,
+    `Apify status check for run ${apifyRunId}`,
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Apify status check failed (${res.status})${text.trim() ? `: ${text.trim().slice(0, 500)}` : ""}`);
+  }
+  const body = await res.json();
+  const data = body?.data;
+  if (typeof data?.status !== "string") throw new Error("Apify status response did not contain a run status.");
+  return {
+    status: data.status,
+    statusMessage: typeof data.statusMessage === "string" ? data.statusMessage.slice(0, 1000) : null,
+    exitCode: Number.isFinite(data.exitCode) ? Number(data.exitCode) : null,
+    startedAt: typeof data.startedAt === "string" ? data.startedAt : null,
+    finishedAt: typeof data.finishedAt === "string" ? data.finishedAt : null,
+  };
+}
+
 export async function checkApifyRunStatus(apifyRunId: string, token: string): Promise<string> {
-  const url = `${APIFY_BASE_URL}/actor-runs/${apifyRunId}?token=${encodeURIComponent(token)}`;
-  const res = await fetchApify(url, undefined, APIFY_STATUS_TIMEOUT_MS, `Apify status check for run ${apifyRunId}`);
-  if (!res.ok) { const text = await res.text().catch(() => ""); throw new Error(`Status check failed (${res.status}): ${text}`); }
-  const data = await res.json();
-  return data?.data?.status;
+  return (await getApifyRunDetails(apifyRunId, token)).status;
+}
+
+/** Request an immediate actor abort (`gracefully=false`) through Apify's run API. */
+export async function abortApifyRun(apifyRunId: string, token: string): Promise<ApifyRunDetails> {
+  const url = `${APIFY_BASE_URL}/actor-runs/${encodeURIComponent(apifyRunId)}/abort?gracefully=false`;
+  const res = await fetchApify(
+    url,
+    { method: "POST", headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+    APIFY_STATUS_TIMEOUT_MS,
+    `Apify abort request for run ${apifyRunId}`,
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Apify abort request failed (${res.status})${text.trim() ? `: ${text.trim().slice(0, 500)}` : ""}`);
+  }
+  const body = await res.json();
+  const data = body?.data;
+  if (typeof data?.status !== "string") throw new Error("Apify abort response did not contain a run status.");
+  return {
+    status: data.status,
+    statusMessage: typeof data.statusMessage === "string" ? data.statusMessage.slice(0, 1000) : null,
+    exitCode: Number.isFinite(data.exitCode) ? Number(data.exitCode) : null,
+    startedAt: typeof data.startedAt === "string" ? data.startedAt : null,
+    finishedAt: typeof data.finishedAt === "string" ? data.finishedAt : null,
+  };
 }
 
 /** Convenience: create + execute synchronously (for cron). */
 export async function executeRun(options: ExecuteRunOptions = {}): Promise<ExecuteRunResult> {
-  const { runId, config, roleGroups, token } = await createPendingRun(options);
-  return executeRunFromRecord(runId, config, roleGroups, token, options);
+  const { runId, config, roleGroups, token, tokenReservationId } = await createPendingRun(options);
+  return executeRunFromRecord(runId, config, roleGroups, token, {
+    ...options,
+    tokenReservationId,
+  });
 }
 
 // ─── Internal Helpers ──────────────────────────────────────────────────────────
 
 function getSearchQueries(roleGroups: string[], testMode: boolean, customKeywords: string[]): string[] {
   const titles = getTitlesForGroups(roleGroups);
-  const merged = [...new Set([...titles, ...customKeywords.map((k) => k.trim()).filter(Boolean)])];
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...titles, ...customKeywords]) {
+    const title = raw.trim();
+    const key = title.toLowerCase();
+    if (!title || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(title);
+  }
   if (testMode) {
     const testSet = ["OSP Design Engineer", "Fiber Design Engineer", "AutoCAD Drafter", "GIS Analyst", "GIS Technician"];
     return testSet.filter((t) => merged.includes(t));
@@ -453,10 +619,10 @@ async function startApifyRun(
   // Apify's own actor-run timeout (how long the ACTOR is allowed to scrape
   // for) - unrelated to APIFY_START_TIMEOUT_MS below, which only bounds how
   // long we wait for Apify to acknowledge the start request.
-  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?token=${encodeURIComponent(token)}&timeout=${timeoutSeconds}`;
+  const url = `${APIFY_BASE_URL}/acts/${encodeURIComponent(actorId)}/runs?timeout=${timeoutSeconds}`;
   const res = await fetchApify(
     url,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) },
+    { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(input) },
     APIFY_START_TIMEOUT_MS,
     `Apify start run for actor ${actorId}`,
   );
@@ -468,15 +634,15 @@ async function startApifyRun(
 }
 
 async function fetchApifyDataset(datasetId: string, token: string): Promise<ApifyDatasetItem[]> {
-  const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true`;
-  const res = await fetchApify(url, undefined, APIFY_DATASET_FETCH_TIMEOUT_MS, `Apify dataset fetch for dataset ${datasetId}`);
+  const url = `${APIFY_BASE_URL}/datasets/${encodeURIComponent(datasetId)}/items?format=json&clean=true`;
+  const res = await fetchApify(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }, APIFY_DATASET_FETCH_TIMEOUT_MS, `Apify dataset fetch for dataset ${datasetId}`);
   if (!res.ok) throw new Error(`Dataset fetch failed (${res.status})`);
   return (await res.json()) as ApifyDatasetItem[];
 }
 
 export async function fetchLiveApifyDatasetItems(datasetId: string, token: string, limit: number = 50): Promise<ApifyDatasetItem[]> {
-  const url = `${APIFY_BASE_URL}/datasets/${datasetId}/items?token=${encodeURIComponent(token)}&format=json&clean=true&limit=${limit}&desc=true`;
-  const res = await fetchApify(url, undefined, APIFY_STATUS_TIMEOUT_MS, `Apify live dataset fetch for dataset ${datasetId}`);
+  const url = `${APIFY_BASE_URL}/datasets/${encodeURIComponent(datasetId)}/items?format=json&clean=true&limit=${limit}&desc=true`;
+  const res = await fetchApify(url, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }, APIFY_STATUS_TIMEOUT_MS, `Apify live dataset fetch for dataset ${datasetId}`);
   if (!res.ok) throw new Error(`Live dataset fetch failed (${res.status})`);
   return (await res.json()) as ApifyDatasetItem[];
 }
@@ -830,22 +996,31 @@ function toDateExcludedStagedJob(
   };
 }
 
-export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {
+export async function checkApifyTokenIdentity(
+  token: string,
+): Promise<{ ok: boolean; status: number | null; error?: string }> {
   try {
     // Apify exposes the authenticated account resource at /users/me (plural).
     // The former singular /user/me path always returned 404, so a valid token
     // was incorrectly reported as unusable by the Job Agent UI.
     const res = await fetchApify(
-      `${APIFY_BASE_URL}/users/me?token=${encodeURIComponent(token)}`,
-      undefined,
+                  `${APIFY_BASE_URL}/users/me`,
+                  { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
       APIFY_STATUS_TIMEOUT_MS,
       "Apify token validation",
     );
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       const detail = text.trim().replace(/\s+/g, " ").slice(0, 240);
-      return { ok: false, error: `Apify returned ${res.status}${detail ? `: ${detail}` : ""}` };
+      return { ok: false, status: res.status, error: `Apify returned ${res.status}${detail ? `: ${detail}` : ""}` };
     }
-    return { ok: true };
-  } catch (err: any) { return { ok: false, error: err.message ?? "Request failed" }; }
+    return { ok: true, status: res.status };
+  } catch (err: any) {
+    return { ok: false, status: null, error: err.message ?? "Request failed" };
+  }
+}
+
+export async function testApifyToken(token: string): Promise<{ ok: boolean; error?: string }> {
+  const result = await checkApifyTokenIdentity(token);
+  return result.ok ? { ok: true } : { ok: false, error: result.error ?? "Token validation failed" };
 }

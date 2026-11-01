@@ -2,7 +2,7 @@
 // Token pool management with auto-rotation.
 // Picks the lowest-priority active token with today's spend under $5 and no errors.
 
-import { query, queryOne, execute } from "@/server/db/neon";
+import { query, queryOne, execute, sql } from "@/server/db/neon";
 import { encryptSecret, decryptSecret, isEncryptionAvailable } from "@/server/security/secretCrypto";
 
 export interface JobAgentTokenRow {
@@ -142,7 +142,39 @@ export async function insertToken(label: string | null, token: string, priority?
  */
 export async function rotateToken(): Promise<{ id: string; token: string; label: string | null } | null> {
   const rows = await query<JobAgentTokenRow>(
-    `SELECT * FROM job_agent_apify_tokens WHERE is_active = true ORDER BY priority ASC, created_at ASC`
+    `SELECT t.*
+     FROM job_agent_apify_tokens t
+     LEFT JOIN LATERAL (
+       SELECT MAX(usage.last_used_at) AS last_used_at
+       FROM (
+         SELECT r.created_at AS last_used_at
+         FROM job_agent_apify_token_reservations r
+         WHERE r.token_id = t.id
+         UNION ALL
+         SELECT run.started_at AS last_used_at
+         FROM job_agent_runs run
+         WHERE run.token_id = t.id
+       ) usage
+     ) rotation ON true
+     WHERE t.is_active = true
+       AND NOT EXISTS (
+         SELECT 1
+         FROM job_agent_apify_token_reservations r
+         LEFT JOIN job_agent_runs active_run ON active_run.id = r.run_id
+         WHERE r.token_id = t.id
+           AND (
+             (r.status = 'active' AND r.expires_at > NOW())
+             OR (r.status = 'consumed' AND active_run.status IN ('pending', 'running', 'processing'))
+           )
+       )
+       AND NOT EXISTS (
+         SELECT 1
+         FROM job_agent_runs legacy_active_run
+         WHERE legacy_active_run.token_id = t.id
+           AND legacy_active_run.token_reservation_id IS NULL
+           AND legacy_active_run.status IN ('pending', 'running', 'processing')
+       )
+     ORDER BY rotation.last_used_at ASC NULLS FIRST, t.priority ASC, t.created_at ASC`
   );
 
   const spends = await getTodaySpendForAllTokens();
@@ -150,9 +182,31 @@ export async function rotateToken(): Promise<{ id: string; token: string; label:
   for (const row of rows) {
     // Skip tokens errored today (quota/limit) — they reset tomorrow
     if (row.last_error_at) {
-      const errDate = new Date(row.last_error_at).toDateString();
-      const today = new Date().toDateString();
-      if (errDate === today) continue;
+      const errorText = row.last_error?.toLowerCase() ?? "";
+      const errorTime = new Date(row.last_error_at);
+      const errorDateParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Dhaka",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(errorTime);
+      const todayParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Dhaka",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(new Date());
+      const getPart = (parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes) =>
+        parts.find((part) => part.type === type)?.value ?? "";
+      const sameDay = ["year", "month", "day"].every((part) =>
+        getPart(errorDateParts, part as Intl.DateTimeFormatPartTypes) ===
+        getPart(todayParts, part as Intl.DateTimeFormatPartTypes)
+      );
+      const sameMonth = ["year", "month"].every((part) =>
+        getPart(errorDateParts, part as Intl.DateTimeFormatPartTypes) ===
+        getPart(todayParts, part as Intl.DateTimeFormatPartTypes)
+      );
+      if (errorText.includes("monthly usage hard limit exceeded") ? sameMonth : sameDay) continue;
     }
     const spend = spends[row.id] || 0;
     if (spend >= JOB_AGENT_DEFAULT_DAILY_SPEND_LIMIT_USD) continue;
@@ -194,9 +248,10 @@ export async function activateToken(tokenId: string): Promise<void> {
 }
 
 /**
- * Atomically reserve projected spend and return a decrypted token. The token
- * row is locked while the reservation is inserted, preventing concurrent shard
- * launchers from all observing the same available budget.
+ * Atomically reserve projected spend and return a decrypted token. A transaction-
+ * scoped advisory lock serializes allocation before the candidate query takes its
+ * READ COMMITTED snapshot; row locks alone can still select the same key when
+ * concurrent statements began before the first reservation committed.
  *
  * reservationKey must be stable for one logical attempt (for example
  * `${batchKey}:${shardKey}:attempt-1`). Calling again with the same key returns
@@ -231,7 +286,10 @@ export async function reserveTokenAtomically(input: {
     token_label: string | null;
   };
 
-  const row = await queryOne<ReservationWithSecret>(
+  const client = sql();
+  const [, reservationRows] = await client.transaction<ReservationWithSecret[]>([
+    client.query("SELECT pg_advisory_xact_lock(762390127765::bigint)"),
+    client.query<ReservationWithSecret[]>(
     `WITH expired AS (
        UPDATE job_agent_apify_token_reservations
        SET status = 'expired', updated_at = NOW()
@@ -247,6 +305,18 @@ export async function reserveTokenAtomically(input: {
      candidate AS MATERIALIZED (
        SELECT t.id AS token_id
        FROM job_agent_apify_tokens t
+       LEFT JOIN LATERAL (
+         SELECT MAX(usage.last_used_at) AS last_used_at
+         FROM (
+           SELECT r.created_at AS last_used_at
+           FROM job_agent_apify_token_reservations r
+           WHERE r.token_id = t.id
+           UNION ALL
+           SELECT run.started_at AS last_used_at
+           FROM job_agent_runs run
+           WHERE run.token_id = t.id
+         ) usage
+       ) rotation ON true
        LEFT JOIN LATERAL (
          SELECT COALESCE(SUM(r.estimated_cost_usd), 0)::numeric AS amount
          FROM job_agent_runs r
@@ -265,11 +335,35 @@ export async function reserveTokenAtomically(input: {
        WHERE t.is_active = true
          AND (
            t.last_error_at IS NULL
-           OR (t.last_error_at AT TIME ZONE $6)::date <> $2::date
+           OR CASE
+             WHEN POSITION('monthly usage hard limit exceeded' IN LOWER(COALESCE(t.last_error, ''))) > 0
+               THEN DATE_TRUNC('month', t.last_error_at AT TIME ZONE $6) <> DATE_TRUNC('month', $2::date::timestamp)
+             ELSE (t.last_error_at AT TIME ZONE $6)::date <> $2::date
+           END
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM job_agent_apify_token_reservations active_reservation
+           LEFT JOIN job_agent_runs active_run ON active_run.id = active_reservation.run_id
+           WHERE active_reservation.token_id = t.id
+             AND (
+               (active_reservation.status = 'active' AND active_reservation.expires_at > NOW())
+               OR (
+                 active_reservation.status = 'consumed'
+                 AND active_run.status IN ('pending', 'running', 'processing')
+               )
+             )
+         )
+         AND NOT EXISTS (
+           SELECT 1
+           FROM job_agent_runs legacy_active_run
+           WHERE legacy_active_run.token_id = t.id
+             AND legacy_active_run.token_reservation_id IS NULL
+             AND legacy_active_run.status IN ('pending', 'running', 'processing')
          )
          AND COALESCE(run_spend.amount, 0) + COALESCE(reservations.amount, 0) + $3::numeric <= $5::numeric
          AND NOT EXISTS (SELECT 1 FROM existing)
-       ORDER BY t.priority ASC, t.created_at ASC
+       ORDER BY rotation.last_used_at ASC NULLS FIRST, t.priority ASC, t.created_at ASC
        LIMIT 1
        FOR UPDATE OF t SKIP LOCKED
      ),
@@ -291,7 +385,22 @@ export async function reserveTokenAtomically(input: {
          SET reservation_key = EXCLUDED.reservation_key
        RETURNING *
      )
-     SELECT reserved.*, t.token_encrypted, t.label AS token_label
+     SELECT reserved.id,
+            reserved.reservation_key,
+            reserved.token_id,
+            reserved.batch_shard_id,
+            reserved.run_id,
+            reserved.business_date::text AS business_date,
+            reserved.reserved_amount_usd,
+            reserved.settled_amount_usd,
+            reserved.daily_limit_usd,
+            reserved.status,
+            reserved.expires_at,
+            reserved.released_reason,
+            reserved.created_at,
+            reserved.updated_at,
+            t.token_encrypted,
+            t.label AS token_label
      FROM reserved
      JOIN job_agent_apify_tokens t ON t.id = reserved.token_id`,
     [
@@ -302,8 +411,9 @@ export async function reserveTokenAtomically(input: {
       dailyLimit,
       timezone,
       ttlMinutes,
-    ]
-  );
+    ]),
+  ]);
+  const row = reservationRows[0] ?? null;
 
   if (!row) return null;
   if (row.business_date !== input.businessDate || Number(row.reserved_amount_usd) !== input.amountUsd) {

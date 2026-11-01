@@ -321,6 +321,44 @@ describe("nightly batch identity and launch mode", () => {
     }));
   });
 
+  test("manual nightly dry runs can be scoped to A/B while scheduled batches remain fixed", async () => {
+    const row = batch({
+      batch_key: "job-agent-nightly-dry:2026-08-07:AB-run",
+      trigger_type: "manual",
+      auto_import: false,
+      role_groups: ["A", "B"],
+    });
+    mocks.getBatchByKey.mockResolvedValue(null);
+    mocks.createOrGetBatch.mockResolvedValue(row);
+    mocks.listBatchShards.mockResolvedValue([]);
+    mocks.getBatchById.mockResolvedValue(row);
+    mocks.getBatchProgress.mockResolvedValue(progress(row, [shard()]));
+
+    await startOrResumeNightlyBatch({
+      invocationType: "manual",
+      requestId: "AB run",
+      roleGroups: ["A", "B"],
+      now: new Date("2026-08-06T18:00:00.000Z"),
+    });
+
+    expect(mocks.buildNightlyShardMatrix).toHaveBeenCalledWith(["A", "B"]);
+    expect(mocks.createOrGetBatch).toHaveBeenCalledWith(expect.objectContaining({
+      batchKey: "job-agent-nightly-dry:2026-08-07:AB-run",
+      roleGroups: ["A", "B"],
+      triggerType: "manual",
+      autoImport: false,
+    }));
+  });
+
+  test("does not allow a scoped role list to alter a scheduled nightly batch", async () => {
+    await expect(startOrResumeNightlyBatch({
+      invocationType: "scheduled",
+      roleGroups: ["A", "B"],
+      businessDate: "2026-08-07",
+    })).rejects.toThrow("Role-group selection is only supported for ad-hoc manual nightly dry runs.");
+    expect(mocks.createOrGetBatch).not.toHaveBeenCalled();
+  });
+
   test("recovery resumes only the scheduled key and never creates a missing batch", async () => {
     mocks.getBatchByKey.mockResolvedValue(null);
 
@@ -502,6 +540,8 @@ describe("recovery reconciliation and retry contract", () => {
     expect(source).toContain("attempt_count = 1 THEN NOW() + INTERVAL '5 minutes'");
     expect(source).toContain("attempt_count = 2 THEN NOW() + INTERVAL '15 minutes'");
     expect(source).toContain("ELSE NOW() + INTERVAL '30 minutes'");
+    expect(source).toContain("last_error = $3::text");
+    expect(source).toContain("'message', $3::text");
     expect(source).toContain("completed_at = CASE WHEN attempt_count >= max_attempts THEN NOW()");
   });
 });

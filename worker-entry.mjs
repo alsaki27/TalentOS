@@ -36,6 +36,9 @@ function applyRuntimeSecrets(env) {
   if (typeof env?.CRON_SECRET === "string" && env.CRON_SECRET.length > 0) {
     process.env.CRON_SECRET = env.CRON_SECRET;
   }
+  if (typeof env?.JOB_AGENT_NIGHTLY_ENABLED === "string") {
+    process.env.JOB_AGENT_NIGHTLY_ENABLED = env.JOB_AGENT_NIGHTLY_ENABLED;
+  }
   applyHyperdrive(env);
 }
 
@@ -65,16 +68,22 @@ export default {
   // scheduled() (up to 15 minutes), unlike HTTP waitUntil which is cut off 30s
   // after the response. Claim locking makes UI/GitHub/Cron overlap safe.
   async scheduled(controller, env) {
-    if (controller.cron !== "* * * * *") return;
+    const cron = controller.cron;
+    const isMinuteTick = cron === "* * * * *";
+    const isNightlyStart = cron === "0 18 * * *"; // 12:00 AM Asia/Dhaka
+    const isHistoryRetention = cron === "5 18 * * *"; // 12:05 AM Asia/Dhaka
+    if (!isMinuteTick && !isNightlyStart && !isHistoryRetention) return;
+
     const secret = env?.CRON_SECRET;
     if (typeof secret !== "string" || secret.length === 0) {
-      throw new Error("CRON_SECRET is required for the AI pipeline scheduled dispatcher");
+      throw new Error("CRON_SECRET is required for scheduled TalentOS jobs");
     }
 
     const baseUrl = env?.TALENTOS_BASE_URL || "https://talent.skarion.com";
-    const reportPeriods = getDueTeamActivityReportPeriods(new Date(controller.scheduledTime));
-    const tasks = [
-      (async () => {
+    const tasks = [];
+    if (isMinuteTick) {
+      const reportPeriods = getDueTeamActivityReportPeriods(new Date(controller.scheduledTime));
+      tasks.push((async () => {
         const response = await fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
           method: "GET",
           headers: { Authorization: `Bearer ${secret}` },
@@ -84,8 +93,22 @@ export default {
           throw new Error(`AI pipeline scheduled dispatch failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
         }
         console.log(`[scheduled pipeline dispatch] ${body.slice(0, 500)}`);
-      })(),
-      ...reportPeriods.map(async (period) => {
+      })());
+      tasks.push((async () => {
+        const response = await fetch(`${baseUrl}/api/cron/job-agent-poll`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
+        });
+        const body = await response.text();
+        if (!response.ok) {
+          throw new Error(`Job Agent poll failed with HTTP ${response.status}: ${body.slice(0, 1000)}`);
+        }
+        let pollErrors = 0;
+        try { pollErrors = Number(JSON.parse(body)?.pollErrors ?? 0); } catch { /* body is logged below */ }
+        if (pollErrors > 0) console.warn(`[scheduled Job Agent poll] ${pollErrors} Apify status check(s) failed: ${body.slice(0, 1000)}`);
+        else console.log(`[scheduled Job Agent poll] ${body.slice(0, 500)}`);
+      })());
+      for (const period of reportPeriods) tasks.push((async () => {
         const response = await fetch(`${baseUrl}/api/cron/team-activity-report?period=${period}`, {
           method: "POST",
           headers: {
@@ -98,8 +121,33 @@ export default {
           throw new Error(`Scheduled ${period} team activity report failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
         }
         console.log(`[scheduled ${period} team activity report] ${body.slice(0, 500)}`);
-      }),
-    ];
+      })());
+    }
+    if (isNightlyStart) tasks.push((async () => {
+      const response = await fetch(`${baseUrl}/api/cron/job-agent`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "X-Job-Agent-Invocation": "scheduled",
+          "X-Job-Agent-Request-Id": `cloudflare-${controller.scheduledTime}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+      const body = await response.text();
+      if (!response.ok) throw new Error(`Nightly Job Agent start failed with HTTP ${response.status}: ${body.slice(0, 1000)}`);
+      console.log(`[scheduled nightly Job Agent] ${body.slice(0, 1000)}`);
+    })());
+    if (isHistoryRetention) tasks.push((async () => {
+      const response = await fetch(`${baseUrl}/api/cron/job-agent-retention`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
+      });
+      const body = await response.text();
+      if (!response.ok) throw new Error(`Job Agent history retention failed with HTTP ${response.status}: ${body.slice(0, 1000)}`);
+      console.log(`[scheduled Job Agent history retention] ${body.slice(0, 1000)}`);
+    })());
     const outcomes = await Promise.allSettled(tasks);
     const errors = outcomes.flatMap((outcome) => outcome.status === "rejected" ? [outcome.reason] : []);
     if (errors.length > 0) {
