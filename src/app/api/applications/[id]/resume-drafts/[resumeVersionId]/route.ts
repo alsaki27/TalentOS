@@ -46,6 +46,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     if (key in body) allowedFields[key] = body[key];
   }
 
+  if (["content", "formatting", "generated_text"].some((field) => field in allowedFields)) {
+    allowedFields.updated_by_user_id = context!.profile.user_id;
+    allowedFields.updated_source = "human_draft_editor";
+  }
+
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }

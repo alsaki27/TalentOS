@@ -85,6 +85,10 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   for (const f of allowedFields) {
     if (f in body) updates[f] = body[f];
   }
+  if (["content", "formatting", "generated_text"].some((field) => field in updates)) {
+    updates.updated_by_user_id = context!.profile.user_id;
+    updates.updated_source = "human_studio_save";
+  }
 
   // Re-measure page fit from the content actually being saved, rather than
   // trusting whatever (if anything) the client sent for page_fit_metrics -

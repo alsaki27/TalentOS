@@ -137,6 +137,8 @@ export async function buildResumeDraftFromAcceptedSuggestions(
       resumeVersion = await updateApplicationResumeVersion(existing.id, {
         content: draftContent,
         title: existing.title ?? "Updated Draft",
+        updated_by_user_id: null,
+        updated_source: "ai_resume_draft_builder",
       });
     } else {
       // No existing draft — create new
@@ -149,6 +151,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
         title: sourceResult.title,
         version_label: "draft",
         created_by: createdByUserId,
+        updated_source: "ai_resume_draft_builder",
       });
     }
   } else {
@@ -162,6 +165,7 @@ export async function buildResumeDraftFromAcceptedSuggestions(
       title: sourceResult.title,
       version_label: "draft",
       created_by: createdByUserId,
+      updated_source: "ai_resume_draft_builder",
     });
   }
 

@@ -577,6 +577,8 @@ export interface CallContext {
   userId?: string;
   workflowId?: string;
   applicationId?: string;
+  stageRunId?: string;
+  promptVersion?: string | null;
   attemptNumber?: number;
   routingStateId?: string;
   maxProviderAttempts?: number;
@@ -710,21 +712,86 @@ export async function callWithUsageTracking<T>(
     let inputTokens: number | null = null;
     let outputTokens: number | null = null;
     let capturedUsage: { input_tokens: number; output_tokens: number } | null = null;
+    const traceIds: string[] = [];
+    let requestSequence = 0;
 
     const wrappedProvider: AiProvider = {
       send: async (opts) => {
-        const response = await resolved.provider.send(opts);
-        if (response.usage) {
-          // fn() may call send() more than once per agent run (e.g. Resume
-          // Forge's job-only extraction + requirement analysis + draft).
-          // Accumulate across every sub-call instead of overwriting, or the
-          // recorded usage event only reflects the last send.
-          capturedUsage = {
-            input_tokens: (capturedUsage?.input_tokens ?? 0) + response.usage.input_tokens,
-            output_tokens: (capturedUsage?.output_tokens ?? 0) + response.usage.output_tokens,
-          };
+        const startedAt = new Date();
+        const sequence = ++requestSequence;
+        try {
+          const response = await resolved.provider.send(opts);
+          if (response.usage) {
+            // fn() may call send() more than once per agent run (e.g. Resume
+            // Forge's job-only extraction + requirement analysis + draft).
+            // Accumulate across every sub-call instead of overwriting.
+            capturedUsage = {
+              input_tokens: (capturedUsage?.input_tokens ?? 0) + response.usage.input_tokens,
+              output_tokens: (capturedUsage?.output_tokens ?? 0) + response.usage.output_tokens,
+            };
+          }
+          if (!ctx?.benchmarkMode) {
+            const traceId = await recordAiCallTrace({
+              automationId,
+              aiKeyId: resolved.aiKeyId,
+              provider: resolved.name,
+              model: resolved.model ?? null,
+              routeId: resolved.routeId ?? null,
+              routeRank: resolved.routeRank,
+              routingStateId: ctx?.routingStateId ?? null,
+              userId: ctx?.userId ?? null,
+              workflowId: ctx?.workflowId ?? null,
+              applicationId: ctx?.applicationId ?? null,
+              stageRunId: ctx?.stageRunId ?? null,
+              promptVersion: ctx?.promptVersion ?? null,
+              stageAttemptNumber: ctx?.attemptNumber ?? null,
+              providerAttemptNumber: iteration,
+              requestSequence: sequence,
+              request: opts,
+              response,
+              outcome: "success",
+              inputTokens: response.usage?.input_tokens ?? null,
+              outputTokens: response.usage?.output_tokens ?? null,
+              latencyMs: Date.now() - startedAt.getTime(),
+              startedAt,
+              completedAt: new Date(),
+            });
+            if (traceId) traceIds.push(traceId);
+          }
+          return response;
+        } catch (err: any) {
+          if (!ctx?.benchmarkMode) {
+            const traceId = await recordAiCallTrace({
+              automationId,
+              aiKeyId: resolved.aiKeyId,
+              provider: resolved.name,
+              model: resolved.model ?? null,
+              routeId: resolved.routeId ?? null,
+              routeRank: resolved.routeRank,
+              routingStateId: ctx?.routingStateId ?? null,
+              userId: ctx?.userId ?? null,
+              workflowId: ctx?.workflowId ?? null,
+              applicationId: ctx?.applicationId ?? null,
+              stageRunId: ctx?.stageRunId ?? null,
+              promptVersion: ctx?.promptVersion ?? null,
+              stageAttemptNumber: ctx?.attemptNumber ?? null,
+              providerAttemptNumber: iteration,
+              requestSequence: sequence,
+              request: opts,
+              response: null,
+              outcome: classifyErrorCode(err) === "timeout" ? "timeout" : "failure",
+              inputTokens: null,
+              outputTokens: null,
+              latencyMs: Date.now() - startedAt.getTime(),
+              errorCode: classifyErrorCode(err),
+              errorMessage: err?.message ?? "Provider request failed",
+              startedAt,
+              completedAt: new Date(),
+            });
+            if (traceId) traceIds.push(traceId);
+          }
+          throw err;
         }
-        return response;
       },
     };
 
@@ -741,7 +808,7 @@ export async function callWithUsageTracking<T>(
       outcome = "success";
 
       if (!ctx?.benchmarkMode) {
-        await recordUsageEvent({
+        const usageEventId = await recordUsageEvent({
           automationId,
           aiKeyId: resolved.aiKeyId,
           provider: resolved.name,
@@ -758,6 +825,7 @@ export async function callWithUsageTracking<T>(
           attemptNumber: ctx?.attemptNumber ?? null,
           routeRank: resolved.routeRank,
         });
+        await linkAiCallTracesToUsageEvent(traceIds, usageEventId);
         if (resolved.aiKeyId) await recordAiKeySuccess(resolved.aiKeyId).catch(() => {});
       }
 
@@ -790,7 +858,7 @@ export async function callWithUsageTracking<T>(
       }
 
       if (!ctx?.benchmarkMode) {
-        await recordUsageEvent({
+        const usageEventId = await recordUsageEvent({
           automationId,
           aiKeyId: resolved.aiKeyId,
           provider: resolved.name,
@@ -807,6 +875,7 @@ export async function callWithUsageTracking<T>(
           attemptNumber: ctx?.attemptNumber ?? null,
           routeRank: resolved.routeRank,
         });
+        await linkAiCallTracesToUsageEvent(traceIds, usageEventId);
         // A provider can reject one model while the credential remains valid for
         // sibling model routes (e.g. OpenCode 403 "Model access is disabled").
         // Do not poison the shared key's health for a model-entitlement issue.
@@ -1004,6 +1073,136 @@ function isModelAccessUnavailable(message: string): boolean {
 // small regression test without exposing routing internals.
 const classifyErrorCode = classifyAiErrorCode;
 
+type AiCallTraceInput = {
+  automationId: string;
+  aiKeyId: string | null;
+  provider: string;
+  model: string | null;
+  routeId: string | null;
+  routeRank: number | null;
+  routingStateId: string | null;
+  userId: string | null;
+  workflowId: string | null;
+  applicationId: string | null;
+  stageRunId: string | null;
+  promptVersion: string | null;
+  stageAttemptNumber: number | null;
+  providerAttemptNumber: number;
+  requestSequence: number;
+  request: Parameters<AiProvider["send"]>[0];
+  response: Awaited<ReturnType<AiProvider["send"]>> | null;
+  outcome: "success" | "failure" | "timeout";
+  inputTokens: number | null;
+  outputTokens: number | null;
+  latencyMs: number;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  startedAt: Date;
+  completedAt: Date;
+};
+
+function redactTraceError(message: unknown): string {
+  return String(message ?? "Unknown provider error")
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[REDACTED_KEY]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
+    .replace(/((?:api[_-]?key|authorization)["'\s:=]+)[^\s,"']+/gi, "$1[REDACTED]")
+    .slice(0, 4000);
+}
+
+async function recordAiCallTrace(input: AiCallTraceInput): Promise<string | null> {
+  try {
+    // Capture the exact provider request object and normalized response before
+    // agent parsing/post-processing. Credentials are added by the provider
+    // adapter and are not part of AiProvider.send's request object.
+    const requestPayload = {
+      system: input.request.system,
+      messages: input.request.messages,
+      tools: input.request.tools,
+      generation: {
+        temperature: input.request.temperature ?? null,
+        maxTokens: input.request.maxTokens ?? null,
+        timeoutMs: input.request.timeoutMs ?? null,
+        responseSchema: input.request.responseSchema ?? null,
+        responseMimeType: input.request.responseMimeType ?? null,
+      },
+    };
+    const responsePayload = input.response
+      ? {
+          content: input.response.content,
+          stopReason: input.response.stopReason,
+          usage: input.response.usage ?? null,
+        }
+      : null;
+    const responseText = input.response?.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.type === "text" ? block.text : "")
+      .join("\n") ?? null;
+    const requestJson = JSON.stringify(requestPayload);
+    const responseJson = responsePayload ? JSON.stringify(responsePayload) : null;
+    const row = await queryOne<{ id: string }>(
+      `INSERT INTO ai_call_traces (
+         automation_id, provider, model, ai_key_id, route_id, route_rank,
+         routing_state_id, triggered_by_user_id, application_id, workflow_id, stage_run_id,
+         prompt_version, stage_attempt_number, provider_attempt_number,
+         request_sequence, request_payload, response_payload, response_text,
+         request_hash, response_hash, outcome, input_tokens, output_tokens,
+         latency_ms, error_code, error_message, started_at, completed_at
+       ) VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+         $16::jsonb, $17::jsonb, $18, md5($16::jsonb::text),
+         CASE WHEN $17::jsonb IS NULL THEN NULL ELSE md5($17::jsonb::text) END,
+         $19, $20, $21, $22, $23, $24, $25, $26
+       ) RETURNING id`,
+      [
+        input.automationId,
+        input.provider,
+        input.model,
+        input.aiKeyId,
+        input.routeId,
+        input.routeRank,
+        input.routingStateId,
+        input.userId,
+        input.applicationId,
+        input.workflowId,
+        input.stageRunId,
+        input.promptVersion,
+        input.stageAttemptNumber,
+        input.providerAttemptNumber,
+        input.requestSequence,
+        requestJson,
+        responseJson,
+        responseText,
+        input.outcome,
+        input.inputTokens,
+        input.outputTokens,
+        input.latencyMs,
+        input.errorCode ?? null,
+        input.errorMessage ? redactTraceError(input.errorMessage) : null,
+        input.startedAt.toISOString(),
+        input.completedAt.toISOString(),
+      ],
+    );
+    return row?.id ?? null;
+  } catch (err) {
+    // Observability must never turn a successful provider response into a
+    // failed pipeline stage. Keep prompt/response bodies out of error logs.
+    console.error("[ai-call-trace] Failed to persist provider trace:", err instanceof Error ? err.message : "Unknown error");
+    return null;
+  }
+}
+
+async function linkAiCallTracesToUsageEvent(traceIds: string[], usageEventId: string | null): Promise<void> {
+  if (!usageEventId || traceIds.length === 0) return;
+  try {
+    await execute(
+      "UPDATE ai_call_traces SET usage_event_id = $1 WHERE id = ANY($2::uuid[])",
+      [usageEventId, traceIds],
+    );
+  } catch (err) {
+    console.error("[ai-call-trace] Failed to link provider trace to usage event:", err instanceof Error ? err.message : "Unknown error");
+  }
+}
+
 export interface UsageEventInput {
   automationId: string;
   aiKeyId: string | null;
@@ -1022,7 +1221,7 @@ export interface UsageEventInput {
   routeRank: number | null;
 }
 
-export async function recordUsageEvent(input: UsageEventInput): Promise<void> {
+export async function recordUsageEvent(input: UsageEventInput): Promise<string | null> {
   const cost = estimateCost(input.provider, input.model, input.inputTokens, input.outputTokens);
 
   // This is analytics/usage tracking, not business-critical data - it must
@@ -1036,13 +1235,14 @@ export async function recordUsageEvent(input: UsageEventInput): Promise<void> {
   // of the same kind should degrade to a missing usage record, not a
   // broken pipeline.
   try {
-    await execute(
+    const row = await queryOne<{ id: string }>(
       `INSERT INTO ai_usage_events
         (automation_id, ai_key_id, provider, model, outcome,
          latency_ms, input_tokens, output_tokens, estimated_cost_usd,
          error_message, error_code, triggered_by_user_id,
          route_rank, attempt_number, workflow_id, application_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::uuid, $16::uuid)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::uuid, $16::uuid)
+       RETURNING id`,
       [
         input.automationId,
         input.aiKeyId,
@@ -1062,7 +1262,9 @@ export async function recordUsageEvent(input: UsageEventInput): Promise<void> {
         input.applicationId,
       ]
     );
+    return row?.id ?? null;
   } catch (err) {
     console.error("[recordUsageEvent] Failed to record usage event (non-fatal):", err);
+    return null;
   }
 }

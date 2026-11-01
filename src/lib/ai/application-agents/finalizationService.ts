@@ -308,15 +308,17 @@ export async function finalizeWorkflow(
          INSERT INTO application_resume_versions
            (candidate_id, target_job_id, application_id, job_id, workflow_id, base_resume_id,
             title, content, source_type, status, ats_score, truth_score, recruiter_score, role_fit_score,
-            one_page_fit_score, page_fit_metrics, created_at)
+            one_page_fit_score, page_fit_metrics, updated_by_user_id, updated_source, created_at)
          VALUES (${wf.candidate_id}, ${tj.id}, ${wf.application_id}, ${wf.job_id ?? null}, ${workflowId}::uuid, ${realBaseResumeId},
                  ${title}, ${contentJson}, 'ai_agent', 'draft', ${finalAtsScore}, ${finalTruthScore},
-                 ${finalScores.recruiterScore}, ${finalScores.roleFitScore}, ${onePageFitScore}, ${pageFitMetricsJson}, NOW())
+                 ${finalScores.recruiterScore}, ${finalScores.roleFitScore}, ${onePageFitScore}, ${pageFitMetricsJson},
+                 NULL, 'ai_pipeline_finalization', NOW())
          ON CONFLICT (workflow_id) WHERE source_type = 'ai_agent'
          DO UPDATE SET content = EXCLUDED.content, ats_score = EXCLUDED.ats_score,
                        truth_score = EXCLUDED.truth_score, recruiter_score = EXCLUDED.recruiter_score,
                        role_fit_score = EXCLUDED.role_fit_score, one_page_fit_score = EXCLUDED.one_page_fit_score,
-                       page_fit_metrics = EXCLUDED.page_fit_metrics, updated_at = NOW()
+                       page_fit_metrics = EXCLUDED.page_fit_metrics,
+                       updated_by_user_id = NULL, updated_source = 'ai_pipeline_finalization', updated_at = NOW()
          RETURNING id
        )
        UPDATE applications SET
