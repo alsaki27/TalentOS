@@ -3,6 +3,7 @@
 // Uses TalentOS's native Neon driver.
 
 import { NextRequest, NextResponse } from "next/server";
+import { getCurrentUserContext } from "@/lib/auth";
 import { query, queryOne, execute } from "@/server/db/neon";
 import {
   mergeResumifyEditorIntoBaseResume,
@@ -278,6 +279,10 @@ export async function PATCH(req: NextRequest) {
         );
       } else if (applicationResumeMatch) {
         const resumeVersionId = applicationResumeMatch[1];
+        // Falood Studio supports anonymous saved sessions, so keep this lookup
+        // optional. When the request has a valid TalentOS session, capture the
+        // signed-in editor; never accept an actor ID from the client payload.
+        const editorContext = await getCurrentUserContext().catch(() => null);
 
         // Tailor Studio ("Open in Studio" from the Application Queue) edits
         // this bridge row, not application_resume_versions directly - without
@@ -305,8 +310,8 @@ export async function PATCH(req: NextRequest) {
               );
               await updateApplicationResumeVersion(resumeVersionId, {
                 content: mergedContent,
-                updated_by_user_id: null,
-                updated_source: "falood_studio_save_unattributed",
+                updated_by_user_id: editorContext?.profile.user_id ?? null,
+                updated_source: editorContext ? "human_falood_studio_save" : "falood_studio_save_unattributed",
               });
             } catch (syncErr: any) {
               console.error(
