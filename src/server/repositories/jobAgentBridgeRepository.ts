@@ -69,8 +69,11 @@ export async function listBatchBridgeCandidates(batchId: string): Promise<BatchB
      JOIN job_agent_batch_shards shard ON shard.id = run.batch_shard_id
      WHERE shard.batch_id = $1
        AND run.status = 'succeeded'
-       AND staged.tier IN ('best', 'medium', 'worthy')
-       AND staged.is_false_positive = false
+       AND staged.tier IN ('best', 'medium', 'worthy', 'skip')
+       -- Skip-tier and flagged false-positive results are intentionally handed
+       -- to Job CEO so its QA stage can make the final keep/drop decision.
+       -- Preserve the stricter false-positive exclusion for other tiers.
+       AND (staged.is_false_positive = false OR staged.tier = 'skip')
        AND staged.is_duplicate = false
        AND staged.import_status <> 'imported'
        AND staged.date_window_status = 'in_window'
