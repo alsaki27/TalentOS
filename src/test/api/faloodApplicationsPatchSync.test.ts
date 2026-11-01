@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
   backgroundDispatch: vi.fn((p: Promise<unknown>) => p),
   updateApplicationResumeVersion: vi.fn(),
+  getCurrentUserContext: vi.fn(),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  getCurrentUserContext: mocks.getCurrentUserContext,
 }));
 
 vi.mock("@/server/db/neon", () => ({
@@ -62,6 +67,7 @@ function req(id: string, body: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.backgroundDispatch.mockImplementation((p: Promise<unknown>) => p);
+  mocks.getCurrentUserContext.mockResolvedValue(null);
 });
 
 describe("PATCH /api/falood/applications - application_resume_version sync", () => {
@@ -84,6 +90,31 @@ describe("PATCH /api/falood/applications - application_resume_version sync", () 
     expect(calledId).toBe(RESUME_VERSION_ID);
     expect((calledInput.content as any).summary.text).toBe("Trimmed summary to fit one page");
     expect((calledInput.content as any).header.fullName).toBe("Istiaque Uddin Hyder");
+    expect(calledInput.updated_by_user_id).toBeNull();
+    expect(calledInput.updated_source).toBe("falood_studio_save_unattributed");
+  });
+
+  it("attributes the Falood Studio save to the signed-in TalentOS editor when available", async () => {
+    mocks.getCurrentUserContext.mockResolvedValue({
+      profile: { user_id: "editor-1" },
+    });
+    mocks.queryOne.mockImplementation((sql: string) => {
+      if (sql.includes("UPDATE falood_saved_applications")) {
+        return Promise.resolve({ id: SESSION_ID, createdAt: "t", updatedAt: "t", name: `application_resume_version:${RESUME_VERSION_ID}` });
+      }
+      if (sql.includes("SELECT content FROM application_resume_versions")) {
+        return Promise.resolve({ content: EXISTING_CANONICAL_CONTENT });
+      }
+      throw new Error(`Unexpected queryOne: ${sql}`);
+    });
+
+    const res = await PATCH(req(SESSION_ID, { resumeData: RESUME_DATA }));
+
+    expect(res.status).toBe(200);
+    expect(mocks.updateApplicationResumeVersion).toHaveBeenCalledTimes(1);
+    const [, calledInput] = mocks.updateApplicationResumeVersion.mock.calls[0];
+    expect(calledInput.updated_by_user_id).toBe("editor-1");
+    expect(calledInput.updated_source).toBe("human_falood_studio_save");
   });
 
   it("does not touch application_resume_versions for a base_resume-sourced session", async () => {
