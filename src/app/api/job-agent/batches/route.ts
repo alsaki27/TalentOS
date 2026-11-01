@@ -46,6 +46,7 @@ function publicShard(shard: JobAgentBatchShardRow) {
   return {
     id: shard.id,
     shard_key: shard.shard_key,
+    last_run_id: shard.last_run_id,
     logical_order: shard.logical_order,
     actor_source: shard.actor_source,
     role_groups: shard.role_groups,
@@ -63,6 +64,8 @@ function publicShard(shard: JobAgentBatchShardRow) {
     classified_count: shard.classified_count,
     imported_count: shard.imported_count,
     last_error: shard.last_error,
+    started_at: shard.started_at,
+    completed_at: shard.completed_at,
   };
 }
 
