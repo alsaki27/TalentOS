@@ -1012,6 +1012,8 @@ export async function processWorkflowStage(workflowId: string, expectedLockVersi
         userId: wf.started_by ?? undefined,
         workflowId,
         applicationId: wf.application_id,
+        stageRunId: stageRun.id,
+        promptVersion: agentConfig?.prompt_version ?? null,
         attemptNumber: stageAttemptNumber,
         routingStateId: typeof (wf.config_snapshot as any)?.routingStateId === "string"
           ? (wf.config_snapshot as any).routingStateId

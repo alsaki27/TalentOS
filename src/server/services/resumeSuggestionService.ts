@@ -487,7 +487,8 @@ export async function rejectSuggestion(
 
 export async function applySuggestionToResume(
   suggestionId: string,
-  resumeVersionId: string
+  resumeVersionId: string,
+  actor?: { userId?: string | null }
 ): Promise<{ ok: boolean; error?: string }> {
   const { findSuggestionById } = await import("@/server/repositories/applicationResumeSuggestionsRepository");
   const suggestion = await findSuggestionById(suggestionId);
@@ -505,7 +506,11 @@ export async function applySuggestionToResume(
   if (!applied) return { ok: false, error: "Could not apply suggestion to resume content" };
 
   // Save updated content via repository
-  await updateApplicationResumeVersion(resumeVersionId, { content });
+  await updateApplicationResumeVersion(resumeVersionId, {
+    content,
+    updated_by_user_id: actor?.userId ?? null,
+    updated_source: "human_suggestion_apply",
+  });
 
   // Mark suggestion as applied
   const { updateSuggestion } = await import("@/server/repositories/applicationResumeSuggestionsRepository");

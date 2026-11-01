@@ -83,4 +83,20 @@ describe("updateApplicationResumeVersion - page fit recompute", () => {
     expect(sql).toContain("page_fit_metrics");
     expect(values).toContain(explicitValue);
   });
+
+  it("persists the authenticated editor and edit source alongside a saved resume change", async () => {
+    mocks.measureResumePageFitMetrics.mockReturnValue(FRESH_PAGE_FIT);
+
+    await updateApplicationResumeVersion("rv-1", {
+      content: NEW_CONTENT,
+      updated_by_user_id: "user-1",
+      updated_source: "human_draft_editor",
+    });
+
+    const [sql, values] = mocks.queryOne.mock.calls[0];
+    expect(sql).toContain("updated_by_user_id");
+    expect(sql).toContain("updated_source");
+    expect(values).toContain("user-1");
+    expect(values).toContain("human_draft_editor");
+  });
 });

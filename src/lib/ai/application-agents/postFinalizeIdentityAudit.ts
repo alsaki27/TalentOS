@@ -197,7 +197,7 @@ export async function auditAndRepairResumeVersionIdentity(
   }
 
   await execute(
-    "UPDATE application_resume_versions SET content = $1::jsonb, updated_at = NOW() WHERE id = $2",
+    "UPDATE application_resume_versions SET content = $1::jsonb, updated_by_user_id = NULL, updated_source = 'post_finalize_identity_audit', updated_at = NOW() WHERE id = $2",
     [JSON.stringify(doc), resumeVersionId]
   );
 

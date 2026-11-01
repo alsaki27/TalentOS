@@ -145,8 +145,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const measuredPageFit = measureResumePageFitMetrics(updatedContent) ?? null;
   const res = await execute(
-    `UPDATE application_resume_versions SET content = $1, page_fit_metrics = COALESCE($2::jsonb, page_fit_metrics), updated_at = $3 WHERE id = $4`,
-    [updatedContent, measuredPageFit, now, suggestion.application_resume_id]
+    `UPDATE application_resume_versions
+        SET content = $1, page_fit_metrics = COALESCE($2::jsonb, page_fit_metrics),
+            updated_by_user_id = $3, updated_source = 'human_suggestion_apply', updated_at = $4
+      WHERE id = $5`,
+    [updatedContent, measuredPageFit, context!.profile.user_id, now, suggestion.application_resume_id]
   );
   updateResumeError = res.rowCount === 0 ? { message: "Update failed" } : null;
 

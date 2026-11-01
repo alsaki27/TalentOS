@@ -303,7 +303,11 @@ export async function PATCH(req: NextRequest) {
                 existingContent,
                 body.resumeData,
               );
-              await updateApplicationResumeVersion(resumeVersionId, { content: mergedContent });
+              await updateApplicationResumeVersion(resumeVersionId, {
+                content: mergedContent,
+                updated_by_user_id: null,
+                updated_source: "falood_studio_save_unattributed",
+              });
             } catch (syncErr: any) {
               console.error(
                 "[Falood Applications PATCH] Application resume version sync failed (non-critical):",

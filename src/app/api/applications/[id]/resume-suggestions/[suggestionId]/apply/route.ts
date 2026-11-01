@@ -21,7 +21,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string;
     return NextResponse.json({ error: "resume_version_id is required" }, { status: 400 });
   }
 
-  const result = await applySuggestionToResume(suggestionId, resumeVersionId);
+  const result = await applySuggestionToResume(suggestionId, resumeVersionId, {
+    userId: context!.profile.user_id,
+  });
 
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 500 });

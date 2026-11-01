@@ -100,9 +100,7 @@ describe("callWithUsageTracking error paths", () => {
     expect(result.result).toBeDefined();
     expect(result.providerName).toBe("anthropic");
     expect(result.aiKeyId).toBeNull();
-    expect(mockExecute).toHaveBeenCalled();
-    const sql = mockExecute.mock.calls[0][0];
-    expect(sql).toContain("ai_usage_events");
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_usage_events"))).toBe(true);
   });
 
   it("records usage event on failed call", async () => {
@@ -118,9 +116,150 @@ describe("callWithUsageTracking error paths", () => {
       })
     ).rejects.toThrow("API error");
 
-    expect(mockExecute).toHaveBeenCalled();
-    const sql = mockExecute.mock.calls[0][0];
-    expect(sql).toContain("ai_usage_events");
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_usage_events"))).toBe(true);
+  });
+
+  it("captures every provider send with its exact request, response, and pipeline context", async () => {
+    const send = vi.fn()
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "first raw model output" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 11, output_tokens: 7 },
+      })
+      .mockResolvedValueOnce({
+        content: [{ type: "text", text: "second raw model output" }],
+        stopReason: "end_turn",
+        usage: { input_tokens: 13, output_tokens: 9 },
+      });
+    mockGetActiveProviderWithFallback.mockResolvedValue({
+      provider: { send },
+      name: "anthropic",
+      model: "claude-sonnet-5",
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO ai_call_traces")) {
+        return { id: `trace-${mockQueryOne.mock.calls.filter(([query]) => String(query).includes("INSERT INTO ai_call_traces")).length}` };
+      }
+      if (sql.includes("INSERT INTO ai_usage_events")) return { id: "usage-event-1" };
+      return null;
+    });
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    await callWithUsageTracking(
+      "application_resume_forge",
+      {
+        userId: "user-1",
+        workflowId: "workflow-1",
+        applicationId: "application-1",
+        stageRunId: "stage-run-1",
+        promptVersion: "resume-forge-v4",
+        attemptNumber: 2,
+        routingStateId: "routing-state-1",
+      },
+      async (provider) => {
+        await provider.send({
+          system: "system prompt one",
+          messages: [{ role: "user", content: "first candidate prompt" }],
+          tools: [],
+          temperature: 0.2,
+          maxTokens: 2048,
+        });
+        return provider.send({
+          system: "system prompt two",
+          messages: [{ role: "user", content: "second candidate prompt" }],
+          tools: [],
+          temperature: 0,
+          maxTokens: 4096,
+        });
+      },
+    );
+
+    const traceCalls = mockQueryOne.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO ai_call_traces"));
+    expect(traceCalls).toHaveLength(2);
+    const firstParams = traceCalls[0][1] as any[];
+    const secondParams = traceCalls[1][1] as any[];
+    expect(firstParams[6]).toBe("routing-state-1");
+    expect(firstParams[8]).toBe("application-1");
+    expect(firstParams[9]).toBe("workflow-1");
+    expect(firstParams[10]).toBe("stage-run-1");
+    expect(firstParams[11]).toBe("resume-forge-v4");
+    expect(firstParams[12]).toBe(2);
+    expect(firstParams[13]).toBe(1);
+    expect(firstParams[14]).toBe(1);
+    expect(JSON.parse(firstParams[15]).system).toBe("system prompt one");
+    expect(JSON.parse(firstParams[15]).messages[0].content).toBe("first candidate prompt");
+    expect(JSON.parse(firstParams[15]).generation.maxTokens).toBe(2048);
+    expect(JSON.parse(firstParams[16]).content[0].text).toBe("first raw model output");
+    expect(firstParams[17]).toBe("first raw model output");
+    expect(secondParams[14]).toBe(2);
+    expect(JSON.parse(secondParams[15]).system).toBe("system prompt two");
+    expect(JSON.parse(secondParams[16]).content[0].text).toBe("second raw model output");
+    expect(mockExecute).toHaveBeenCalledWith(
+      "UPDATE ai_call_traces SET usage_event_id = $1 WHERE id = ANY($2::uuid[])",
+      ["usage-event-1", ["trace-1", "trace-2"]],
+    );
+  });
+
+  it("records failed provider requests and redacts credential-shaped error text", async () => {
+    mockGetActiveProviderWithFallback.mockResolvedValue({
+      provider: { send: vi.fn().mockRejectedValue(new Error("API rejected key sk-12345678901234567890")) },
+      name: "anthropic",
+      model: "claude-sonnet-5",
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO ai_call_traces")) return { id: "trace-failed" };
+      if (sql.includes("INSERT INTO ai_usage_events")) return { id: "usage-failed" };
+      return null;
+    });
+
+    const { callWithUsageTracking } = await import("@/lib/ai/routing");
+    await expect(
+      callWithUsageTracking(
+        "application_resume_forge",
+        { applicationId: "application-1" },
+        async (provider) => provider.send({
+          system: "private prompt",
+          messages: [{ role: "user", content: "private resume" }],
+          tools: [],
+        }),
+      ),
+    ).rejects.toThrow("API rejected key");
+
+    const traceCall = mockQueryOne.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO ai_call_traces"));
+    expect(traceCall).toBeDefined();
+    const params = traceCall![1] as any[];
+    expect(params[18]).toBe("failure");
+    expect(params[16]).toBeNull();
+    expect(params[23]).toContain("[REDACTED_KEY]");
+    expect(params[23]).not.toContain("sk-12345678901234567890");
+  });
+
+  it("does not fail a working AI call when trace persistence is unavailable", async () => {
+    mockGetActiveProviderWithFallback.mockResolvedValue({
+      provider: { send: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "usable output" }], stopReason: "end_turn" }) },
+      name: "anthropic",
+      model: "claude-sonnet-5",
+    });
+    mockQueryOne.mockImplementation(async (sql: string) => {
+      if (sql.includes("INSERT INTO ai_call_traces")) {
+        throw new Error("trace table temporarily unavailable");
+      }
+      return null;
+    });
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const { callWithUsageTracking } = await import("@/lib/ai/routing");
+      const result = await callWithUsageTracking(
+        "application_resume_forge",
+        { applicationId: "application-1" },
+        async (provider) => provider.send({ system: "system", messages: [], tools: [] }),
+      );
+      expect(result.result).toBeDefined();
+      expect(logSpy).toHaveBeenCalledWith("[ai-call-trace] Failed to persist provider trace:", "trace table temporarily unavailable");
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("classifies malformed or schema-invalid model output as retryable output failure", async () => {
@@ -323,7 +462,8 @@ describe("callWithUsageTracking error paths", () => {
       async (provider) => provider.send({ system: "s", messages: [], tools: [] }),
     );
 
-    expect(mockExecute.mock.calls.some(([sql]) => String(sql).includes("ai_usage_events"))).toBe(false);
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_usage_events"))).toBe(false);
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_call_traces"))).toBe(false);
     expect(mockRecordAiKeySuccess).not.toHaveBeenCalled();
 
     mockBuildProviderFromDbKey.mockReturnValue({ send: vi.fn().mockRejectedValue(new Error("boom (500): server error")) });
@@ -335,7 +475,8 @@ describe("callWithUsageTracking error paths", () => {
       )
     ).rejects.toThrow();
 
-    expect(mockExecute.mock.calls.some(([sql]) => String(sql).includes("ai_usage_events"))).toBe(false);
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_usage_events"))).toBe(false);
+    expect(mockQueryOne.mock.calls.some(([sql]) => String(sql).includes("INSERT INTO ai_call_traces"))).toBe(false);
     expect(mockRecordAiKeyFailure).not.toHaveBeenCalled();
   });
 

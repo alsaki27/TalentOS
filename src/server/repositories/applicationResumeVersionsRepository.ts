@@ -27,6 +27,8 @@ export interface ApplicationResumeVersionRow {
   generated_text: string | null;
   source_resume_id: string | null;
   created_by: string | null;
+  updated_by_user_id?: string | null;
+  updated_source?: string;
   created_at: string | null;
   updated_at: string | null;
 }
@@ -43,6 +45,8 @@ export interface CreateApplicationResumeVersionInput {
   version_label?: string | null;
   generated_text?: string | null;
   source_resume_id?: string | null;
+  updated_by_user_id?: string | null;
+  updated_source?: string;
   created_by?: string | null;
 }
 
@@ -58,6 +62,8 @@ export interface UpdateApplicationResumeVersionInput {
   version_label?: string | null;
   generated_text?: string | null;
   source_resume_id?: string | null;
+  updated_by_user_id?: string | null;
+  updated_source?: string;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -105,8 +111,8 @@ export async function createApplicationResumeVersion(
     `INSERT INTO application_resume_versions (
       candidate_id, base_resume_id, target_job_id, content, formatting,
       status, source_type, title, version_label, generated_text,
-      source_resume_id, created_by
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      source_resume_id, created_by, updated_by_user_id, updated_source
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     RETURNING *`,
     [
       input.candidate_id,
@@ -121,6 +127,8 @@ export async function createApplicationResumeVersion(
       input.generated_text ?? null,
       input.source_resume_id ?? null,
       input.created_by ?? null,
+      input.updated_by_user_id ?? null,
+      input.updated_source ?? "legacy_unknown",
     ]
   );
   if (!result) throw new Error("Failed to create resume version");
@@ -189,6 +197,14 @@ export async function updateApplicationResumeVersion(
   if (input.source_resume_id !== undefined) {
     fields.push(`source_resume_id = $${paramIndex++}`);
     values.push(input.source_resume_id);
+  }
+  if (input.updated_by_user_id !== undefined) {
+    fields.push(`updated_by_user_id = $${paramIndex++}`);
+    values.push(input.updated_by_user_id);
+  }
+  if (input.updated_source !== undefined) {
+    fields.push(`updated_source = $${paramIndex++}`);
+    values.push(input.updated_source);
   }
 
   fields.push(`updated_at = $${paramIndex++}`);
