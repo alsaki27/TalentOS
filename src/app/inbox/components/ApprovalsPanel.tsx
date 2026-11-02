@@ -149,7 +149,7 @@ export default function ApprovalsPanel({ candidateId }: { candidateId?: string }
 
   return (
     <div style={{ padding: "0" }}>
-      <div className="stats-strip" style={{ gridTemplateColumns: "repeat(4, minmax(140px, 1fr))", marginBottom: 16 }}>
+      <div className="stats-strip approvals-stats-strip" style={{ marginBottom: 16 }}>
         {tabs.map((tab) => (
           <button key={tab.key} className={`stat-button ${view === tab.key ? "active" : ""}`} onClick={() => { setView(tab.key); setPage(1); }}>
             <span className="stat-label">{tab.label}</span>

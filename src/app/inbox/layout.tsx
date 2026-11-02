@@ -9,6 +9,7 @@ import { usePathname } from "next/navigation";
 const TABS = [
   { href: "/inbox", label: "Candidate Inbox" },
   { href: "/inbox/approvals", label: "Pending Approvals" },
+  { href: "/inbox/reminders", label: "Email Reminders" },
 ];
 
 export default function InboxLayout({ children }: { children: React.ReactNode }) {
@@ -23,7 +24,10 @@ export default function InboxLayout({ children }: { children: React.ReactNode })
             <Link
               key={tab.href}
               href={tab.href}
+              prefetch
+              scroll={false}
               className={active ? "btn-primary" : ""}
+              aria-current={active ? "page" : undefined}
               style={{
                 textDecoration: "none",
                 padding: "6px 14px",

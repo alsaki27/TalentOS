@@ -16,6 +16,11 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
             ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
             ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
             ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence,
+            ec.manual_replied_at,
+            public.email_detected_team_reply_at(ec.id) AS detected_replied_at,
+            COALESCE(public.email_detected_team_reply_at(ec.id), ec.replied_at, ec.manual_replied_at) AS effective_replied_at,
+            public.email_is_forwarded_candidate_reply(ec.id) AS forwarded_candidate_reply,
+            (ec.sent_at + interval '24 hours') AS response_due_at,
             a.status AS application_status, a.application_stage,
             j.id AS job_id, j.title AS job_title, j.company AS company_name,
             c.portal_token,
@@ -26,7 +31,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
        LEFT JOIN candidates c ON c.id = ec.candidate_id
        LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
        LEFT JOIN jobs j ON j.id = a.job_id
-      WHERE ec.id = $1`,
+      WHERE ec.id = $1 AND ec.sent_at >= now() - interval '15 days'`,
     [params.id],
   );
   if (!message) return NextResponse.json({ error: "Email not found." }, { status: 404 });
@@ -37,11 +42,14 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
   const thread = await query<any>(
     `SELECT ec.id, ec.direction, ec.from_email, ec.to_emails, ec.subject,
             ec.body_text, ec.body_html, ec.gmail_message_id, ec.snippet, ec.sent_at, ec.ai_relevant, ec.ai_category,
-            ec.ai_confidence, ec.ai_summary, ec.needs_reply, ec.replied_at,
+            ec.ai_confidence, ec.ai_summary, ec.needs_reply, ec.replied_at, ec.manual_replied_at,
             ec.triaged_at, ec.gmail_label_ids, ec.gmail_is_unread,
-            ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence
+            ec.gmail_is_important, ec.attachment_metadata, ec.interview_details, ec.ai_evidence,
+            public.email_detected_team_reply_at(ec.id) AS detected_replied_at,
+            COALESCE(public.email_detected_team_reply_at(ec.id), ec.replied_at, ec.manual_replied_at) AS effective_replied_at,
+            public.email_is_forwarded_candidate_reply(ec.id) AS forwarded_candidate_reply
        FROM email_communications ec
-      WHERE ec.gmail_thread_id = $1
+      WHERE ec.gmail_thread_id = $1 AND ec.sent_at >= now() - interval '15 days'
       ORDER BY ec.sent_at ASC, ec.id ASC`,
     [message.gmail_thread_id],
   );

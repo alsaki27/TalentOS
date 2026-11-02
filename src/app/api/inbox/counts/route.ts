@@ -43,7 +43,9 @@ export async function GET(req: NextRequest) {
                                 AND ai.priority = 'urgent' AND ai.application_id IS NOT NULL
                                 AND ai.proposed_status IS NOT NULL
                                 AND approval_app.status IS DISTINCT FROM ai.proposed_status)::int AS urgent_approvals,
-         COUNT(*) FILTER (WHERE ai.type = 'needs_reply' AND ai.status IN ('open', 'in_progress'))::int AS needs_reply,
+         COUNT(*) FILTER (WHERE ai.type = 'needs_reply' AND ai.status IN ('open', 'in_progress')
+           AND EXISTS (SELECT 1 FROM email_communications task_mail WHERE task_mail.id = ai.email_communication_id
+             AND task_mail.sent_at >= now() - interval '15 days'))::int AS needs_reply,
          COUNT(*) FILTER (WHERE ai.type = 'interview_followup' AND ai.status IN ('open', 'in_progress'))::int AS interviews,
          COUNT(*) FILTER (WHERE ai.type = 'untracked_application' AND ai.status IN ('open', 'in_progress'))::int AS untracked,
          COUNT(*) FILTER (WHERE ai.type = 'calendar_conflict' AND ai.status IN ('open', 'in_progress'))::int AS conflicts,
@@ -69,34 +71,48 @@ export async function GET(req: NextRequest) {
                   ORDER BY ec.sent_at DESC, ec.id DESC
                 ) AS thread_row
            FROM email_communications ec
+           JOIN candidates c ON c.id = ec.candidate_id
            LEFT JOIN applications a  ON a.id  = ec.ai_matched_application_id
            LEFT JOIN jobs         j  ON j.id  = a.job_id
           WHERE ec.direction = 'inbound'
+            AND ec.sent_at >= now() - interval '15 days'
+            AND lower(COALESCE(NULLIF(substring(ec.from_email FROM '<([^>]+)>'), ''), btrim(ec.from_email))) IS DISTINCT FROM lower(c.email)
             AND ($1::uuid IS NULL OR ec.candidate_id = $1)
             AND ${clearanceExclusionSql("$2")}
        )
        SELECT
-         -- Threads visible in the default inbox view:
-         -- relevant, not suppressed, and not currently pending an approval action.
+         -- Inbox total includes AI-hidden mail now; pending human approvals
+         -- remain in the separate approvals queue.
          COUNT(*) FILTER (
            WHERE thread_row = 1
              AND ai_relevant IS DISTINCT FROM false
              AND suppression_reason IS NULL
              AND NOT EXISTS (
-               SELECT 1
-                 FROM action_items ai3
-                 JOIN applications approval_app3
-                   ON approval_app3.id = ai3.application_id
-                WHERE ai3.email_communication_id = thread_reps.id
-                  AND ai3.type = 'status_change_approval'
-                  AND ai3.status IN ('open', 'in_progress')
-                  AND ai3.proposed_status IS NOT NULL
-                  AND approval_app3.status IS DISTINCT FROM ai3.proposed_status
+               SELECT 1 FROM action_items pending
+               JOIN applications pending_app ON pending_app.id = pending.application_id
+                WHERE pending.email_communication_id = thread_reps.id
+                  AND pending.type = 'status_change_approval'
+                  AND pending.status IN ('open', 'in_progress')
+                  AND pending.proposed_status IS NOT NULL
+                  AND pending_app.status IS DISTINCT FROM pending.proposed_status
              )
          )::int AS relevant,
-         COUNT(*) FILTER (WHERE thread_row = 1 AND needs_reply AND replied_at IS NULL)::int AS awaiting_reply,
+         COUNT(*) FILTER (WHERE thread_row = 1 AND needs_reply
+           AND public.email_detected_team_reply_at(thread_reps.id) IS NULL
+           AND replied_at IS NULL AND manual_replied_at IS NULL)::int AS awaiting_reply,
          COUNT(*) FILTER (WHERE thread_row = 1 AND suppression_reason IS NOT NULL)::int AS hidden,
-         COUNT(*) FILTER (WHERE thread_row = 1)::int AS total,
+         COUNT(*) FILTER (
+           WHERE thread_row = 1
+             AND NOT EXISTS (
+               SELECT 1 FROM action_items pending
+               JOIN applications pending_app ON pending_app.id = pending.application_id
+                WHERE pending.email_communication_id = thread_reps.id
+                  AND pending.type = 'status_change_approval'
+                  AND pending.status IN ('open', 'in_progress')
+                  AND pending.proposed_status IS NOT NULL
+                  AND pending_app.status IS DISTINCT FROM pending.proposed_status
+             )
+         )::int AS total,
          MAX(sent_at) AS last_message_at
        FROM thread_reps`,
       [candidateFilter, CLEARANCE_KEYWORDS],
@@ -110,20 +126,20 @@ export async function GET(req: NextRequest) {
     // candidateFilter is intentionally ignored here - an unassigned message
     // has no candidate_id to filter by; this is a system-wide queue.
     queryOne<{ total_unassigned: number }>(
-      `SELECT COUNT(*)::int AS total_unassigned FROM email_communications WHERE candidate_id IS NULL AND direction = 'inbound'`
+      `SELECT COUNT(*)::int AS total_unassigned FROM email_communications WHERE candidate_id IS NULL AND direction = 'inbound' AND sent_at >= now() - interval '15 days'`
     ),
-    // Category breakdown for the clickable category chips - scoped to the
-    // same "clean" default view the mail list itself shows (relevant mail,
-    // federal/clearance jobs excluded), so the counts on each chip match
-    // what clicking it will actually return.
+    // Category breakdown includes AI-hidden mail, matching the inbox list's
+    // default behavior. Clearance-related mail is still excluded.
     query<{ category: string | null; count: number }>(
       `SELECT ec.ai_category AS category, COUNT(*)::int AS count
          FROM email_communications ec
+         JOIN candidates c ON c.id = ec.candidate_id
          LEFT JOIN applications a ON a.id = ec.ai_matched_application_id
          LEFT JOIN jobs j ON j.id = a.job_id
         WHERE ec.direction = 'inbound'
+          AND ec.sent_at >= now() - interval '15 days'
+          AND lower(COALESCE(NULLIF(substring(ec.from_email FROM '<([^>]+)>'), ''), btrim(ec.from_email))) IS DISTINCT FROM lower(c.email)
           AND ($1::uuid IS NULL OR ec.candidate_id = $1)
-          AND ec.suppression_reason IS NULL AND ec.ai_relevant IS DISTINCT FROM false
           AND ${clearanceExclusionSql("$2")}
         GROUP BY ec.ai_category
         ORDER BY count DESC`,

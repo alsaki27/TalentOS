@@ -1,11 +1,5 @@
-// Regression guard for the easiest bug to introduce in the whole
-// email-intelligence plan (Chunk C): a status_change_approval proposal MUST
-// be created with resolution_rule='manual_only'. storeRawMessage's
-// thread-reply sweep auto-closes any open item with
-// resolution_rule='manual_or_thread_reply' whose source email shares a
-// thread with a later outbound message - a proposal using that rule would
-// be silently discarded the moment anyone replied in-thread, deleting a
-// pending human decision with no trace.
+// Status proposals stay in the human approval queue, while mail replies are
+// reconciled from shared-mailbox and forwarded candidate-mail chronology.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -69,13 +63,14 @@ import type { EmailTriagePolicy } from "@/server/services/emailApprovalPolicy";
 // here so the test's intent doesn't depend on that coincidence.
 const RISK_BASED_POLICY: EmailTriagePolicy = { policy: "risk_based", threshold: 0.85, isActive: true, loadedFrom: "config" };
 
-describe("triageStoredMessage — status_change_approval proposal", () => {
+describe("triageStoredMessage — status change approvals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (execute as any).mockResolvedValue({ rowCount: 1 });
+    (query as any).mockResolvedValue([]);
   });
 
-  it("creates the proposal with resolution_rule='manual_only', not 'manual_or_thread_reply'", async () => {
+  it("creates a manual-only proposal for a low-confidence status signal", async () => {
     // Row fetch inside triageStoredMessage.
     (queryOne as any).mockResolvedValueOnce({
       id: "email-1", candidate_id: "cand-1", subject: "Update on your application",
@@ -85,11 +80,8 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     // getCandidateApplicationContext's query.
     (query as any).mockResolvedValueOnce([{ id: "app-1", title: "Backend Engineer", company: "Acme Corp", status: "interview" }]);
 
-    // Below the auto-write confidence threshold (0.85), so canAutoWrite is
-    // false and this must fall into the proposal path instead of
-    // changeApplicationStatus - "rejection" is otherwise an
-    // AUTO_WRITE_CATEGORIES member, which is exactly what makes 0.6 here a
-    // meaningful test of the confidence gate, not just the category gate.
+    // Below the auto-write confidence threshold, so the status change waits
+    // for a human decision instead of being applied automatically.
     (triageEmail as any).mockResolvedValue({
       relevant: true, category: "rejection", confidence: 0.6,
       matchedApplicationId: "app-1", suggestedStatus: null, needsReply: false,
@@ -101,16 +93,14 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     expect(changeApplicationStatus).not.toHaveBeenCalled();
 
     const calls = (execute as any).mock.calls as [string, unknown[]][];
-    const proposalCall = calls.find(([sql]) => sql.includes("status_change_approval"));
-    expect(proposalCall).toBeDefined();
-
-    const [sql, params] = proposalCall!;
-    expect(sql).toContain("'manual_only'");
-    expect(sql).not.toContain("manual_or_thread_reply");
-    expect(params).toEqual(expect.arrayContaining(["rejected", "interview", 0.6]));
+    const proposal = calls.find(([sql]) => sql.includes("status_change_approval"));
+    expect(proposal).toBeDefined();
+    expect(proposal![0]).toContain("'manual_only'");
+    expect(proposal![0]).not.toContain("manual_or_thread_reply");
+    expect(proposal![1]).toEqual(expect.arrayContaining(["rejected", "interview", 0.6]));
   });
 
-  it("does not create a proposal when canAutoWrite succeeds (site 4 handles it instead)", async () => {
+  it("auto-writes an eligible stage change without creating a review item", async () => {
     (queryOne as any).mockResolvedValueOnce({
       id: "email-2", candidate_id: "cand-1", subject: "Interview invitation",
       snippet: "Let's schedule your interview", body_text: "We would like to schedule an interview.",
@@ -130,12 +120,10 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
       applicationId: "app-1", toStatus: "interview", actorType: "ai", source: "email_ai",
     }));
     const calls = (execute as any).mock.calls as [string, unknown[]][];
-    expect(calls.some(([sql]) => sql.includes("status_change_approval"))).toBe(false);
-    const fyiCall = calls.find(([sql]) => sql.includes("status_change_review"));
-    expect(fyiCall![0]).toContain("'auto_approved'");
+    expect(calls.some(([sql]) => sql.includes("status_change_approval") || sql.includes("status_change_review"))).toBe(false);
   });
 
-  it("always_human policy proposes instead of auto-writing, even at confidence that would clear the risk_based threshold", async () => {
+  it("always_human policy creates a proposal even at high confidence", async () => {
     (queryOne as any).mockResolvedValueOnce({
       id: "email-3", candidate_id: "cand-1", subject: "You're hired!",
       snippet: "We are pleased to offer you the position", body_text: "We are pleased to offer you the position.",
@@ -153,9 +141,9 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
 
     expect(changeApplicationStatus).not.toHaveBeenCalled();
     const calls = (execute as any).mock.calls as [string, unknown[]][];
-    const proposalCall = calls.find(([sql]) => sql.includes("status_change_approval"));
-    expect(proposalCall).toBeDefined();
-    expect(proposalCall![1]).toEqual(expect.arrayContaining(["always_human"]));
+    const proposal = calls.find(([sql]) => sql.includes("status_change_approval"));
+    expect(proposal).toBeDefined();
+    expect(proposal![1]).toEqual(expect.arrayContaining(["always_human"]));
   });
 
   it("auto policy auto-writes even below the risk_based confidence threshold - this is the goal-#4 acceptance path: config only, no code change", async () => {
@@ -180,7 +168,7 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     expect(calls.some(([sql]) => sql.includes("status_change_approval"))).toBe(false);
   });
 
-  it("fails closed: a disabled agent proposes instead of auto-writing, even under the auto policy", async () => {
+  it("fails closed: a disabled agent creates a human approval instead of writing", async () => {
     (queryOne as any).mockResolvedValueOnce({
       id: "email-5", candidate_id: "cand-1", subject: "You're hired!",
       snippet: "We are pleased to offer you the position", body_text: "We are pleased to offer you the position.",
@@ -221,11 +209,46 @@ describe("triageStoredMessage — status_change_approval proposal", () => {
     const calls = (execute as any).mock.calls as [string, unknown[]][];
     expect(calls.some(([sql]) => sql.includes("status_change_approval"))).toBe(false);
   });
+
+  it("marks a reply-needed email as replied only when a later sent message exists in its Gmail thread", async () => {
+    const replyAt = "2026-11-01T02:30:00.000Z";
+    (queryOne as any)
+      .mockResolvedValueOnce({
+        id: "email-reply-check", candidate_id: "cand-1", subject: "Interview time confirmation",
+        snippet: "Please confirm", body_text: "Please reply and confirm one of these times.",
+        from_email: "recruiter@acmecorp.com", direction: "inbound", gmail_message_id: "gm-reply-check",
+        gmail_thread_id: "thread-reply-check", sent_at: "2026-11-01T01:30:00.000Z",
+      })
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ sent_at: replyAt })
+      .mockResolvedValueOnce({ name: "Test Candidate" });
+    (query as any)
+      .mockResolvedValueOnce([{ id: "app-1", title: "Backend Engineer", company: "Acme Corp", status: "interview" }])
+      .mockResolvedValueOnce([]);
+    (triageEmail as any).mockResolvedValue({
+      relevant: true, category: "recruiter_reply", confidence: 0.96, matchedApplicationId: "app-1",
+      suggestedStatus: null, needsReply: true, summary: "Recruiter requests a confirmation.",
+    });
+
+    await triageStoredMessage("email-reply-check", "fake-access-token", RISK_BASED_POLICY);
+
+    const calls = (execute as any).mock.calls as [string, unknown[]][];
+    const triageUpdate = calls.find(([sql]) => sql.includes("ai_matched_application_id = $5::uuid"));
+    expect(triageUpdate).toBeDefined();
+    expect(triageUpdate![1][5]).toBe(false);
+    expect(triageUpdate![1][7]).toBe(replyAt);
+    const replyLookup = (queryOne as any).mock.calls.find(([sql]: [string]) => sql.includes("email_detected_team_reply_at"));
+    expect(replyLookup).toBeDefined();
+    expect(replyLookup[1]).toEqual(["email-reply-check"]);
+  });
 });
 
 describe("triageStoredMessage — storeButHide skips AI and records suppression_reason/suppression_rule", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Clear queued one-shot queryOne results from preceding tests as well as
+    // call history, so this fixture's stored email is always the first row.
+    (queryOne as any).mockReset();
     (execute as any).mockResolvedValue({ rowCount: 1 });
   });
 

@@ -1,5 +1,6 @@
 import worker from "./.open-next/worker.js";
 import { getDueTeamActivityReportPeriods } from "./src/lib/teamActivityEmailSchedule.ts";
+import { getDueEmailReminderSlot } from "./src/lib/emailReminderSchedule.ts";
 
 // TalentOS' Postgres moved from Neon (HTTP) to a self-hosted server, which a
 // Worker can only reach over TCP. A Worker cannot verify that server's
@@ -83,6 +84,7 @@ export default {
     const tasks = [];
     if (isMinuteTick) {
       const reportPeriods = getDueTeamActivityReportPeriods(new Date(controller.scheduledTime));
+      const emailReminderSlot = getDueEmailReminderSlot(new Date(controller.scheduledTime));
       tasks.push((async () => {
         const response = await fetch(`${baseUrl}/api/application-ai-workflows/dispatch`, {
           method: "GET",
@@ -121,6 +123,15 @@ export default {
           throw new Error(`Scheduled ${period} team activity report failed with HTTP ${response.status}: ${body.slice(0, 500)}`);
         }
         console.log(`[scheduled ${period} team activity report] ${body.slice(0, 500)}`);
+      })());
+      if (emailReminderSlot) tasks.push((async () => {
+        const response = await fetch(`${baseUrl}/api/cron/email-reminders?slot=${encodeURIComponent(emailReminderSlot.key)}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${secret}`, Accept: "application/json" },
+        });
+        const body = await response.text();
+        if (!response.ok) throw new Error(`Email reminder digest failed with HTTP ${response.status}: ${body.slice(0, 1000)}`);
+        console.log(`[scheduled email reminder digest] ${body.slice(0, 500)}`);
       })());
     }
     if (isNightlyStart) tasks.push((async () => {

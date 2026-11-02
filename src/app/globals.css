@@ -753,7 +753,9 @@ body::before {
 /* Candidate Inbox needs room for the thread list, category chips, and the
    full-width action modal - same full-bleed treatment as Application Queue
    and the AI Control Center rather than the default 1100px content shell. */
-.page:has(.inbox-page) {
+.page:has(.inbox-page),
+.page:has(.email-approvals-page),
+.page:has(.email-reminders-page) {
   max-width: calc(100vw - 32px);
   padding-left: 16px;
   padding-right: 16px;
@@ -3860,4 +3862,107 @@ label {
   .ja-batch-card,
   .ja-manual-card,
   .ja-chevron { transition: none; }
+}
+
+/* Inbox companion pages use the available app width; their tables and action
+   cards have enough information to benefit from a wider desktop canvas. */
+.page.email-reminders-page,
+.page.email-approvals-page {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+.page.email-approvals-page .approvals-stats-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.email-reminders-page .email-reminder-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.inbox-needs-reply-check {
+  min-width: 190px;
+  white-space: normal;
+}
+
+.inbox-needs-reply-check span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inbox-needs-reply-check small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.email-reminder-actions {
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .page.email-approvals-page .approvals-stats-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .page.email-reminders-page,
+  .page.email-approvals-page {
+    padding: 16px 12px 32px !important;
+  }
+
+  .inbox-filter-box > input,
+  .inbox-filter-box > select {
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: 1 1 100%;
+  }
+
+  .inbox-filter-box > div:last-child {
+    width: 100% !important;
+  }
+
+  .inbox-thread-actions {
+    flex-direction: row !important;
+    align-items: stretch !important;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .inbox-thread-actions button {
+    flex: 1 1 135px;
+  }
+
+  .email-reminder-actions {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .email-reminder-actions > a,
+  .email-reminder-actions > button {
+    flex: 1 1 135px;
+    text-align: center;
+  }
+
+  .email-action-modal-footer {
+    gap: 6px !important;
+    padding: 10px !important;
+  }
+
+  .email-action-modal-footer > a,
+  .email-action-modal-footer > button {
+    flex: 1 1 calc(50% - 6px);
+    justify-content: center;
+    text-align: center;
+  }
+
+  .email-action-modal-footer .email-modal-urgent-action {
+    flex: 1 1 100%;
+    margin-left: 0 !important;
+  }
 }

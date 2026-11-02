@@ -13,7 +13,7 @@ function isUuid(value: string) {
 }
 
 export async function GET(req: NextRequest) {
-  const { response } = await requireCurrentUser(ALL_USER_ROLES);
+  const { context, response } = await requireCurrentUser(ALL_USER_ROLES);
   if (response) return response;
 
   const url = new URL(req.url);
@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
   const category = (url.searchParams.get("category") || "").trim();
   const search = (url.searchParams.get("search") || "").trim();
   const needsReply = url.searchParams.get("needsReply");
+  const replyStatus = url.searchParams.get("replyStatus") || "all";
   const relevant = url.searchParams.get("relevant");
   const hasOpenTask = url.searchParams.get("hasOpenTask");
   const page = Math.max(1, Number.parseInt(url.searchParams.get("page") || "1", 10) || 1);
@@ -30,6 +31,7 @@ export async function GET(req: NextRequest) {
   if (!DIRECTIONS.has(direction)) return NextResponse.json({ error: "Invalid direction." }, { status: 400 });
   if (candidateId && !isUuid(candidateId)) return NextResponse.json({ error: "Invalid candidateId." }, { status: 400 });
   if (needsReply && !["true", "false"].includes(needsReply)) return NextResponse.json({ error: "Invalid needsReply filter." }, { status: 400 });
+  if (!["all", "needs-reply", "waiting-12h", "overdue-24h", "replied", "no-reply-needed"].includes(replyStatus)) return NextResponse.json({ error: "Invalid replyStatus filter." }, { status: 400 });
   if (relevant && !["true", "false"].includes(relevant)) return NextResponse.json({ error: "Invalid relevant filter." }, { status: 400 });
   if (hasOpenTask && !["true", "false"].includes(hasOpenTask)) return NextResponse.json({ error: "Invalid hasOpenTask filter." }, { status: 400 });
 
@@ -56,22 +58,31 @@ export async function GET(req: NextRequest) {
   // Shared filter builder — called once per query set with its own add() closure
   // so $N indices are always correct and never bleed between query sets.
   const applySharedPredicates = (bucket: string[], add: (v: unknown) => string) => {
+    bucket.push("ec.sent_at >= now() - interval '15 days'");
     if (direction === "inbox") {
-      bucket.push(`ec.direction = 'inbound'`);
+      bucket.push(`ec.direction = 'inbound' AND lower(COALESCE(NULLIF(substring(ec.from_email FROM '<([^>]+)>'), ''), btrim(ec.from_email))) IS DISTINCT FROM lower(c.email)`);
       bucket.push(`NOT EXISTS (
-      SELECT 1
-        FROM action_items ai3
+        SELECT 1 FROM action_items ai3
         JOIN applications approval_app3 ON approval_app3.id = ai3.application_id
-       WHERE ai3.email_communication_id = ec.id
-         AND ai3.type = 'status_change_approval'
-         AND ai3.status IN ('open', 'in_progress')
-         AND ai3.proposed_status IS NOT NULL
-         AND approval_app3.status IS DISTINCT FROM ai3.proposed_status
-    )`);
+        WHERE ai3.email_communication_id = ec.id
+          AND ai3.type = 'status_change_approval'
+          AND ai3.status IN ('open', 'in_progress')
+          AND ai3.proposed_status IS NOT NULL
+          AND approval_app3.status IS DISTINCT FROM ai3.proposed_status
+      )`);
     }
-    if (direction === "sent") bucket.push(`ec.direction = 'outbound'`);
+    if (direction === "sent") bucket.push(`(ec.direction = 'outbound' OR (ec.direction = 'inbound' AND lower(COALESCE(NULLIF(substring(ec.from_email FROM '<([^>]+)>'), ''), btrim(ec.from_email))) = lower(c.email)))`);
     if (candidateId) bucket.push(`ec.candidate_id = ${add(candidateId)}`);
-    if (needsReply) bucket.push(`ec.needs_reply = ${add(needsReply === "true")}`);
+    if (needsReply === "true") bucket.push(`ec.direction = 'inbound' AND ec.needs_reply = true AND public.email_detected_team_reply_at(ec.id) IS NULL AND ec.replied_at IS NULL AND ec.manual_replied_at IS NULL`);
+    if (needsReply === "false") bucket.push(`ec.needs_reply = false`);
+    if (replyStatus === "needs-reply") bucket.push(`ec.direction = 'inbound' AND ec.needs_reply = true AND public.email_detected_team_reply_at(ec.id) IS NULL AND ec.replied_at IS NULL AND ec.manual_replied_at IS NULL`);
+    if (replyStatus === "waiting-12h") bucket.push(`ec.direction = 'inbound' AND ec.needs_reply = true AND ec.sent_at <= now() - interval '12 hours' AND ec.sent_at > now() - interval '24 hours' AND public.email_detected_team_reply_at(ec.id) IS NULL AND ec.replied_at IS NULL AND ec.manual_replied_at IS NULL`);
+    if (replyStatus === "overdue-24h") bucket.push(`ec.direction = 'inbound' AND ec.needs_reply = true AND ec.sent_at <= now() - interval '24 hours' AND ec.sent_at >= now() - interval '7 days' AND public.email_detected_team_reply_at(ec.id) IS NULL AND ec.replied_at IS NULL AND ec.manual_replied_at IS NULL`);
+    // Sync correctly clears needs_reply after detecting a later thread reply.
+    // Keep this filter based on the reply signal itself or answered threads
+    // disappear from the "Team replied" view as soon as sync reconciles them.
+    if (replyStatus === "replied") bucket.push(`ec.direction = 'inbound' AND (public.email_detected_team_reply_at(ec.id) IS NOT NULL OR ec.replied_at IS NOT NULL OR ec.manual_replied_at IS NOT NULL)`);
+    if (replyStatus === "no-reply-needed") bucket.push(`ec.direction = 'inbound' AND ec.needs_reply = false AND public.email_detected_team_reply_at(ec.id) IS NULL AND ec.replied_at IS NULL AND ec.manual_replied_at IS NULL`);
     if (relevant) {
       if (relevant === "true") {
         // suppression_reason catches deterministic noise (job-board digests,
@@ -93,8 +104,8 @@ export async function GET(req: NextRequest) {
        WHERE ai2.email_communication_id = ec.id
          AND ai2.status IN ('open', 'in_progress')
          AND (ai2.type <> 'status_change_approval'
-               OR (ai2.application_id IS NOT NULL AND ai2.proposed_status IS NOT NULL
-                   AND approval_app2.status IS DISTINCT FROM ai2.proposed_status))
+              OR (ai2.application_id IS NOT NULL AND ai2.proposed_status IS NOT NULL
+                  AND approval_app2.status IS DISTINCT FROM ai2.proposed_status))
     )`;
       bucket.push(hasOpenTask === "true" ? existsSql : `NOT ${existsSql}`);
     }
@@ -159,9 +170,13 @@ export async function GET(req: NextRequest) {
               ec.gmail_thread_id, ec.direction, ec.from_email, ec.to_emails,
               ec.subject, ec.snippet, ec.sent_at, ec.ai_relevant, ec.ai_category,
               ec.ai_confidence, ec.ai_summary, ec.ai_matched_application_id,
-              ec.needs_reply, ec.replied_at, ec.triaged_at, ec.gmail_label_ids,
+              ec.needs_reply, ec.replied_at, ec.manual_replied_at, ec.triaged_at, ec.gmail_label_ids,
               ec.gmail_is_unread, ec.gmail_is_important, ec.attachment_metadata,
               ec.suppression_reason, ec.suppression_rule,
+              public.email_detected_team_reply_at(ec.id) AS detected_replied_at,
+              COALESCE(public.email_detected_team_reply_at(ec.id), ec.replied_at, ec.manual_replied_at) AS effective_replied_at,
+              public.email_is_forwarded_candidate_reply(ec.id) AS forwarded_candidate_reply,
+              ec.sent_at + interval '24 hours' AS response_due_at,
               (SELECT COUNT(*)::int
                  FROM action_items ai2
                  LEFT JOIN applications approval_app2 ON approval_app2.id = ai2.application_id
