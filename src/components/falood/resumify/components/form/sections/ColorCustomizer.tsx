@@ -7,11 +7,11 @@ import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Palette, RotateCcw, Type, Settings } from 'lucide-react';
-import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
+import { DEFAULT_COLORS, DEFAULT_PAGE_PADDING, DEFAULT_LINE_SPACING, DEFAULT_TITLE_SPACING, MIN_TITLE_SPACING, MAX_TITLE_SPACING, DEFAULT_FONT_SIZE } from '@/components/falood/resumify/types/resume';
 
 export const ColorCustomizer: React.FC = () => {
-  const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding, updateLineSpacing } = useResume();
-  const { colors, fontSize, fontFamily, pagePadding, lineSpacing } = state.resumeData;
+  const { state, updateColors, updateFontSize, updateFontFamily, updatePagePadding, updateLineSpacing, updateTitleSpacing } = useResume();
+  const { colors, fontSize, fontFamily, pagePadding, lineSpacing, titleSpacing } = state.resumeData;
 
   const updateColor = (colorKey: keyof typeof colors, value: string) => {
     updateColors({ ...colors, [colorKey]: value });
@@ -27,6 +27,10 @@ export const ColorCustomizer: React.FC = () => {
 
   const resetLineSpacing = () => {
     updateLineSpacing(DEFAULT_LINE_SPACING);
+  };
+
+  const resetTitleSpacing = () => {
+    updateTitleSpacing(DEFAULT_TITLE_SPACING);
   };
 
   const colorPresets = [
@@ -240,6 +244,46 @@ export const ColorCustomizer: React.FC = () => {
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>Compact</span>
               <span>Relaxed</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Settings className="w-5 h-5" />
+            Title Spacing
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Section title spacing</Label>
+              <p className="text-xs text-muted-foreground mt-1">
+                Adjusts the gap below section headings without changing body line spacing.
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={resetTitleSpacing}>
+              Reset
+            </Button>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Heading gap</span>
+              <span className="font-medium">{titleSpacing > 0 ? '+' : ''}{titleSpacing.toFixed(2)} rem</span>
+            </div>
+            <Slider
+              value={[titleSpacing]}
+              min={MIN_TITLE_SPACING}
+              max={MAX_TITLE_SPACING}
+              step={0.05}
+              onValueChange={(value) => updateTitleSpacing(value[0] ?? DEFAULT_TITLE_SPACING)}
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Tighter</span>
+              <span>Looser</span>
             </div>
           </div>
         </CardContent>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { Globe, Link2, Code2, Mail, Phone, MapPin } from 'lucide-react';
+import { Globe, Code2 } from 'lucide-react';
+import { getResumeTitleSpacingStyle, ResumeContactLine, ResumeProjectTitle } from '../ResumeTemplateParts';
 
 interface TemplateProps {
   data: ResumeData;
@@ -33,8 +34,8 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full`}
-      style={{ fontSize: getFontSizePx(), color: colors.text,
+      className="resume-template w-full h-full"
+      style={{ ...getResumeTitleSpacingStyle(data.titleSpacing), fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Lato, sans-serif',
         lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
@@ -57,44 +58,12 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
           </h2>
         )}
         
-        <div className="flex justify-center flex-wrap gap-x-4 gap-y-1 text-xs">
-          {personalInfo.email && (
-            <div className="flex items-center gap-1">
-              <Mail className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.email}</span>
-            </div>
-          )}
-          {personalInfo.phone && (
-            <div className="flex items-center gap-1">
-              <Phone className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.phone}</span>
-            </div>
-          )}
-          {personalInfo.location && (
-            <div className="flex items-center gap-1">
-              <MapPin className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.location}</span>
-            </div>
-          )}
-          {personalInfo.website && (
-            <div className="flex items-center gap-1">
-              <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
-            </div>
-          )}
-          {personalInfo.linkedin && (
-            <div className="flex items-center gap-1">
-              <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
-            </div>
-          )}
-          {personalInfo.github && (
-            <div className="flex items-center gap-1">
-              <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
-            </div>
-          )}
-        </div>
+        <ResumeContactLine
+          personalInfo={personalInfo}
+          showIcons
+          iconColor={colors.accent}
+          className="justify-center gap-x-4 text-xs"
+        />
       </div>
 
       {/* Single Column with Timeline */}
@@ -182,7 +151,7 @@ export const ElegantTimelineTemplate: React.FC<TemplateProps> = ({ data }) => {
                 <div className="space-y-4">
                   {projects.map((project) => (
                       <div key={project.id} className="text-center page-break-inside-avoid">
-                        <h4 className={` font-semibold`}>{project.title}</h4>
+                        <ResumeProjectTitle project={project} className="font-semibold" />
                         {project.description && <p className="text-xs mt-1 max-w-2xl mx-auto">{project.description}</p>}
                       {project.technologies && project.technologies.length > 0 && (
                         <div className="flex flex-wrap justify-center gap-1 mt-2">

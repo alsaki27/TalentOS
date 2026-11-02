@@ -55,8 +55,18 @@ export interface StudioDocumentLike {
   certifications?: { name?: string; issuer?: string; date?: string }[];
   projects?: {
     title?: string;
+    name?: string;
     description?: string;
     bullets?: { text?: string }[] | string[];
+    url?: string;
+    liveUrl?: string;
+    live_url?: string;
+    githubUrl?: string;
+    github_url?: string;
+    repositoryUrl?: string;
+    repository_url?: string;
+    repoUrl?: string;
+    repo_url?: string;
   }[];
   customSections?: {
     id?: string;
@@ -100,6 +110,43 @@ function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+function asOptionalString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function isGitHubRepositoryUrl(value: string | undefined): boolean {
+  if (!value) return false;
+  try {
+    const url = new URL(value.includes("://") ? value : `https://${value}`);
+    return url.hostname === "github.com" || url.hostname.endsWith(".github.com");
+  } catch {
+    return false;
+  }
+}
+
+function projectLinkFields(project: any): { liveUrl?: string; githubUrl?: string } {
+  const explicitLiveUrl = asOptionalString(project?.liveUrl, project?.live_url);
+  const explicitGithubUrl = asOptionalString(
+    project?.githubUrl,
+    project?.github_url,
+    project?.repositoryUrl,
+    project?.repository_url,
+    project?.repoUrl,
+    project?.repo_url,
+  );
+  const legacyUrl = asOptionalString(project?.url);
+  const inferredGithubUrl = explicitGithubUrl
+    || (isGitHubRepositoryUrl(explicitLiveUrl) ? explicitLiveUrl : undefined)
+    || (isGitHubRepositoryUrl(legacyUrl) ? legacyUrl : undefined);
+  const inferredLiveUrl = (explicitLiveUrl && !isGitHubRepositoryUrl(explicitLiveUrl) ? explicitLiveUrl : undefined)
+    || (legacyUrl && !isGitHubRepositoryUrl(legacyUrl) ? legacyUrl : undefined);
+
+  return { liveUrl: inferredLiveUrl, githubUrl: inferredGithubUrl };
+}
+
 let idCounter = 0;
 function uid(prefix: string): string {
   idCounter = (idCounter + 1) % 1_000_000;
@@ -131,15 +178,14 @@ function normalizeResumifyNative(d: any): ResumeData {
   }));
   const projects = asArray<any>(d.projects).map((p) => ({
     id: asString(p?.id) || uid("proj"),
-    title: asString(p?.title),
+    title: asString(p?.title).trim() || asString(p?.name).trim(),
     description: asString(p?.description),
     technologies: asArray<string>(p?.technologies),
     // Confirmed live: a base resume with a project's live/GitHub link or
     // dates filled in lost them every time "Open in studio" was clicked
     // again, because this mapping only carried title/description/
     // technologies through - the round trip silently dropped the rest.
-    liveUrl: p?.liveUrl ? asString(p.liveUrl) : undefined,
-    githubUrl: p?.githubUrl ? asString(p.githubUrl) : undefined,
+    ...projectLinkFields(p),
     startDate: p?.startDate ? asString(p.startDate) : undefined,
     endDate: p?.endDate ? asString(p.endDate) : undefined,
   }));
@@ -210,9 +256,10 @@ function convertStudioDocument(d: StudioDocumentLike): ResumeData {
 
   const projects = asArray<NonNullable<StudioDocumentLike["projects"]>[number]>(d.projects).map((p) => ({
     id: uid("proj"),
-    title: p?.title ?? "",
+    title: (typeof p?.title === "string" ? p.title.trim() : "") || (typeof p?.name === "string" ? p.name.trim() : ""),
     description: p?.description ?? "",
     technologies: [] as string[],
+    ...projectLinkFields(p),
   }));
 
   const skillGroups = asArray<NonNullable<StudioDocumentLike["skills"]>[number]>(d.skills);

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { Globe, Link2, Code2 } from 'lucide-react';
+import { getResumeTitleSpacingStyle, ResumeContactLinks, ResumeProjectTitle, getResumeProjectTitle } from '../ResumeTemplateParts';
 
 interface TemplateProps {
   data: ResumeData;
@@ -31,8 +31,9 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full `}
+      className="resume-template resume-template-bjet w-full h-full"
       style={{
+        ...getResumeTitleSpacingStyle(data.titleSpacing),
         fontFamily: fontFamily || 'Arial, sans-serif',
         color: colors.text,
         lineHeight: data.lineSpacing
@@ -135,26 +136,11 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
                   Portfolio link
                 </td>
                 <td className="p-2 border" style={{ borderColor: colors.secondary }}>
-                  <div className="space-y-1">
-                    {personalInfo.website && (
-                      <div className="flex items-center gap-1">
-                        <Globe className="w-3 h-3" />
-                        <span className="text-blue-600 underline text-[10px]">{personalInfo.website}</span>
-                      </div>
-                    )}
-                    {personalInfo.github && (
-                      <div className="flex items-center gap-1">
-                        <span className="font-medium">GitHub:</span>
-                        <span className="text-blue-600 underline text-[10px]">{personalInfo.github}</span>
-                      </div>
-                    )}
-                    {personalInfo.linkedin && (
-                      <div className="flex items-center gap-1">
-                        <span className="font-medium">LinkedIn:</span>
-                        <span className="text-blue-600 underline text-[10px]">{personalInfo.linkedin}</span>
-                      </div>
-                    )}
-                  </div>
+                  <ResumeContactLinks
+                    personalInfo={personalInfo}
+                    showIcons
+                    className="flex flex-col items-start gap-1 text-[10px]"
+                  />
                 </td>
               </tr>
             </tbody>
@@ -411,7 +397,12 @@ export const BJetProfessionalTemplate: React.FC<TemplateProps> = ({ data }) => {
                   </td>
                   <td className="p-2 border align-top" style={{ borderColor: colors.secondary }}>
                     <div className="space-y-1">
-                      <div><span className="font-medium">Project Title:</span> {project.title}</div>
+                      {getResumeProjectTitle(project) && (
+                        <div>
+                          <span className="font-medium">Project Title:</span>{' '}
+                          <ResumeProjectTitle project={project} as="span" />
+                        </div>
+                      )}
                       <div><span className="font-medium">Project Overview:</span> {project.description}</div>
                       {project.liveUrl && (
                         <div><span className="font-medium">Project Link:</span> {project.liveUrl}</div>

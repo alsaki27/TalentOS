@@ -127,4 +127,50 @@ describe("studioDocumentToResumeData - projects (Resumify-native / personalInfo-
     expect(result.projects[0].startDate).toBeUndefined();
     expect(result.projects[0].endDate).toBeUndefined();
   });
+
+  it("keeps a legacy project name visible as the studio project title", () => {
+    const native = studioDocumentToResumeData({
+      personalInfo: { fullName: "Jane Doe" },
+      projects: [{ id: "native-project", title: "  ", name: "Legacy Portfolio", description: "Old project field" }],
+    } as any);
+    const canonical = studioDocumentToResumeData({
+      header: { fullName: "Jane Doe" },
+      projects: [{ id: "canonical-project", title: "  ", name: "Legacy Shop", description: "Older canonical project" }],
+    } as any);
+
+    expect(native.projects[0].title).toBe("Legacy Portfolio");
+    expect(canonical.projects[0].title).toBe("Legacy Shop");
+  });
+
+  it("restores canonical legacy project URLs as either a demo or GitHub repository link", () => {
+    const result = studioDocumentToResumeData({
+      header: { fullName: "Jane Doe" },
+      projects: [
+        { name: "Portfolio", url: "https://portfolio.example.com" },
+        { name: "Repository", url: "https://github.com/example/project" },
+      ],
+    } as any);
+
+    expect(result.projects[0]).toMatchObject({ liveUrl: "https://portfolio.example.com" });
+    expect(result.projects[0].githubUrl).toBeUndefined();
+    expect(result.projects[1]).toMatchObject({ githubUrl: "https://github.com/example/project" });
+    expect(result.projects[1].liveUrl).toBeUndefined();
+  });
+
+  it("accepts snake_case and repository URL aliases from older saved projects", () => {
+    const result = studioDocumentToResumeData({
+      personalInfo: { fullName: "Jane Doe" },
+      projects: [{
+        id: "legacy-project",
+        title: "Legacy links",
+        live_url: "https://demo.example.com",
+        repository_url: "https://github.com/example/legacy",
+      }],
+    } as any);
+
+    expect(result.projects[0]).toMatchObject({
+      liveUrl: "https://demo.example.com",
+      githubUrl: "https://github.com/example/legacy",
+    });
+  });
 });

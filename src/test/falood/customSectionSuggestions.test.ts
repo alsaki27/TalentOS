@@ -18,6 +18,8 @@ function baseResumeData(customSections: ResumeData["customSections"] = []): Resu
     fontSize: 10,
     fontFamily: "Inter",
     pagePadding: 0.5,
+    lineSpacing: 1.625,
+    titleSpacing: 0,
   };
 }
 

@@ -102,7 +102,7 @@ export const ProjectsForm: React.FC = () => {
                 <div className="space-y-2">
                   <Label>Project Title *</Label>
                   <Input
-                    placeholder="E-commerce Platform"
+                    placeholder="Enter project title"
                     value={project.title}
                     onChange={(e) => updateProject(project.id, 'title', e.target.value)}
                   />

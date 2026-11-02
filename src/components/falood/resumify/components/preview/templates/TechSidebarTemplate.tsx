@@ -1,6 +1,7 @@
 import React from 'react';
 import { ResumeData } from '@/components/falood/resumify/types/resume';
-import { Globe, Link2, Code2, Mail, Phone, MapPin } from 'lucide-react';
+import { Globe, Code2 } from 'lucide-react';
+import { getResumeTitleSpacingStyle, ResumeContactLine, ResumeProjectTitle } from '../ResumeTemplateParts';
 
 interface TemplateProps {
   data: ResumeData;
@@ -35,8 +36,8 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
 
   return (
     <div 
-      className={`w-full h-full`}
-      style={{ fontSize: getFontSizePx(), color: colors.text,
+      className="resume-template w-full h-full"
+      style={{ ...getResumeTitleSpacingStyle(data.titleSpacing), fontSize: getFontSizePx(), color: colors.text,
         fontFamily: fontFamily || 'Inter, sans-serif',
         lineHeight: data.lineSpacing,
         pageBreakInside: 'avoid'
@@ -59,45 +60,12 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
           </h2>
         )}
         
-        {/* Contact Info */}
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-          {personalInfo.email && (
-            <div className="flex items-center gap-1">
-              <Mail className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.email}</span>
-            </div>
-          )}
-          {personalInfo.phone && (
-            <div className="flex items-center gap-1">
-              <Phone className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.phone}</span>
-            </div>
-          )}
-          {personalInfo.location && (
-            <div className="flex items-center gap-1">
-              <MapPin className="w-3 h-3" style={{ color: colors.accent }} />
-              <span>{personalInfo.location}</span>
-            </div>
-          )}
-          {personalInfo.website && (
-            <div className="flex items-center gap-1">
-              <Globe className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.website)} className="hover:underline">Portfolio</a>
-            </div>
-          )}
-          {personalInfo.linkedin && (
-            <div className="flex items-center gap-1">
-              <Link2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.linkedin)} className="hover:underline">LinkedIn</a>
-            </div>
-          )}
-          {personalInfo.github && (
-            <div className="flex items-center gap-1">
-              <Code2 className="w-3 h-3" style={{ color: colors.accent }} />
-              <a href={formatUrl(personalInfo.github)} className="hover:underline">GitHub</a>
-            </div>
-          )}
-        </div>
+        <ResumeContactLine
+          personalInfo={personalInfo}
+          showIcons
+          iconColor={colors.accent}
+          className="gap-x-4 text-xs"
+        />
       </div>
 
       {/* Two Column Layout */}
@@ -293,7 +261,7 @@ export const TechSidebarTemplate: React.FC<TemplateProps> = ({ data }) => {
                     {projects.map((project) => (
                       <div key={project.id} className="page-break-inside-avoid">
                         <div className="flex justify-between items-start mb-1">
-                          <h4 className="text-xs font-medium">{project.title}</h4>
+                          <ResumeProjectTitle project={project} className="text-xs font-medium" />
                           {(project.startDate || project.endDate) && (
                             <span 
                               className="text-xs"
